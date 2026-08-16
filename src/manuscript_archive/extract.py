@@ -145,25 +145,48 @@ _NOTE_OTHER_RE = re.compile(
 
 
 def _split_entities(value: str) -> list[str]:
-    """Split a 'Named entities' value into bullet items. Prefer ';' / '|'
-    separators (entities often carry parenthetical commas); fall back to
-    commas only when there are no parentheses."""
+    """Split an inline 'Named entities' value into bullet items.
+
+    Handles ';', '|' and spaced-hyphen (' - ') separators, but only outside
+    parentheses (entities often carry parenthetical notes with commas/dashes).
+    """
+    value = re.sub(r"^\s*[-*]\s+", "", value.strip())
     value = value.strip()
     if not value:
         return ["(none)"]
-    items = [i.strip() for i in re.split(r"\s*;\s*|\s*\|\s*", value) if i.strip()]
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    i = 0
+    while i < len(value):
+        ch = value[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if depth == 0 and (ch in (";", "|") or value.startswith(" - ", i)):
+            parts.append("".join(buf))
+            buf = []
+            i += 3 if value.startswith(" - ", i) else 1
+            continue
+        buf.append(ch)
+        i += 1
+    parts.append("".join(buf))
+    items = [p.strip(" -") for p in parts if p.strip(" -")]
     if not items:
         return ["(none)"]
     if len(items) == 1 and "(" not in items[0]:
-        items = [i.strip() for i in items[0].split(",") if i.strip()]
+        items = [it.strip() for it in items[0].split(",") if it.strip()]
     return items or ["(none)"]
 
 
 def format_notes(text: str) -> str:
     """Reformat a transcription: '- Named entities: …' becomes a
-    '### Named entities' heading with a bullet list, and
-    '- Content summary: …' becomes a '### Content summary' heading.
+    '### Named entities' heading and '- Content summary: …' becomes a
+    '### Content summary' heading.
 
+    If the model wrote the value inline, it is split into a bullet list /
+    paragraph; if it wrote bullets under the label, they are kept as-is.
     Lines that do not match are left untouched, so prompts with other
     output structures (JSON, tables, …) are unaffected.
     """
@@ -179,21 +202,24 @@ def format_notes(text: str) -> str:
             out.append(line)
             i += 1
             continue
-        label, value = m.group(1), m.group(2)
-        # absorb wrapped continuation lines (not bullets/headings/other labels)
-        j = i + 1
-        while j < len(lines):
-            nxt = lines[j].strip()
-            if not nxt or nxt.startswith("#") or _NOTE_OTHER_RE.match(nxt):
-                break
-            value += " " + nxt
-            j += 1
+        label, value = m.group(1), m.group(2).strip()
         out.append(f"### {label}")
-        if label.lower() == "named entities":
-            for item in _split_entities(value):
-                out.append(f"- {item}")
-        else:
-            out.append(value.strip() or "—")
+        # block = lines until the next Notes label or a heading
+        j = i + 1
+        while j < len(lines) and not _NOTE_LABEL_RE.match(lines[j]) and not lines[j].lstrip().startswith("#"):
+            j += 1
+        block = [b.strip() for b in lines[i + 1 : j] if b.strip()]
+        if value:
+            if label.lower() == "named entities":
+                for item in _split_entities(value):
+                    out.append(f"- {item}")
+            else:
+                out.append(value)
+        for b in block:
+            if label.lower() == "named entities" and not re.match(r"^\s*[-*]\s+", b):
+                out.append(f"- {b}")
+            else:
+                out.append(b)
         i = j
     return "\n".join(out)
 

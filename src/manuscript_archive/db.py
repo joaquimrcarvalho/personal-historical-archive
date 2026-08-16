@@ -84,9 +84,11 @@ def migrate(conn: sqlite3.Connection) -> None:
                 time.sleep(3)
         else:
             raise last_err or RuntimeError("migration failed")
-    # page status vocabulary: failed pages are 'waiting' (retried on next scan)
-    conn.execute("UPDATE pages SET status = 'waiting' WHERE status = 'error'")
-    conn.commit()
+    # page status vocabulary: failed pages are 'waiting' (retried on next scan).
+    # Only writes when rows need converting, so normal connections stay read-only.
+    if conn.execute("SELECT COUNT(*) AS n FROM pages WHERE status = 'error'").fetchone()["n"]:
+        _write(conn, "UPDATE pages SET status = 'waiting' WHERE status = 'error'")
+        conn.commit()
 
 
 # --------------------------------------------------------------------------- documents
