@@ -8,7 +8,7 @@ from datetime import datetime
 from . import db
 from .config import Config
 from .extract import is_supported, resolve_prompt
-from .ingest import reindex_all, scan_once, watch
+from .ingest import reindex_all, remove_library_artifact, scan_once, watch
 from .model_client import ModelClient, ModelError
 
 
@@ -51,7 +51,8 @@ def cmd_search(cfg: Config, args) -> None:
         try:
             from .search import search as run_search
 
-            res = run_search(conn, client, cfg, args.query, mode=args.mode, limit=args.limit)
+            res = run_search(conn, client, cfg, args.query, mode=args.mode, limit=args.limit,
+                             collection=args.collection)
         except ModelError as e:
             print(f"model error: {e}", file=sys.stderr)
             sys.exit(2)
@@ -67,7 +68,7 @@ def cmd_search(cfg: Config, args) -> None:
         print("no results")
         return
     for i, r in enumerate(res["results"], 1):
-        print(f"{i:2d}. [{r['source']:8s}] {r['filename']}  p.{r['page_no']}  score={r['score']}")
+        print(f"{i:2d}. [{r['source']:8s}] {r['filename']}  [{r['collection']}]  p.{r['page_no']}  score={r['score']}")
         print(f"     {r['snippet']}")
     print(f"\n{len(res['results'])} result(s) in mode '{res['mode']}'")
 
@@ -80,12 +81,20 @@ def cmd_status(cfg: Config, args) -> None:
         print(f"  documents: {s['documents'] or 'none'}")
         print(f"  pages extracted: {s['pages_done']}")
         print(f"  chunks indexed: {s['chunks']} (embedded: {s['chunks_embedded']})")
+        groups = conn.execute(
+            "SELECT COALESCE(NULLIF(dir_path, ''), '(root)') AS col, COUNT(*) n FROM documents GROUP BY col ORDER BY col"
+        ).fetchall()
+        if groups:
+            print("  collections:")
+            for g in groups:
+                print(f"    {g['col']}: {g['n']}")
         docs = db.list_documents(conn, limit=100)
         if docs:
             print("\ndocuments:")
             for d in docs:
                 err = f"  ERROR: {(d['error'] or '')[:60]}" if d["status"] == "error" else ""
-                print(f"  #{d['id']:3d} {d['status']:10s} {d['filename']}  ({d['kind']}, {d['page_count'] or 0} pages)  updated {_fmt_ts(d['updated_at'])}{err}")
+                col = d["dir_path"] or "(root)"
+                print(f"  #{d['id']:3d} {d['status']:10s} [{col}] {d['filename']}  ({d['kind']}, {d['page_count'] or 0} pages)  updated {_fmt_ts(d['updated_at'])}{err}")
     finally:
         conn.close()
 
@@ -105,7 +114,7 @@ def cmd_prompts(cfg: Config, args) -> None:
         if not p.exists():
             print(f"not found: {args.file}")
             return
-        text, source = resolve_prompt(p.stem, cfg.dropbox, cfg.prompts)
+        text, source = resolve_prompt(p.stem, p.parent, cfg.dropbox, cfg.prompts)
         print(f"prompt source: {source}")
         print("---")
         print(text)
@@ -113,11 +122,8 @@ def cmd_prompts(cfg: Config, args) -> None:
     print(f"default: {cfg.prompts / 'default_prompt.md'}")
     for f in sorted(cfg.prompts.glob("*.prompt.md")):
         print(f"  {f}")
-    sidecars = sorted(cfg.dropbox.glob("*.prompt.md"))
-    if sidecars:
-        print("dropbox sidecars:")
-        for f in sidecars:
-            print(f"  {f}")
+    for f in sorted(cfg.dropbox.rglob("*.prompt.md")):
+        print(f"dropbox: {f}")
 
 
 def cmd_rm(cfg: Config, args) -> None:
@@ -132,6 +138,7 @@ def cmd_rm(cfg: Config, args) -> None:
             print(f"no document matches {target!r}")
             return
         for d in docs:
+            remove_library_artifact(cfg, d)
             db.delete_document(conn, d["id"])
             print(f"removed #{d['id']} {d['filename']}")
         conn.commit()
@@ -168,6 +175,8 @@ def main(argv: list[str] | None = None) -> None:
     q.add_argument("query")
     q.add_argument("--mode", choices=["hybrid", "keyword", "semantic"], default=None)
     q.add_argument("--limit", type=int, default=None)
+    q.add_argument("--collection", default=None,
+                   help="restrict to a collection/dir, e.g. 'documents', 'COLX' or 'collections/COLX'")
     q.add_argument("--json", action="store_true")
     q.set_defaults(fn=cmd_search)
 

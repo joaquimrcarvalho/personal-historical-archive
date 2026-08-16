@@ -11,8 +11,10 @@ manuscripts — where low-quality embedded OCR text is common — a VLM that
 gives far better results, and you control the prompt per document.
 
 ```
- dropbox/*.pdf, *.png, ...
-     │  (optional sidecar: myfile.pdf.prompt.md)
+ dropbox/documents/*.pdf, *.png, ...        individual documents
+ dropbox/collections/COLX/*, ...            collections of sources
+     │  (optional prompts: <stem>.prompt.md next to a file,
+     │   or prompt.md inside a directory → applies to everything under it)
      ▼
  ┌─────────────────────── watcher / `ma scan` ───────────────────────┐
  │  1. render pages → JPEG (200 dpi, long edge ≤ 1800 px)             │
@@ -22,9 +24,10 @@ gives far better results, and you control the prompt per document.
  └────────────────────────────────────────────────────────────────────┘
      │
      ▼
- SQLite (data/archive.db) ──► `ma search` (hybrid keyword+semantic)
-     ▲                           FastMCP server: search / get_document /
-     └────────────────────────   list_documents / scan_now / extraction_status
+ SQLite (data/archive.db) ──► `ma search` (hybrid keyword+semantic,
+     ▲                           optional --collection filter)
+     └────────────────────────── FastMCP server: search / get_document /
+                                 list_documents / scan_now / extraction_status
 ```
 
 ---
@@ -88,11 +91,33 @@ Exposed tools:
 
 | tool | purpose |
 | --- | --- |
-| `search(query, mode, limit)` | ranked passages — hybrid (keyword+semantic), keyword, semantic |
+| `search(query, mode, limit, collection)` | ranked passages — hybrid (keyword+semantic), keyword, semantic; optionally restricted to a collection |
 | `get_document(document_id, max_chars)` | metadata + full extracted per-page text |
-| `list_documents(status, limit)` | browse the archive |
+| `list_documents(status, limit, collection)` | browse the archive, optionally by collection |
 | `scan_now()` | ingest newly dropped files |
 | `extraction_status()` | ingestion summary |
+
+## Dropbox layout: documents and collections
+
+The dropbox is scanned recursively, so any subdirectory structure works.
+The suggested convention:
+
+```
+dropbox/
+  documents/                  individual documents
+    myfile.pdf
+    myfile.pdf.prompt.md      (optional per-file prompt)
+  collections/
+    COLX/                     one directory per collection of sources
+      source1.pdf
+      source2.png
+      prompt.md               (optional: prompt for the whole collection)
+```
+
+Every document is tagged with its relative directory (`documents`,
+`collections/COLX`, …), which shows up in search results and can be used to
+filter: `ma search "..." --collection COLX` or via the MCP `collection`
+parameter. `ma status` lists documents grouped by collection.
 
 ## Custom extraction prompts
 
@@ -100,17 +125,24 @@ Each document can carry its own extraction instructions. Prompt resolution
 order:
 
 1. `--prompt <file>` CLI/MCP flag
-2. `dropbox/<stem>.prompt.md` — sidecar next to the document
-3. `prompts/<stem>.prompt.md`
-4. `prompts/default_prompt.md` (the shipped scholarly-transcription prompt)
-5. built-in default
+2. **file sidecar** — `<stem>.prompt.md` / `<stem>.pdf.prompt.md` next to the
+   document (works in any subdirectory)
+3. **directory chain** — `<dir>/prompt.md`, then `<dir>/<dirname>.prompt.md`,
+   walking from the document's directory up to the dropbox root (nearest
+   wins). This is how a collection-level prompt in
+   `dropbox/collections/COLX/prompt.md` applies to every file under it.
+4. `prompts/<stem>.prompt.md`
+5. `prompts/default_prompt.md` (the shipped scholarly-transcription prompt)
+6. built-in default
 
 A sidecar lets the VLM return **structured data** for a specific document
 type. Example (`dropbox/sample_charter.prompt.md` asks for JSON with
 `document_type`, `date`, `parties`, `places`, `summary`, `transcription`,
-`archival_marks`). Editing a sidecar **automatically re-extracts** that
-document on the next scan (sidecar mtime is compared against the document's
-last update). Use `ma scan --reprocess` to force a full re-extraction.
+`archival_marks`; the sample collection uses a Markdown table instead).
+Editing a prompt file (sidecar, collection `prompt.md`, or the default)
+**automatically re-extracts** the affected documents on the next scan
+(prompt mtime is compared against the document's last update). Use
+`ma scan --reprocess` to force a full re-extraction.
 
 `ma prompts [file]` shows how a prompt resolves.
 
@@ -118,9 +150,10 @@ last update). Use `ma scan --reprocess` to force a full re-extraction.
 
 ```
 ma scan [--watch] [--debounce N] [--prompt FILE] [--reprocess]
-ma search QUERY [--mode hybrid|keyword|semantic] [--limit N] [--json]
+ma search QUERY [--mode hybrid|keyword|semantic] [--collection COLX] [--limit N] [--json]
 ma status
 ma reindex
+ma rm ID|NAME
 ma prompts [file]
 ma mcp [--transport stdio|sse] [--port 8000]
 ```
@@ -148,8 +181,10 @@ After switching the embedding model run `ma reindex`.
 ## Data layout
 
 ```
-dropbox/                  ← where you drop files (+ .prompt.md sidecars)
-library/<stem>__<sha8>/   ← human-readable extracted Markdown per document
+dropbox/documents/        ← individual documents (+ .prompt.md sidecars)
+dropbox/collections/COLX/ ← collections of sources (+ prompt.md for the collection)
+library/<dir>/<stem>__<sha8>/  ← human-readable extracted Markdown per document,
+                                 mirroring the dropbox directory structure
 data/renders/<sha>/       ← cached page JPEGs fed to the VLM
 data/archive.db           ← documents / pages / chunks + FTS5 + embeddings
 prompts/default_prompt.md ← shipped default prompt

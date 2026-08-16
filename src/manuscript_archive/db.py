@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS documents (
     page_count INTEGER,
     status TEXT NOT NULL DEFAULT 'pending',
     prompt_source TEXT,
+    dir_path TEXT,
     error TEXT,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
@@ -52,8 +53,16 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=20000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    migrate(conn)
     conn.commit()
     return conn
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the first release, if missing."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(documents)")]
+    if "dir_path" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN dir_path TEXT")
 
 
 # --------------------------------------------------------------------------- documents
@@ -76,13 +85,30 @@ def add_document(
     mtime: float,
     kind: str,
     now: str,
+    dir_path: str = "",
 ) -> int:
     cur = conn.execute(
-        """INSERT INTO documents (filename, path, sha256, size_bytes, mtime, kind, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (filename, path, sha256, size_bytes, mtime, kind, now, now),
+        """INSERT INTO documents (filename, path, sha256, size_bytes, mtime, kind, dir_path, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (filename, path, sha256, size_bytes, mtime, kind, dir_path, now, now),
     )
     return int(cur.lastrowid)
+
+
+def backfill_dir_path(conn: sqlite3.Connection, dropbox: Path) -> None:
+    """Fill dir_path for rows created before the column existed."""
+    rows = conn.execute("SELECT id, path FROM documents WHERE dir_path IS NULL").fetchall()
+    if not rows:
+        return
+    root = str(Path(dropbox).resolve())
+    for r in rows:
+        p = Path(r["path"])
+        try:
+            rel = str(p.parent.relative_to(root)) if str(p.parent) != root else ""
+        except ValueError:
+            rel = ""
+        conn.execute("UPDATE documents SET dir_path = ? WHERE id = ?", (rel, r["id"]))
+    conn.commit()
 
 
 def update_document(conn: sqlite3.Connection, doc_id: int, **fields) -> None:
@@ -111,12 +137,45 @@ def delete_document(conn: sqlite3.Connection, doc_id: int) -> None:
     conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
 
 
-def list_documents(conn: sqlite3.Connection, status: str | None = None, limit: int = 100) -> list[sqlite3.Row]:
+def _dir_clause(value: str | None, alias: str = "d") -> tuple[str, list]:
+    """SQL fragment matching documents under a collection/dir.
+
+    'documents' matches the documents/ tree; 'COLX' matches collections/COLX
+    (bare names are resolved against the collections/ prefix too);
+    'collections/COLX' and nested paths match exactly or as a prefix.
+    """
+    if not value:
+        return "", []
+    col = "dir_path" if not alias else f"{alias}.dir_path"
+    parts = [value]
+    if "/" not in value:
+        parts.append("collections/" + value)
+    clauses, params = [], []
+    for p in parts:
+        clauses.append(f"({col} = ? OR {col} LIKE ?)")
+        params += [p, p + "/%"]
+    return " AND (" + " OR ".join(clauses) + ")", params
+
+
+def list_documents(
+    conn: sqlite3.Connection,
+    status: str | None = None,
+    limit: int = 100,
+    collection: str | None = None,
+) -> list[sqlite3.Row]:
+    clause, params = _dir_clause(collection, alias="")
+    where = []
     if status:
-        return conn.execute(
-            "SELECT * FROM documents WHERE status = ? ORDER BY updated_at DESC LIMIT ?", (status, limit)
-        ).fetchall()
-    return conn.execute("SELECT * FROM documents ORDER BY updated_at DESC LIMIT ?", (limit,)).fetchall()
+        where.append("status = ?")
+        params.append(status)
+    if clause:
+        where.append(clause.lstrip(" AND "))
+    sql = "SELECT * FROM documents"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY updated_at DESC LIMIT ?"
+    params.append(limit)
+    return conn.execute(sql, params).fetchall()
 
 
 def summary(conn: sqlite3.Connection) -> dict:
@@ -184,10 +243,18 @@ def add_chunk(
     conn.execute("INSERT INTO chunks_fts (rowid, text) VALUES (?, ?)", (cur.lastrowid, text))
 
 
-def all_embeddings(conn: sqlite3.Connection) -> list[tuple[int, bytes]]:
-    return conn.execute(
-        "SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL"
-    ).fetchall()
+def all_embeddings(
+    conn: sqlite3.Connection, collection: str | None = None
+) -> list[tuple[int, bytes]]:
+    clause, params = _dir_clause(collection)
+    sql = (
+        "SELECT c.id, c.embedding FROM chunks c "
+        "JOIN documents d ON d.id = c.document_id "
+        "WHERE c.embedding IS NOT NULL"
+    )
+    if clause:
+        sql += clause
+    return conn.execute(sql, params).fetchall()
 
 
 def get_chunk_text(conn: sqlite3.Connection, chunk_id: int) -> str | None:
@@ -209,19 +276,26 @@ def build_fts_query(query: str) -> str:
     return " AND ".join(parts) or '""'
 
 
-def keyword_search(conn: sqlite3.Connection, query: str, limit: int = 10) -> list[sqlite3.Row]:
+def keyword_search(
+    conn: sqlite3.Connection, query: str, limit: int = 10, collection: str | None = None
+) -> list[sqlite3.Row]:
     fts_q = build_fts_query(query)
+    clause, params = _dir_clause(collection)
     return conn.execute(
         """SELECT c.id AS chunk_id, c.document_id, c.page_id, p.page_no, c.chunk_no, c.text,
+                  d.dir_path,
                   -bm25(chunks_fts) AS bm,
                   snippet(chunks_fts, 0, '…', '…', '…', 28) AS snippet
            FROM chunks_fts
            JOIN chunks c ON c.id = chunks_fts.rowid
            JOIN pages p ON p.id = c.page_id
-           WHERE chunks_fts MATCH ?
+           JOIN documents d ON d.id = c.document_id
+           WHERE chunks_fts MATCH ?"""
+        + clause
+        + """
            ORDER BY bm25(chunks_fts)
            LIMIT ?""",
-        (fts_q, limit),
+        (fts_q, *params, limit),
     ).fetchall()
 
 

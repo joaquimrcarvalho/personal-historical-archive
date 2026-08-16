@@ -36,6 +36,7 @@ def _decorate(conn: sqlite3.Connection, chunk_id: int, row, source: str, score) 
         "chunk_id": chunk_id,
         "document_id": row["document_id"],
         "filename": doc["filename"] if doc else None,
+        "collection": (doc["dir_path"] if doc and doc["dir_path"] else "(root)"),
         "path": doc["path"] if doc else None,
         "page_no": row["page_no"],
         "text": row["text"],
@@ -45,8 +46,8 @@ def _decorate(conn: sqlite3.Connection, chunk_id: int, row, source: str, score) 
     }
 
 
-def keyword_search(conn: sqlite3.Connection, query: str, limit: int) -> list[dict]:
-    rows = db.keyword_search(conn, query, limit)
+def keyword_search(conn: sqlite3.Connection, query: str, limit: int, collection: str | None = None) -> list[dict]:
+    rows = db.keyword_search(conn, query, limit, collection=collection)
     out = []
     for r in rows:
         d = _decorate(conn, r["chunk_id"], r, "keyword", None)
@@ -56,12 +57,17 @@ def keyword_search(conn: sqlite3.Connection, query: str, limit: int) -> list[dic
 
 
 def semantic_search(
-    conn: sqlite3.Connection, client: ModelClient, model: str, query: str, limit: int
+    conn: sqlite3.Connection,
+    client: ModelClient,
+    model: str,
+    query: str,
+    limit: int,
+    collection: str | None = None,
 ) -> list[dict]:
     q = _embed_query(client, model, query)
     if q is None:
         return []
-    embs = db.all_embeddings(conn)
+    embs = db.all_embeddings(conn, collection=collection)
     if not embs:
         return []
     scored = [(cosine(q, unpack(b)), cid) for cid, b in embs]
@@ -100,6 +106,7 @@ def search(
     query: str,
     mode: str | None = None,
     limit: int | None = None,
+    collection: str | None = None,
 ) -> dict:
     mode = (mode or cfg.default_mode).lower()
     limit = limit or cfg.top_k
@@ -107,16 +114,18 @@ def search(
         raise ValueError(f"Unknown search mode {mode!r}; use hybrid, keyword or semantic")
 
     if mode == "keyword":
-        return {"mode": mode, "query": query, "results": keyword_search(conn, query, limit), "note": None}
+        return {
+            "mode": mode, "query": query, "results": keyword_search(conn, query, limit, collection), "note": None,
+        }
 
-    sem = semantic_search(conn, client, cfg.embed_model, query, limit)
+    sem = semantic_search(conn, client, cfg.embed_model, query, limit, collection)
     if mode == "semantic":
         note = None
         if not sem:
             note = "Semantic search unavailable: embedding model unreachable or no embedded chunks."
         return {"mode": mode, "query": query, "results": sem, "note": note}
 
-    kw = keyword_search(conn, query, limit)
+    kw = keyword_search(conn, query, limit, collection)
     note = None
     if not sem:
         note = "Embedding model unreachable or no embedded chunks; showing keyword results only."

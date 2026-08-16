@@ -61,33 +61,57 @@ def page_count(path: Path) -> int:
         return len(doc)
 
 
-def resolve_prompt(
+def prompt_candidates(
     stem: str,
+    file_dir: Path,
     dropbox: Path,
     prompts_dir: Path,
     explicit: str | None = None,
-) -> tuple[str, str]:
-    """Return (prompt_text, source) for a file.
+) -> list[Path]:
+    """Candidate prompt files in resolution order.
 
-    Resolution order:
+    Order:
       1. explicit prompt file (--prompt flag)
-      2. <stem>.prompt.md next to the document in the dropbox
-      3. <stem>.prompt.md in the prompts dir
-      4. prompts/default_prompt.md
-      5. built-in default
+      2. next to the document: <stem>.prompt.md / <stem>.pdf.prompt.md
+      3. directory chain (nearest first): <dir>/prompt.md, <dir>/<dirname>.prompt.md,
+         walking up to the dropbox root — this is how a collection-level prompt
+         (e.g. dropbox/collections/COLX/prompt.md) applies to everything under it
+      4. prompts dir: <stem>.prompt.md
     """
     if explicit:
         p = Path(explicit)
         if not p.is_absolute():
             p = prompts_dir / explicit
-        if p.exists():
-            return p.read_text(), str(p)
-        raise FileNotFoundError(f"Explicit prompt file not found: {explicit}")
-    for cand in (
-        dropbox / f"{stem}.prompt.md",
-        dropbox / f"{stem}.pdf.prompt.md",
-        prompts_dir / f"{stem}.prompt.md",
-    ):
+        return [p]
+    cands: list[Path] = [
+        file_dir / f"{stem}.prompt.md",
+        file_dir / f"{stem}.pdf.prompt.md",
+    ]
+    d = file_dir
+    while True:
+        cands.append(d / "prompt.md")
+        cands.append(d / f"{d.name}.prompt.md")
+        if d == dropbox or dropbox not in d.parents:
+            break
+        d = d.parent
+    cands.append(prompts_dir / f"{stem}.prompt.md")
+    return cands
+
+
+def resolve_prompt(
+    stem: str,
+    file_dir: Path,
+    dropbox: Path,
+    prompts_dir: Path,
+    explicit: str | None = None,
+) -> tuple[str, str]:
+    """Return (prompt_text, source) for a document at file_dir.
+
+    Resolution order: explicit --prompt, file-sidecar, directory/collection
+    chain (nearest first), prompts/<stem>.prompt.md, prompts/default_prompt.md,
+    built-in default.
+    """
+    for cand in prompt_candidates(stem, file_dir, dropbox, prompts_dir, explicit):
         if cand.exists():
             return cand.read_text(), str(cand)
     default = prompts_dir / "default_prompt.md"

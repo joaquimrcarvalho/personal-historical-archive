@@ -1,9 +1,12 @@
-"""Generate a small sample 'manuscript' for end-to-end testing.
+"""Generate small sample 'manuscripts' for end-to-end testing.
 
 Writes into the dropbox:
   - sample_charter.pdf        (2 pages, pseudo-16th-century Portuguese charter)
   - sample_charter.prompt.md  (custom per-file extraction prompt -> JSON)
   - sample_charter_image.png  (page 1 as an image, extracted with the default prompt)
+  - collections/COLX/         a collection containing a copy of the charter
+      - sample_charter.pdf    (uses the collection-level prompt)
+      - prompt.md             collection-level extraction prompt
 """
 
 from pathlib import Path
@@ -40,6 +43,21 @@ PROMPT = """Extract the information from this archival document and return it as
 If a piece of information is not present, use null. Output ONLY the JSON object."""
 
 
+COLLECTION_PROMPT = """You are transcribing documents from a research collection on early Portuguese land grants.
+For each page return a Markdown table row with these columns:
+| field | value |
+| --- | --- |
+| document_type | charter/letter/etc. |
+| language | |
+| date | explicit date(s), original form |
+| parties | people/institutions involved |
+| places | places mentioned |
+| grant_or_right | what was granted / which right is involved |
+| transcription | faithful transcription, [illegible] for unreadable parts |
+
+One table per page. If a value is absent, write '—'."""
+
+
 def main() -> None:
     DROP.mkdir(exist_ok=True)
     pdf = DROP / "sample_charter.pdf"
@@ -64,9 +82,17 @@ def main() -> None:
     (DROP / "sample_charter.prompt.md").write_text(PROMPT)
     with fitz.open(str(pdf)) as d:
         d[0].get_pixmap(dpi=150).save(str(DROP / "sample_charter_image.png"))
+    # collection structure: collections/COLX
+    col_dir = DROP / "collections" / "COLX"
+    col_dir.mkdir(parents=True, exist_ok=True)
+    (col_dir / "prompt.md").write_text(COLLECTION_PROMPT)
+    col_pdf = col_dir / "sample_charter.pdf"
+    if not col_pdf.exists():
+        col_pdf.write_bytes(pdf.read_bytes())
     print("wrote:")
-    for p in sorted(DROP.iterdir()):
-        print(f"  {p.name}  ({p.stat().st_size} bytes)")
+    for p in sorted(DROP.rglob("*")):
+        if p.is_file():
+            print(f"  {p.relative_to(DROP)}  ({p.stat().st_size} bytes)")
 
 
 if __name__ == "__main__":

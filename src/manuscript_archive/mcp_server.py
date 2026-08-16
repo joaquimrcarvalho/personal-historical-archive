@@ -22,15 +22,17 @@ def make_server(cfg: Config) -> FastMCP:
     )
 
     @mcp.tool()
-    def search(query: str, mode: str = "hybrid", limit: int = 10) -> list[dict]:
+    def search(query: str, mode: str = "hybrid", limit: int = 10, collection: str | None = None) -> list[dict]:
         """Search the extracted manuscript text and return ranked passages.
 
         Args:
             query: free-text search query (keyword terms or a natural-language description).
             mode: hybrid (keyword + semantic, default), keyword (FTS5), or semantic (embeddings).
             limit: maximum number of results (1-50).
+            collection: restrict to a collection or directory, e.g. 'documents',
+                'COLX' (resolves to collections/COLX), or 'collections/COLX'.
         Returns:
-            Ranked passages with document id/name, page number, snippet, and full chunk text.
+            Ranked passages with document id/name, collection, page number, snippet, and full chunk text.
         """
         if mode not in ("hybrid", "keyword", "semantic"):
             mode = "hybrid"
@@ -38,7 +40,7 @@ def make_server(cfg: Config) -> FastMCP:
         conn = db.connect(cfg.db_path)
         client = ModelClient(cfg.embed_base_url, timeout_s=cfg.embed_timeout_s)
         try:
-            res = run_search(conn, client, cfg, query, mode=mode, limit=limit)
+            res = run_search(conn, client, cfg, query, mode=mode, limit=limit, collection=collection)
         finally:
             client.close()
             conn.close()
@@ -79,19 +81,20 @@ def make_server(cfg: Config) -> FastMCP:
             conn.close()
 
     @mcp.tool()
-    def list_documents(status: str | None = None, limit: int = 100) -> list[dict]:
+    def list_documents(status: str | None = None, limit: int = 100, collection: str | None = None) -> list[dict]:
         """List documents in the archive.
 
         Args:
             status: optional filter: done, error, processing, pending.
             limit: maximum number of entries (1-500).
+            collection: restrict to a collection/directory (see `search`).
         """
         limit = max(1, min(int(limit), 500))
         if status and status not in ("done", "error", "processing", "pending"):
             status = None
         conn = db.connect(cfg.db_path)
         try:
-            docs = db.list_documents(conn, status=status, limit=limit)
+            docs = db.list_documents(conn, status=status, limit=limit, collection=collection)
             return [{k: d[k] for k in d.keys()} for d in docs]
         finally:
             conn.close()

@@ -3,6 +3,10 @@
 
 paths:
   dropbox: dropbox        # drop PDFs/images here (+ optional <stem>.prompt.md sidecars)
+                          # subdirectories are supported and become 'collections':
+                          #   dropbox/documents/            individual documents
+                          #   dropbox/collections/COLX/     a collection of sources
+                          #   dropbox/collections/COLX/prompt.md  -> prompt for the whole collection
   library: library        # human-readable extracted markdown per document
   data: data              # sqlite db + page renders
   renders: data/renders   # cached page images fed to the vision model

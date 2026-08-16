@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -11,7 +12,14 @@ from watchdog.observers import Observer
 from . import db
 from .config import Config
 from .embed import pack, prefixed
-from .extract import build_page_prompt, is_supported, page_count, render_document, resolve_prompt
+from .extract import (
+    build_page_prompt,
+    is_supported,
+    page_count,
+    prompt_candidates,
+    render_document,
+    resolve_prompt,
+)
 from .model_client import ModelClient, ModelError
 
 
@@ -55,15 +63,21 @@ def chunk_text(text: str, size: int, overlap: int) -> list[str]:
 
 
 def _prompt_newer_than(path: Path, cfg: Config, ts: float) -> bool:
-    stem = path.stem
-    for cand in (
-        cfg.dropbox / f"{stem}.prompt.md",
-        cfg.dropbox / f"{stem}.pdf.prompt.md",
-        cfg.prompts / f"{stem}.prompt.md",
-    ):
+    for cand in prompt_candidates(path.stem, path.parent, cfg.dropbox, cfg.prompts):
         if cand.exists() and cand.stat().st_mtime > ts:
             return True
-    return False
+    default = cfg.prompts / "default_prompt.md"
+    return default.exists() and default.stat().st_mtime > ts
+
+
+def remove_library_artifact(cfg: Config, doc) -> None:
+    """Delete the extracted-markdown directory for a document, if present."""
+    if not doc:
+        return
+    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    d = cfg.library / (doc["dir_path"] or "") / slug
+    if d.exists():
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def ingest_file(
@@ -91,17 +105,24 @@ def ingest_file(
             return {"action": "skipped", "filename": path.name, "reason": "already processing"}
         reuse = True  # prompt changed or previous run failed -> reprocess in place
     if existing and not reuse:
+        remove_library_artifact(cfg, existing)
         db.delete_document(conn, existing["id"])
         conn.commit()
 
+    try:
+        rel_dir = str(path.parent.relative_to(cfg.dropbox))
+    except ValueError:
+        rel_dir = ""
+    if rel_dir == ".":
+        rel_dir = ""
     doc_id = existing["id"] if reuse else db.add_document(
         conn, filename=path.name, path=str(path), sha256=sha,
-        size_bytes=size, mtime=mtime, kind=kind, now=now,
+        size_bytes=size, mtime=mtime, kind=kind, now=now, dir_path=rel_dir,
     )
     db.set_document_status(conn, doc_id, "processing")
     conn.commit()
 
-    prompt, prompt_source = resolve_prompt(path.stem, cfg.dropbox, cfg.prompts, explicit_prompt)
+    prompt, prompt_source = resolve_prompt(path.stem, path.parent, cfg.dropbox, cfg.prompts, explicit_prompt)
     force = reprocess or reuse
 
     try:
@@ -182,12 +203,14 @@ def write_library_artifact(cfg: Config, conn, doc_id: int) -> Path | None:
     if not doc:
         return None
     slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
-    out_dir = cfg.library / slug
+    rel_dir = Path(doc["dir_path"] or "")
+    out_dir = cfg.library / rel_dir / slug
     out_dir.mkdir(parents=True, exist_ok=True)
     lines = [
         f"# {doc['filename']}",
         "",
         f"- source: `{doc['path']}`",
+        f"- collection: `{doc['dir_path'] or '(root)'}`",
         f"- kind: {doc['kind']}",
         f"- pages: {doc['page_count']}",
         f"- status: {doc['status']}",
@@ -214,6 +237,7 @@ def scan_once(
     cfg.ensure_dirs()
     conn = db.connect(cfg.db_path)
     try:
+        db.backfill_dir_path(conn, cfg.dropbox)
         files = discover(cfg.dropbox)
         results = []
         for i, f in enumerate(files, 1):
@@ -228,6 +252,7 @@ def scan_once(
 def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True) -> dict:
     conn = db.connect(cfg.db_path)
     try:
+        db.backfill_dir_path(conn, cfg.dropbox)
         docs = [d for d in db.list_documents(conn, limit=10000) if d["status"] == "done"]
         counts = {}
         for d in docs:
