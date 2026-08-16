@@ -168,13 +168,26 @@ def chunk_text(text: str, size: int, overlap: int) -> list[str]:
     return chunks
 
 
-def _prompt_newer_than(path: Path, cfg: Config, ts: float) -> bool:
+def _prompt_newer_than(
+    path: Path,
+    cfg: Config,
+    ts: float,
+    palaeographer: Palaeographer | None = None,
+) -> bool:
     file_dir = path if path.is_dir() else path.parent
     for cand in prompt_candidates(path.stem, file_dir, cfg.dropbox, cfg.prompts):
         if cand.exists() and cand.stat().st_mtime > ts:
             return True
     default = cfg.prompts / "default_prompt.md"
-    return default.exists() and default.stat().st_mtime > ts
+    if default.exists() and default.stat().st_mtime > ts:
+        return True
+    if palaeographer and palaeographer.prompt_file:
+        try:
+            if palaeographer.prompt_file.stat().st_mtime > ts:
+                return True
+        except OSError:
+            pass
+    return False
 
 
 def remove_library_artifact(cfg: Config, doc) -> None:
@@ -213,19 +226,22 @@ def ingest_file(
     reuse = False
     prompt_changed = False
     if existing and not reprocess and existing["sha256"] == sha:
+        prompt_newer = _prompt_newer_than(path, cfg, existing["updated_at"], palaeographer)
         if existing["status"] == "processing":
             # Only skip if ANOTHER live scan owns this document right now;
             # a stale 'processing' (killed by sleep/crash/reboot) is resumed.
             if _scan_lock_held_by_other(cfg) and time.time() - existing["updated_at"] < 600:
                 return {"action": "skipped", "filename": path.name, "reason": "already processing"}
             reuse = True  # resume (keep done pages)
+            prompt_changed = prompt_newer  # palaeographer/doc prompt edited mid-run
         elif existing["status"] == "done":
-            if not _prompt_newer_than(path, cfg, existing["updated_at"]):
+            if not prompt_newer:
                 return {"action": "skipped", "filename": path.name, "reason": "unchanged"}
             reuse = True
             prompt_changed = True  # prompt edited -> re-extract ALL pages
         else:  # 'error': previous run failed -> resume (keep done pages, retry the rest)
             reuse = True
+            prompt_changed = prompt_newer
     if existing and not reuse:
         remove_library_artifact(cfg, existing)
         db.delete_document(conn, existing["id"])

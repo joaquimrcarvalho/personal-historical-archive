@@ -33,17 +33,14 @@ PAGE2 = [
     "Assinado: Frei João de São Bento, abade. — Selo pendente de cera vermelha, com as armas reais.",
 ]
 
-PROMPT = """Extract the information from this archival document and return it as JSON with these exact keys:
-- document_type: what kind of document it is (e.g. charter, letter, inventory)
-- language: language(s) used
-- date: explicit date(s) found, in the original form
-- parties: people/institutions involved (list)
-- places: places mentioned (list)
-- summary: 3-5 sentence summary in English
-- transcription: faithful transcription of the text, keeping original spelling, marking illegible parts with [illegible]
-- archival_marks: shelfmarks, page/folio numbers, stamps, seal descriptions
-
-If a piece of information is not present, use null. Output ONLY the JSON object."""
+PROMPT = """This document adds specific aspects on top of the palaeographer's base prompt
+(which defines the exact output format). This is an archival charter (carta de
+doação); pay special attention to:
+- parties (grantor, grantee) and what was granted
+- explicit dates, in the original form
+- places mentioned
+- archival marks (shelfmarks, seals, folio references)
+- whether the text is a traslado (copy) or the original"""
 
 
 LETTER_PROMPT = """Transcribe this page of a personal letter (early modern Portuguese).
@@ -54,19 +51,17 @@ Return exactly:
 - 2-3 sentence summary in English
 Label the result as '## Page analysis'."""
 
-COLLECTION_PROMPT = """You are transcribing documents from a research collection on early Portuguese land grants.
-For each page return a Markdown table row with these columns:
-| field | value |
-| --- | --- |
-| document_type | charter/letter/etc. |
-| language | |
-| date | explicit date(s), original form |
-| parties | people/institutions involved |
-| places | places mentioned |
-| grant_or_right | what was granted / which right is involved |
-| transcription | faithful transcription, [illegible] for unreadable parts |
+COLLECTION_PROMPT = """This collection prompt adds specific aspects on top of the palaeographer's base
+prompt (which defines the exact output format). This collection is about early
+Portuguese land grants; pay special attention to:
+- document_type: charter/letter/etc.
+- explicit dates, original form
+- parties: people/institutions involved
+- places mentioned
+- grant_or_right: what was granted / which right is involved
+- archival marks
 
-One table per page. If a value is absent, write '—'."""
+If a value is absent, write "none"."""
 
 
 def _write_if_changed(path: Path, text: str) -> None:

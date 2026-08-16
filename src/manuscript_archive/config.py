@@ -52,6 +52,7 @@ class Palaeographer:
     max_tokens: int
     timeout_s: int
     prompt_text: str
+    prompt_file: Path | None = None
 
     @property
     def prompt_source(self) -> str:
@@ -181,6 +182,7 @@ def _palaeographer_from_entry(
     pal_id: str, entry: dict, prompts_dir: Path, root: Path
 ) -> Palaeographer:
     prompt_text = ""
+    prompt_file: Path | None = None
     if entry.get("prompt_file"):
         p = Path(str(entry["prompt_file"]))
         if not p.is_absolute():
@@ -190,6 +192,7 @@ def _palaeographer_from_entry(
                 if alt.exists():
                     p = alt
         if p.exists():
+            prompt_file = p
             prompt_text = p.read_text()
     elif isinstance(entry.get("prompt"), str):
         prompt_text = entry["prompt"]
@@ -203,6 +206,7 @@ def _palaeographer_from_entry(
         max_tokens=int(entry.get("max_tokens", 4096)),
         timeout_s=int(entry.get("timeout_s", 900)),
         prompt_text=prompt_text,
+        prompt_file=prompt_file,
     )
 
 

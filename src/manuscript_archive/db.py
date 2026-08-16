@@ -228,16 +228,18 @@ def summary(conn: sqlite3.Connection) -> dict:
 # --------------------------------------------------------------------------- pages
 
 def add_page(conn: sqlite3.Connection, doc_id: int, page_no: int) -> int:
-    cur = _write(
+    _write(
         conn,
         "INSERT OR IGNORE INTO pages (document_id, page_no) VALUES (?, ?)",
         (doc_id, page_no),
     )
-    if cur.lastrowid:
-        return int(cur.lastrowid)
+    # INSERT OR IGNORE leaves lastrowid stale when the row already exists
+    # (it returns the previous insert's rowid), so always look the row up.
     row = conn.execute(
         "SELECT id FROM pages WHERE document_id = ? AND page_no = ?", (doc_id, page_no)
     ).fetchone()
+    if row is None:
+        raise RuntimeError(f"failed to create/read page {page_no} of document {doc_id}")
     return int(row["id"])
 
 

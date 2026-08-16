@@ -10,7 +10,15 @@ SUPPORTED_EXTS = {".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".b
 DEFAULT_PROMPT = """You are a scholarly transcriber working with historical manuscripts in Western
 European languages (Latin, Portuguese, French, Italian, Spanish, German, English).
 
-Transcribe the page faithfully:
+You are transcribing ONE page of a multi-page document (page N of M).
+Do NOT comment on the completeness, truncation, or fragmentary nature of the
+text, and do NOT mention preceding or following pages. Transcribe only what is
+visible on this page, exactly as it appears.
+
+This prompt adds scholarly transcription rules to the palaeographer's base
+prompt that precedes it (the base prompt defines the exact output format:
+## Transcription, then ## Notes with ### Named entities — one entity per line
+as a bullet — and ### Content summary). Keep that format unchanged:
 
 1. Keep the original language and spelling. When you are confident about an
    abbreviation, expand it in square brackets, e.g. "dñs" -> "d[omi]n[u]s".
@@ -20,17 +28,6 @@ Transcribe the page faithfully:
 3. Mark anything you cannot read: `[illegible]` for a few characters,
    `[illegible: N words]` for larger passages, `[damaged]`, `[hole]`, `[seal]`.
 4. Never invent text you cannot see. If the page is blank, write `[blank page]`.
-
-After the transcription add a section headed `## Notes` (write the notes in English):
-
-- Language: the language(s) of the page
-- Script: e.g. secretary hand, humanist, cursive, print
-- Date clues: any explicit dates or datable references you can see
-- Named entities: people, places, institutions mentioned
-- Content summary: 2-4 sentences describing what this page is about
-- Foliation / archival marks: page numbers, folio numbers, stamps, shelfmarks
-
-Output format: Markdown, starting with `## Transcription`.
 """
 
 
@@ -147,8 +144,9 @@ _NOTE_OTHER_RE = re.compile(
 def _split_entities(value: str) -> list[str]:
     """Split an inline 'Named entities' value into bullet items.
 
-    Handles ';', '|' and spaced-hyphen (' - ') separators, but only outside
-    parentheses (entities often carry parenthetical notes with commas/dashes).
+    Splits on ';', '|', ',' and spaced hyphens (' - '), but only OUTSIDE
+    parentheses, so parenthetical notes are kept intact
+    (e.g. "Geylolo (likely Gading, a ruler of the region)" stays one item).
     """
     value = re.sub(r"^\s*[-*]\s+", "", value.strip())
     value = value.strip()
@@ -164,7 +162,7 @@ def _split_entities(value: str) -> list[str]:
             depth += 1
         elif ch == ")":
             depth = max(0, depth - 1)
-        if depth == 0 and (ch in (";", "|") or value.startswith(" - ", i)):
+        if depth == 0 and (ch in (";", "|", ",") or value.startswith(" - ", i)):
             parts.append("".join(buf))
             buf = []
             i += 3 if value.startswith(" - ", i) else 1
@@ -173,10 +171,6 @@ def _split_entities(value: str) -> list[str]:
         i += 1
     parts.append("".join(buf))
     items = [p.strip(" -") for p in parts if p.strip(" -")]
-    if not items:
-        return ["(none)"]
-    if len(items) == 1 and "(" not in items[0]:
-        items = [it.strip() for it in items[0].split(",") if it.strip()]
     return items or ["(none)"]
 
 
