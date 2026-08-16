@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
 
@@ -184,8 +185,12 @@ def cmd_palaeographer(cfg: Config, args) -> None:
         print(f"source: {source or 'config default (vision.palaeographer)'}")
         return
     print(f"default (vision.palaeographer): {cfg.active_palaeographer}")
-    for f in sorted(list(cfg.dropbox.rglob("palaeographer")) + list(cfg.dropbox.rglob("*.palaeographer"))):
-        pal_id = f.read_text().strip().splitlines()[0].strip() if f.read_text().strip() else ""
+    pal_files = []
+    for pat in ("palaeographer", "palaeographer.txt", "palaeographer.md",
+                "*.palaeographer", "*.palaeographer.txt", "*.palaeographer.md"):
+        pal_files.extend(cfg.dropbox.rglob(pat))
+    for f in sorted(set(pal_files)):
+        pal_id = re.sub(r"^[#\-*\s]+", "", f.read_text().strip().splitlines()[0]).strip() if f.read_text().strip() else ""
         print(f"  {f}: {pal_id or '(empty)'}")
 
 

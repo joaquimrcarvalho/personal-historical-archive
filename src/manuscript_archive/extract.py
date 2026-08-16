@@ -225,16 +225,19 @@ def build_page_prompt(file_prompt: str, filename: str, page_no: int, total: int)
 # --------------------------------------------------------------------------- palaeographer selection
 
 def palaeographer_candidates(stem: str, file_dir: Path, dropbox: Path) -> list[Path]:
-    """Candidate 'palaeographer' files in resolution order:
-    1. <stem>.palaeographer sidecar next to the document
-    2. <dir>/palaeographer walking from the document's directory up to the
-       dropbox root (nearest wins) — a collection-level file like
-       dropbox/collections/COLX/palaeographer applies to everything under it.
+    """Candidate 'palaeographer' files in resolution order.
+
+    The file may be named 'palaeographer' with an optional '.txt' or '.md'
+    extension (so it is easy to open/edit on desktop computers). Order per
+    location: plain, then .txt, then .md; sidecar next to the document first,
+    then <dir>/palaeographer walking up to the dropbox root (nearest wins).
     """
-    cands: list[Path] = [file_dir / f"{stem}.palaeographer"]
+    exts = ("", ".txt", ".md")
+    cands: list[Path] = [file_dir / f"{stem}.palaeographer{ext}" for ext in exts]
     d = file_dir
     while True:
-        cands.append(d / "palaeographer")
+        for ext in exts:
+            cands.append(d / f"palaeographer{ext}")
         if d == dropbox or dropbox not in d.parents:
             break
         d = d.parent
@@ -245,12 +248,15 @@ def resolve_palaeographer_id(
     stem: str, file_dir: Path, dropbox: Path, explicit: str | None = None
 ) -> tuple[str | None, str | None]:
     """Return (palaeographer_id, source) for a document, or (None, None) to
-    fall back to the configured default."""
+    fall back to the configured default. The id is the first non-empty line
+    of the file; leading markdown markers ('# ', '- ', '* ') are tolerated."""
     if explicit:
         return explicit, f"flag:{explicit}"
     for cand in palaeographer_candidates(stem, file_dir, dropbox):
         if cand.exists():
-            pal_id = cand.read_text().strip().splitlines()[0].strip() if cand.read_text().strip() else ""
-            if pal_id:
-                return pal_id, str(cand)
+            text = cand.read_text().strip()
+            if text:
+                pal_id = re.sub(r"^[#\-*\s]+", "", text.splitlines()[0]).strip()
+                if pal_id:
+                    return pal_id, str(cand)
     return None, None

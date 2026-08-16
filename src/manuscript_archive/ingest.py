@@ -520,7 +520,14 @@ class _WatchHandler(FileSystemEventHandler):
         name = Path(event.src_path).name
         if name.startswith(".") or name.endswith((".tmp", "~")):
             return
-        if not (is_supported(name) or name.endswith(".prompt.md") or name == "palaeographer" or name.endswith(".palaeographer")):
+        is_pal = (
+            name == "palaeographer"
+            or name.startswith("palaeographer.")
+            or name.endswith(".palaeographer")
+            or name.endswith(".palaeographer.txt")
+            or name.endswith(".palaeographer.md")
+        )
+        if not (is_supported(name) or name.endswith(".prompt.md") or is_pal):
             return
         with self._lock:
             if self._timer:

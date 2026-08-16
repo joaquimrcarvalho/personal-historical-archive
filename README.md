@@ -186,14 +186,16 @@ palaeographers:
 - `vision.palaeographer` selects the active one; `ma scan --palaeographer ID`
   overrides it for one run; the MCP `scan_now` uses the configured default.
 - **Per-document / per-collection selection**: place a file named
-  `palaeographer` (containing the palaeographer id) either next to a document
-  (`<stem>.palaeographer`) or in a directory/collection
-  (`dropbox/collections/COLX/palaeographer`). It is resolved with the same
-  nearest-wins chain as prompts (file sidecar, then walking up to the dropbox
-  root), and overrides the config default for everything under it:
+  `palaeographer` (with an optional `.txt` or `.md` extension so it is easy
+  to edit on a desktop) containing the palaeographer id — either next to a
+  document (`<stem>.palaeographer`, `<stem>.palaeographer.md`, …) or in a
+  directory/collection (`dropbox/collections/COLX/palaeographer.txt`). It is
+  resolved with the same nearest-wins chain as prompts (file sidecar, then
+  walking up to the dropbox root), and overrides the config default for
+  everything under it:
 
   ```
-  dropbox/collections/COLX/palaeographer   → "portuguese-secretary"
+  dropbox/collections/COLX/palaeographer.md   → "portuguese-secretary"
   ```
 
   Changing a `palaeographer` file re-extracts the affected document(s) with
