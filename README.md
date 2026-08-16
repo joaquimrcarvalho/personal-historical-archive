@@ -107,17 +107,27 @@ dropbox/
   documents/                  individual documents
     myfile.pdf
     myfile.pdf.prompt.md      (optional per-file prompt)
+    ms123/                    a document made of page-scan images:
+      p01.jpg, p02.jpg, ...     each image is scanned as one page
+      prompt.md                 (optional: applies to scanning EACH image)
   collections/
     COLX/                     one directory per collection of sources
       source1.pdf
-      source2.png
+      source2/                (a document made of images inside a collection)
       prompt.md               (optional: prompt for the whole collection)
 ```
 
+A **document** is either a single file (PDF or image) or a directory of
+images (auto-detected: images and no subdirectories/PDFs — each image becomes
+a page, exactly like the pages of a PDF). Such a directory is indexed as one
+document, its images share one prompt, and the library output is a single
+markdown file. Set `extraction.dir_documents: false` to treat every directory
+as a plain grouping of separate files instead.
+
 Every document is tagged with its relative directory (`documents`,
-`collections/COLX`, …), which shows up in search results and can be used to
-filter: `ma search "..." --collection COLX` or via the MCP `collection`
-parameter. `ma status` lists documents grouped by collection.
+`documents/ms123`, `collections/COLX`, …), which shows up in search results
+and can be used to filter: `ma search "..." --collection COLX` or via the MCP
+`collection` parameter. `ma status` lists documents grouped by collection.
 
 ## Custom extraction prompts
 
@@ -127,10 +137,15 @@ order:
 1. `--prompt <file>` CLI/MCP flag
 2. **file sidecar** — `<stem>.prompt.md` / `<stem>.pdf.prompt.md` next to the
    document (works in any subdirectory)
-3. **directory chain** — `<dir>/prompt.md`, then `<dir>/<dirname>.prompt.md`,
-   walking from the document's directory up to the dropbox root (nearest
-   wins). This is how a collection-level prompt in
-   `dropbox/collections/COLX/prompt.md` applies to every file under it.
+3. **directory chain** — for each directory from the document's location up to
+   the dropbox root (nearest wins): `<dir>/prompt.md`, then
+   `<dir>/<dirname>.prompt.md`, then `<parent>/<dirname>.prompt.md` (a sidecar
+   next to the directory). This is how:
+   - a collection prompt in `dropbox/collections/COLX/prompt.md` applies to
+     every file under it,
+   - a document-directory prompt (`documents/ms123/prompt.md` or
+     `documents/ms123.prompt.md`) applies to **scanning each image** in that
+     folder.
 4. `prompts/<stem>.prompt.md`
 5. `prompts/default_prompt.md` (the shipped scholarly-transcription prompt)
 6. built-in default

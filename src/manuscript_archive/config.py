@@ -51,6 +51,7 @@ class Config:
     chunk_chars: int
     chunk_overlap: int
     concurrency: int
+    dir_documents: bool
     # search
     default_mode: str
     top_k: int
@@ -91,6 +92,7 @@ class Config:
             chunk_chars=int(ext.get("chunk_chars", 2000)),
             chunk_overlap=int(ext.get("chunk_overlap", 200)),
             concurrency=int(ext.get("concurrency", 1)),
+            dir_documents=bool(ext.get("dir_documents", True)),
             default_mode=str(sea.get("default_mode", "hybrid")),
             top_k=int(sea.get("top_k", 10)),
         )

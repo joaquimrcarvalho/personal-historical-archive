@@ -40,6 +40,8 @@ extraction:
   chunk_chars: 2000       # index chunk size
   chunk_overlap: 200
   concurrency: 1          # parallel VLM calls; 1 is safest on 24 GB
+  dir_documents: true     # a directory of images (no subdirs/PDFs) is ONE document;
+                          # its prompt applies to scanning each image
 
 search:
   default_mode: hybrid    # hybrid | keyword | semantic

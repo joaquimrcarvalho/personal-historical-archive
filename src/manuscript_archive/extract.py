@@ -73,9 +73,12 @@ def prompt_candidates(
     Order:
       1. explicit prompt file (--prompt flag)
       2. next to the document: <stem>.prompt.md / <stem>.pdf.prompt.md
-      3. directory chain (nearest first): <dir>/prompt.md, <dir>/<dirname>.prompt.md,
+      3. directory chain (nearest first):
+           <dir>/prompt.md, <dir>/<dirname>.prompt.md,
+           <parent>/<dirname>.prompt.md (sidecar next to the directory),
          walking up to the dropbox root — this is how a collection-level prompt
-         (e.g. dropbox/collections/COLX/prompt.md) applies to everything under it
+         (e.g. dropbox/collections/COLX/prompt.md) applies to everything under
+         it, and how a document-directory of images gets one prompt for all pages
       4. prompts dir: <stem>.prompt.md
     """
     if explicit:
@@ -91,6 +94,8 @@ def prompt_candidates(
     while True:
         cands.append(d / "prompt.md")
         cands.append(d / f"{d.name}.prompt.md")
+        if d != dropbox and dropbox in d.parents:
+            cands.append(d.parent / f"{d.name}.prompt.md")
         if d == dropbox or dropbox not in d.parents:
             break
         d = d.parent

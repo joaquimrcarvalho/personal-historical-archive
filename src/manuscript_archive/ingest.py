@@ -31,11 +31,45 @@ def sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
-def discover(dropbox: Path) -> list[Path]:
-    return sorted(
-        p for p in dropbox.rglob("*")
-        if p.is_file() and is_supported(p.name) and not p.name.startswith(".")
-    )
+def sha256_of_dir(path: Path) -> str:
+    """Content hash of an image-directory document (names + file hashes)."""
+    h = hashlib.sha256()
+    for f in sorted(path.iterdir()):
+        if f.is_file() and is_supported(f.name) and not f.name.startswith("."):
+            h.update(f.name.encode())
+            h.update(sha256_of(f).encode())
+    return h.hexdigest()
+
+
+def _is_document_dir(path: Path) -> bool:
+    """A directory of images (and no subdirectories/PDFs) is ONE document:
+    each image is a page, scanned with the directory's prompt."""
+    entries = list(path.iterdir())
+    has_images = any(e.is_file() and is_supported(e.name) and not e.name.startswith(".") for e in entries)
+    if not has_images:
+        return False
+    for e in entries:
+        if e.is_dir():
+            return False
+        if e.is_file() and e.suffix.lower() == ".pdf":
+            return False
+    return True
+
+
+def discover(dropbox: Path, dir_documents: bool = True) -> list[Path]:
+    """List document units: individual files plus image-directory documents."""
+    units: list[Path] = []
+    for p in sorted(dropbox.rglob("*")):
+        if not p.is_file() or not is_supported(p.name) or p.name.startswith("."):
+            continue
+        if dir_documents and p.parent != dropbox and _is_document_dir(p.parent):
+            continue  # this file is a page of a document-directory
+        units.append(p)
+    if dir_documents:
+        for d in sorted(dropbox.rglob("*")):
+            if d.is_dir() and d != dropbox and _is_document_dir(d):
+                units.append(d)
+    return sorted(units, key=lambda p: str(p))
 
 
 def chunk_text(text: str, size: int, overlap: int) -> list[str]:
@@ -63,7 +97,8 @@ def chunk_text(text: str, size: int, overlap: int) -> list[str]:
 
 
 def _prompt_newer_than(path: Path, cfg: Config, ts: float) -> bool:
-    for cand in prompt_candidates(path.stem, path.parent, cfg.dropbox, cfg.prompts):
+    file_dir = path if path.is_dir() else path.parent
+    for cand in prompt_candidates(path.stem, file_dir, cfg.dropbox, cfg.prompts):
         if cand.exists() and cand.stat().st_mtime > ts:
             return True
     default = cfg.prompts / "default_prompt.md"
@@ -90,20 +125,29 @@ def ingest_file(
     verbose: bool = True,
 ) -> dict:
     path = Path(path)
-    sha = sha256_of(path)
+    if path.is_dir():
+        sha = sha256_of_dir(path)
+        kind = "dir"
+    else:
+        sha = sha256_of(path)
+        kind = "pdf" if path.suffix.lower() == ".pdf" else "image"
     stat = path.stat()
     mtime, size = stat.st_mtime, stat.st_size
-    kind = "pdf" if path.suffix.lower() == ".pdf" else "image"
     now = time.time()
 
     existing = db.get_document_by_path(conn, str(path))
     reuse = False
     if existing and not reprocess and existing["sha256"] == sha:
-        if existing["status"] == "done" and not _prompt_newer_than(path, cfg, existing["updated_at"]):
-            return {"action": "skipped", "filename": path.name, "reason": "unchanged"}
         if existing["status"] == "processing":
-            return {"action": "skipped", "filename": path.name, "reason": "already processing"}
-        reuse = True  # prompt changed or previous run failed -> reprocess in place
+            # A live run heartbeats updated_at each page; a stale one (killed by
+            # sleep/crash/reboot) is resumed instead of skipped.
+            if time.time() - existing["updated_at"] < 600:
+                return {"action": "skipped", "filename": path.name, "reason": "already processing"}
+            reuse = True
+        elif existing["status"] == "done" and not _prompt_newer_than(path, cfg, existing["updated_at"]):
+            return {"action": "skipped", "filename": path.name, "reason": "unchanged"}
+        else:
+            reuse = True  # previous run failed or prompt changed -> reprocess in place
     if existing and not reuse:
         remove_library_artifact(cfg, existing)
         db.delete_document(conn, existing["id"])
@@ -122,12 +166,24 @@ def ingest_file(
     db.set_document_status(conn, doc_id, "processing")
     conn.commit()
 
-    prompt, prompt_source = resolve_prompt(path.stem, path.parent, cfg.dropbox, cfg.prompts, explicit_prompt)
+    prompt, prompt_source = resolve_prompt(
+        path.stem,
+        path if path.is_dir() else path.parent,
+        cfg.dropbox, cfg.prompts, explicit_prompt,
+    )
     force = reprocess or reuse
 
     try:
-        total = page_count(path)
-        renders = render_document(path, cfg.renders / sha, cfg.render_dpi, cfg.max_image_px, cfg.jpeg_quality)
+        if path.is_dir():
+            images = [f for f in sorted(path.iterdir())
+                      if f.is_file() and is_supported(f.name) and not f.name.startswith(".")]
+            total = len(images)
+            renders: list[Path] = []
+            for img in images:
+                renders += render_document(img, cfg.renders / sha, cfg.render_dpi, cfg.max_image_px, cfg.jpeg_quality)
+        else:
+            total = page_count(path)
+            renders = render_document(path, cfg.renders / sha, cfg.render_dpi, cfg.max_image_px, cfg.jpeg_quality)
     except Exception as e:
         db.set_document_status(conn, doc_id, "error", error=f"render failed: {e}")
         conn.commit()
@@ -151,6 +207,7 @@ def ingest_file(
         except ModelError as e:
             db.set_page_result(conn, page_id, error=str(e))
             page_errors.append((i, str(e)))
+        conn.execute("UPDATE documents SET updated_at = ? WHERE id = ?", (time.time(), doc_id))
         conn.commit()
 
     if page_errors:
@@ -238,7 +295,7 @@ def scan_once(
     conn = db.connect(cfg.db_path)
     try:
         db.backfill_dir_path(conn, cfg.dropbox)
-        files = discover(cfg.dropbox)
+        files = discover(cfg.dropbox, cfg.dir_documents)
         results = []
         for i, f in enumerate(files, 1):
             if verbose:

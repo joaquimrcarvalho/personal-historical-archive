@@ -7,6 +7,9 @@ Writes into the dropbox:
   - collections/COLX/         a collection containing a copy of the charter
       - sample_charter.pdf    (uses the collection-level prompt)
       - prompt.md             collection-level extraction prompt
+  - documents/sample_letter/  a document made of page-scan images
+      - page01.png, page02.png (each scanned with the directory's prompt)
+      - prompt.md             applies to scanning each image
 """
 
 from pathlib import Path
@@ -43,6 +46,14 @@ PROMPT = """Extract the information from this archival document and return it as
 If a piece of information is not present, use null. Output ONLY the JSON object."""
 
 
+LETTER_PROMPT = """Transcribe this page of a personal letter (early modern Portuguese).
+Return exactly:
+- sender/recipient if visible
+- place and date of writing, original form
+- a faithful transcription of the text, marking [illegible] parts
+- 2-3 sentence summary in English
+Label the result as '## Page analysis'."""
+
 COLLECTION_PROMPT = """You are transcribing documents from a research collection on early Portuguese land grants.
 For each page return a Markdown table row with these columns:
 | field | value |
@@ -56,6 +67,11 @@ For each page return a Markdown table row with these columns:
 | transcription | faithful transcription, [illegible] for unreadable parts |
 
 One table per page. If a value is absent, write '—'."""
+
+
+def _write_if_changed(path: Path, text: str) -> None:
+    if not path.exists() or path.read_text() != text:
+        path.write_text(text)
 
 
 def main() -> None:
@@ -79,16 +95,23 @@ def main() -> None:
         )
     doc.save(str(pdf))
     doc.close()
-    (DROP / "sample_charter.prompt.md").write_text(PROMPT)
+    _write_if_changed(DROP / "sample_charter.prompt.md", PROMPT)
     with fitz.open(str(pdf)) as d:
         d[0].get_pixmap(dpi=150).save(str(DROP / "sample_charter_image.png"))
     # collection structure: collections/COLX
     col_dir = DROP / "collections" / "COLX"
     col_dir.mkdir(parents=True, exist_ok=True)
-    (col_dir / "prompt.md").write_text(COLLECTION_PROMPT)
+    _write_if_changed(col_dir / "prompt.md", COLLECTION_PROMPT)
     col_pdf = col_dir / "sample_charter.pdf"
     if not col_pdf.exists():
         col_pdf.write_bytes(pdf.read_bytes())
+    # document-directory: a 'document' made of page-scan images
+    letter_dir = DROP / "documents" / "sample_letter"
+    letter_dir.mkdir(parents=True, exist_ok=True)
+    _write_if_changed(letter_dir / "prompt.md", LETTER_PROMPT)
+    with fitz.open(str(pdf)) as d:
+        for i, page in enumerate(d):
+            page.get_pixmap(dpi=150).save(str(letter_dir / f"page{i + 1:02d}.png"))
     print("wrote:")
     for p in sorted(DROP.rglob("*")):
         if p.is_file():
