@@ -1,4 +1,4 @@
-# manuscript-archive configuration
+# personal-historical-archive (pha) configuration
 # All relative paths resolve against the project root (where this file lives).
 
 paths:

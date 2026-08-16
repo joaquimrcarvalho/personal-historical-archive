@@ -1,8 +1,9 @@
-# manuscript-archive
+# personal-historical-archive (pha)
 
-A local research archive for manuscript **PDFs and images**: drop files into a
-folder, a vision model (VLM) transcribes each page, everything is indexed, and
-any LLM can search the corpus through an **MCP server**.
+A local research archive for **historical documents — manuscripts, old books,
+maps, and more — as PDFs and images**: drop files into a folder, a vision
+model (VLM) transcribes each page, everything is indexed, and any LLM can
+search the corpus through an **MCP server**.
 
 The key design choice: text extraction is done with a **vision model and an
 optional per-file custom prompt** (not with plain OCR). For historical
@@ -16,7 +17,7 @@ gives far better results, and you control the prompt per document.
      │  (optional prompts: <stem>.prompt.md next to a file,
      │   or prompt.md inside a directory → applies to everything under it)
      ▼
- ┌─────────────────────── watcher / `ma scan` ───────────────────────┐
+ ┌─────────────────────── watcher / `pha scan` ───────────────────────┐
  │  1. render pages → JPEG (200 dpi, long edge ≤ 1800 px)             │
  │  2. per page: VLM transcription with resolved prompt (LM Studio)   │
  │  3. per page text stored in SQLite + Markdown copy in library/     │
@@ -24,10 +25,10 @@ gives far better results, and you control the prompt per document.
  └────────────────────────────────────────────────────────────────────┘
      │
      ▼
- SQLite (data/archive.db) ──► `ma search` (hybrid keyword+semantic,
+ SQLite (data/archive.db) ──► `pha search` (hybrid keyword+semantic,
      ▲                           optional --collection filter)
-     └────────────────────────── FastMCP server: search / get_document /
-                                 list_documents / scan_now / extraction_status
+     └────────────────────────── FastMCP server: pha_search / pha_get_document /
+                                 pha_list_documents / pha_scan_now / pha_extraction_status
 ```
 
 ---
@@ -49,22 +50,22 @@ gives far better results, and you control the prompt per document.
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e .
-alias ma=".venv/bin/python -m manuscript_archive"
+alias pha=".venv/bin/python -m personal_historical_archive"
 
 # 2. start LM Studio, load qwen/qwen3-vl-8b (+ an embedding model),
 #    and start the local server (default port 1234). Check config.yaml.
 
 # 3. drop manuscripts into dropbox/ and extract
-ma scan                 # one-shot
-ma scan --watch         # keep watching the dropbox
+pha scan                 # one-shot
+pha scan --watch         # keep watching the dropbox
 
 # 4. search
-ma search "doação de Évora ao mosteiro"
-ma search "alfange" --mode keyword
-ma search "monastery donation charter" --mode semantic
+pha search "doação de Évora ao mosteiro"
+pha search "alfange" --mode keyword
+pha search "monastery donation charter" --mode semantic
 
 # 5. MCP server (stdio)
-ma mcp
+pha mcp
 ```
 
 ### MCP client setup
@@ -75,17 +76,17 @@ Point any MCP-capable client at the stdio server. Example for
 ```json
 {
   "mcpServers": {
-    "manuscript-archive": {
+    "personal-historical-archive": {
       "command": "/Users/jrc/develop/personal-historical-archive/.venv/bin/python",
-      "args": ["-m", "manuscript_archive", "mcp"],
-      "env": { "MA_HOME": "/Users/jrc/develop/personal-historical-archive" }
+      "args": ["-m", "personal_historical_archive", "mcp"],
+      "env": { "PHA_HOME": "/Users/jrc/develop/personal-historical-archive" }
     }
   }
 }
 ```
 
-`MA_HOME` makes the server find `config.yaml` regardless of the working
-directory. An SSE variant is available: `ma mcp --transport sse --port 8000`.
+`PHA_HOME` makes the server find `config.yaml` regardless of the working
+directory. An SSE variant is available: `pha mcp --transport sse --port 8000`.
 
 **Full agent setup instructions** (Claude Desktop, Cursor, Claude Code,
 MCP Inspector, SSE, and a suggested agent workflow) live in
@@ -97,9 +98,9 @@ Exposed tools:
 | --- | --- |
 | `search(query, mode, limit, collection)` | ranked passages — hybrid (keyword+semantic), keyword, semantic; optionally restricted to a collection |
 | `get_document(document_id, max_chars)` | metadata + full extracted per-page text |
-| `list_documents(status, limit, collection)` | browse the archive, optionally by collection |
-| `scan_now()` | ingest newly dropped files |
-| `extraction_status()` | ingestion summary |
+| `pha_list_documents(status, limit, collection)` | browse the archive, optionally by collection |
+| `pha_scan_now()` | ingest newly dropped files |
+| `pha_extraction_status()` | ingestion summary |
 
 ## Dropbox layout: documents and collections
 
@@ -130,8 +131,8 @@ as a plain grouping of separate files instead.
 
 Every document is tagged with its relative directory (`documents`,
 `documents/ms123`, `collections/COLX`, …), which shows up in search results
-and can be used to filter: `ma search "..." --collection COLX` or via the MCP
-`collection` parameter. `ma status` lists documents grouped by collection.
+and can be used to filter: `pha search "..." --collection COLX` or via the MCP
+`collection` parameter. `pha status` lists documents grouped by collection.
 
 ## Custom extraction prompts
 
@@ -161,9 +162,9 @@ type. Example (`dropbox/sample_charter.prompt.md` asks for JSON with
 Editing a prompt file (sidecar, collection `prompt.md`, or the default)
 **automatically re-extracts** the affected documents on the next scan
 (prompt mtime is compared against the document's last update). Use
-`ma scan --reprocess` to force a full re-extraction.
+`pha scan --reprocess` to force a full re-extraction.
 
-`ma prompts [file]` shows how a prompt resolves.
+`pha prompts [file]` shows how a prompt resolves.
 
 ## Palaeographers (vision models)
 
@@ -183,8 +184,8 @@ palaeographers:
     prompt_file: prompts/palaeographers/qwen-local.md   # this palaeographer's base prompt
 ```
 
-- `vision.palaeographer` selects the active one; `ma scan --palaeographer ID`
-  overrides it for one run; the MCP `scan_now` uses the configured default.
+- `vision.palaeographer` selects the active one; `pha scan --palaeographer ID`
+  overrides it for one run; the MCP `pha_scan_now` uses the configured default.
 - **Per-document / per-collection selection**: place a file named
   `palaeographer` (with an optional `.txt` or `.md` extension so it is easy
   to edit on a desktop) containing the palaeographer id — either next to a
@@ -200,7 +201,7 @@ palaeographers:
 
   Changing a `palaeographer` file re-extracts the affected document(s) with
   the new palaeographer; output goes to a sibling
-  `transcription-<palaeographer>/` folder. `ma palaeographer [file]` shows
+  `transcription-<palaeographer>/` folder. `pha palaeographer [file]` shows
   how a document resolves.
 - Each palaeographer can carry its own **base prompt** (its expertise/working
   rules). It is always prepended **before** the document/collection prompt and
@@ -217,19 +218,19 @@ palaeographers:
 - `api_key` supports `${ENV_VAR}` and `${ENV_VAR:-default}` expansion, so keys
   never need to be committed. Local servers (LM Studio, Ollama) need no key.
 - Every document records which palaeographer extracted it (shown by
-  `ma status`, in search results, and in the library markdown header).
+  `pha status`, in search results, and in the library markdown header).
 
 ## CLI reference
 
 ```
-ma scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--reprocess]
-ma search QUERY [--mode hybrid|keyword|semantic] [--collection COLX] [--limit N] [--json]
-ma status
-ma export
-ma reindex
-ma rm ID|NAME
-ma prompts [file]
-ma mcp [--transport stdio|sse] [--port 8000]
+pha scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--reprocess]
+pha search QUERY [--mode hybrid|keyword|semantic] [--collection COLX] [--limit N] [--json]
+pha status
+pha export
+pha reindex
+pha rm ID|NAME
+pha prompts [file]
+pha mcp [--transport stdio|sse] [--port 8000]
 ```
 
 ## Configuration (`config.yaml`)
@@ -250,7 +251,7 @@ embeddings:
   model: nomic-embed-text
 ```
 
-After switching the embedding model run `ma reindex`.
+After switching the embedding model run `pha reindex`.
 
 ## Data layout
 
@@ -271,7 +272,7 @@ prompts/default_prompt.md ← shipped default prompt
 
 Per-page files are written **incrementally** while a document is being
 extracted, so output is visible immediately (no need to wait for completion).
-`ma export` regenerates all per-page files from the database without
+`pha export` regenerates all per-page files from the database without
 re-extracting. Running a different palaeographer over the same document adds
 a sibling `transcription-<palaeographer>/` folder for side-by-side
 comparison.

@@ -207,8 +207,8 @@ def main(argv: list[str] | None = None) -> None:
     cfg.ensure_dirs()
 
     parser = argparse.ArgumentParser(
-        prog="ma",
-        description="Local manuscript archive: drop folder -> VLM extraction -> index -> MCP search.",
+        prog="pha",
+        description="Personal Historical Archive (pha): drop folder -> VLM extraction -> index -> MCP search.",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 

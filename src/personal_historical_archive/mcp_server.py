@@ -11,18 +11,18 @@ from .search import search as run_search
 
 def make_server(cfg: Config) -> FastMCP:
     mcp = FastMCP(
-        "manuscript-archive",
+        "personal-historical-archive",
         instructions=(
-            "This server provides access to a local archive of manuscript PDFs and images "
-            "that have been transcribed page-by-page by a vision model. Use `search` to "
-            "find relevant passages, `get_document` to read full extracted text, "
-            "`list_documents` to browse, `scan_now` after new files are dropped into the "
-            "dropbox, and `extraction_status` to see ingestion progress."
+            "This server provides access to a local archive of historical documents (manuscripts, old books, maps, ...) "
+            "that have been transcribed page-by-page by a vision model. Use `pha_search` to "
+            "find relevant passages, `pha_get_document` to read full extracted text, "
+            "`pha_list_documents` to browse, `pha_scan_now` after new files are dropped into the "
+            "dropbox, and `pha_extraction_status` to see ingestion progress."
         ),
     )
 
     @mcp.tool()
-    def search(query: str, mode: str = "hybrid", limit: int = 10, collection: str | None = None) -> list[dict]:
+    def pha_search(query: str, mode: str = "hybrid", limit: int = 10, collection: str | None = None) -> list[dict]:
         """Search the extracted manuscript text and return ranked passages.
 
         Args:
@@ -47,7 +47,7 @@ def make_server(cfg: Config) -> FastMCP:
         return res["results"]
 
     @mcp.tool()
-    def get_document(document_id: int, max_chars: int = 20000) -> dict:
+    def pha_get_document(document_id: int, max_chars: int = 20000) -> dict:
         """Return metadata and the extracted per-page text of one document.
 
         Args:
@@ -81,7 +81,7 @@ def make_server(cfg: Config) -> FastMCP:
             conn.close()
 
     @mcp.tool()
-    def list_documents(status: str | None = None, limit: int = 100, collection: str | None = None) -> list[dict]:
+    def pha_list_documents(status: str | None = None, limit: int = 100, collection: str | None = None) -> list[dict]:
         """List documents in the archive.
 
         Args:
@@ -100,7 +100,7 @@ def make_server(cfg: Config) -> FastMCP:
             conn.close()
 
     @mcp.tool()
-    def scan_now() -> dict:
+    def pha_scan_now() -> dict:
         """Scan the dropbox for new or changed files, extract text with the active
         palaeographer (vision model), and index them. Call this after the user has
         dropped new files."""
@@ -111,7 +111,7 @@ def make_server(cfg: Config) -> FastMCP:
             client.close()
 
     @mcp.tool()
-    def extraction_status() -> dict:
+    def pha_extraction_status() -> dict:
         """Summary of the archive: documents by status, pages extracted, chunks indexed."""
         conn = db.connect(cfg.db_path)
         try:

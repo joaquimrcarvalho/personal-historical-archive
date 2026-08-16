@@ -21,7 +21,7 @@ def _expand(value: str) -> str:
 
 
 def find_project_root(start: Path | None = None) -> Path:
-    env = os.environ.get("MA_HOME")
+    env = os.environ.get("PHA_HOME")
     if env:
         return Path(env).resolve()
     cur = (start or Path.cwd()).resolve()
