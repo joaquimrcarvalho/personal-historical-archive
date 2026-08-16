@@ -36,6 +36,17 @@ palaeographers:
   #   max_tokens: 4096
   #   timeout_s: 300
   #   prompt_file: prompts/palaeographers/gpt-remote.md
+  # Specialised for 17th-century Portuguese secretary hand (activate by
+  # uncommenting and setting vision.palaeographer: portuguese-secretary):
+  # portuguese-secretary:
+  #   description: 17th-c. Portuguese secretary-hand specialist (LM Studio)
+  #   base_url: http://127.0.0.1:1234/v1
+  #   model: qwen/qwen3-vl-8b
+  #   api_key: ""
+  #   temperature: 0.0
+  #   max_tokens: 4096
+  #   timeout_s: 900
+  #   prompt_file: prompts/palaeographers/portuguese-secretary.md
 
 vision:
   palaeographer: qwen-local         # which palaeographer transcribes documents
