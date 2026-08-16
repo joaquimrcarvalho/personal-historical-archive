@@ -87,6 +87,10 @@ Point any MCP-capable client at the stdio server. Example for
 `MA_HOME` makes the server find `config.yaml` regardless of the working
 directory. An SSE variant is available: `ma mcp --transport sse --port 8000`.
 
+**Full agent setup instructions** (Claude Desktop, Cursor, Claude Code,
+MCP Inspector, SSE, and a suggested agent workflow) live in
+[MCP_CLIENTS.md](MCP_CLIENTS.md).
+
 Exposed tools:
 
 | tool | purpose |
