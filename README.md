@@ -181,18 +181,33 @@ palaeographers:
 
 - `vision.palaeographer` selects the active one; `ma scan --palaeographer ID`
   overrides it for one run; the MCP `scan_now` uses the configured default.
+- **Per-document / per-collection selection**: place a file named
+  `palaeographer` (containing the palaeographer id) either next to a document
+  (`<stem>.palaeographer`) or in a directory/collection
+  (`dropbox/collections/COLX/palaeographer`). It is resolved with the same
+  nearest-wins chain as prompts (file sidecar, then walking up to the dropbox
+  root), and overrides the config default for everything under it:
+
+  ```
+  dropbox/collections/COLX/palaeographer   → "portuguese-secretary"
+  ```
+
+  Changing a `palaeographer` file re-extracts the affected document(s) with
+  the new palaeographer; output goes to a sibling
+  `transcription-<palaeographer>/` folder. `ma palaeographer [file]` shows
+  how a document resolves.
 - Each palaeographer can carry its own **base prompt** (its expertise/working
-  rules). It is prepended **before** the document/collection sidecar prompt —
-  so the document prompt still controls the output structure, while the
-  palaeographer prompt steers transcription behaviour:
+  rules). It is always prepended **before** the document/collection prompt and
+  is the **format authority** (## Transcription, ## Notes with
+  ### Named entities — one bullet per entity — and ### Content summary). The
+  document/collection prompt that follows only adds specific aspects (fields
+  to prioritise, transcription style) and cannot change the structure:
 
   ```
-  [palaeographer base prompt]
+  [palaeographer base prompt — format authority]
   ---
-  [document / collection sidecar prompt]
+  [document / collection prompt — adds aspects only]
   ```
-
-  Document prompts win when they request a specific structure (JSON, tables…).
 - `api_key` supports `${ENV_VAR}` and `${ENV_VAR:-default}` expansion, so keys
   never need to be committed. Local servers (LM Studio, Ollama) need no key.
 - Every document records which palaeographer extracted it (shown by

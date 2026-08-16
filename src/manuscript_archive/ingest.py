@@ -21,8 +21,10 @@ from .extract import (
     format_notes,
     is_supported,
     page_count,
+    palaeographer_candidates,
     prompt_candidates,
     render_document,
+    resolve_palaeographer_id,
     resolve_prompt,
 )
 from .model_client import ModelClient, ModelError
@@ -187,6 +189,9 @@ def _prompt_newer_than(
                 return True
         except OSError:
             pass
+    for cand in palaeographer_candidates(path.stem, file_dir, cfg.dropbox):
+        if cand.exists() and cand.stat().st_mtime > ts:
+            return True
     return False
 
 
@@ -334,12 +339,14 @@ def ingest_file(
 
     db.set_document_status(conn, doc_id, "done", prompt_source=prompt_source)
     conn.commit()
-    index_document(cfg, conn, client, doc_id, verbose=verbose)
+    index_document(cfg, conn, doc_id, verbose=verbose)
     write_document_pages(cfg, conn, doc_id)
     return {"action": "ingested", "filename": path.name, "pages": total, "prompt": prompt_source}
 
 
-def index_document(cfg: Config, conn, client: ModelClient, doc_id: int, verbose: bool = True) -> int:
+def index_document(
+    cfg: Config, conn, doc_id: int, embed_client: ModelClient | None = None, verbose: bool = True
+) -> int:
     pages = db.get_pages(conn, doc_id)
     db.clear_chunks(conn, doc_id)
     items: list[tuple[int, int, str]] = []
@@ -353,8 +360,12 @@ def index_document(cfg: Config, conn, client: ModelClient, doc_id: int, verbose:
         return 0
     if verbose:
         print(f"  indexing {n} chunks ...", flush=True)
+    close_embed = False
+    if embed_client is None:
+        embed_client = ModelClient(cfg.embed_base_url, timeout_s=cfg.embed_timeout_s)
+        close_embed = True
     try:
-        vecs = client.embed(
+        vecs = embed_client.embed(
             cfg.embed_model,
             [prefixed(cfg.embed_model, t, "doc") for _, _, t in items],
         )
@@ -362,6 +373,9 @@ def index_document(cfg: Config, conn, client: ModelClient, doc_id: int, verbose:
         vecs = [None] * len(items)
         if verbose:
             print(f"  warning: embeddings unavailable ({e}); indexing text-only")
+    finally:
+        if close_embed:
+            embed_client.close()
     for (page_id, chunk_no, text), v in zip(items, vecs):
         db.add_chunk(conn, doc_id, page_id, chunk_no, text, pack(v) if v else None)
     conn.commit()
@@ -422,6 +436,11 @@ def scan_once(
                                            "reason": "another scan is running"}]}
     cfg.ensure_dirs()
     conn = db.connect(cfg.db_path)
+    # vision clients per palaeographer: the default is the passed client;
+    # documents that resolve to another palaeographer get their own.
+    clients: dict[str, tuple[ModelClient, Palaeographer]] = {
+        palaeographer.id: (client, palaeographer)
+    }
     try:
         db.backfill_dir_path(conn, cfg.dropbox)
         files = discover(cfg.dropbox, cfg.dir_documents)
@@ -429,13 +448,33 @@ def scan_once(
         for i, f in enumerate(files, 1):
             if verbose:
                 print(f"[{i}/{len(files)}] {f.name}", flush=True)
+            pal_id, pal_src = resolve_palaeographer_id(
+                f.stem, f if f.is_dir() else f.parent, cfg.dropbox
+            )
+            if pal_id:
+                try:
+                    pal = cfg.get_palaeographer(pal_id)
+                except KeyError:
+                    print(f"  warning: unknown palaeographer {pal_id!r} (from {pal_src}); using default",
+                          flush=True)
+                    pal = palaeographer
+            else:
+                pal = palaeographer
+            if pal.id not in clients:
+                clients[pal.id] = make_vision_client(cfg, pal.id)
+                if verbose:
+                    print(f"  palaeographer: {pal.id} ({pal.description or pal.model})", flush=True)
             results.append(
-                ingest_file(cfg, conn, client, f, palaeographer, explicit_prompt, reprocess, verbose)
+                ingest_file(cfg, conn, clients[pal.id][0], f, clients[pal.id][1],
+                            explicit_prompt, reprocess, verbose)
             )
         return {"scanned": len(files), "results": results}
     finally:
         conn.close()
         _release_scan_lock(cfg)
+        for pid, (c, _p) in clients.items():
+            if pid != palaeographer.id:
+                c.close()
 
 
 def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True) -> dict:
@@ -445,7 +484,7 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True) -> dict:
         docs = [d for d in db.list_documents(conn, limit=10000) if d["status"] == "done"]
         counts = {}
         for d in docs:
-            counts[d["id"]] = index_document(cfg, conn, client, d["id"], verbose=verbose)
+            counts[d["id"]] = index_document(cfg, conn, d["id"], embed_client=client, verbose=verbose)
         return {"reindexed": len(docs), "chunks": counts}
     finally:
         conn.close()
@@ -474,7 +513,7 @@ class _WatchHandler(FileSystemEventHandler):
         name = Path(event.src_path).name
         if name.startswith(".") or name.endswith((".tmp", "~")):
             return
-        if not (is_supported(name) or name.endswith(".prompt.md")):
+        if not (is_supported(name) or name.endswith(".prompt.md") or name == "palaeographer" or name.endswith(".palaeographer")):
             return
         with self._lock:
             if self._timer:

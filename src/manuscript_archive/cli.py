@@ -7,7 +7,7 @@ from datetime import datetime
 
 from . import db
 from .config import Config
-from .extract import is_supported, resolve_prompt
+from .extract import is_supported, resolve_palaeographer_id, resolve_prompt
 from .ingest import (
     make_vision_client,
     reindex_all,
@@ -170,6 +170,25 @@ def cmd_rm(cfg: Config, args) -> None:
         conn.close()
 
 
+def cmd_palaeographer(cfg: Config, args) -> None:
+    if args.file:
+        p = cfg.dropbox / args.file if not (cfg.root / args.file).exists() else cfg.root / args.file
+        if not p.exists():
+            print(f"not found: {args.file}")
+            return
+        pal_id, source = resolve_palaeographer_id(
+            p.stem, p if p.is_dir() else p.parent, cfg.dropbox
+        )
+        pal = cfg.get_palaeographer(pal_id) if pal_id else cfg.get_palaeographer()
+        print(f"palaeographer: {pal.id} ({pal.description or pal.model})")
+        print(f"source: {source or 'config default (vision.palaeographer)'}")
+        return
+    print(f"default (vision.palaeographer): {cfg.active_palaeographer}")
+    for f in sorted(list(cfg.dropbox.rglob("palaeographer")) + list(cfg.dropbox.rglob("*.palaeographer"))):
+        pal_id = f.read_text().strip().splitlines()[0].strip() if f.read_text().strip() else ""
+        print(f"  {f}: {pal_id or '(empty)'}")
+
+
 def cmd_mcp(cfg: Config, args) -> None:
     from . import mcp_server
 
@@ -227,6 +246,10 @@ def main(argv: list[str] | None = None) -> None:
     pr = sub.add_parser("prompts", help="show prompt resolution")
     pr.add_argument("file", nargs="?")
     pr.set_defaults(fn=cmd_prompts)
+
+    pa = sub.add_parser("palaeographer", help="show palaeographer resolution for a file")
+    pa.add_argument("file", nargs="?")
+    pa.set_defaults(fn=cmd_palaeographer)
 
     args = parser.parse_args(argv)
     args.fn(cfg, args)
