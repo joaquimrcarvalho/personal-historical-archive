@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pymupdf as fitz  # pymupdf (fitz API)
@@ -131,6 +132,70 @@ def compose_prompts(palaeographer_prompt: str, doc_prompt: str) -> str:
     if not pal:
         return doc_prompt
     return f"{pal}\n\n---\n\n{doc_prompt}"
+
+
+_NOTE_LABEL_RE = re.compile(
+    r"^\s*[-*]?\s*\**\s*(Named entities|Content summary)\s*\**\s*:\s*(.*)$",
+    re.IGNORECASE,
+)
+_NOTE_OTHER_RE = re.compile(
+    r"^\s*[-*]?\s*\**\s*(Language|Script|Date clues?|Foliation[^:]*|Named entities|Content summary)\s*\**\s*:",
+    re.IGNORECASE,
+)
+
+
+def _split_entities(value: str) -> list[str]:
+    """Split a 'Named entities' value into bullet items. Prefer ';' / '|'
+    separators (entities often carry parenthetical commas); fall back to
+    commas only when there are no parentheses."""
+    value = value.strip()
+    if not value:
+        return ["(none)"]
+    items = [i.strip() for i in re.split(r"\s*;\s*|\s*\|\s*", value) if i.strip()]
+    if not items:
+        return ["(none)"]
+    if len(items) == 1 and "(" not in items[0]:
+        items = [i.strip() for i in items[0].split(",") if i.strip()]
+    return items or ["(none)"]
+
+
+def format_notes(text: str) -> str:
+    """Reformat a transcription: '- Named entities: …' becomes a
+    '### Named entities' heading with a bullet list, and
+    '- Content summary: …' becomes a '### Content summary' heading.
+
+    Lines that do not match are left untouched, so prompts with other
+    output structures (JSON, tables, …) are unaffected.
+    """
+    if not text or ("Named entities" not in text and "Content summary" not in text):
+        return text
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = _NOTE_LABEL_RE.match(line)
+        if not m:
+            out.append(line)
+            i += 1
+            continue
+        label, value = m.group(1), m.group(2)
+        # absorb wrapped continuation lines (not bullets/headings/other labels)
+        j = i + 1
+        while j < len(lines):
+            nxt = lines[j].strip()
+            if not nxt or nxt.startswith("#") or _NOTE_OTHER_RE.match(nxt):
+                break
+            value += " " + nxt
+            j += 1
+        out.append(f"### {label}")
+        if label.lower() == "named entities":
+            for item in _split_entities(value):
+                out.append(f"- {item}")
+        else:
+            out.append(value.strip() or "—")
+        i = j
+    return "\n".join(out)
 
 
 def build_page_prompt(file_prompt: str, filename: str, page_no: int, total: int) -> str:

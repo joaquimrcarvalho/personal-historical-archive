@@ -18,6 +18,7 @@ from .embed import pack, prefixed
 from .extract import (
     build_page_prompt,
     compose_prompts,
+    format_notes,
     is_supported,
     page_count,
     prompt_candidates,
@@ -378,8 +379,9 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
     for p in pages:
         fm = dict(base)
         fm["page"] = p["page_no"]
-        fm["status"] = p["status"]
-        body = (p["raw_text"] or f"*{p['status']}*").strip()
+        fm["status"] = "done" if p["status"] == "done" else "waiting"
+        body = (p["raw_text"] or "").strip()
+        body = format_notes(body) if body else "*waiting*"
         text = (
             "---\n"
             + yaml.safe_dump(fm, sort_keys=False, allow_unicode=True, width=100000).strip()

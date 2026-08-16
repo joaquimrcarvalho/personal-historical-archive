@@ -70,20 +70,23 @@ def migrate(conn: sqlite3.Connection) -> None:
         statements.append("ALTER TABLE documents ADD COLUMN dir_path TEXT")
     if "palaeographer" not in cols:
         statements.append("ALTER TABLE documents ADD COLUMN palaeographer TEXT")
-    if not statements:
-        return
-    import time
+    if statements:
+        import time
 
-    last_err: Exception | None = None
-    for attempt in range(15):
-        try:
-            for stmt in statements:
-                conn.execute(stmt)
-            return
-        except sqlite3.OperationalError as e:
-            last_err = e
-            time.sleep(3)
-    raise last_err or RuntimeError("migration failed")
+        last_err: Exception | None = None
+        for attempt in range(15):
+            try:
+                for stmt in statements:
+                    conn.execute(stmt)
+                break
+            except sqlite3.OperationalError as e:
+                last_err = e
+                time.sleep(3)
+        else:
+            raise last_err or RuntimeError("migration failed")
+    # page status vocabulary: failed pages are 'waiting' (retried on next scan)
+    conn.execute("UPDATE pages SET status = 'waiting' WHERE status = 'error'")
+    conn.commit()
 
 
 # --------------------------------------------------------------------------- documents
@@ -240,7 +243,9 @@ def set_page_result(
     conn: sqlite3.Connection, page_id: int, raw_text: str | None = None, error: str | None = None
 ) -> None:
     if error is not None:
-        _write(conn, "UPDATE pages SET error = ?, status = 'error' WHERE id = ?", (error, page_id))
+        # 'waiting': the page will be retried on the next scan; the message
+        # stays in the error column for diagnostics only.
+        _write(conn, "UPDATE pages SET error = ?, status = 'waiting' WHERE id = ?", (error, page_id))
     else:
         _write(conn, "UPDATE pages SET raw_text = ?, error = NULL, status = 'done' WHERE id = ?", (raw_text, page_id))
 
