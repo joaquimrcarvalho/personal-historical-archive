@@ -1,0 +1,25 @@
+[project]
+name = "manuscript-archive"
+version = "0.1.0"
+description = "Local manuscript repository: drop folder -> VLM text extraction (Ollama) -> index -> MCP search"
+requires-python = ">=3.11"
+dependencies = [
+    "pymupdf>=1.24",
+    "watchdog>=4.0",
+    "httpx>=0.27",
+    "numpy>=1.26",
+    "PyYAML>=6.0",
+    "fastmcp>=2.0",
+    "uvicorn>=0.30",
+    "sse-starlette>=2.0",
+]
+
+[project.scripts]
+ma = "manuscript_archive.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/manuscript_archive"]

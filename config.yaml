@@ -1,0 +1,42 @@
+# manuscript-archive configuration
+# All relative paths resolve against the project root (where this file lives).
+
+paths:
+  dropbox: dropbox        # drop PDFs/images here (+ optional <stem>.prompt.md sidecars)
+  library: library        # human-readable extracted markdown per document
+  data: data              # sqlite db + page renders
+  renders: data/renders   # cached page images fed to the vision model
+  prompts: prompts        # default + per-file prompt files
+  db: data/archive.db
+
+# Vision model used for text extraction.
+# Any OpenAI-compatible endpoint works: LM Studio (default), Ollama (/v1), llama.cpp, vLLM, ...
+# To use Ollama instead: backend: ollama, base_url: http://127.0.0.1:11434/v1, model: qwen2.5vl:7b
+vision:
+  backend: lmstudio
+  base_url: http://127.0.0.1:1234/v1
+  model: qwen/qwen3-vl-8b
+  temperature: 0.1        # keep transcriptions deterministic
+  max_tokens: 4096
+  timeout_s: 900
+
+# Embedding model for semantic search.
+# LM Studio serves text-embedding-nomic-embed-text-v1.5 if downloaded;
+# alternatively point at Ollama: backend: ollama, base_url: http://127.0.0.1:11434/v1, model: nomic-embed-text
+embeddings:
+  backend: lmstudio
+  base_url: http://127.0.0.1:1234/v1
+  model: text-embedding-nomic-embed-text-v1.5@q4_k_m
+  timeout_s: 120
+
+extraction:
+  render_dpi: 200         # render resolution for PDF pages
+  max_image_px: 1800      # cap the long edge of page images (VLM input size)
+  jpeg_quality: 88
+  chunk_chars: 2000       # index chunk size
+  chunk_overlap: 200
+  concurrency: 1          # parallel VLM calls; 1 is safest on 24 GB
+
+search:
+  default_mode: hybrid    # hybrid | keyword | semantic
+  top_k: 10

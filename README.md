@@ -1,0 +1,185 @@
+# manuscript-archive
+
+A local research archive for manuscript **PDFs and images**: drop files into a
+folder, a vision model (VLM) transcribes each page, everything is indexed, and
+any LLM can search the corpus through an **MCP server**.
+
+The key design choice: text extraction is done with a **vision model and an
+optional per-file custom prompt** (not with plain OCR). For historical
+manuscripts — where low-quality embedded OCR text is common — a VLM that
+"reads" the page image with instructions tailored to the document's structure
+gives far better results, and you control the prompt per document.
+
+```
+ dropbox/*.pdf, *.png, ...
+     │  (optional sidecar: myfile.pdf.prompt.md)
+     ▼
+ ┌─────────────────────── watcher / `ma scan` ───────────────────────┐
+ │  1. render pages → JPEG (200 dpi, long edge ≤ 1800 px)             │
+ │  2. per page: VLM transcription with resolved prompt (LM Studio)   │
+ │  3. per page text stored in SQLite + Markdown copy in library/     │
+ │  4. chunk (2000 chars) → embeddings → FTS5 + vector index          │
+ └────────────────────────────────────────────────────────────────────┘
+     │
+     ▼
+ SQLite (data/archive.db) ──► `ma search` (hybrid keyword+semantic)
+     ▲                           FastMCP server: search / get_document /
+     └────────────────────────   list_documents / scan_now / extraction_status
+```
+
+---
+
+## Requirements
+
+- macOS / Linux, Python ≥ 3.11 (managed with [uv](https://docs.astral.sh/uv/))
+- Any **OpenAI-compatible model server** (tested with **LM Studio**, default):
+  - a **vision model** for extraction — e.g. `qwen/qwen3-vl-8b`
+  - an **embedding model** for semantic search — e.g.
+    `text-embedding-nomic-embed-text-v1.5` (LM Studio catalog) or
+    `nomic-embed-text` (Ollama)
+- Everything runs locally; no cloud calls.
+
+## Quickstart
+
+```bash
+# 1. environment
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -e .
+alias ma=".venv/bin/python -m manuscript_archive"
+
+# 2. start LM Studio, load qwen/qwen3-vl-8b (+ an embedding model),
+#    and start the local server (default port 1234). Check config.yaml.
+
+# 3. drop manuscripts into dropbox/ and extract
+ma scan                 # one-shot
+ma scan --watch         # keep watching the dropbox
+
+# 4. search
+ma search "doação de Évora ao mosteiro"
+ma search "alfange" --mode keyword
+ma search "monastery donation charter" --mode semantic
+
+# 5. MCP server (stdio)
+ma mcp
+```
+
+### MCP client setup
+
+Point any MCP-capable client at the stdio server. Example for
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "manuscript-archive": {
+      "command": "/Users/jrc/develop/personal-historical-archive/.venv/bin/python",
+      "args": ["-m", "manuscript_archive", "mcp"],
+      "env": { "MA_HOME": "/Users/jrc/develop/personal-historical-archive" }
+    }
+  }
+}
+```
+
+`MA_HOME` makes the server find `config.yaml` regardless of the working
+directory. An SSE variant is available: `ma mcp --transport sse --port 8000`.
+
+Exposed tools:
+
+| tool | purpose |
+| --- | --- |
+| `search(query, mode, limit)` | ranked passages — hybrid (keyword+semantic), keyword, semantic |
+| `get_document(document_id, max_chars)` | metadata + full extracted per-page text |
+| `list_documents(status, limit)` | browse the archive |
+| `scan_now()` | ingest newly dropped files |
+| `extraction_status()` | ingestion summary |
+
+## Custom extraction prompts
+
+Each document can carry its own extraction instructions. Prompt resolution
+order:
+
+1. `--prompt <file>` CLI/MCP flag
+2. `dropbox/<stem>.prompt.md` — sidecar next to the document
+3. `prompts/<stem>.prompt.md`
+4. `prompts/default_prompt.md` (the shipped scholarly-transcription prompt)
+5. built-in default
+
+A sidecar lets the VLM return **structured data** for a specific document
+type. Example (`dropbox/sample_charter.prompt.md` asks for JSON with
+`document_type`, `date`, `parties`, `places`, `summary`, `transcription`,
+`archival_marks`). Editing a sidecar **automatically re-extracts** that
+document on the next scan (sidecar mtime is compared against the document's
+last update). Use `ma scan --reprocess` to force a full re-extraction.
+
+`ma prompts [file]` shows how a prompt resolves.
+
+## CLI reference
+
+```
+ma scan [--watch] [--debounce N] [--prompt FILE] [--reprocess]
+ma search QUERY [--mode hybrid|keyword|semantic] [--limit N] [--json]
+ma status
+ma reindex
+ma prompts [file]
+ma mcp [--transport stdio|sse] [--port 8000]
+```
+
+## Configuration (`config.yaml`)
+
+- `vision.*` — model server + vision model for extraction
+- `embeddings.*` — model server + embedding model
+- `extraction.*` — render dpi, image cap, chunk size/overlap, concurrency
+- `search.*` — default mode and result count
+
+**Switching backends** (e.g. Ollama instead of LM Studio) is a config change:
+
+```yaml
+vision:
+  base_url: http://127.0.0.1:11434/v1
+  model: qwen2.5vl:7b
+embeddings:
+  base_url: http://127.0.0.1:11434/v1
+  model: nomic-embed-text
+```
+
+After switching the embedding model run `ma reindex`.
+
+## Data layout
+
+```
+dropbox/                  ← where you drop files (+ .prompt.md sidecars)
+library/<stem>__<sha8>/   ← human-readable extracted Markdown per document
+data/renders/<sha>/       ← cached page JPEGs fed to the VLM
+data/archive.db           ← documents / pages / chunks + FTS5 + embeddings
+prompts/default_prompt.md ← shipped default prompt
+```
+
+## Notes on quality & performance
+
+- Extraction is page-by-page; on an M2/24 GB, `qwen3-vl-8b` takes roughly
+  10–60 s per page depending on density. `extraction.concurrency` can be
+  raised to 2 on 24 GB, but 1 is the safe default.
+- Resumable: pages already extracted are skipped on rescan; failed pages are
+  retried. Prompt changes or `--reprocess` force re-extraction.
+- The VLM output is stored verbatim per page; the default prompt asks for
+  `[illegible]` markers and a structured `## Notes` block — tune
+  `prompts/default_prompt.md` to your manuscript tradition.
+- Semantic search needs an embedding model served at `embeddings.base_url`;
+  if it is unreachable, hybrid search degrades to keyword-only (a note is
+  returned).
+
+## Alternatives considered (why not X)
+
+| option | fit | gap for this workflow |
+| --- | --- | --- |
+| [Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) + AI forks ([paperless-gpt](https://github.com/icereed/paperless-gpt), [Paperless-AIssist](https://nyxtron.github.io/paperless-aissist/)) | turnkey DMS: consumption folder, OCR, tagging, web UI, REST | Docker/Postgres stack; vision extraction targets *metadata* (type, date, sender), not arbitrary per-file content prompts; heavier to run and extend |
+| [Docling](https://pypi.org/project/docling/) (IBM) | excellent PDF→structured-text parsing, VLM table/OCR support | a parsing library, not a drop-folder→index→MCP system; no per-file prompt workflow |
+| [MinerU](https://github.com/opendatalab/MinerU) + mineru-mcp | strong layout/OCR parsing, MCP wrapper | optimized for printed documents/layout; per-file custom prompts not the model |
+| [olmOCR / local-llm-pdf-ocr](https://github.com/ahnafnafee/local-llm-pdf-ocr) | PDF→text with VLMs, web UI | OCR-oriented; no index/search/MCP; no per-file prompts |
+| [local-rag](https://github.com/aihaysteve/local-rag) / [mcp-rag](https://github.com/JMRussas/mcp-rag) | sqlite/embeddings RAG + MCP, close to the search half | no VLM document ingestion or per-file prompts |
+| [local-mmcp](https://github.com/rorojiao/local-mmcp) | multimodal MCP toolkit for Apple Silicon (oMLX VLM + MinerU + ASR) | general-purpose toolkit, not a manuscript workflow |
+
+This project keeps the parts you actually asked for — drop folder + watcher,
+VLM extraction with per-file prompts, hybrid index, MCP search — as a small,
+fully local, model-server-agnostic pipeline (~1 kLOC).

@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime
+
+from . import db
+from .config import Config
+from .extract import is_supported, resolve_prompt
+from .ingest import reindex_all, scan_once, watch
+from .model_client import ModelClient, ModelError
+
+
+def _client(cfg: Config, base_url: str, timeout_s: int) -> ModelClient:
+    return ModelClient(base_url, timeout_s=timeout_s)
+
+
+def _fmt_ts(ts: float | None) -> str:
+    if not ts:
+        return "-"
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+# --------------------------------------------------------------------------- commands
+
+def cmd_scan(cfg: Config, args) -> None:
+    client = _client(cfg, cfg.vision_base_url, cfg.vision_timeout_s)
+    try:
+        if args.watch:
+            watch(cfg, client, explicit_prompt=args.prompt, debounce_s=args.debounce)
+            return
+        res = scan_once(cfg, client, explicit_prompt=args.prompt, reprocess=args.reprocess)
+    finally:
+        client.close()
+    summary = {"ingested": 0, "skipped": 0, "error": 0}
+    for r in res["results"]:
+        summary[r["action"]] = summary.get(r["action"], 0) + 1
+        if r["action"] == "ingested":
+            print(f"  + {r['filename']} ({r['pages']} pages, prompt: {r['prompt']})")
+        elif r["action"] == "error":
+            print(f"  ! {r['filename']}: {r['error']}", file=sys.stderr)
+    print(f"scanned {res['scanned']} file(s): {summary}")
+
+
+def cmd_search(cfg: Config, args) -> None:
+    conn = db.connect(cfg.db_path)
+    client = _client(cfg, cfg.embed_base_url, cfg.embed_timeout_s)
+    try:
+        res = None
+        try:
+            from .search import search as run_search
+
+            res = run_search(conn, client, cfg, args.query, mode=args.mode, limit=args.limit)
+        except ModelError as e:
+            print(f"model error: {e}", file=sys.stderr)
+            sys.exit(2)
+    finally:
+        client.close()
+        conn.close()
+    if args.json:
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return
+    if res.get("note"):
+        print(f"note: {res['note']}")
+    if not res["results"]:
+        print("no results")
+        return
+    for i, r in enumerate(res["results"], 1):
+        print(f"{i:2d}. [{r['source']:8s}] {r['filename']}  p.{r['page_no']}  score={r['score']}")
+        print(f"     {r['snippet']}")
+    print(f"\n{len(res['results'])} result(s) in mode '{res['mode']}'")
+
+
+def cmd_status(cfg: Config, args) -> None:
+    conn = db.connect(cfg.db_path)
+    try:
+        s = db.summary(conn)
+        print(f"archive: {cfg.db_path}")
+        print(f"  documents: {s['documents'] or 'none'}")
+        print(f"  pages extracted: {s['pages_done']}")
+        print(f"  chunks indexed: {s['chunks']} (embedded: {s['chunks_embedded']})")
+        docs = db.list_documents(conn, limit=100)
+        if docs:
+            print("\ndocuments:")
+            for d in docs:
+                err = f"  ERROR: {(d['error'] or '')[:60]}" if d["status"] == "error" else ""
+                print(f"  #{d['id']:3d} {d['status']:10s} {d['filename']}  ({d['kind']}, {d['page_count'] or 0} pages)  updated {_fmt_ts(d['updated_at'])}{err}")
+    finally:
+        conn.close()
+
+
+def cmd_reindex(cfg: Config, args) -> None:
+    client = _client(cfg, cfg.embed_base_url, cfg.embed_timeout_s)
+    try:
+        res = reindex_all(cfg, client)
+    finally:
+        client.close()
+    print(f"reindexed {res['reindexed']} document(s)")
+
+
+def cmd_prompts(cfg: Config, args) -> None:
+    if args.file:
+        p = cfg.dropbox / args.file if not (cfg.root / args.file).exists() else cfg.root / args.file
+        if not p.exists():
+            print(f"not found: {args.file}")
+            return
+        text, source = resolve_prompt(p.stem, cfg.dropbox, cfg.prompts)
+        print(f"prompt source: {source}")
+        print("---")
+        print(text)
+        return
+    print(f"default: {cfg.prompts / 'default_prompt.md'}")
+    for f in sorted(cfg.prompts.glob("*.prompt.md")):
+        print(f"  {f}")
+    sidecars = sorted(cfg.dropbox.glob("*.prompt.md"))
+    if sidecars:
+        print("dropbox sidecars:")
+        for f in sidecars:
+            print(f"  {f}")
+
+
+def cmd_rm(cfg: Config, args) -> None:
+    conn = db.connect(cfg.db_path)
+    try:
+        target = args.target
+        if target.isdigit():
+            docs = [db.get_document(conn, int(target))] if db.get_document(conn, int(target)) else []
+        else:
+            docs = [d for d in db.list_documents(conn, limit=1000) if target in d["filename"]]
+        if not docs:
+            print(f"no document matches {target!r}")
+            return
+        for d in docs:
+            db.delete_document(conn, d["id"])
+            print(f"removed #{d['id']} {d['filename']}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def cmd_mcp(cfg: Config, args) -> None:
+    from . import mcp_server
+
+    mcp_server.main(args.transport, args.host, args.port)
+
+
+# --------------------------------------------------------------------------- main
+
+def main(argv: list[str] | None = None) -> None:
+    cfg = Config.load()
+    cfg.ensure_dirs()
+
+    parser = argparse.ArgumentParser(
+        prog="ma",
+        description="Local manuscript archive: drop folder -> VLM extraction -> index -> MCP search.",
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("scan", help="extract + index new/changed files in the dropbox")
+    s.add_argument("--watch", action="store_true", help="keep watching the dropbox")
+    s.add_argument("--debounce", type=int, default=8, help="watch debounce seconds")
+    s.add_argument("--prompt", default=None, help="prompt file used for all files")
+    s.add_argument("--reprocess", action="store_true", help="re-extract everything")
+    s.set_defaults(fn=cmd_scan)
+
+    q = sub.add_parser("search", help="search the extracted text")
+    q.add_argument("query")
+    q.add_argument("--mode", choices=["hybrid", "keyword", "semantic"], default=None)
+    q.add_argument("--limit", type=int, default=None)
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(fn=cmd_search)
+
+    st = sub.add_parser("status", help="archive summary")
+    st.set_defaults(fn=cmd_status)
+
+    m = sub.add_parser("mcp", help="run the MCP server (stdio or sse)")
+    m.add_argument("--transport", choices=["stdio", "sse"], default="stdio")
+    m.add_argument("--host", default="127.0.0.1")
+    m.add_argument("--port", type=int, default=8000)
+    m.set_defaults(fn=cmd_mcp)
+
+    r = sub.add_parser("reindex", help="re-embed all chunks")
+    r.set_defaults(fn=cmd_reindex)
+
+    rm = sub.add_parser("rm", help="remove document(s) from the index (by id or filename substring)")
+    rm.add_argument("target")
+    rm.set_defaults(fn=cmd_rm)
+
+    pr = sub.add_parser("prompts", help="show prompt resolution")
+    pr.add_argument("file", nargs="?")
+    pr.set_defaults(fn=cmd_prompts)
+
+    args = parser.parse_args(argv)
+    args.fn(cfg, args)
+
+
+if __name__ == "__main__":
+    main()

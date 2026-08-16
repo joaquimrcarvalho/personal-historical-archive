@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.uv-cache/
+.uv-python/
+
+# Generated / user data
+data/
+library/
+dropbox/*
+!dropbox/.gitkeep
+
+# OS
+.DS_Store
