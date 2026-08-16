@@ -201,9 +201,10 @@ palaeographers:
 ## CLI reference
 
 ```
-ma scan [--watch] [--debounce N] [--prompt FILE] [--reprocess]
+ma scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--reprocess]
 ma search QUERY [--mode hybrid|keyword|semantic] [--collection COLX] [--limit N] [--json]
 ma status
+ma export
 ma reindex
 ma rm ID|NAME
 ma prompts [file]
@@ -235,12 +236,22 @@ After switching the embedding model run `ma reindex`.
 ```
 dropbox/documents/        ← individual documents (+ .prompt.md sidecars)
 dropbox/collections/COLX/ ← collections of sources (+ prompt.md for the collection)
-library/<dir>/<stem>__<sha8>/  ← human-readable extracted Markdown per document,
-                                 mirroring the dropbox directory structure
+library/
+  transcription-qwen-local/           ← one folder per palaeographer
+    collections/letters-from-missons/ ← mirrors the dropbox directory structure
+      <doc-slug>/                     ← one folder per document
+        page-001.md                   ← one file per page, YAML front matter repeated
+        page-002.md                     (source filename, collection, page, palaeographer,
+        …                               prompt, status) + the transcription body
 data/renders/<sha>/       ← cached page JPEGs fed to the VLM
 data/archive.db           ← documents / pages / chunks + FTS5 + embeddings
 prompts/default_prompt.md ← shipped default prompt
 ```
+
+Per-page files are written **incrementally** while a document is being
+extracted, so output is visible immediately (no need to wait for completion).
+`ma export` regenerates all per-page files from the database without
+re-extracting.
 
 ## Notes on quality & performance
 

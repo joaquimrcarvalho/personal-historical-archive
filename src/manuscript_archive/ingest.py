@@ -7,6 +7,8 @@ import threading
 import time
 from pathlib import Path
 
+import yaml
+
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
@@ -175,13 +177,19 @@ def _prompt_newer_than(path: Path, cfg: Config, ts: float) -> bool:
 
 
 def remove_library_artifact(cfg: Config, doc) -> None:
-    """Delete the extracted-markdown directory for a document, if present."""
+    """Delete the transcription folders (any palaeographer) for a document."""
     if not doc:
         return
     slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
-    d = cfg.library / (doc["dir_path"] or "") / slug
-    if d.exists():
-        shutil.rmtree(d, ignore_errors=True)
+    rel = Path(doc["dir_path"] or "")
+    for pal_dir in cfg.library.glob("transcription-*"):
+        d = pal_dir / rel / slug
+        if d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+    # legacy single-file format
+    old = cfg.library / rel / slug
+    if old.exists():
+        shutil.rmtree(old, ignore_errors=True)
 
 
 def ingest_file(
@@ -252,7 +260,7 @@ def ingest_file(
     force = reprocess or prompt_changed  # only these re-extract already-done pages
     db.update_document(conn, doc_id, prompt_source=prompt_source)
     conn.commit()
-    write_library_artifact(cfg, conn, doc_id)  # visible output even while processing
+    write_document_pages(cfg, conn, doc_id)  # visible output even while processing
 
     try:
         if path.is_dir():
@@ -303,7 +311,7 @@ def ingest_file(
                 return {"action": "error", "filename": path.name, "error": str(e)}
         db.touch_document(conn, doc_id)
         conn.commit()
-        write_library_artifact(cfg, conn, doc_id)  # grow the artifact page by page
+        write_document_pages(cfg, conn, doc_id)  # grow the artifact page by page
     if page_errors:
         db.set_document_status(
             conn, doc_id, "error",
@@ -315,7 +323,7 @@ def ingest_file(
     db.set_document_status(conn, doc_id, "done", prompt_source=prompt_source)
     conn.commit()
     index_document(cfg, conn, client, doc_id, verbose=verbose)
-    write_library_artifact(cfg, conn, doc_id)
+    write_document_pages(cfg, conn, doc_id)
     return {"action": "ingested", "filename": path.name, "pages": total, "prompt": prompt_source}
 
 
@@ -348,35 +356,44 @@ def index_document(cfg: Config, conn, client: ModelClient, doc_id: int, verbose:
     return n
 
 
-def write_library_artifact(cfg: Config, conn, doc_id: int) -> Path | None:
+def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
+    """Write per-page transcription files with repeated front matter, grouped
+    by palaeographer:
+
+        library/transcription-<pal>/<rel_dir>/<slug>/page-NNN.md
+    """
     doc = db.get_document(conn, doc_id)
     pages = db.get_pages(conn, doc_id)
     if not doc:
         return None
+    pal = doc["palaeographer"] or "default"
     slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
     rel_dir = Path(doc["dir_path"] or "")
-    out_dir = cfg.library / rel_dir / slug
+    out_dir = cfg.library / f"transcription-{pal}" / rel_dir / slug
     out_dir.mkdir(parents=True, exist_ok=True)
-    lines = [
-        f"# {doc['filename']}",
-        "",
-        f"- source: `{doc['path']}`",
-        f"- collection: `{doc['dir_path'] or '(root)'}`",
-        f"- kind: {doc['kind']}",
-        f"- pages: {doc['page_count']}",
-        f"- status: {doc['status']}",
-        f"- palaeographer: {doc['palaeographer'] or 'default'}",
-        f"- prompt: `{doc['prompt_source']}`",
-        f"- sha256: {doc['sha256']}",
-        "",
-    ]
+    base = {
+        "source": doc["path"],
+        "filename": doc["filename"],
+        "collection": doc["dir_path"] or "(root)",
+        "document_id": doc["id"],
+        "pages_total": doc["page_count"],
+        "palaeographer": pal,
+        "prompt": doc["prompt_source"],
+    }
     for p in pages:
-        lines.append(f"## Page {p['page_no']}\n")
-        lines.append((p["raw_text"] or f"*{p['status']}*").strip())
-        lines.append("")
-    out = out_dir / f"{doc['filename']}.md"
-    out.write_text("\n".join(lines))
-    return out
+        fm = dict(base)
+        fm["page"] = p["page_no"]
+        fm["status"] = p["status"]
+        body = (p["raw_text"] or f"*{p['status']}*").strip()
+        text = (
+            "---\n"
+            + yaml.safe_dump(fm, sort_keys=False, allow_unicode=True, width=100000).strip()
+            + "\n---\n\n"
+            + body
+            + "\n"
+        )
+        (out_dir / f"page-{p['page_no']:03d}.md").write_text(text)
+    return out_dir
 
 
 def scan_once(

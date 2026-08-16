@@ -8,7 +8,14 @@ from datetime import datetime
 from . import db
 from .config import Config
 from .extract import is_supported, resolve_prompt
-from .ingest import make_vision_client, reindex_all, remove_library_artifact, scan_once, watch
+from .ingest import (
+    make_vision_client,
+    reindex_all,
+    remove_library_artifact,
+    scan_once,
+    watch,
+    write_document_pages,
+)
 from .model_client import ModelClient, ModelError
 
 
@@ -110,6 +117,21 @@ def cmd_reindex(cfg: Config, args) -> None:
     print(f"reindexed {res['reindexed']} document(s)")
 
 
+def cmd_export(cfg: Config, args) -> None:
+    """Regenerate per-page transcription files from the DB (no re-extraction)."""
+    conn = db.connect(cfg.db_path)
+    try:
+        docs = db.list_documents(conn, limit=10000)
+        n = 0
+        for d in docs:
+            out = write_document_pages(cfg, conn, d["id"])
+            if out:
+                n += 1
+        print(f"exported {n} document(s) to {cfg.library}")
+    finally:
+        conn.close()
+
+
 def cmd_prompts(cfg: Config, args) -> None:
     if args.file:
         p = cfg.dropbox / args.file if not (cfg.root / args.file).exists() else cfg.root / args.file
@@ -194,6 +216,9 @@ def main(argv: list[str] | None = None) -> None:
 
     r = sub.add_parser("reindex", help="re-embed all chunks")
     r.set_defaults(fn=cmd_reindex)
+
+    e = sub.add_parser("export", help="regenerate per-page transcription files from the DB")
+    e.set_defaults(fn=cmd_export)
 
     rm = sub.add_parser("rm", help="remove document(s) from the index (by id or filename substring)")
     rm.add_argument("target")
