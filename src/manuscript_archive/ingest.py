@@ -250,6 +250,9 @@ def ingest_file(
     )
     prompt = compose_prompts(palaeographer.prompt_text, prompt)
     force = reprocess or prompt_changed  # only these re-extract already-done pages
+    db.update_document(conn, doc_id, prompt_source=prompt_source)
+    conn.commit()
+    write_library_artifact(cfg, conn, doc_id)  # visible output even while processing
 
     try:
         if path.is_dir():
@@ -300,6 +303,7 @@ def ingest_file(
                 return {"action": "error", "filename": path.name, "error": str(e)}
         db.touch_document(conn, doc_id)
         conn.commit()
+        write_library_artifact(cfg, conn, doc_id)  # grow the artifact page by page
     if page_errors:
         db.set_document_status(
             conn, doc_id, "error",
