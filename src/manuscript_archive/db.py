@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS documents (
     status TEXT NOT NULL DEFAULT 'pending',
     prompt_source TEXT,
     dir_path TEXT,
+    palaeographer TEXT,
     error TEXT,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
@@ -59,10 +60,30 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    """Add columns introduced after the first release, if missing."""
+    """Add columns introduced after the first release, if missing.
+
+    DDL needs an exclusive lock; retry in case a watcher/scan is mid-write.
+    """
     cols = [r[1] for r in conn.execute("PRAGMA table_info(documents)")]
+    statements = []
     if "dir_path" not in cols:
-        conn.execute("ALTER TABLE documents ADD COLUMN dir_path TEXT")
+        statements.append("ALTER TABLE documents ADD COLUMN dir_path TEXT")
+    if "palaeographer" not in cols:
+        statements.append("ALTER TABLE documents ADD COLUMN palaeographer TEXT")
+    if not statements:
+        return
+    import time
+
+    last_err: Exception | None = None
+    for attempt in range(15):
+        try:
+            for stmt in statements:
+                conn.execute(stmt)
+            return
+        except sqlite3.OperationalError as e:
+            last_err = e
+            time.sleep(3)
+    raise last_err or RuntimeError("migration failed")
 
 
 # --------------------------------------------------------------------------- documents
@@ -86,11 +107,12 @@ def add_document(
     kind: str,
     now: str,
     dir_path: str = "",
+    palaeographer: str | None = None,
 ) -> int:
     cur = conn.execute(
-        """INSERT INTO documents (filename, path, sha256, size_bytes, mtime, kind, dir_path, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (filename, path, sha256, size_bytes, mtime, kind, dir_path, now, now),
+        """INSERT INTO documents (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, now, now),
     )
     return int(cur.lastrowid)
 

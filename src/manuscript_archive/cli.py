@@ -8,7 +8,7 @@ from datetime import datetime
 from . import db
 from .config import Config
 from .extract import is_supported, resolve_prompt
-from .ingest import reindex_all, remove_library_artifact, scan_once, watch
+from .ingest import make_vision_client, reindex_all, remove_library_artifact, scan_once, watch
 from .model_client import ModelClient, ModelError
 
 
@@ -25,12 +25,13 @@ def _fmt_ts(ts: float | None) -> str:
 # --------------------------------------------------------------------------- commands
 
 def cmd_scan(cfg: Config, args) -> None:
-    client = _client(cfg, cfg.vision_base_url, cfg.vision_timeout_s)
+    client, pal = make_vision_client(cfg, args.palaeographer)
+    print(f"palaeographer: {pal.id} ({pal.description or pal.model})")
     try:
         if args.watch:
-            watch(cfg, client, explicit_prompt=args.prompt, debounce_s=args.debounce)
+            watch(cfg, client, pal, explicit_prompt=args.prompt, debounce_s=args.debounce)
             return
-        res = scan_once(cfg, client, explicit_prompt=args.prompt, reprocess=args.reprocess)
+        res = scan_once(cfg, client, pal, explicit_prompt=args.prompt, reprocess=args.reprocess)
     finally:
         client.close()
     summary = {"ingested": 0, "skipped": 0, "error": 0}
@@ -94,7 +95,8 @@ def cmd_status(cfg: Config, args) -> None:
             for d in docs:
                 err = f"  ERROR: {(d['error'] or '')[:60]}" if d["status"] == "error" else ""
                 col = d["dir_path"] or "(root)"
-                print(f"  #{d['id']:3d} {d['status']:10s} [{col}] {d['filename']}  ({d['kind']}, {d['page_count'] or 0} pages)  updated {_fmt_ts(d['updated_at'])}{err}")
+                pal = d["palaeographer"] or "default"
+                print(f"  #{d['id']:3d} {d['status']:10s} [{col}] {d['filename']}  ({d['kind']}, {d['page_count'] or 0} pages, {pal})  updated {_fmt_ts(d['updated_at'])}{err}")
     finally:
         conn.close()
 
@@ -168,6 +170,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--watch", action="store_true", help="keep watching the dropbox")
     s.add_argument("--debounce", type=int, default=8, help="watch debounce seconds")
     s.add_argument("--prompt", default=None, help="prompt file used for all files")
+    s.add_argument("--palaeographer", default=None, help="palaeographer id from config (default: vision.palaeographer)")
     s.add_argument("--reprocess", action="store_true", help="re-extract everything")
     s.set_defaults(fn=cmd_scan)
 

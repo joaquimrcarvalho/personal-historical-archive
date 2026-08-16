@@ -10,10 +10,11 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from . import db
-from .config import Config
+from .config import Config, Palaeographer
 from .embed import pack, prefixed
 from .extract import (
     build_page_prompt,
+    compose_prompts,
     is_supported,
     page_count,
     prompt_candidates,
@@ -21,6 +22,14 @@ from .extract import (
     resolve_prompt,
 )
 from .model_client import ModelClient, ModelError
+
+
+def make_vision_client(
+    cfg: Config, pal_id: str | None = None
+) -> tuple[ModelClient, Palaeographer]:
+    """Create a ModelClient for a palaeographer (or the active one)."""
+    pal = cfg.get_palaeographer(pal_id)
+    return ModelClient(pal.base_url, timeout_s=pal.timeout_s, api_key=pal.api_key), pal
 
 
 def sha256_of(path: Path) -> str:
@@ -120,6 +129,7 @@ def ingest_file(
     conn,
     client: ModelClient,
     path: Path,
+    palaeographer: Palaeographer,
     explicit_prompt: str | None = None,
     reprocess: bool = False,
     verbose: bool = True,
@@ -162,7 +172,10 @@ def ingest_file(
     doc_id = existing["id"] if reuse else db.add_document(
         conn, filename=path.name, path=str(path), sha256=sha,
         size_bytes=size, mtime=mtime, kind=kind, now=now, dir_path=rel_dir,
+        palaeographer=palaeographer.id,
     )
+    if reuse:
+        db.update_document(conn, doc_id, palaeographer=palaeographer.id)
     db.set_document_status(conn, doc_id, "processing")
     conn.commit()
 
@@ -171,6 +184,7 @@ def ingest_file(
         path if path.is_dir() else path.parent,
         cfg.dropbox, cfg.prompts, explicit_prompt,
     )
+    prompt = compose_prompts(palaeographer.prompt_text, prompt)
     force = reprocess or reuse
 
     try:
@@ -201,7 +215,8 @@ def ingest_file(
             print(f"  page {i}/{total}: extracting ...", flush=True)
         try:
             text = client.chat_vision(
-                cfg.vision_model, prompt_txt, img, cfg.vision_temperature, cfg.vision_max_tokens
+                palaeographer.model, prompt_txt, img,
+                palaeographer.temperature, palaeographer.max_tokens,
             )
             db.set_page_result(conn, page_id, raw_text=text)
         except ModelError as e:
@@ -271,6 +286,7 @@ def write_library_artifact(cfg: Config, conn, doc_id: int) -> Path | None:
         f"- kind: {doc['kind']}",
         f"- pages: {doc['page_count']}",
         f"- status: {doc['status']}",
+        f"- palaeographer: {doc['palaeographer'] or 'default'}",
         f"- prompt: `{doc['prompt_source']}`",
         f"- sha256: {doc['sha256']}",
         "",
@@ -287,6 +303,7 @@ def write_library_artifact(cfg: Config, conn, doc_id: int) -> Path | None:
 def scan_once(
     cfg: Config,
     client: ModelClient,
+    palaeographer: Palaeographer,
     explicit_prompt: str | None = None,
     reprocess: bool = False,
     verbose: bool = True,
@@ -300,7 +317,9 @@ def scan_once(
         for i, f in enumerate(files, 1):
             if verbose:
                 print(f"[{i}/{len(files)}] {f.name}", flush=True)
-            results.append(ingest_file(cfg, conn, client, f, explicit_prompt, reprocess, verbose))
+            results.append(
+                ingest_file(cfg, conn, client, f, palaeographer, explicit_prompt, reprocess, verbose)
+            )
         return {"scanned": len(files), "results": results}
     finally:
         conn.close()
@@ -320,9 +339,17 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True) -> dict:
 
 
 class _WatchHandler(FileSystemEventHandler):
-    def __init__(self, cfg: Config, client: ModelClient, explicit_prompt: str | None, debounce_s: float) -> None:
+    def __init__(
+        self,
+        cfg: Config,
+        client: ModelClient,
+        palaeographer: Palaeographer,
+        explicit_prompt: str | None,
+        debounce_s: float,
+    ) -> None:
         self.cfg = cfg
         self.client = client
+        self.palaeographer = palaeographer
         self.explicit_prompt = explicit_prompt
         self.debounce_s = debounce_s
         self._lock = threading.Lock()
@@ -345,16 +372,22 @@ class _WatchHandler(FileSystemEventHandler):
 
     def _run(self) -> None:
         try:
-            scan_once(self.cfg, self.client, self.explicit_prompt)
+            scan_once(self.cfg, self.client, self.palaeographer, self.explicit_prompt)
         except Exception as e:  # keep the watcher alive
             print(f"scan failed: {e}")
 
 
-def watch(cfg: Config, client: ModelClient, explicit_prompt: str | None = None, debounce_s: float = 8.0) -> None:
+def watch(
+    cfg: Config,
+    client: ModelClient,
+    palaeographer: Palaeographer,
+    explicit_prompt: str | None = None,
+    debounce_s: float = 8.0,
+) -> None:
     cfg.ensure_dirs()
     print(f"Initial scan of {cfg.dropbox} ...")
-    scan_once(cfg, client, explicit_prompt)
-    handler = _WatchHandler(cfg, client, explicit_prompt, debounce_s)
+    scan_once(cfg, client, palaeographer, explicit_prompt)
+    handler = _WatchHandler(cfg, client, palaeographer, explicit_prompt, debounce_s)
     observer = Observer()
     observer.schedule(handler, str(cfg.dropbox), recursive=True)
     observer.start()

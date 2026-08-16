@@ -24,18 +24,22 @@ _MIME = {
 
 
 class ModelClient:
-    """OpenAI-compatible client — works with LM Studio and Ollama (/v1).
+    """OpenAI-compatible client — works with LM Studio, Ollama (/v1), llama.cpp,
+    vLLM, and remote APIs (OpenAI, OpenRouter, Groq, ...) that need an api_key."""
 
-    Uses the chat/completions and embeddings endpoints, so any OpenAI-compatible
-    local server (LM Studio, Ollama, llama.cpp, vLLM, ...) can be used by just
-    pointing base_url at it.
-    """
-
-    def __init__(self, base_url: str, timeout_s: int = 900, retries: int = 2) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout_s: int = 900,
+        retries: int = 2,
+        api_key: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
         self.retries = retries
-        self._http = httpx.Client(base_url=self.base_url, timeout=timeout_s)
+        self.api_key = api_key or None
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        self._http = httpx.Client(base_url=self.base_url, timeout=timeout_s, headers=headers)
 
     def close(self) -> None:
         self._http.close()

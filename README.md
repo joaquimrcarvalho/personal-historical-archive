@@ -161,6 +161,43 @@ Editing a prompt file (sidecar, collection `prompt.md`, or the default)
 
 `ma prompts [file]` shows how a prompt resolves.
 
+## Palaeographers (vision models)
+
+A **palaeographer** is a named vision model that transcribes the documents,
+configured in `config.yaml`:
+
+```yaml
+palaeographers:
+  qwen-local:                     # id used by vision.palaeographer
+    description: qwen3-vl-8b via LM Studio (local, default)
+    base_url: http://127.0.0.1:1234/v1   # local or remote OpenAI-compatible endpoint
+    model: qwen/qwen3-vl-8b
+    api_key: ""                          # remote APIs: "${MY_API_KEY}" (env expansion)
+    temperature: 0.1
+    max_tokens: 4096
+    timeout_s: 900
+    prompt_file: prompts/palaeographers/qwen-local.md   # this palaeographer's base prompt
+```
+
+- `vision.palaeographer` selects the active one; `ma scan --palaeographer ID`
+  overrides it for one run; the MCP `scan_now` uses the configured default.
+- Each palaeographer can carry its own **base prompt** (its expertise/working
+  rules). It is prepended **before** the document/collection sidecar prompt —
+  so the document prompt still controls the output structure, while the
+  palaeographer prompt steers transcription behaviour:
+
+  ```
+  [palaeographer base prompt]
+  ---
+  [document / collection sidecar prompt]
+  ```
+
+  Document prompts win when they request a specific structure (JSON, tables…).
+- `api_key` supports `${ENV_VAR}` and `${ENV_VAR:-default}` expansion, so keys
+  never need to be committed. Local servers (LM Studio, Ollama) need no key.
+- Every document records which palaeographer extracted it (shown by
+  `ma status`, in search results, and in the library markdown header).
+
 ## CLI reference
 
 ```

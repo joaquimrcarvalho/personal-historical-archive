@@ -13,18 +13,34 @@ paths:
   prompts: prompts        # default + per-file prompt files
   db: data/archive.db
 
-# Vision model used for text extraction.
-# Any OpenAI-compatible endpoint works: LM Studio (default), Ollama (/v1), llama.cpp, vLLM, ...
-# To use Ollama instead: backend: ollama, base_url: http://127.0.0.1:11434/v1, model: qwen2.5vl:7b
-vision:
-  backend: lmstudio
-  base_url: http://127.0.0.1:1234/v1
-  model: qwen/qwen3-vl-8b
-  temperature: 0.1        # keep transcriptions deterministic
-  max_tokens: 4096
-  timeout_s: 900
+# Palaeographers: named vision models that transcribe the documents.
+# Each has its own endpoint (local or remote), model, optional API key, and a
+# base prompt that is prepended BEFORE the document/collection sidecar prompt.
+palaeographers:
+  qwen-local:
+    description: qwen3-vl-8b via LM Studio (local, default)
+    base_url: http://127.0.0.1:1234/v1
+    model: qwen/qwen3-vl-8b
+    api_key: ""                     # local servers need none
+    temperature: 0.1
+    max_tokens: 4096
+    timeout_s: 900
+    prompt_file: prompts/palaeographers/qwen-local.md
+  # Example remote palaeographer (OpenAI-compatible API, key from env):
+  # gpt-remote:
+  #   description: remote model for comparison
+  #   base_url: https://api.openai.com/v1
+  #   model: gpt-4o
+  #   api_key: "${OPENAI_API_KEY}"
+  #   temperature: 0.1
+  #   max_tokens: 4096
+  #   timeout_s: 300
+  #   prompt_file: prompts/palaeographers/gpt-remote.md
 
-# Embedding model for semantic search.
+vision:
+  palaeographer: qwen-local         # which palaeographer transcribes documents
+
+# Embedding model for semantic search (independent of palaeographers).
 # LM Studio serves text-embedding-nomic-embed-text-v1.5 if downloaded;
 # alternatively point at Ollama: backend: ollama, base_url: http://127.0.0.1:11434/v1, model: nomic-embed-text
 embeddings:

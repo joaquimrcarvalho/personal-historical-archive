@@ -4,7 +4,7 @@ from fastmcp import FastMCP
 
 from . import db
 from .config import Config
-from .ingest import scan_once
+from .ingest import make_vision_client, scan_once
 from .model_client import ModelClient
 from .search import search as run_search
 
@@ -101,11 +101,12 @@ def make_server(cfg: Config) -> FastMCP:
 
     @mcp.tool()
     def scan_now() -> dict:
-        """Scan the dropbox for new or changed files, extract text with the vision model,
-        and index them. Call this after the user has dropped new files."""
-        client = ModelClient(cfg.vision_base_url, timeout_s=cfg.vision_timeout_s)
+        """Scan the dropbox for new or changed files, extract text with the active
+        palaeographer (vision model), and index them. Call this after the user has
+        dropped new files."""
+        client, pal = make_vision_client(cfg)
         try:
-            return scan_once(cfg, client, verbose=False)
+            return scan_once(cfg, client, pal, verbose=False)
         finally:
             client.close()
 

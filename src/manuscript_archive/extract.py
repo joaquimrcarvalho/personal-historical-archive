@@ -125,5 +125,13 @@ def resolve_prompt(
     return DEFAULT_PROMPT, "builtin"
 
 
+def compose_prompts(palaeographer_prompt: str, doc_prompt: str) -> str:
+    """The palaeographer's base prompt comes BEFORE the document prompt."""
+    pal = (palaeographer_prompt or "").strip()
+    if not pal:
+        return doc_prompt
+    return f"{pal}\n\n---\n\n{doc_prompt}"
+
+
 def build_page_prompt(file_prompt: str, filename: str, page_no: int, total: int) -> str:
     return f"Document: {filename}\nPage: {page_no} of {total}\n\n{file_prompt}"
