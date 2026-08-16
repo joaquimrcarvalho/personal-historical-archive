@@ -147,17 +147,21 @@ def ingest_file(
 
     existing = db.get_document_by_path(conn, str(path))
     reuse = False
+    prompt_changed = False
     if existing and not reprocess and existing["sha256"] == sha:
         if existing["status"] == "processing":
             # A live run heartbeats updated_at each page; a stale one (killed by
             # sleep/crash/reboot) is resumed instead of skipped.
             if time.time() - existing["updated_at"] < 600:
                 return {"action": "skipped", "filename": path.name, "reason": "already processing"}
+            reuse = True  # interrupted run -> resume (keep done pages)
+        elif existing["status"] == "done":
+            if not _prompt_newer_than(path, cfg, existing["updated_at"]):
+                return {"action": "skipped", "filename": path.name, "reason": "unchanged"}
             reuse = True
-        elif existing["status"] == "done" and not _prompt_newer_than(path, cfg, existing["updated_at"]):
-            return {"action": "skipped", "filename": path.name, "reason": "unchanged"}
-        else:
-            reuse = True  # previous run failed or prompt changed -> reprocess in place
+            prompt_changed = True  # prompt edited -> re-extract ALL pages
+        else:  # 'error': previous run failed -> resume (keep done pages, retry the rest)
+            reuse = True
     if existing and not reuse:
         remove_library_artifact(cfg, existing)
         db.delete_document(conn, existing["id"])
@@ -185,7 +189,7 @@ def ingest_file(
         cfg.dropbox, cfg.prompts, explicit_prompt,
     )
     prompt = compose_prompts(palaeographer.prompt_text, prompt)
-    force = reprocess or reuse
+    force = reprocess or prompt_changed  # only these re-extract already-done pages
 
     try:
         if path.is_dir():
@@ -205,6 +209,7 @@ def ingest_file(
     db.update_document(conn, doc_id, page_count=total)
 
     page_errors: list[tuple[int, str]] = []
+    consecutive_failures = 0
     for i, img in enumerate(renders, start=1):
         page_id = db.add_page(conn, doc_id, i)
         page = conn.execute("SELECT * FROM pages WHERE id = ?", (page_id,)).fetchone()
@@ -219,9 +224,20 @@ def ingest_file(
                 palaeographer.temperature, palaeographer.max_tokens,
             )
             db.set_page_result(conn, page_id, raw_text=text)
+            consecutive_failures = 0
         except ModelError as e:
             db.set_page_result(conn, page_id, error=str(e))
             page_errors.append((i, str(e)))
+            consecutive_failures += 1
+            if consecutive_failures >= 5:
+                # systemic failure (server down, model not loaded, ...): stop
+                # instead of burning through the whole document
+                db.set_document_status(
+                    conn, doc_id, "error",
+                    error=f"aborted after {consecutive_failures} consecutive page failures: {e}",
+                )
+                conn.commit()
+                return {"action": "error", "filename": path.name, "error": str(e)}
         conn.execute("UPDATE documents SET updated_at = ? WHERE id = ?", (time.time(), doc_id))
         conn.commit()
 
