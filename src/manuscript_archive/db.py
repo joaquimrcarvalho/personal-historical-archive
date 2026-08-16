@@ -109,7 +109,8 @@ def add_document(
     dir_path: str = "",
     palaeographer: str | None = None,
 ) -> int:
-    cur = conn.execute(
+    cur = _write(
+        conn,
         """INSERT INTO documents (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, now, now),
@@ -137,8 +138,13 @@ def update_document(conn: sqlite3.Connection, doc_id: int, **fields) -> None:
     if not fields:
         return
     keys = ", ".join(f"{k} = ?" for k in fields)
-    conn.execute(f"UPDATE documents SET {keys}, updated_at = ? WHERE id = ?",
-                 (*fields.values(), _now(), doc_id))
+    _write(conn, f"UPDATE documents SET {keys}, updated_at = ? WHERE id = ?",
+           (*fields.values(), _now(), doc_id))
+
+
+def touch_document(conn: sqlite3.Connection, doc_id: int) -> None:
+    """Per-page heartbeat so interrupted runs are detectable."""
+    _write(conn, "UPDATE documents SET updated_at = ? WHERE id = ?", (_now(), doc_id))
 
 
 def set_document_status(
@@ -148,7 +154,8 @@ def set_document_status(
     error: str | None = None,
     prompt_source: str | None = None,
 ) -> None:
-    conn.execute(
+    _write(
+        conn,
         "UPDATE documents SET status = ?, error = ?, prompt_source = COALESCE(?, prompt_source), updated_at = ? WHERE id = ?",
         (status, error, prompt_source, _now(), doc_id),
     )
@@ -216,8 +223,10 @@ def summary(conn: sqlite3.Connection) -> dict:
 # --------------------------------------------------------------------------- pages
 
 def add_page(conn: sqlite3.Connection, doc_id: int, page_no: int) -> int:
-    cur = conn.execute(
-        "INSERT OR IGNORE INTO pages (document_id, page_no) VALUES (?, ?)", (doc_id, page_no)
+    cur = _write(
+        conn,
+        "INSERT OR IGNORE INTO pages (document_id, page_no) VALUES (?, ?)",
+        (doc_id, page_no),
     )
     if cur.lastrowid:
         return int(cur.lastrowid)
@@ -231,9 +240,9 @@ def set_page_result(
     conn: sqlite3.Connection, page_id: int, raw_text: str | None = None, error: str | None = None
 ) -> None:
     if error is not None:
-        conn.execute("UPDATE pages SET error = ?, status = 'error' WHERE id = ?", (error, page_id))
+        _write(conn, "UPDATE pages SET error = ?, status = 'error' WHERE id = ?", (error, page_id))
     else:
-        conn.execute("UPDATE pages SET raw_text = ?, error = NULL, status = 'done' WHERE id = ?", (raw_text, page_id))
+        _write(conn, "UPDATE pages SET raw_text = ?, error = NULL, status = 'done' WHERE id = ?", (raw_text, page_id))
 
 
 def get_pages(conn: sqlite3.Connection, doc_id: int) -> list[sqlite3.Row]:
@@ -249,20 +258,23 @@ def document_pages(conn: sqlite3.Connection, doc_id: int) -> list[sqlite3.Row]:
 # --------------------------------------------------------------------------- chunks
 
 def clear_chunks(conn: sqlite3.Connection, doc_id: int) -> None:
-    conn.execute(
-        "DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE document_id = ?)", (doc_id,)
+    _write(
+        conn,
+        "DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE document_id = ?)",
+        (doc_id,),
     )
-    conn.execute("DELETE FROM chunks WHERE document_id = ?", (doc_id,))
+    _write(conn, "DELETE FROM chunks WHERE document_id = ?", (doc_id,))
 
 
 def add_chunk(
     conn: sqlite3.Connection, doc_id: int, page_id: int, chunk_no: int, text: str, embedding: bytes | None
 ) -> None:
-    cur = conn.execute(
+    cur = _write(
+        conn,
         "INSERT INTO chunks (document_id, page_id, chunk_no, text, embedding) VALUES (?, ?, ?, ?, ?)",
         (doc_id, page_id, chunk_no, text, embedding),
     )
-    conn.execute("INSERT INTO chunks_fts (rowid, text) VALUES (?, ?)", (cur.lastrowid, text))
+    _write(conn, "INSERT INTO chunks_fts (rowid, text) VALUES (?, ?)", (cur.lastrowid, text))
 
 
 def all_embeddings(
@@ -327,3 +339,17 @@ def _now() -> float:
     import time
 
     return time.time()
+
+
+def _write(conn: sqlite3.Connection, sql: str, params=()):
+    """Execute a write, retrying through transient 'database is locked'
+    (watcher + manual scans + monitor queries share the DB)."""
+    import time as _t
+
+    for attempt in range(6):
+        try:
+            return conn.execute(sql, params)
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() or attempt >= 5:
+                raise
+            _t.sleep(1 + attempt * 2)

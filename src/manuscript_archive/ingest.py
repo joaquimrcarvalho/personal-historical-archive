@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import threading
 import time
@@ -30,6 +31,65 @@ def make_vision_client(
     """Create a ModelClient for a palaeographer (or the active one)."""
     pal = cfg.get_palaeographer(pal_id)
     return ModelClient(pal.base_url, timeout_s=pal.timeout_s, api_key=pal.api_key), pal
+
+
+# --------------------------------------------------------------------------- scan lock
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists but owned by another user
+    except OSError:
+        return False
+
+
+def _scan_lock_path(cfg: Config) -> Path:
+    return cfg.data / "scan.lock"
+
+
+def _scan_lock_held_by_other(cfg: Config) -> bool:
+    """True if a DIFFERENT, still-running process holds the scan lock."""
+    lock = _scan_lock_path(cfg)
+    if not lock.exists():
+        return False
+    try:
+        pid = int(lock.read_text().strip() or "0")
+    except (ValueError, OSError):
+        return False
+    return pid != os.getpid() and _pid_alive(pid)
+
+
+def _acquire_scan_lock(cfg: Config) -> bool:
+    """Take the scan lock. Returns False if another live scan is running."""
+    lock = _scan_lock_path(cfg)
+    try:
+        if lock.exists():
+            try:
+                pid = int(lock.read_text().strip() or "0")
+            except (ValueError, OSError):
+                pid = 0
+            if pid != os.getpid() and _pid_alive(pid):
+                return False
+            lock.unlink()  # stale lock
+        lock.write_text(str(os.getpid()))
+        return True
+    except OSError:
+        return True  # cannot lock; proceed (best effort)
+
+
+def _release_scan_lock(cfg: Config) -> None:
+    lock = _scan_lock_path(cfg)
+    try:
+        if lock.exists() and lock.read_text().strip() == str(os.getpid()):
+            lock.unlink()
+    except OSError:
+        pass
 
 
 def sha256_of(path: Path) -> str:
@@ -150,11 +210,11 @@ def ingest_file(
     prompt_changed = False
     if existing and not reprocess and existing["sha256"] == sha:
         if existing["status"] == "processing":
-            # A live run heartbeats updated_at each page; a stale one (killed by
-            # sleep/crash/reboot) is resumed instead of skipped.
-            if time.time() - existing["updated_at"] < 600:
+            # Only skip if ANOTHER live scan owns this document right now;
+            # a stale 'processing' (killed by sleep/crash/reboot) is resumed.
+            if _scan_lock_held_by_other(cfg) and time.time() - existing["updated_at"] < 600:
                 return {"action": "skipped", "filename": path.name, "reason": "already processing"}
-            reuse = True  # interrupted run -> resume (keep done pages)
+            reuse = True  # resume (keep done pages)
         elif existing["status"] == "done":
             if not _prompt_newer_than(path, cfg, existing["updated_at"]):
                 return {"action": "skipped", "filename": path.name, "reason": "unchanged"}
@@ -238,9 +298,8 @@ def ingest_file(
                 )
                 conn.commit()
                 return {"action": "error", "filename": path.name, "error": str(e)}
-        conn.execute("UPDATE documents SET updated_at = ? WHERE id = ?", (time.time(), doc_id))
+        db.touch_document(conn, doc_id)
         conn.commit()
-
     if page_errors:
         db.set_document_status(
             conn, doc_id, "error",
@@ -324,6 +383,9 @@ def scan_once(
     reprocess: bool = False,
     verbose: bool = True,
 ) -> dict:
+    if not _acquire_scan_lock(cfg):
+        return {"scanned": 0, "results": [{"action": "skipped", "filename": "(scan)",
+                                           "reason": "another scan is running"}]}
     cfg.ensure_dirs()
     conn = db.connect(cfg.db_path)
     try:
@@ -339,6 +401,7 @@ def scan_once(
         return {"scanned": len(files), "results": results}
     finally:
         conn.close()
+        _release_scan_lock(cfg)
 
 
 def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True) -> dict:
