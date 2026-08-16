@@ -237,9 +237,9 @@ After switching the embedding model run `ma reindex`.
 dropbox/documents/        ← individual documents (+ .prompt.md sidecars)
 dropbox/collections/COLX/ ← collections of sources (+ prompt.md for the collection)
 library/
-  transcription-qwen-local/           ← one folder per palaeographer
-    collections/letters-from-missons/ ← mirrors the dropbox directory structure
-      <doc-slug>/                     ← one folder per document
+  collections/letters-from-missons/   ← mirrors the dropbox directory structure
+    <doc-slug>/                       ← one folder per document
+      transcription-qwen-local/       ← one folder per palaeographer
         page-001.md                   ← one file per page, YAML front matter repeated
         page-002.md                     (source filename, collection, page, palaeographer,
         …                               prompt, status) + the transcription body
@@ -251,7 +251,9 @@ prompts/default_prompt.md ← shipped default prompt
 Per-page files are written **incrementally** while a document is being
 extracted, so output is visible immediately (no need to wait for completion).
 `ma export` regenerates all per-page files from the database without
-re-extracting.
+re-extracting. Running a different palaeographer over the same document adds
+a sibling `transcription-<palaeographer>/` folder for side-by-side
+comparison.
 
 ## Notes on quality & performance
 

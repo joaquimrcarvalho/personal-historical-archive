@@ -177,19 +177,14 @@ def _prompt_newer_than(path: Path, cfg: Config, ts: float) -> bool:
 
 
 def remove_library_artifact(cfg: Config, doc) -> None:
-    """Delete the transcription folders (any palaeographer) for a document."""
+    """Delete the document's library folder (all palaeographer transcriptions)."""
     if not doc:
         return
     slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
     rel = Path(doc["dir_path"] or "")
-    for pal_dir in cfg.library.glob("transcription-*"):
-        d = pal_dir / rel / slug
-        if d.exists():
-            shutil.rmtree(d, ignore_errors=True)
-    # legacy single-file format
-    old = cfg.library / rel / slug
-    if old.exists():
-        shutil.rmtree(old, ignore_errors=True)
+    d = cfg.library / rel / slug
+    if d.exists():
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def ingest_file(
@@ -358,9 +353,9 @@ def index_document(cfg: Config, conn, client: ModelClient, doc_id: int, verbose:
 
 def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
     """Write per-page transcription files with repeated front matter, grouped
-    by palaeographer:
+    by palaeographer at the document level:
 
-        library/transcription-<pal>/<rel_dir>/<slug>/page-NNN.md
+        library/<rel_dir>/<slug>/transcription-<pal>/page-NNN.md
     """
     doc = db.get_document(conn, doc_id)
     pages = db.get_pages(conn, doc_id)
@@ -369,7 +364,7 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
     pal = doc["palaeographer"] or "default"
     slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
     rel_dir = Path(doc["dir_path"] or "")
-    out_dir = cfg.library / f"transcription-{pal}" / rel_dir / slug
+    out_dir = cfg.library / rel_dir / slug / f"transcription-{pal}"
     out_dir.mkdir(parents=True, exist_ok=True)
     base = {
         "source": doc["path"],
