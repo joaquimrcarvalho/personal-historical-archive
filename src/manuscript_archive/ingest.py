@@ -232,21 +232,28 @@ def ingest_file(
     prompt_changed = False
     if existing and not reprocess and existing["sha256"] == sha:
         prompt_newer = _prompt_newer_than(path, cfg, existing["updated_at"], palaeographer)
+        # The document re-extracts if it now resolves to a DIFFERENT palaeographer
+        # than the one that produced its current text (NULL = unknown/legacy).
+        pal_changed = (
+            existing["palaeographer"] is not None
+            and existing["palaeographer"] != palaeographer.id
+        )
+        changed = prompt_newer or pal_changed
         if existing["status"] == "processing":
             # Only skip if ANOTHER live scan owns this document right now;
             # a stale 'processing' (killed by sleep/crash/reboot) is resumed.
             if _scan_lock_held_by_other(cfg) and time.time() - existing["updated_at"] < 600:
                 return {"action": "skipped", "filename": path.name, "reason": "already processing"}
             reuse = True  # resume (keep done pages)
-            prompt_changed = prompt_newer  # palaeographer/doc prompt edited mid-run
+            prompt_changed = changed  # prompt/palaeographer edited mid-run
         elif existing["status"] == "done":
-            if not prompt_newer:
+            if not changed:
                 return {"action": "skipped", "filename": path.name, "reason": "unchanged"}
             reuse = True
-            prompt_changed = True  # prompt edited -> re-extract ALL pages
+            prompt_changed = True  # prompt/palaeographer changed -> re-extract ALL pages
         else:  # 'error': previous run failed -> resume (keep done pages, retry the rest)
             reuse = True
-            prompt_changed = prompt_newer
+            prompt_changed = changed
     if existing and not reuse:
         remove_library_artifact(cfg, existing)
         db.delete_document(conn, existing["id"])
