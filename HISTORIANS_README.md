@@ -16,15 +16,53 @@ what to ask, and each section has a block you can copy straight into the chat.
 You need:
 
 - A computer with **macOS or Windows**
-- **LM Studio** installed (free, from lmstudio.ai) — this runs the AI models
-  locally, on your machine
+- **LM Studio** (free, from lmstudio.ai) — this runs the AI models locally on
+  your machine. If you do not have it, your agent can install it for you
+  (step 1 below)
 - An AI assistant you trust with file operations
 
 The archive itself lives on **your** computer. Nothing is uploaded anywhere.
 
 ---
 
-## 1. Install pha (from GitHub)
+## 1. Install LM Studio, choose models, and install pha
+
+You can ask your agent to do all of it. Three short prompts, in order:
+
+### 1a. Install LM Studio (if you don't have it)
+
+```
+Please install LM Studio on my computer: download it from lmstudio.ai,
+install it, and open it so its local server can run. Tell me when it is ready.
+```
+
+### 1b. Choose the best models for your documents
+
+Different vision and text models are better for different material. Ask your
+agent to research and recommend:
+
+```
+Research and recommend the best LOCAL models for my archive, considering my
+computer specs (e.g. MacBook Air M2, 24 GB RAM):
+
+1. a VISION model for reading pages of [describe your documents, e.g. printed
+   19th-century Portuguese books and 17th-century manuscript letters] —
+   give me 2-3 options with a clear recommendation
+2. a TEXT model for editing transcriptions (modernizing old Portuguese,
+   translating to English) — 2-3 options with a recommendation
+3. an EMBEDDING model for search (a small one is fine)
+
+Then tell me exactly which models to download in LM Studio and their names
+in the LM Studio catalog.
+```
+
+A good starting point, already configured in pha by default: the vision model
+`qwen/qwen3-vl-8b` (excellent at reading historical text), the embedding model
+`text-embedding-nomic-embed-text-v1.5`, and the text/editing model
+`amalia-9b-0626-dpo` (or `google/gemma-4-e4b`). Keep these if the research
+agrees, or switch per the recommendation.
+
+### 1c. Install pha (from GitHub)
 
 Copy this into your agent's chat and let it do the work:
 
@@ -36,11 +74,9 @@ Steps:
 1. Clone the repository to a folder of your choice, e.g. ~/develop/personal-historical-archive
 2. Install `uv` if it is not present, create a Python virtual environment
    in the project and install the package (uv pip install -e .)
-3. Check that LM Studio is installed and running with its local server on
-   port 1234; if a vision model is not loaded, load:
-     - qwen/qwen3-vl-8b            (reads pages)
-     - text-embedding-nomic-embed-text-v1.5   (for search)
-     - amalia-9b-0626-dpo or google/gemma-4-e4b   (a text model, for editing)
+3. Check that LM Studio is running with its local server on port 1234 and
+   that the chosen models are available (the vision model, the embedding
+   model, and the text/editing model). Load them if needed.
 4. Verify the installation and tell me the result of `pha status`.
 ```
 
@@ -111,7 +147,8 @@ and pha editor). Then, for my documents, I want:
 
 Create the corresponding files by copying palaeographers/_sample.md and
 editors/_sample.md, giving them good names, filling in the settings
-(endpoint, model, temperature) and writing the instructions in the body.
+(endpoint, model — use the models we chose in step 1b — temperature) and
+writing the instructions in the body.
 Then SELECT them for my collections: create a file named "palaeographer"
 containing the palaeographer id inside each collection folder, and an
 "editor" file with the editor id. Show me the result of:
