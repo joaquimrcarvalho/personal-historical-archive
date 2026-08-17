@@ -1,0 +1,210 @@
+# pha for historians — a step-by-step guide
+
+**pha** (Personal Historical Archive) keeps your manuscripts, old books and
+maps in a local archive: you drop files into a folder, a vision model reads
+each page, a text model can modernize or translate the transcriptions, and
+everything becomes searchable by your AI assistant.
+
+You do not need to touch the command line yourself — you work through **your
+favourite AI agent** (Claude, ChatGPT, Cursor, …). The steps below tell you
+what to ask, and each section has a block you can copy straight into the chat.
+
+---
+
+## Before you start
+
+You need:
+
+- A computer with **macOS or Windows**
+- **LM Studio** installed (free, from lmstudio.ai) — this runs the AI models
+  locally, on your machine
+- An AI assistant you trust with file operations
+
+The archive itself lives on **your** computer. Nothing is uploaded anywhere.
+
+---
+
+## 1. Install pha (from GitHub)
+
+Copy this into your agent's chat and let it do the work:
+
+```
+Please install the "personal-historical-archive" (pha) program from
+https://github.com/joaquimrcarvalho/personal-historical-archive
+
+Steps:
+1. Clone the repository to a folder of your choice, e.g. ~/develop/personal-historical-archive
+2. Install `uv` if it is not present, create a Python virtual environment
+   in the project and install the package (uv pip install -e .)
+3. Check that LM Studio is installed and running with its local server on
+   port 1234; if a vision model is not loaded, load:
+     - qwen/qwen3-vl-8b            (reads pages)
+     - text-embedding-nomic-embed-text-v1.5   (for search)
+     - amalia-9b-0626-dpo or google/gemma-4-e4b   (a text model, for editing)
+4. Verify the installation and tell me the result of `pha status`.
+```
+
+What you should see afterwards: a short report that the archive is ready and
+which palaeographers and editors are configured (`qwen-local` by default,
+plus a `modern-portuguese` editor).
+
+**Windows note:** the commands are the same, only the environment folder
+differs (`Scripts\python.exe` instead of `bin/python`). Your agent will
+handle this.
+
+---
+
+## 2. Put your documents in the archive
+
+pha expects a simple folder layout. Tell your agent:
+
+```
+Create these folders in the archive (inside the "dropbox" folder):
+  dropbox/documents/          — individual documents
+  dropbox/collections/<NAME>/ — one folder per collection, e.g. "letters-from-missons"
+
+Then copy my files in, following these rules:
+- a PDF or an image file = one document
+- a FOLDER containing only images = one document whose pages are those images
+  (put it inside documents/ or inside a collection)
+- anything that belongs together historically (e.g. all letters of one
+  correspondence) goes into its own collection folder
+- tell me where each file ended up
+```
+
+Rules of thumb for your own use:
+
+- **One document** = a PDF (many pages) **or** an image (one page) **or** a
+  folder of page-scan images (each image becomes a page).
+- **A collection** = a folder that groups related documents, e.g.
+  `collections/missons-do-oriente/`. The folder name becomes a way to filter
+  searches.
+- Keep the originals somewhere safe; pha reads a copy you place in the
+  dropbox and never modifies your source files.
+
+---
+
+## 3. Set up palaeographers and editors
+
+Two kinds of "helpers" read and improve your documents:
+
+- **Palaeographer** — a vision model that *reads* a page image and transcribes
+  it. Different palaeographers can be specialised for different hands or
+  languages (e.g. 17th-century Portuguese secretary hand).
+- **Editor** — a text model that *transforms* the transcription: convert to
+  modern Portuguese, translate to English, normalize names, …
+
+Each is a single text file in the `palaeographers/` or `editors/` folder.
+**To add one, you duplicate the `_sample.md` file, rename it, and edit it** —
+your agent can do this for you from a plain-language description.
+
+Tell your agent:
+
+```
+Show me the current palaeographers and editors (run: pha palaeographer
+and pha editor). Then, for my documents, I want:
+
+[describe what you need, for example:]
+- a palaeographer specialised in 17th-century Portuguese secretary hand,
+  transcribing faithfully in the original language
+- an editor that converts the transcriptions to modern Portuguese
+
+Create the corresponding files by copying palaeographers/_sample.md and
+editors/_sample.md, giving them good names, filling in the settings
+(endpoint, model, temperature) and writing the instructions in the body.
+Then SELECT them for my collections: create a file named "palaeographer"
+containing the palaeographer id inside each collection folder, and an
+"editor" file with the editor id. Show me the result of:
+  pha palaeographer
+  pha editor
+```
+
+Notes:
+
+- The **file name** (without extension) is the id used for selection — e.g. a
+  file `palaeographers/portuguese-secretary.md` is selected by writing
+  `portuguese-secretary` in a `palaeographer` file.
+- You can use a different palaeographer/editor per **collection** — that is
+  how a historian's editorial choice is expressed.
+- The base prompt in a palaeographer file defines the output format; the
+  document/collection prompt only adds specific aspects (e.g. which fields
+  matter, whether to modernize spelling).
+
+---
+
+## 4. Process the documents and query the archive
+
+### First run (processing)
+
+Tell your agent:
+
+```
+Run the extraction:  pha scan
+Then, when it finishes:  pha edit
+Then show me:  pha status
+```
+
+- `pha scan` reads every page with the palaeographer(s).
+- `pha edit` runs the editor over the transcriptions (modernize/translate).
+- Large books take time; the work is resumable — if the computer sleeps or is
+  restarted, just run `pha scan` again and it continues where it stopped.
+
+### Searching
+
+Ask in plain language, e.g.:
+
+- *"Search the archive for mentions of Malacca."*
+- *"In the collection missons-do-oriente, find the pages about Francis Xavier."*
+- *"Show me the full transcription of that page."*
+
+Your agent can answer directly if it is connected to the archive (see below),
+or you can ask it to run: `pha search "Malacca" --collection missons-do-oriente`
+
+### Letting your agent query directly (MCP)
+
+For agents that support MCP (Claude Desktop, Cursor, …), the archive exposes
+its search as tools. Ask your agent:
+
+```
+Connect to the local MCP server "personal-historical-archive" using:
+  <path-to-project>/.venv/bin/python -m personal_historical_archive mcp
+(with the environment variable PHA_HOME set to the project folder)
+Then use its tools: pha_search, pha_get_document, pha_list_documents,
+pha_scan_now, pha_extraction_status.
+```
+
+After that you can simply ask questions and the agent will query the archive
+itself.
+
+---
+
+## Where the results are
+
+For each document, in the `library/` folder, mirroring the dropbox layout:
+
+```
+library/<collection>/<document>/transcription-qwen-local/page-001.md   ← faithful transcription
+library/<collection>/<document>/edited-modern-portuguese/page-001.md   ← modernized / translated
+```
+
+Each page file starts with a small header (source file, page number,
+palaeographer, editor, status) followed by the text.
+
+---
+
+## Troubleshooting (quick)
+
+- **Nothing happens / errors about a model** → check that LM Studio is open
+  and its server is running (port 1234); your agent can test it.
+- **Extraction seems stuck** → it is probably waiting while the computer
+  slept; run `pha scan` again, it resumes.
+- **Search returns nothing** → the extraction may not be finished; check
+  `pha status`.
+- **Windows** → everything works; only the environment paths differ, which
+  your agent handles.
+
+---
+
+*pha is designed so that historians control the editorial choices — which
+palaeographer reads, which editor transforms — while the technical work stays
+in the hands of your AI assistant.*
