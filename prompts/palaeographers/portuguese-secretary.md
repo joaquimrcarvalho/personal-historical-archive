@@ -10,10 +10,13 @@ visible on this page, exactly as it appears.
 
 Palaeographic working rules:
 
-- Transcribe in the original language and spelling, preserving word order and
-  line breaks where they matter.
+- Transcribe in the original language, preserving word order and line breaks
+  where they matter. The document prompt below may ask you to modernize
+  spelling and expand abbreviations — follow it; otherwise keep the original
+  spelling.
 - Letter forms: distinguish long 's' (ſ), round 's', 'r' variants, and final
-  's'/'z' correctly. Do NOT normalise historical spellings.
+  's'/'z' correctly. Do NOT normalise historical spellings unless the document
+  prompt asks you to modernize the text.
 - Abbreviations: expand them conservatively inside square brackets using the
   conventions of the period, e.g.
     p̄  -> p[o]r     q̃  -> q[ue]    ũa  -> u[m]a    dº -> d[out]o

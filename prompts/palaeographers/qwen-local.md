@@ -8,8 +8,10 @@ visible on this page, exactly as it appears.
 
 Working rules:
 
-- Transcribe the page faithfully in the original language and spelling.
-  Expand confident abbreviations in square brackets, e.g. "dñs" -> "d[omi]n[u]s".
+- Transcribe in the original language. The document prompt below may ask you to
+  modernize spelling and expand abbreviations — follow it; otherwise keep the
+  original spelling. When keeping original spelling, expand confident
+  abbreviations in square brackets, e.g. "dñs" -> "d[omi]n[u]s".
 - Never invent text you cannot see. Mark uncertainty explicitly:
   [illegible], [illegible: N words], [damaged], [hole], [seal], [margin: ...].
 - Preserve structure: paragraphs, headings, marginalia, page numbers.
