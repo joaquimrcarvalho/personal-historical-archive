@@ -213,12 +213,14 @@ breaks the load. `pha palaeographer` lists the configured palaeographers.
   the new palaeographer; output goes to a sibling
   `transcription-<palaeographer>/` folder. `pha palaeographer [file]` shows
   how a document resolves.
-- The body of the file is the **base prompt** (the format authority:
-  ## Transcription, ## Notes with ### Named entities — one bullet per
-  entity — and ### Content summary). It is always prepended **before** the
-  document/collection prompt; the document/collection prompt only adds
-  specific aspects (fields to prioritise, transcription style) and cannot
-  change the structure.
+- The body of the file is the palaeographer's **base prompt**, and it is the
+  **format authority**: it defines the output structure — `## Transcription`,
+  then `## Notes` with `### Named entities` (one bullet per entity) and
+  `### Content summary`.
+- The base prompt is always sent **first**, before the document/collection
+  prompt. The document/collection prompt only adds specific aspects (fields
+  to prioritise, transcription style such as modernizing spelling) and cannot
+  change the output structure.
 - `api_key` supports `${ENV_VAR}` and `${ENV_VAR:-default}` expansion, so keys
   never need to be committed. Local servers (LM Studio, Ollama) need no key.
 - Every document records which palaeographer extracted it (shown by
