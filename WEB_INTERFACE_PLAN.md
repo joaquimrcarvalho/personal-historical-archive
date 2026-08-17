@@ -91,10 +91,14 @@ document, a row per palaeographer (transcriptions also live side-by-side in
    palaeographer); documents table with expandable per-palaeographer runs
    (status, pages done/total, started/finished, error); actions: Scan now,
    Reprocess, Remove.
-2. **Palaeographers** — cards for each entry; add/edit form (id, description,
-   base_url, api_key — masked, model, temperature, max_tokens, timeout_s,
-   prompt file or inline text); **Test connection**; set as `vision.palaeographer`;
-   delete. Editing triggers re-extraction of affected docs — show a warning.
+2. **Palaeographers / Editors** — a **file manager over the `palaeographers/`
+   and `editors/` directories**: each configured model is one `.md` file
+   (front matter = settings, body = prompt). The screen lists the files with
+   a preview, and offers **Duplicate (as sample)**, **Edit** (form over the
+   front matter + textarea for the prompt body), **Test connection** (tiny
+   call to the configured endpoint), **Set as default** (`vision.palaeographer`),
+   and **Delete**. Saving re-extracts/re-edits affected documents — warn
+   before saving.
 3. **Prompts** — grouped list (default, palaeographers/, collection `prompt.md`,
    document sidecars `*.prompt.md`); editor (textarea, markdown) with save;
    before saving, show "this re-extracts N documents"; a **resolved preview**
