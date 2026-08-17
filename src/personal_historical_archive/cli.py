@@ -8,8 +8,9 @@ from datetime import datetime
 
 from . import db
 from .config import Config
-from .extract import is_supported, resolve_palaeographer_id, resolve_prompt
+from .extract import is_supported, resolve_editor_id, resolve_palaeographer_id, resolve_prompt
 from .ingest import (
+    edit_all,
     make_vision_client,
     reindex_all,
     remove_library_artifact,
@@ -77,7 +78,7 @@ def cmd_search(cfg: Config, args) -> None:
         print("no results")
         return
     for i, r in enumerate(res["results"], 1):
-        print(f"{i:2d}. [{r['source']:8s}] {r['filename']}  [{r['collection']}]  p.{r['page_no']}  score={r['score']}")
+        print(f"{i:2d}. [{r['source']:8s}][{r.get('variant','raw'):6s}] {r['filename']}  [{r['collection']}]  p.{r['page_no']}  score={r['score']}")
         print(f"     {r['snippet']}")
     print(f"\n{len(res['results'])} result(s) in mode '{res['mode']}'")
 
@@ -194,6 +195,50 @@ def cmd_palaeographer(cfg: Config, args) -> None:
         print(f"  {f}: {pal_id or '(empty)'}")
 
 
+def cmd_editor(cfg: Config, args) -> None:
+    if args.file:
+        p = cfg.dropbox / args.file if not (cfg.root / args.file).exists() else cfg.root / args.file
+        if not p.exists():
+            print(f"not found: {args.file}")
+            return
+        ed_id, source = resolve_editor_id(
+            p.stem, p if p.is_dir() else p.parent, cfg.dropbox
+        )
+        if ed_id and ed_id in cfg.editors:
+            ed = cfg.editors[ed_id]
+            print(f"editor: {ed.id} ({ed.description or ed.model})")
+        else:
+            print(f"editor: {ed_id or 'none (no editing)'}")
+        print(f"source: {source or '(none — no editor configured)'}")
+        return
+    print(f"editors configured: {sorted(cfg.editors)}")
+    ed_files = []
+    for pat in ("editor", "editor.txt", "editor.md",
+                "*.editor", "*.editor.txt", "*.editor.md"):
+        ed_files.extend(cfg.dropbox.rglob(pat))
+    for f in sorted(set(ed_files)):
+        ed_id = re.sub(r"^[#\-*\s]+", "", f.read_text().strip().splitlines()[0]).strip() if f.read_text().strip() else ""
+        print(f"  {f}: {ed_id or '(empty)'}")
+
+
+def cmd_edit(cfg: Config, args) -> None:
+    res = edit_all(cfg, reprocess=args.reprocess, verbose=True)
+    edited = sum(1 for r in res["results"] if r["action"] == "edited")
+    print(f"edited {edited} document(s)")
+    for r in res["results"]:
+        if r["action"] == "edited":
+            print(f"  + {r['filename']} [{r['editor']}] ({r['pages']} pages)")
+        elif r["reason"] != "no editor configured":
+            print(f"  ! {r['filename']}: {r.get('reason', r['action'])}")
+    # re-index edited docs so the search covers both raw and edited variants
+    if edited:
+        client = _client(cfg, cfg.embed_base_url, cfg.embed_timeout_s)
+        try:
+            reindex_all(cfg, client, verbose=False)
+        finally:
+            client.close()
+
+
 def cmd_mcp(cfg: Config, args) -> None:
     from . import mcp_server
 
@@ -255,6 +300,14 @@ def main(argv: list[str] | None = None) -> None:
     pa = sub.add_parser("palaeographer", help="show palaeographer resolution for a file")
     pa.add_argument("file", nargs="?")
     pa.set_defaults(fn=cmd_palaeographer)
+
+    ed = sub.add_parser("editor", help="show editor resolution for a file")
+    ed.add_argument("file", nargs="?")
+    ed.set_defaults(fn=cmd_editor)
+
+    e2 = sub.add_parser("edit", help="run the editor pass over all documents with an editor")
+    e2.add_argument("--reprocess", action="store_true", help="re-edit everything")
+    e2.set_defaults(fn=cmd_edit)
 
     args = parser.parse_args(argv)
     args.fn(cfg, args)

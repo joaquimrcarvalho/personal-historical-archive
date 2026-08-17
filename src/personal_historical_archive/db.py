@@ -38,11 +38,24 @@ CREATE TABLE IF NOT EXISTS chunks (
     chunk_no INTEGER NOT NULL,
     text TEXT NOT NULL,
     embedding BLOB,
-    UNIQUE (page_id, chunk_no)
+    variant TEXT NOT NULL DEFAULT 'raw',
+    UNIQUE (page_id, chunk_no, variant)
+);
+CREATE TABLE IF NOT EXISTS page_edits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    editor TEXT NOT NULL,
+    text TEXT,
+    raw_sha TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT,
+    updated_at REAL,
+    UNIQUE (page_id, editor)
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text);
 CREATE INDEX IF NOT EXISTS idx_pages_doc ON pages(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id);
+CREATE INDEX IF NOT EXISTS idx_edits_page ON page_edits(page_id);
 """
 
 
@@ -70,6 +83,8 @@ def migrate(conn: sqlite3.Connection) -> None:
         statements.append("ALTER TABLE documents ADD COLUMN dir_path TEXT")
     if "palaeographer" not in cols:
         statements.append("ALTER TABLE documents ADD COLUMN palaeographer TEXT")
+    if "editor" not in cols:
+        statements.append("ALTER TABLE documents ADD COLUMN editor TEXT")
     if statements:
         import time
 
@@ -84,6 +99,16 @@ def migrate(conn: sqlite3.Connection) -> None:
                 time.sleep(3)
         else:
             raise last_err or RuntimeError("migration failed")
+    ccols = [r[1] for r in conn.execute("PRAGMA table_info(chunks)")]
+    if "variant" not in ccols:
+        for attempt in range(15):
+            try:
+                conn.execute("ALTER TABLE chunks ADD COLUMN variant TEXT NOT NULL DEFAULT 'raw'")
+                break
+            except sqlite3.OperationalError as e:
+                if attempt >= 14:
+                    raise
+                time.sleep(3)
     # page status vocabulary: failed pages are 'waiting' (retried on next scan).
     # Only writes when rows need converting, so normal connections stay read-only.
     if conn.execute("SELECT COUNT(*) AS n FROM pages WHERE status = 'error'").fetchone()["n"]:
@@ -113,12 +138,13 @@ def add_document(
     now: str,
     dir_path: str = "",
     palaeographer: str | None = None,
+    editor: str | None = None,
 ) -> int:
     cur = _write(
         conn,
-        """INSERT INTO documents (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, now, now),
+        """INSERT INTO documents (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, editor, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, editor, now, now),
     )
     return int(cur.lastrowid)
 
@@ -264,6 +290,65 @@ def document_pages(conn: sqlite3.Connection, doc_id: int) -> list[sqlite3.Row]:
     return get_pages(conn, doc_id)
 
 
+# --------------------------------------------------------------------------- page edits (editors)
+
+def get_page_edit(
+    conn: sqlite3.Connection, page_id: int, editor: str
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM page_edits WHERE page_id = ? AND editor = ?", (page_id, editor)
+    ).fetchone()
+
+
+def set_page_edit(
+    conn: sqlite3.Connection,
+    page_id: int,
+    editor: str,
+    text: str | None = None,
+    error: str | None = None,
+    raw_sha: str | None = None,
+) -> None:
+    import time as _t
+
+    if error is not None:
+        _write(
+            conn,
+            """INSERT INTO page_edits (page_id, editor, text, raw_sha, status, error, updated_at)
+               VALUES (?, ?, NULL, ?, 'waiting', ?, ?)
+               ON CONFLICT(page_id, editor) DO UPDATE SET
+                 text = NULL, raw_sha = ?, status = 'waiting', error = ?, updated_at = ?""",
+            (page_id, editor, raw_sha, error, _t.time(), raw_sha, error, _t.time()),
+        )
+    else:
+        _write(
+            conn,
+            """INSERT INTO page_edits (page_id, editor, text, raw_sha, status, error, updated_at)
+               VALUES (?, ?, ?, ?, 'done', NULL, ?)
+               ON CONFLICT(page_id, editor) DO UPDATE SET
+                 text = ?, raw_sha = ?, status = 'done', error = NULL, updated_at = ?""",
+            (page_id, editor, text, raw_sha, _t.time(), text, raw_sha, _t.time()),
+        )
+
+
+def edits_for_document(
+    conn: sqlite3.Connection, doc_id: int, editor: str
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        """SELECT pe.* FROM page_edits pe JOIN pages p ON p.id = pe.page_id
+           WHERE p.document_id = ? AND pe.editor = ?""",
+        (doc_id, editor),
+    ).fetchall()
+
+
+def clear_page_edits(conn: sqlite3.Connection, doc_id: int, editor: str) -> None:
+    _write(
+        conn,
+        """DELETE FROM page_edits WHERE editor = ? AND page_id IN
+           (SELECT id FROM pages WHERE document_id = ?)""",
+        (editor, doc_id),
+    )
+
+
 # --------------------------------------------------------------------------- chunks
 
 def clear_chunks(conn: sqlite3.Connection, doc_id: int) -> None:
@@ -276,12 +361,18 @@ def clear_chunks(conn: sqlite3.Connection, doc_id: int) -> None:
 
 
 def add_chunk(
-    conn: sqlite3.Connection, doc_id: int, page_id: int, chunk_no: int, text: str, embedding: bytes | None
+    conn: sqlite3.Connection,
+    doc_id: int,
+    page_id: int,
+    chunk_no: int,
+    text: str,
+    embedding: bytes | None,
+    variant: str = "raw",
 ) -> None:
     cur = _write(
         conn,
-        "INSERT INTO chunks (document_id, page_id, chunk_no, text, embedding) VALUES (?, ?, ?, ?, ?)",
-        (doc_id, page_id, chunk_no, text, embedding),
+        "INSERT INTO chunks (document_id, page_id, chunk_no, text, embedding, variant) VALUES (?, ?, ?, ?, ?, ?)",
+        (doc_id, page_id, chunk_no, text, embedding, variant),
     )
     _write(conn, "INSERT INTO chunks_fts (rowid, text) VALUES (?, ?)", (cur.lastrowid, text))
 
@@ -325,7 +416,7 @@ def keyword_search(
     fts_q = build_fts_query(query)
     clause, params = _dir_clause(collection)
     return conn.execute(
-        """SELECT c.id AS chunk_id, c.document_id, c.page_id, p.page_no, c.chunk_no, c.text,
+        """SELECT c.id AS chunk_id, c.document_id, c.page_id, p.page_no, c.chunk_no, c.text, c.variant,
                   d.dir_path,
                   -bm25(chunks_fts) AS bm,
                   snippet(chunks_fts, 0, '…', '…', '…', 28) AS snippet

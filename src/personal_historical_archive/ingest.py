@@ -13,17 +13,19 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from . import db
-from .config import Config, Palaeographer
+from .config import Config, Editor, Palaeographer
 from .embed import pack, prefixed
 from .extract import (
     build_page_prompt,
     compose_prompts,
+    editor_candidates,
     format_notes,
     is_supported,
     page_count,
     palaeographer_candidates,
     prompt_candidates,
     render_document,
+    resolve_editor_id,
     resolve_palaeographer_id,
     resolve_prompt,
 )
@@ -36,6 +38,19 @@ def make_vision_client(
     """Create a ModelClient for a palaeographer (or the active one)."""
     pal = cfg.get_palaeographer(pal_id)
     return ModelClient(pal.base_url, timeout_s=pal.timeout_s, api_key=pal.api_key), pal
+
+
+def make_editor_client(cfg: Config, editor_id: str) -> tuple[ModelClient, Editor]:
+    """Create a ModelClient for an editor (a text model, possibly on a
+    different endpoint/model than the palaeographer)."""
+    editor = cfg.get_editor(editor_id)
+    return ModelClient(editor.base_url, timeout_s=editor.timeout_s, api_key=editor.api_key), editor
+
+
+def _raw_sha(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256((text or "").encode()).hexdigest()
 
 
 # --------------------------------------------------------------------------- scan lock
@@ -278,13 +293,16 @@ def ingest_file(
         rel_dir = ""
     if rel_dir == ".":
         rel_dir = ""
+    ed_id, _edsrc = resolve_editor_id(
+        path.stem, path if path.is_dir() else path.parent, cfg.dropbox
+    )
     doc_id = existing["id"] if reuse else db.add_document(
         conn, filename=path.name, path=str(path), sha256=sha,
         size_bytes=size, mtime=mtime, kind=kind, now=now, dir_path=rel_dir,
-        palaeographer=palaeographer.id,
+        palaeographer=palaeographer.id, editor=ed_id,
     )
     if reuse:
-        db.update_document(conn, doc_id, palaeographer=palaeographer.id)
+        db.update_document(conn, doc_id, palaeographer=palaeographer.id, editor=ed_id)
     db.set_document_status(conn, doc_id, "processing")
     conn.commit()
 
@@ -359,7 +377,8 @@ def ingest_file(
 
     db.set_document_status(conn, doc_id, "done", prompt_source=prompt_source)
     conn.commit()
-    index_document(cfg, conn, doc_id, verbose=verbose)
+    edit_document(cfg, conn, doc_id, verbose=verbose)  # editor pass (skips if none configured)
+    index_document(cfg, conn, doc_id, verbose=verbose)  # indexes raw + edited variants
     write_document_pages(cfg, conn, doc_id)
     return {"action": "ingested", "filename": path.name, "pages": total, "prompt": prompt_source}
 
@@ -367,14 +386,27 @@ def ingest_file(
 def index_document(
     cfg: Config, conn, doc_id: int, embed_client: ModelClient | None = None, verbose: bool = True
 ) -> int:
+    """Index BOTH variants when an editor is configured: the raw transcription
+    (variant='raw') and the editor's output (variant='edited'), so searches
+    hit either the faithful or the modernized/translated text."""
     pages = db.get_pages(conn, doc_id)
     db.clear_chunks(conn, doc_id)
-    items: list[tuple[int, int, str]] = []
+    doc = db.get_document(conn, doc_id)
+    edited: dict[int, str] = {}
+    if doc and doc["editor"]:
+        for e in db.edits_for_document(conn, doc_id, doc["editor"]):
+            if e["status"] == "done" and e["text"]:
+                edited[e["page_id"]] = e["text"]
+    items: list[tuple[int, int, str, str]] = []  # (page_id, chunk_no, text, variant)
     n = 0
     for p in pages:
         for ch in chunk_text(p["raw_text"], cfg.chunk_chars, cfg.chunk_overlap):
-            items.append((p["id"], n, ch))
+            items.append((p["id"], n, ch, "raw"))
             n += 1
+        if p["id"] in edited:
+            for ch in chunk_text(edited[p["id"]], cfg.chunk_chars, cfg.chunk_overlap):
+                items.append((p["id"], n, ch, "edited"))
+                n += 1
     if not items:
         conn.commit()
         return 0
@@ -387,7 +419,7 @@ def index_document(
     try:
         vecs = embed_client.embed(
             cfg.embed_model,
-            [prefixed(cfg.embed_model, t, "doc") for _, _, t in items],
+            [prefixed(cfg.embed_model, t, "doc") for _, _, t, _v in items],
         )
     except ModelError as e:
         vecs = [None] * len(items)
@@ -396,8 +428,8 @@ def index_document(
     finally:
         if close_embed:
             embed_client.close()
-    for (page_id, chunk_no, text), v in zip(items, vecs):
-        db.add_chunk(conn, doc_id, page_id, chunk_no, text, pack(v) if v else None)
+    for (page_id, chunk_no, text, variant), v in zip(items, vecs):
+        db.add_chunk(conn, doc_id, page_id, chunk_no, text, pack(v) if v else None, variant)
     conn.commit()
     return n
 
@@ -441,6 +473,133 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
         )
         (out_dir / f"page-{p['page_no']:03d}.md").write_text(text)
     return out_dir
+
+
+# --------------------------------------------------------------------------- editors
+
+def _edit_needed(page, edit_row, editor: Editor, reprocess: bool) -> bool:
+    """Does this page need (re-)editing?"""
+    if reprocess:
+        return True
+    if edit_row is None or edit_row["status"] != "done" or not edit_row["text"]:
+        return True
+    if edit_row["raw_sha"] != _raw_sha(page["raw_text"]):
+        return True  # page was re-transcribed since the edit
+    if editor.prompt_file:
+        try:
+            if editor.prompt_file.stat().st_mtime > (edit_row["updated_at"] or 0):
+                return True  # the editor's prompt changed
+        except OSError:
+            pass
+    return False
+
+
+def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path | None:
+    """Write the editor's per-page output to library/.../edited-<editor>/."""
+    doc = db.get_document(conn, doc_id)
+    if not doc:
+        return None
+    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    rel_dir = Path(doc["dir_path"] or "")
+    out_dir = cfg.library / rel_dir / slug / f"edited-{editor_id}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = {
+        "source": doc["path"],
+        "filename": doc["filename"],
+        "collection": doc["dir_path"] or "(root)",
+        "document_id": doc["id"],
+        "pages_total": doc["page_count"],
+        "editor": editor_id,
+    }
+    for e in db.edits_for_document(conn, doc_id, editor_id):
+        p = conn.execute("SELECT page_no FROM pages WHERE id = ?", (e["page_id"],)).fetchone()
+        if not p:
+            continue
+        fm = dict(base)
+        fm["page"] = p["page_no"]
+        fm["status"] = "done" if e["status"] == "done" else "waiting"
+        body = (e["text"] or "*waiting*").strip()
+        text = (
+            "---\n"
+            + yaml.safe_dump(fm, sort_keys=False, allow_unicode=True, width=100000).strip()
+            + "\n---\n\n"
+            + body
+            + "\n"
+        )
+        (out_dir / f"page-{p['page_no']:03d}.md").write_text(text)
+    return out_dir
+
+
+def edit_document(
+    cfg: Config,
+    conn,
+    doc_id: int,
+    editor_id: str | None = None,
+    reprocess: bool = False,
+    verbose: bool = True,
+) -> dict:
+    """Run the editor pass over a document's transcription pages. The editor is
+    a DIFFERENT (text) model than the palaeographer; it transforms each page's
+    transcription with its editing prompt (modernize, translate, ...)."""
+    doc = db.get_document(conn, doc_id)
+    if not doc:
+        return {"action": "skipped", "filename": "?", "reason": "no document"}
+    if editor_id:
+        resolved = editor_id
+    else:
+        path = Path(doc["path"])
+        ed_id, _src = resolve_editor_id(
+            path.stem, path if path.is_dir() else path.parent, cfg.dropbox
+        )
+        resolved = ed_id or (doc["editor"] if doc["editor"] in cfg.editors else None)
+    if not resolved:
+        return {"action": "skipped", "filename": doc["filename"], "reason": "no editor configured"}
+    editor = cfg.get_editor(resolved)
+    pages = db.get_pages(conn, doc_id)
+    client, _ = make_editor_client(cfg, resolved)
+    edited = 0
+    try:
+        for p in pages:
+            raw = (p["raw_text"] or "").strip()
+            if not raw:
+                continue
+            edit_row = db.get_page_edit(conn, p["id"], resolved)
+            if not _edit_needed(p, edit_row, editor, reprocess):
+                continue
+            if verbose:
+                print(f"  editing page {p['page_no']}/{doc['page_count']} ...", flush=True)
+            prompt = (
+                f"{editor.prompt_text}\n\n"
+                f"Document: {doc['filename']}\nPage: {p['page_no']} of {doc['page_count']}\n\n"
+                f"Transcription to edit:\n{raw}"
+            )
+            try:
+                out = client.chat_text(editor.model, prompt, editor.temperature, editor.max_tokens)
+                db.set_page_edit(conn, p["id"], resolved, text=out, raw_sha=_raw_sha(raw))
+                edited += 1
+            except ModelError as e:
+                db.set_page_edit(conn, p["id"], resolved, error=str(e), raw_sha=_raw_sha(raw))
+            conn.commit()
+    finally:
+        client.close()
+    if doc["editor"] != resolved:
+        db.update_document(conn, doc_id, editor=resolved)
+        conn.commit()
+    write_edited_pages(cfg, conn, doc_id, resolved)
+    return {"action": "edited", "filename": doc["filename"], "editor": resolved, "pages": edited}
+
+
+def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> dict:
+    """Run the editor pass for every document that has an editor configured."""
+    cfg.ensure_dirs()
+    conn = db.connect(cfg.db_path)
+    try:
+        results = []
+        for d in db.list_documents(conn, limit=10000):
+            results.append(edit_document(cfg, conn, d["id"], reprocess=reprocess, verbose=verbose))
+        return {"results": results}
+    finally:
+        conn.close()
 
 
 def scan_once(
@@ -540,7 +699,14 @@ class _WatchHandler(FileSystemEventHandler):
             or name.endswith(".palaeographer.txt")
             or name.endswith(".palaeographer.md")
         )
-        if not (is_supported(name) or name.endswith(".prompt.md") or is_pal):
+        is_ed = (
+            name == "editor"
+            or name.startswith("editor.")
+            or name.endswith(".editor")
+            or name.endswith(".editor.txt")
+            or name.endswith(".editor.md")
+        )
+        if not (is_supported(name) or name.endswith(".prompt.md") or is_pal or is_ed):
             return
         with self._lock:
             if self._timer:

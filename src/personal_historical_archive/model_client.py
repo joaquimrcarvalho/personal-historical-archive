@@ -121,6 +121,28 @@ class ModelClient:
         except (KeyError, IndexError, AttributeError) as e:
             raise ModelError(f"Unexpected chat response: {data!r}") from e
 
+    def chat_text(
+        self,
+        model: str,
+        prompt: str,
+        temperature: float = 0.1,
+        max_tokens: int = 4096,
+    ) -> str:
+        """Text-only completion (no image) — used by editors to transform
+        transcriptions with a DIFFERENT model than the palaeographer."""
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+        data = self._post("/chat/completions", payload)
+        try:
+            return data["choices"][0]["message"]["content"].strip()
+        except (KeyError, IndexError, AttributeError) as e:
+            raise ModelError(f"Unexpected chat response: {data!r}") from e
+
     def embed(self, model: str, texts: Sequence[str]) -> list[list[float]]:
         data = self._post("/embeddings", {"model": model, "input": list(texts)})
         try:

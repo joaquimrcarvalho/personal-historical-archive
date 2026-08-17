@@ -52,6 +52,30 @@ palaeographers:
 vision:
   palaeographer: qwen-local         # which palaeographer transcribes documents
 
+# Editors: text models that transform the palaeographer's transcription.
+# Each editor is a DIFFERENT model than the palaeographer (own endpoint/model/
+# api key) applying an editing prompt (modernize, translate, ...). Select per
+# document/collection with an 'editor' file (same mechanism as palaeographers).
+editors:
+  modern-portuguese:
+    description: Convert to modern Portuguese orthography, expand abbreviations
+    base_url: http://127.0.0.1:1234/v1
+    model: amalia-9b-0626-dpo
+    api_key: ""
+    temperature: 0.0
+    max_tokens: 4096
+    timeout_s: 300
+    prompt_file: prompts/editors/modern-portuguese.md
+  # translate-english:
+  #   description: Translate the transcription to English
+  #   base_url: http://127.0.0.1:1234/v1
+  #   model: amalia-9b-0626-dpo
+  #   api_key: ""
+  #   temperature: 0.0
+  #   max_tokens: 4096
+  #   timeout_s: 300
+  #   prompt: "Translate this transcription to English. Keep the structure. Output only the translation."
+
 # Embedding model for semantic search (independent of palaeographers).
 # LM Studio serves text-embedding-nomic-embed-text-v1.5 if downloaded;
 # alternatively point at Ollama: backend: ollama, base_url: http://127.0.0.1:11434/v1, model: nomic-embed-text

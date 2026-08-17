@@ -260,3 +260,37 @@ def resolve_palaeographer_id(
                 if pal_id:
                     return pal_id, str(cand)
     return None, None
+
+
+# --------------------------------------------------------------------------- editor selection
+
+def editor_candidates(stem: str, file_dir: Path, dropbox: Path) -> list[Path]:
+    """Candidate 'editor' files in resolution order (same chain as
+    palaeographers): <stem>.editor sidecar, then <dir>/editor walking up to
+    the dropbox root; plain, .txt and .md variants per location."""
+    exts = ("", ".txt", ".md")
+    cands: list[Path] = [file_dir / f"{stem}.editor{ext}" for ext in exts]
+    d = file_dir
+    while True:
+        for ext in exts:
+            cands.append(d / f"editor{ext}")
+        if d == dropbox or dropbox not in d.parents:
+            break
+        d = d.parent
+    return cands
+
+
+def resolve_editor_id(
+    stem: str, file_dir: Path, dropbox: Path, explicit: str | None = None
+) -> tuple[str | None, str | None]:
+    """Return (editor_id, source) for a document, or (None, None) for no editing."""
+    if explicit:
+        return explicit, f"flag:{explicit}"
+    for cand in editor_candidates(stem, file_dir, dropbox):
+        if cand.exists():
+            text = cand.read_text().strip()
+            if text:
+                ed_id = re.sub(r"^[#\-*\s]+", "", text.splitlines()[0]).strip()
+                if ed_id:
+                    return ed_id, str(cand)
+    return None, None

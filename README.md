@@ -220,6 +220,42 @@ palaeographers:
 - Every document records which palaeographer extracted it (shown by
   `pha status`, in search results, and in the library markdown header).
 
+## Editors (transforming transcriptions)
+
+A **palaeographer reads** the page; an **editor transforms** the result. An
+editor is a **different model** (own endpoint/model/api key — local or remote)
+that applies an editing prompt to each page's transcription text: modernize
+spelling, translate, normalize names, … The faithful transcription is never
+destroyed — the edited version is a derivative.
+
+```yaml
+editors:
+  modern-portuguese:
+    description: Convert to modern Portuguese orthography, expand abbreviations
+    base_url: http://127.0.0.1:1234/v1
+    model: amalia-9b-0626-dpo            # a text LLM, not the vision model
+    temperature: 0.0
+    max_tokens: 4096
+    timeout_s: 300
+    prompt_file: prompts/editors/modern-portuguese.md
+```
+
+Select an editor per document/collection with an **`editor` file** (same
+nearest-wins chain and `.txt`/`.md` variants as palaeographers):
+
+```
+dropbox/collections/letters-from-missons/editor   →  "modern-portuguese"
+```
+
+- `pha edit` runs the editor pass over every document that has an editor and
+  re-indexes; `pha editor [file]` shows resolution.
+- Edited output lands in `library/.../edited-<editor>/page-NNN.md`, next to the
+  faithful `transcription-<pal>/` pages.
+- **Search indexes both variants** (`raw` and `edited`) — results are tagged
+  with the variant, so you can find passages whether you search the faithful
+  or the modernized text. Editing a page re-edits when its transcription
+  changes; changing an editor's prompt re-runs it.
+
 ## CLI reference
 
 ```
@@ -228,8 +264,11 @@ pha search QUERY [--mode hybrid|keyword|semantic] [--collection COLX] [--limit N
 pha status
 pha export
 pha reindex
+pha edit [--reprocess]
 pha rm ID|NAME
 pha prompts [file]
+pha palaeographer [file]
+pha editor [file]
 pha mcp [--transport stdio|sse] [--port 8000]
 ```
 

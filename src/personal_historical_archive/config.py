@@ -60,6 +60,27 @@ class Palaeographer:
 
 
 @dataclass
+class Editor:
+    """A named text model that transforms the palaeographer's transcription.
+
+    An editor is a completely DIFFERENT model from the palaeographer: it runs
+    on its own endpoint (local or remote) and applies an editing prompt
+    (modernize spelling, translate, ...) to the per-page transcription text.
+    """
+
+    id: str
+    description: str
+    base_url: str
+    api_key: str
+    model: str
+    temperature: float
+    max_tokens: int
+    timeout_s: int
+    prompt_text: str
+    prompt_file: Path | None = None
+
+
+@dataclass
 class Config:
     root: Path
     # paths
@@ -72,6 +93,8 @@ class Config:
     # palaeographers (vision models)
     palaeographers: dict[str, Palaeographer]
     active_palaeographer: str
+    # editors (text models that transform transcriptions)
+    editors: dict[str, Editor]
     # embedding model
     embed_backend: str
     embed_base_url: str
@@ -104,6 +127,7 @@ class Config:
         prompts_dir = _p(root, paths.get("prompts", "prompts"))
 
         palaeographers, active = _parse_palaeographers(raw, vis, prompts_dir, root)
+        editors = _parse_editors(raw, prompts_dir, root)
 
         return cls(
             root=root,
@@ -115,6 +139,7 @@ class Config:
             db_path=_p(root, paths.get("db", "data/archive.db")),
             palaeographers=palaeographers,
             active_palaeographer=active,
+            editors=editors,
             embed_backend=str(emb.get("backend", "lmstudio")),
             embed_base_url=str(emb.get("base_url", "http://127.0.0.1:1234/v1")),
             embed_model=str(emb.get("model", "text-embedding-nomic-embed-text-v1.5@q4_k_m")),
@@ -137,6 +162,11 @@ class Config:
                 f"unknown palaeographer {pal_id!r}; configured: {sorted(self.palaeographers)}"
             )
         return self.palaeographers[pal_id]
+
+    def get_editor(self, editor_id: str) -> Editor:
+        if editor_id not in self.editors:
+            raise KeyError(f"unknown editor {editor_id!r}; configured: {sorted(self.editors)}")
+        return self.editors[editor_id]
 
     def ensure_dirs(self) -> None:
         for d in (self.dropbox, self.library, self.data, self.renders, self.prompts):
@@ -176,6 +206,46 @@ def _parse_palaeographers(
         prompt_text=prompt_text,
     )
     return {"default": pal}, "default"
+
+
+def _parse_editors(raw: dict, prompts_dir: Path, root: Path) -> dict[str, Editor]:
+    """Parse the `editors:` map (text models that transform transcriptions)."""
+    raw_eds = raw.get("editors")
+    editors: dict[str, Editor] = {}
+    if not isinstance(raw_eds, dict):
+        return editors
+    for ed_id, entry in raw_eds.items():
+        if not isinstance(entry, dict):
+            continue
+        prompt_text = ""
+        prompt_file: Path | None = None
+        pf = entry.get("prompt_file")
+        if pf:
+            p = Path(str(pf))
+            if not p.is_absolute():
+                p = root / p
+                if not p.exists():
+                    alt = prompts_dir / p
+                    if alt.exists():
+                        p = alt
+            if p.exists():
+                prompt_file = p
+                prompt_text = p.read_text()
+        elif isinstance(entry.get("prompt"), str):
+            prompt_text = entry["prompt"]
+        editors[str(ed_id)] = Editor(
+            id=str(ed_id),
+            description=str(entry.get("description", "")),
+            base_url=_expand(str(entry.get("base_url", "http://127.0.0.1:1234/v1"))),
+            api_key=_expand(str(entry.get("api_key", ""))),
+            model=str(entry.get("model", "")),
+            temperature=float(entry.get("temperature", 0.1)),
+            max_tokens=int(entry.get("max_tokens", 4096)),
+            timeout_s=int(entry.get("timeout_s", 300)),
+            prompt_text=prompt_text,
+            prompt_file=prompt_file,
+        )
+    return editors
 
 
 def _palaeographer_from_entry(

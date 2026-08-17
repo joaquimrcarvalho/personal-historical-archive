@@ -39,6 +39,7 @@ def _decorate(conn: sqlite3.Connection, chunk_id: int, row, source: str, score) 
         "collection": (doc["dir_path"] if doc and doc["dir_path"] else "(root)"),
         "path": doc["path"] if doc else None,
         "page_no": row["page_no"],
+        "variant": row["variant"] if "variant" in keys else "raw",
         "text": row["text"],
         "snippet": snippet,
         "score": score,
