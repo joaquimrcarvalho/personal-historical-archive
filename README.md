@@ -168,24 +168,34 @@ Editing a prompt file (sidecar, collection `prompt.md`, or the default)
 
 ## Palaeographers (vision models)
 
-A **palaeographer** is a named vision model that transcribes the documents,
-configured in `config.yaml`:
+A **palaeographer** is a named vision model that transcribes the documents.
+Each palaeographer is **one file** in the `palaeographers/` directory (the
+file name, without extension, is the id): YAML front matter holds the model
+settings, the body is the base prompt:
 
-```yaml
-palaeographers:
-  qwen-local:                     # id used by vision.palaeographer
-    description: qwen3-vl-8b via LM Studio (local, default)
-    base_url: http://127.0.0.1:1234/v1   # local or remote OpenAI-compatible endpoint
-    model: qwen/qwen3-vl-8b
-    api_key: ""                          # remote APIs: "${MY_API_KEY}" (env expansion)
-    temperature: 0.1
-    max_tokens: 4096
-    timeout_s: 900
-    prompt_file: prompts/palaeographers/qwen-local.md   # this palaeographer's base prompt
+```markdown
+# palaeographers/qwen-local.md
+---
+description: qwen3-vl-8b via LM Studio (local, default)
+base_url: http://127.0.0.1:1234/v1        # local or remote OpenAI-compatible endpoint
+model: qwen/qwen3-vl-8b
+api_key: ""                                # remote APIs: "${MY_API_KEY}" (env expansion)
+temperature: 0.1
+max_tokens: 4096
+timeout_s: 900
+---
+
+You are a palaeographer specialised in Western European manuscripts …
 ```
 
-- `vision.palaeographer` selects the active one; `pha scan --palaeographer ID`
-  overrides it for one run; the MCP `pha_scan_now` uses the configured default.
+**To add a palaeographer**: duplicate `palaeographers/_sample.md`, rename
+(the name becomes the id), edit the settings, replace the body with your
+expertise, save. Invalid files are skipped with a warning — a typo never
+breaks the load. `pha palaeographer` lists the configured palaeographers.
+
+- `vision.palaeographer` in `config.yaml` selects the active one; `pha scan
+  --palaeographer ID` overrides it for one run; the MCP `pha_scan_now` uses
+  the configured default.
 - **Per-document / per-collection selection**: place a file named
   `palaeographer` (with an optional `.txt` or `.md` extension so it is easy
   to edit on a desktop) containing the palaeographer id — either next to a
@@ -203,22 +213,17 @@ palaeographers:
   the new palaeographer; output goes to a sibling
   `transcription-<palaeographer>/` folder. `pha palaeographer [file]` shows
   how a document resolves.
-- Each palaeographer can carry its own **base prompt** (its expertise/working
-  rules). It is always prepended **before** the document/collection prompt and
-  is the **format authority** (## Transcription, ## Notes with
-  ### Named entities — one bullet per entity — and ### Content summary). The
-  document/collection prompt that follows only adds specific aspects (fields
-  to prioritise, transcription style) and cannot change the structure:
-
-  ```
-  [palaeographer base prompt — format authority]
-  ---
-  [document / collection prompt — adds aspects only]
-  ```
+- The body of the file is the **base prompt** (the format authority:
+  ## Transcription, ## Notes with ### Named entities — one bullet per
+  entity — and ### Content summary). It is always prepended **before** the
+  document/collection prompt; the document/collection prompt only adds
+  specific aspects (fields to prioritise, transcription style) and cannot
+  change the structure.
 - `api_key` supports `${ENV_VAR}` and `${ENV_VAR:-default}` expansion, so keys
   never need to be committed. Local servers (LM Studio, Ollama) need no key.
 - Every document records which palaeographer extracted it (shown by
   `pha status`, in search results, and in the library markdown header).
+  Editing a palaeographer file re-extracts the documents that use it.
 
 ## Editors (transforming transcriptions)
 
@@ -228,16 +233,23 @@ that applies an editing prompt to each page's transcription text: modernize
 spelling, translate, normalize names, … The faithful transcription is never
 destroyed — the edited version is a derivative.
 
-```yaml
-editors:
-  modern-portuguese:
-    description: Convert to modern Portuguese orthography, expand abbreviations
-    base_url: http://127.0.0.1:1234/v1
-    model: amalia-9b-0626-dpo            # a text LLM, not the vision model
-    temperature: 0.0
-    max_tokens: 4096
-    timeout_s: 300
-    prompt_file: prompts/editors/modern-portuguese.md
+Each editor is **one file** in the `editors/` directory (same convention as
+palaeographers: front matter = settings, body = editing prompt). To add one,
+duplicate `editors/_sample.md`, rename, edit, save:
+
+```markdown
+# editors/modern-portuguese.md
+---
+description: Convert to modern Portuguese orthography, expand abbreviations
+base_url: http://127.0.0.1:1234/v1
+model: amalia-9b-0626-dpo            # a text LLM, not the vision model
+temperature: 0.0
+max_tokens: 4096
+timeout_s: 300
+---
+
+You are a scholarly editor of historical Portuguese texts. Convert the
+transcription to MODERN Portuguese orthography …
 ```
 
 Select an editor per document/collection with an **`editor` file** (same
@@ -253,8 +265,8 @@ dropbox/collections/letters-from-missons/editor   →  "modern-portuguese"
   faithful `transcription-<pal>/` pages.
 - **Search indexes both variants** (`raw` and `edited`) — results are tagged
   with the variant, so you can find passages whether you search the faithful
-  or the modernized text. Editing a page re-edits when its transcription
-  changes; changing an editor's prompt re-runs it.
+  or the modernized text. A page re-edits when its transcription or the
+  editor's file changes.
 
 ## CLI reference
 

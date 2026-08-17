@@ -186,6 +186,11 @@ def cmd_palaeographer(cfg: Config, args) -> None:
         print(f"source: {source or 'config default (vision.palaeographer)'}")
         return
     print(f"default (vision.palaeographer): {cfg.active_palaeographer}")
+    print(f"configured palaeographers ({cfg.palaeographers_dir}):")
+    for pal_id in sorted(cfg.palaeographers):
+        pal = cfg.palaeographers[pal_id]
+        print(f"  {pal_id}: {pal.description or pal.model} @ {pal.model}")
+    print("selection files in the dropbox:")
     pal_files = []
     for pat in ("palaeographer", "palaeographer.txt", "palaeographer.md",
                 "*.palaeographer", "*.palaeographer.txt", "*.palaeographer.md"):
@@ -211,7 +216,11 @@ def cmd_editor(cfg: Config, args) -> None:
             print(f"editor: {ed_id or 'none (no editing)'}")
         print(f"source: {source or '(none — no editor configured)'}")
         return
-    print(f"editors configured: {sorted(cfg.editors)}")
+    print(f"configured editors ({cfg.editors_dir}):")
+    for ed_id in sorted(cfg.editors):
+        ed = cfg.editors[ed_id]
+        print(f"  {ed_id}: {ed.description or ed.model} @ {ed.model}")
+    print("selection files in the dropbox:")
     ed_files = []
     for pat in ("editor", "editor.txt", "editor.md",
                 "*.editor", "*.editor.txt", "*.editor.md"):

@@ -89,6 +89,8 @@ class Config:
     data: Path
     renders: Path
     prompts: Path
+    palaeographers_dir: Path
+    editors_dir: Path
     db_path: Path
     # palaeographers (vision models)
     palaeographers: dict[str, Palaeographer]
@@ -125,9 +127,11 @@ class Config:
         ext = raw.get("extraction", {}) or {}
         sea = raw.get("search", {}) or {}
         prompts_dir = _p(root, paths.get("prompts", "prompts"))
+        pal_dir = _p(root, paths.get("palaeographers", "palaeographers"))
+        ed_dir = _p(root, paths.get("editors", "editors"))
 
-        palaeographers, active = _parse_palaeographers(raw, vis, prompts_dir, root)
-        editors = _parse_editors(raw, prompts_dir, root)
+        palaeographers, active = _parse_palaeographers(raw, vis, prompts_dir, root, pal_dir)
+        editors = _parse_editors(raw, prompts_dir, root, ed_dir)
 
         return cls(
             root=root,
@@ -136,6 +140,8 @@ class Config:
             data=_p(root, paths.get("data", "data")),
             renders=_p(root, paths.get("renders", "data/renders")),
             prompts=prompts_dir,
+            palaeographers_dir=pal_dir,
+            editors_dir=ed_dir,
             db_path=_p(root, paths.get("db", "data/archive.db")),
             palaeographers=palaeographers,
             active_palaeographer=active,
@@ -169,17 +175,28 @@ class Config:
         return self.editors[editor_id]
 
     def ensure_dirs(self) -> None:
-        for d in (self.dropbox, self.library, self.data, self.renders, self.prompts):
+        for d in (self.dropbox, self.library, self.data, self.renders, self.prompts,
+                  self.palaeographers_dir, self.editors_dir):
             d.mkdir(parents=True, exist_ok=True)
+        # seed sample configuration files on first run
+        _seed_sample(self.palaeographers_dir, "_sample.md", _PAL_SAMPLE)
+        _seed_sample(self.editors_dir, "_sample.md", _ED_SAMPLE)
 
 
 def _parse_palaeographers(
-    raw: dict, vis: dict, prompts_dir: Path, root: Path
+    raw: dict, vis: dict, prompts_dir: Path, root: Path, pal_dir: Path
 ) -> tuple[dict[str, Palaeographer], str]:
-    """Parse the `palaeographers:` map; fall back to the legacy `vision:` block."""
+    """Palaeographers are one file per palaeographer in `palaeographers/`
+    (YAML front matter = model config, body = the base prompt). Falls back to
+    the legacy `palaeographers:` config map / `vision:` block."""
+    pals = _load_model_dir(pal_dir, "palaeographer", _palaeographer_from_frontmatter)
+    if pals:
+        active = str(vis.get("palaeographer", "")) or (next(iter(pals), ""))
+        return pals, active
+
     raw_pals = raw.get("palaeographers")
     if isinstance(raw_pals, dict) and raw_pals:
-        pals: dict[str, Palaeographer] = {}
+        pals = {}
         for pal_id, entry in raw_pals.items():
             if not isinstance(entry, dict):
                 continue
@@ -208,8 +225,13 @@ def _parse_palaeographers(
     return {"default": pal}, "default"
 
 
-def _parse_editors(raw: dict, prompts_dir: Path, root: Path) -> dict[str, Editor]:
-    """Parse the `editors:` map (text models that transform transcriptions)."""
+def _parse_editors(raw: dict, prompts_dir: Path, root: Path, ed_dir: Path) -> dict[str, Editor]:
+    """Editors are one file per editor in `editors/` (front matter = model
+    config, body = the editing prompt). Falls back to the legacy `editors:`
+    config map."""
+    eds = _load_model_dir(ed_dir, "editor", _editor_from_frontmatter)
+    if eds:
+        return eds
     raw_eds = raw.get("editors")
     editors: dict[str, Editor] = {}
     if not isinstance(raw_eds, dict):
@@ -280,6 +302,137 @@ def _palaeographer_from_entry(
     )
 
 
+# --------------------------------------------------------------------------- file-based model configs
+
+def _split_frontmatter(text: str) -> tuple[dict, str]:
+    """Split '--- yaml ---' front matter from the prompt body."""
+    fm: dict = {}
+    body = text
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            try:
+                fm = yaml.safe_load(text[3:end].strip()) or {}
+                if not isinstance(fm, dict):
+                    fm = {}
+            except yaml.YAMLError:
+                fm = {}
+            body = text[end + 4 :].strip()
+    return fm, body
+
+
+def _load_model_dir(directory: Path, kind: str, builder) -> dict:
+    """Load one config per file from a directory. File stem = id; files whose
+    name starts with '_' or '.' (samples, hidden) are ignored; malformed files
+    are skipped with a warning so a typo never breaks the whole load."""
+    models: dict = {}
+    if not directory.is_dir():
+        return models
+    for f in sorted(directory.iterdir()):
+        if not f.is_file() or f.name.startswith(("_", ".")):
+            continue
+        if f.suffix.lower() not in (".md", ".txt"):
+            continue
+        try:
+            model = builder(f.stem, f.read_text(), f)
+        except Exception as e:  # noqa: BLE001 - a bad file must not kill the load
+            print(f"warning: invalid {kind} file {f}: {e}")
+            continue
+        if model is not None:
+            models[f.stem] = model
+    return models
+
+
+def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path) -> Palaeographer | None:
+    fm, body = _split_frontmatter(text)
+    return Palaeographer(
+        id=pal_id,
+        description=str(fm.get("description", "")),
+        base_url=_expand(str(fm.get("base_url", "http://127.0.0.1:1234/v1"))),
+        api_key=_expand(str(fm.get("api_key", ""))),
+        model=str(fm.get("model", "")),
+        temperature=float(fm.get("temperature", 0.1)),
+        max_tokens=int(fm.get("max_tokens", 4096)),
+        timeout_s=int(fm.get("timeout_s", 900)),
+        prompt_text=body,
+        prompt_file=file,
+    )
+
+
+def _editor_from_frontmatter(ed_id: str, text: str, file: Path) -> Editor | None:
+    fm, body = _split_frontmatter(text)
+    return Editor(
+        id=ed_id,
+        description=str(fm.get("description", "")),
+        base_url=_expand(str(fm.get("base_url", "http://127.0.0.1:1234/v1"))),
+        api_key=_expand(str(fm.get("api_key", ""))),
+        model=str(fm.get("model", "")),
+        temperature=float(fm.get("temperature", 0.1)),
+        max_tokens=int(fm.get("max_tokens", 4096)),
+        timeout_s=int(fm.get("timeout_s", 300)),
+        prompt_text=body,
+        prompt_file=file,
+    )
+
+
 def _p(root: Path, s: str) -> Path:
     p = Path(s)
     return p if p.is_absolute() else (root / p).resolve()
+
+
+def _seed_sample(directory: Path, name: str, content: str) -> None:
+    sample = directory / name
+    if not sample.exists():
+        sample.write_text(content)
+
+
+_PAL_SAMPLE = """---
+# HOW TO CREATE A NEW PALAEOGRAPHER
+#   1. Duplicate this file and give it a new name (the file name, without the
+#      extension, becomes the palaeographer's id, e.g. "my-hand.md").
+#   2. Edit the settings below: endpoint, model, api key, temperature.
+#   3. Replace this body with the instructions you want the vision model to
+#      follow when transcribing (your palaeographic expertise).
+#   4. Save — the palaeographer is ready. Select it per document/collection
+#      with a 'palaeographer' file next to the document.
+# Files starting with '_' are ignored (this sample is never loaded).
+description: example palaeographer — edit me
+base_url: http://127.0.0.1:1234/v1
+model: qwen/qwen3-vl-8b
+api_key: ""
+temperature: 0.1
+max_tokens: 4096
+timeout_s: 900
+---
+
+You are a palaeographer specialised in Western European manuscripts of the
+15th–19th centuries. Transcribe the page faithfully; mark [illegible] parts;
+add a "## Notes" section in English (Language, Script, Date clues,
+### Named entities as one bullet per entity, ### Content summary). This is
+one page of a multi-page document — do not comment on completeness.
+"""
+
+_ED_SAMPLE = """---
+# HOW TO CREATE A NEW EDITOR
+#   1. Duplicate this file and give it a new name (the file name, without the
+#      extension, becomes the editor's id, e.g. "translate-english.md").
+#   2. Edit the settings below. The editor is usually a TEXT model — it can be
+#      a completely different model/server than the palaeographer.
+#   3. Replace this body with your editing instructions (e.g. convert to
+#      modern Portuguese, translate to English, normalize names).
+#   4. Save — the editor is ready. Select it per document/collection with an
+#      'editor' file next to the document.
+# Files starting with '_' are ignored (this sample is never loaded).
+description: example editor — edit me
+base_url: http://127.0.0.1:1234/v1
+model: amalia-9b-0626-dpo
+api_key: ""
+temperature: 0.0
+max_tokens: 4096
+timeout_s: 300
+---
+
+You are a scholarly editor. Transform the transcription as requested by these
+instructions. Keep the content faithful: do not add, remove or reorder
+information. Keep the document structure. Output only the edited text.
+"""

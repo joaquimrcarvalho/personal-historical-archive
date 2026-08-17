@@ -580,6 +580,7 @@ def edit_document(
             except ModelError as e:
                 db.set_page_edit(conn, p["id"], resolved, error=str(e), raw_sha=_raw_sha(raw))
             conn.commit()
+            write_edited_pages(cfg, conn, doc_id, resolved)  # grow output page by page
     finally:
         client.close()
     if doc["editor"] != resolved:

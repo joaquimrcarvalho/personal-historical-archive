@@ -11,70 +11,25 @@ paths:
   data: data              # sqlite db + page renders
   renders: data/renders   # cached page images fed to the vision model
   prompts: prompts        # default + per-file prompt files
+  palaeographers: palaeographers   # one file per palaeographer (front matter = config, body = base prompt)
+  editors: editors        # one file per editor (front matter = config, body = editing prompt)
   db: data/archive.db
 
-# Palaeographers: named vision models that transcribe the documents.
-# Each has its own endpoint (local or remote), model, optional API key, and a
-# base prompt that is prepended BEFORE the document/collection sidecar prompt.
-palaeographers:
-  qwen-local:
-    description: qwen3-vl-8b via LM Studio (local, default)
-    base_url: http://127.0.0.1:1234/v1
-    model: qwen/qwen3-vl-8b
-    api_key: ""                     # local servers need none
-    temperature: 0.1
-    max_tokens: 4096
-    timeout_s: 900
-    prompt_file: prompts/palaeographers/qwen-local.md
-  # Example remote palaeographer (OpenAI-compatible API, key from env):
-  # gpt-remote:
-  #   description: remote model for comparison
-  #   base_url: https://api.openai.com/v1
-  #   model: gpt-4o
-  #   api_key: "${OPENAI_API_KEY}"
-  #   temperature: 0.1
-  #   max_tokens: 4096
-  #   timeout_s: 300
-  #   prompt_file: prompts/palaeographers/gpt-remote.md
-  # Specialised for 17th-century Portuguese secretary hand. Activate per
-  # document/collection by placing a 'palaeographer' file containing this id
-  # next to the document or in the collection directory.
-  portuguese-secretary:
-    description: 17th-c. Portuguese secretary-hand specialist (LM Studio)
-    base_url: http://127.0.0.1:1234/v1
-    model: qwen/qwen3-vl-8b
-    api_key: ""
-    temperature: 0.0
-    max_tokens: 4096
-    timeout_s: 900
-    prompt_file: prompts/palaeographers/portuguese-secretary.md
+# Palaeographers live as one file per model in the 'palaeographers/' directory.
+# To add one: duplicate palaeographers/_sample.md, rename, edit, save.
+# The file name (without extension) is the palaeographer id; the YAML front
+# matter holds the endpoint/model settings, the body is the base prompt that
+# is prepended BEFORE the document/collection sidecar prompt.
+# Select per document/collection with a 'palaeographer' file next to it.
 
 vision:
   palaeographer: qwen-local         # which palaeographer transcribes documents
 
-# Editors: text models that transform the palaeographer's transcription.
-# Each editor is a DIFFERENT model than the palaeographer (own endpoint/model/
-# api key) applying an editing prompt (modernize, translate, ...). Select per
-# document/collection with an 'editor' file (same mechanism as palaeographers).
-editors:
-  modern-portuguese:
-    description: Convert to modern Portuguese orthography, expand abbreviations
-    base_url: http://127.0.0.1:1234/v1
-    model: amalia-9b-0626-dpo
-    api_key: ""
-    temperature: 0.0
-    max_tokens: 4096
-    timeout_s: 300
-    prompt_file: prompts/editors/modern-portuguese.md
-  # translate-english:
-  #   description: Translate the transcription to English
-  #   base_url: http://127.0.0.1:1234/v1
-  #   model: amalia-9b-0626-dpo
-  #   api_key: ""
-  #   temperature: 0.0
-  #   max_tokens: 4096
-  #   timeout_s: 300
-  #   prompt: "Translate this transcription to English. Keep the structure. Output only the translation."
+# Editors live as one file per model in the 'editors/' directory (same
+# convention: duplicate editors/_sample.md, rename, edit, save). Each editor
+# is a DIFFERENT (text) model than the palaeographer; its body prompt
+# transforms the transcription (modernize, translate, ...). Select per
+# document/collection with an 'editor' file next to it.
 
 # Embedding model for semantic search (independent of palaeographers).
 # LM Studio serves text-embedding-nomic-embed-text-v1.5 if downloaded;
