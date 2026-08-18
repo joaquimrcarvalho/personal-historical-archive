@@ -1,15 +1,27 @@
 # personal-historical-archive (pha)
 
+> **For human historians:** this README is the technical reference. If you
+> just want to get your documents into the archive and ask your AI assistant
+> questions about them, head to
+> **[HISTORIANS_README.md](HISTORIANS_README.md)** — a step-by-step guide
+> written for historians, no terminal experience needed. Everything here also
+> works from there, through your agent.
+
 A local research archive for **historical documents — manuscripts, old books,
-maps, and more — as PDFs and images**: drop files into a folder, a vision
-model (VLM) transcribes each page, everything is indexed, and any LLM can
-search the corpus through an **MCP server**.
+maps, and more — as PDFs and images**: drop files into a folder, a **vision
+model (a *palaeographer*)** reads each page and transcribes it, an optional
+**text model (an *editor*)** can then modernize or translate the transcriptions
+and refine the named entities, everything is indexed, and any LLM can search
+the corpus through an **MCP server**.
 
 The key design choice: text extraction is done with a **vision model and an
 optional per-file custom prompt** (not with plain OCR). For historical
-manuscripts — where low-quality embedded OCR text is common — a VLM that
+documents — where low-quality embedded OCR text is common — a model that
 "reads" the page image with instructions tailored to the document's structure
-gives far better results, and you control the prompt per document.
+gives far better results, and you control the prompts per document. Then an
+**editor** (a different, text-only model, possibly remote) transforms the
+faithful transcription — modernizing spelling, translating, and correcting the
+named entities that get indexed.
 
 ```
  dropbox/documents/*.pdf, *.png, ...        individual documents
@@ -19,9 +31,12 @@ gives far better results, and you control the prompt per document.
      ▼
  ┌─────────────────────── watcher / `pha scan` ───────────────────────┐
  │  1. render pages → JPEG (200 dpi, long edge ≤ 1800 px)             │
- │  2. per page: VLM transcription with resolved prompt (LM Studio)   │
- │  3. per page text stored in SQLite + Markdown copy in library/     │
- │  4. chunk (2000 chars) → embeddings → FTS5 + vector index          │
+ │  2. per page: palaeographer (vision) transcribes the page          │
+ │     with the resolved prompt (local or remote model)               │
+ │  3. optional editor (text model): modernize/translate, refine      │
+ │     named entities, keep footnotes separate — `pha edit`           │
+ │  4. per page text stored in SQLite + per-page files in library/    │
+ │  5. chunk (2000 chars) → embeddings → FTS5 + vector index          │
  └────────────────────────────────────────────────────────────────────┘
      │
      ▼
@@ -35,13 +50,17 @@ gives far better results, and you control the prompt per document.
 
 ## Requirements
 
-- macOS / Linux, Python ≥ 3.11 (managed with [uv](https://docs.astral.sh/uv/))
+- macOS / Linux / Windows, Python ≥ 3.11 (managed with [uv](https://docs.astral.sh/uv/))
 - Any **OpenAI-compatible model server** (tested with **LM Studio**, default):
-  - a **vision model** for extraction — e.g. `qwen/qwen3-vl-8b`
+  - a **vision model** (palaeographer) for reading pages — e.g. `qwen/qwen3-vl-8b`
   - an **embedding model** for semantic search — e.g.
     `text-embedding-nomic-embed-text-v1.5` (LM Studio catalog) or
     `nomic-embed-text` (Ollama)
-- Everything runs locally; no cloud calls.
+  - a **text model** (editor, optional) for modernizing/translating — e.g.
+    `amalia-9b-0626-dpo` (LM Studio) or any remote OpenAI-compatible model
+- Runs locally by default; **remote OpenAI-compatible models** (e.g. MiniMax)
+  are supported for palaeographers and editors via an API key
+  (`pha key --set` stores it in the OS secret store).
 
 ## Quickstart
 
