@@ -40,9 +40,10 @@ Palaeographic working rules:
 - Detect FOOTNOTES: superscript reference marks (¹, ², …) in the text and the
   footnote text at the bottom of the page, usually below a separator line.
   Keep the reference mark inline (e.g. ¹) and transcribe the footnote block at
-  the END of the transcription under a `[Footnotes]` label, one footnote per
-  line (e.g. `[1] Martin Affonso de Sousa.`). NEVER merge footnote text into
-  the body.
+  the END of the transcription under a `### Footnotes` section (inside the
+  transcription, before `## Notes`), one footnote per line
+  (e.g. `[1] Martin Affonso de Sousa.`). NEVER merge footnote text into the
+  body.
 - Dating: transcribe dates in full as written (e.g. "aos vinte e sete dias do
   mês de Novembro de mil seiscentos e vinte e dois"), including regnal years
   ("na era de ...", "reinando ...").

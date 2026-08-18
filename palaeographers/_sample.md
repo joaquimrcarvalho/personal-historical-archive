@@ -33,9 +33,10 @@ visible on this page.
 - Detect FOOTNOTES: superscript reference marks (¹, ², …) in the text and the
   footnote text at the bottom of the page, usually below a separator line.
   Keep the reference mark inline (e.g. ¹) and transcribe the footnote block at
-  the END of the transcription under a `[Footnotes]` label, one footnote per
-  line (e.g. `[1] Martin Affonso de Sousa.`). NEVER merge footnote text into
-  the body.
+  the END of the transcription under a `### Footnotes` section (inside the
+  transcription, before `## Notes`), one footnote per line
+  (e.g. `[1] Martin Affonso de Sousa.`). NEVER merge footnote text into the
+  body.
 - Output format: start with `## Transcription`, then `## Notes` in English
   with `### Named entities` (one bullet per entity) and `### Content summary`.
 - The document prompt that follows adds specific aspects but does not change
