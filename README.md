@@ -11,8 +11,9 @@ A local research archive for **historical documents — manuscripts, old books,
 maps, and more — as PDFs and images**: drop files into a folder, a **vision
 model (a *palaeographer*)** reads each page and transcribes it, an optional
 **text model (an *editor*)** can then modernize or translate the transcriptions
-and refine the named entities, everything is indexed, and any LLM can search
-the corpus through an **MCP server**.
+and refine the named entities, an optional **encoder** turns the transcriptions
+into structured records (e.g. letter from/to/date/place), everything is indexed,
+and any LLM can search the corpus through an **MCP server**.
 
 The key design choice: text extraction is done with a **vision model and an
 optional per-file custom prompt** (not with plain OCR). For historical
@@ -21,7 +22,9 @@ documents — where low-quality embedded OCR text is common — a model that
 gives far better results, and you control the prompts per document. Then an
 **editor** (a different, text-only model, possibly remote) transforms the
 faithful transcription — modernizing spelling, translating, and correcting the
-named entities that get indexed.
+named entities that get indexed. Finally an **encoder** (another text model,
+possibly remote) reads the whole concatenated document text and returns
+structured records grounded to the page each one starts on.
 
 ```
  dropbox/documents/*.pdf, *.png, ...        individual documents
@@ -35,8 +38,10 @@ named entities that get indexed.
  │     with the resolved prompt (local or remote model)               │
  │  3. optional editor (text model): modernize/translate, refine      │
  │     named entities, keep footnotes separate — `pha edit`           │
- │  4. per page text stored in SQLite + per-page files in library/    │
- │  5. chunk (2000 chars) → embeddings → FTS5 + vector index          │
+ │  4. optional encoder (text model): structured records from the     │
+ │     concatenated document text, grounded to start pages — `pha encode`
+ │  5. per page text stored in SQLite + per-page files in library/    │
+ │  6. chunk (2000 chars) → embeddings → FTS5 + vector index          │
  └────────────────────────────────────────────────────────────────────┘
      │
      ▼
@@ -293,6 +298,42 @@ dropbox/collections/letters-from-missons/editor   →  "modern-portuguese"
   with the variant, so you can find passages whether you search the faithful
   or the modernized text. A page re-edits when its transcription or the
   editor's file changes.
+
+## Encoders (structured records from the text)
+
+An **encoder** is a text model (own endpoint/model/api key — local or remote)
+that turns a document's transcription into **structured records**, e.g. the
+metadata of each letter in a correspondence volume. Unlike the palaeographer
+(one page at a time), the encoder reads the document as **one concatenated
+text** with `--- page N ---` markers, so a record whose parts span several
+pages (a letter header on one page, its body on the next) is seen whole:
+
+- when the concatenated text fits the model's context window (`max_input_chars`)
+  it is sent in **one call**; larger documents are **chunked with overlap**
+  (`batch_pages`, `overlap_pages`) and duplicate records are collapsed;
+- the prompt asks the model to cite the **page each record starts on**
+  (LangExtract-style source grounding), stored per record and shown in the
+  records file.
+
+Each encoder is **one file** in the `encoders/` directory (same convention as
+palaeographers/editors; add `batch_pages`, `max_input_chars`, `overlap_pages`
+in the front matter). Select one per document/collection with an **`encoder`
+file**; stage-qualified prompts live in **`encoder.prompt.md`** files (plain
+`prompt.md` stays the palaeographer prompt):
+
+```
+dropbox/collections/letters-from-missons/encoder            →  "letters"
+dropbox/collections/letters-from-missons/encoder.prompt.md  →  letter-detection rules
+```
+
+- `pha encode` runs the encoder pass; `pha encoder [file]` shows resolution.
+- The encoder prefers the **edited** text (per page) when an editor is
+  configured, falling back to the raw transcription.
+- Records are stored in SQLite and written to
+  `library/<dir>/<slug>/records-<encoder>.json`, with the exact input
+  concatenated text beside it as `concatenated-<encoder>.md` for inspection.
+- Re-encodes when the encoder file, its `encoder.prompt.md`, or the source
+  transcription (raw or edited) changes since the records were created.
 
 ## CLI reference
 

@@ -234,6 +234,8 @@ class Encoder:
     prompt_file: Path | None = None
     thinking: bool = True
     batch_pages: int = 20
+    max_input_chars: int = 600_000
+    overlap_pages: int = 4
 
 
 @dataclass
@@ -567,6 +569,8 @@ def _encoder_from_frontmatter(enc_id: str, text: str, file: Path) -> Encoder | N
         prompt_text=body,
         prompt_file=file,
         batch_pages=int(fm.get("batch_pages", 20)),
+        max_input_chars=int(fm.get("max_input_chars", 600_000)),
+        overlap_pages=int(fm.get("overlap_pages", 4)),
     )
 
 
@@ -653,6 +657,10 @@ _ENC_SAMPLE = """---
 #      go in an 'encoder.prompt.md' file next to the documents.
 #   4. Save — the encoder is ready. Select it per document/collection with an
 #      'encoder' file next to the document.
+# The encoder is fed the document as ONE CONCATENATED text ('--- page N ---'
+# markers between pages), in a single call when it fits max_input_chars;
+# larger documents are chunked with overlap_pages of overlap and records are
+# deduplicated. Ask the model to cite the page each record starts on.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example encoder — edit me
 base_url: http://127.0.0.1:1234/v1
@@ -662,10 +670,14 @@ temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
 batch_pages: 20
+max_input_chars: 600000
+overlap_pages: 4
 ---
 
-You extract structured records from transcriptions. Read the pages provided
-(between '--- page N ---' markers) and return a JSON array of records as
-described by the document/collection encoder prompt. Output ONLY the JSON
-array, with no preamble or commentary.
+You extract structured records from transcriptions. You are given the
+document as a single CONCATENATED text with '--- page N ---' markers
+between pages — records may span several pages, so read the whole text
+before deciding. Return a JSON array of records as described by the
+document/collection encoder prompt. Output ONLY the JSON array, with no
+preamble or commentary.
 """

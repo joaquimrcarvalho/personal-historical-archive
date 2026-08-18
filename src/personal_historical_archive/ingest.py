@@ -617,12 +617,27 @@ def make_encoder_client(cfg: Config, encoder_id: str) -> tuple[ModelClient, Enco
 
 
 def _parse_json_array(text: str) -> list:
-    """Extract the first balanced JSON array from a model response."""
+    """Extract the first balanced JSON array from a model response. Also
+    accepts a JSON object wrapping an array under a list-valued key
+    (e.g. {"records": [...]})."""
     if not text:
         return []
-    start = text.find("[")
-    if start == -1:
-        return []
+    stripped = text.strip()
+    if stripped.startswith("["):
+        start = 0
+    else:
+        start = text.find("[")
+        if start == -1:
+            # object wrapper: {"records": [...]} or {"letters": [...]}
+            try:
+                obj = json.loads(stripped)
+                if isinstance(obj, dict):
+                    for v in obj.values():
+                        if isinstance(v, list):
+                            return v
+            except json.JSONDecodeError:
+                pass
+            return []
     depth = 0
     in_str = False
     esc = False
@@ -653,7 +668,8 @@ def _parse_json_array(text: str) -> list:
 def _encode_needed(cfg: Config, conn, doc_id: int, encoder: Encoder, resolved: str,
                    doc_path: Path, reprocess: bool) -> bool:
     """Re-encode when no records yet, or the encoder file / the document's
-    encoder.prompt.md changed since the records were created."""
+    encoder.prompt.md / the source transcription changed since the records
+    were created."""
     if reprocess:
         return True
     row = conn.execute(
@@ -679,7 +695,50 @@ def _encode_needed(cfg: Config, conn, doc_id: int, encoder: Encoder, resolved: s
                 return True
         except OSError:
             pass
+    # the input text changed (new/updated page edits or raw transcriptions)
+    t = conn.execute(
+        "SELECT MAX(e.updated_at) AS m FROM page_edits e JOIN pages p ON p.id = e.page_id "
+        "WHERE p.document_id = ? AND e.status = 'done'",
+        (doc_id,),
+    ).fetchone()["m"]
+    if t and t > latest:
+        return True
+    t2 = conn.execute(
+        "SELECT MAX(updated_at) AS m FROM pages WHERE document_id = ? AND status = 'done'",
+        (doc_id,),
+    ).fetchone()["m"]
+    if t2 and t2 > latest:
+        return True
     return False
+
+
+def _record_key(rec: dict) -> tuple:
+    """Dedupe key: normalized from/to/date/place so the same letter found in
+    two overlapping chunks collapses into one record."""
+    parts = []
+    for k in ("from", "to", "date", "place"):
+        v = rec.get(k)
+        if isinstance(v, str):
+            v = re.sub(r"\s+", " ", v.strip().lower())
+        parts.append(str(v or ""))
+    return tuple(parts)
+
+
+def write_concatenated_file(cfg: Config, conn, doc_id: int, texts: list,
+                            encoder_id: str) -> Path | None:
+    """Write the concatenated document text the encoder consumed
+    (edited-preferred, '--- page N ---' markers) next to the records file."""
+    doc = db.get_document(conn, doc_id)
+    if not doc:
+        return None
+    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    rel_dir = Path(doc["dir_path"] or "")
+    out_dir = cfg.library / rel_dir / slug
+    out_dir.mkdir(parents=True, exist_ok=True)
+    block = "\n\n".join(f"--- page {pno} ---\n{t}" for pno, t in texts)
+    out = out_dir / f"concatenated-{encoder_id}.md"
+    out.write_text(block, encoding="utf-8")
+    return out
 
 
 def write_records_file(cfg: Config, conn, doc_id: int, encoder_id: str) -> Path | None:
@@ -751,23 +810,50 @@ def encode_document(
 
     client, _ = make_encoder_client(cfg, resolved)
     records: list[dict] = []
-    batch_size = max(1, encoder.batch_pages)
     try:
-        for start in range(0, len(texts), batch_size):
-            batch = texts[start : start + batch_size]
-            block = "\n\n".join(f"--- page {pno} ---\n{t}" for pno, t in batch)
+        # The encoder reads the document as ONE concatenated text so records
+        # that span several pages (e.g. a letter whose header is on one page
+        # and body on the next) are seen whole. Single call when it fits the
+        # model window; otherwise overlapping chunks + dedupe.
+        concat = "\n\n".join(f"--- page {pno} ---\n{t}" for pno, t in texts)
+        if len(concat) <= encoder.max_input_chars:
+            calls = [(texts, concat)]
+        else:
+            batch = max(1, encoder.batch_pages)
+            ov = max(0, min(encoder.overlap_pages, batch - 1))
+            calls = []
+            start = 0
+            while start < len(texts):
+                chunk = texts[start : start + batch]
+                calls.append((chunk, "\n\n".join(f"--- page {pno} ---\n{t}" for pno, t in chunk)))
+                if start + batch >= len(texts):
+                    break
+                start += batch - ov
+        seen: set = set()
+        for chunk, block in calls:
             prompt = (
                 f"{base_prompt}\n\n"
-                f"Document: {doc['filename']}\nPages: {batch[0][0]}-{batch[-1][0]}\n\n"
+                f"Document: {doc['filename']}\nPages: {chunk[0][0]}-{chunk[-1][0]}\n\n"
                 f"{block}"
             )
             if verbose:
-                print(f"  encoding pages {batch[0][0]}-{batch[-1][0]} ...", flush=True)
+                mode = "single-pass" if len(calls) == 1 else "chunked"
+                print(f"  encoding pages {chunk[0][0]}-{chunk[-1][0]} "
+                      f"({mode}, {len(block)} chars)", flush=True)
             out = client.chat_text(encoder.model, prompt, encoder.temperature,
                                    encoder.max_tokens, thinking=encoder.thinking)
-            for rec in _parse_json_array(out):
-                if isinstance(rec, dict):
-                    records.append(rec)
+            parsed = _parse_json_array(out)
+            if verbose and not parsed and out.strip():
+                print(f"    (model returned no parseable JSON array; "
+                      f"response {len(out)} chars, head: {out[:160]!r})", flush=True)
+            for rec in parsed:
+                if not isinstance(rec, dict):
+                    continue
+                key = _record_key(rec)
+                if key in seen:
+                    continue
+                seen.add(key)
+                records.append(rec)
             conn.commit()
     finally:
         client.close()
@@ -780,6 +866,7 @@ def encode_document(
         db.update_document(conn, doc_id, encoder=resolved)
     conn.commit()
     write_records_file(cfg, conn, doc_id, resolved)
+    write_concatenated_file(cfg, conn, doc_id, texts, resolved)
     return {"action": "encoded", "filename": doc["filename"], "encoder": resolved, "records": len(records)}
 
 
