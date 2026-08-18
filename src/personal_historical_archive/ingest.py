@@ -107,13 +107,23 @@ def _acquire_scan_lock(cfg: Config) -> bool:
     lock = _scan_lock_path(cfg)
     try:
         if lock.exists():
+            # A lock older than a scan could plausibly last (6 h) is stale
+            # even if its PID looks alive — PIDs get reused and a stale lock
+            # must never wedge every future scan.
             try:
-                pid = int(lock.read_text().strip() or "0")
-            except (ValueError, OSError):
-                pid = 0
-            if pid != os.getpid() and _pid_alive(pid):
-                return False
-            lock.unlink()  # stale lock
+                age = time.time() - lock.stat().st_mtime
+            except OSError:
+                age = 0.0
+            if age > 6 * 3600:
+                lock.unlink()
+            else:
+                try:
+                    pid = int(lock.read_text().strip() or "0")
+                except (ValueError, OSError):
+                    pid = 0
+                if pid != os.getpid() and _pid_alive(pid):
+                    return False
+                lock.unlink()  # stale lock
         lock.write_text(str(os.getpid()))
         return True
     except OSError:
@@ -262,32 +272,43 @@ def ingest_file(
     existing = db.get_document_by_path(conn, str(path))
     reuse = False
     prompt_changed = False
-    if existing and not reprocess and existing["sha256"] == sha:
-        prompt_newer = _prompt_newer_than(path, cfg, existing["updated_at"], palaeographer)
-        # The document re-extracts if it now resolves to a DIFFERENT palaeographer
-        # than the one that produced its current text (NULL = unknown/legacy).
-        pal_changed = (
-            existing["palaeographer"] is not None
-            and existing["palaeographer"] != palaeographer.id
-        )
-        changed = prompt_newer or pal_changed
-        if existing["status"] == "processing":
-            # Only skip if ANOTHER live scan owns this document right now;
-            # a stale 'processing' (killed by sleep/crash/reboot) is resumed.
-            if _scan_lock_held_by_other(cfg) and time.time() - existing["updated_at"] < 600:
-                return {"action": "skipped", "filename": path.name, "reason": "already processing"}
-            reuse = True  # resume (keep done pages)
-            prompt_changed = changed  # prompt/palaeographer edited mid-run
-        elif existing["status"] == "done":
-            if not changed:
-                return {"action": "skipped", "filename": path.name, "reason": "unchanged"}
+    if existing and existing["sha256"] == sha:
+        # Same file version. Reuse the document row so parallel outputs survive:
+        # previous palaeographer transcriptions, editor outputs and records
+        # stay in the library folder and DB (staleness marks them for
+        # regeneration, never deletion). --reprocess forces re-extraction of
+        # every page but must NOT delete the document.
+        if reprocess:
             reuse = True
-            prompt_changed = True  # prompt/palaeographer changed -> re-extract ALL pages
-        else:  # 'error': previous run failed -> resume (keep done pages, retry the rest)
-            reuse = True
-            prompt_changed = changed
-    if existing and not reuse:
-        remove_library_artifact(cfg, existing)
+            prompt_changed = True  # re-extract ALL pages
+        else:
+            prompt_newer = _prompt_newer_than(path, cfg, existing["updated_at"], palaeographer)
+            # The document re-extracts if it now resolves to a DIFFERENT palaeographer
+            # than the one that produced its current text (NULL = unknown/legacy).
+            pal_changed = (
+                existing["palaeographer"] is not None
+                and existing["palaeographer"] != palaeographer.id
+            )
+            changed = prompt_newer or pal_changed
+            if existing["status"] == "processing":
+                # Only skip if ANOTHER live scan owns this document right now;
+                # a stale 'processing' (killed by sleep/crash/reboot) is resumed.
+                if _scan_lock_held_by_other(cfg) and time.time() - existing["updated_at"] < 600:
+                    return {"action": "skipped", "filename": path.name, "reason": "already processing"}
+                reuse = True  # resume (keep done pages)
+                prompt_changed = changed  # prompt/palaeographer edited mid-run
+            elif existing["status"] == "done":
+                if not changed:
+                    return {"action": "skipped", "filename": path.name, "reason": "unchanged"}
+                reuse = True
+                prompt_changed = True  # prompt/palaeographer changed -> re-extract ALL pages
+            else:  # 'error': previous run failed -> resume (keep done pages, retry the rest)
+                reuse = True
+                prompt_changed = changed
+    elif existing:
+        # File content changed (new sha) -> the document is a NEW version.
+        # The old library folder is keyed by the old sha, so it is left on
+        # disk untouched; only the stale DB row is replaced.
         db.delete_document(conn, existing["id"])
         conn.commit()
 
