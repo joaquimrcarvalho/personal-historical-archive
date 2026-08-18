@@ -1,5 +1,5 @@
 ---
-description: letter metadata records (from/to/date/place) — MiniMax M2.5
+description: letter metadata (from/to/date/place) + correspondents — MiniMax-M2.5
 base_url: https://api.minimax.io/v1
 model: MiniMax-M2.5
 api_key: "${MINIMAX_API_KEY}"
@@ -20,29 +20,42 @@ author, addressee, place and date) appears at the start and the body
 continues over the following pages. Read the WHOLE text before deciding,
 so you never miss a letter whose header falls at a page boundary.
 
-Detect CORRESPONDENCE (letters). For each letter found, extract:
+Detect CORRESPONDENCE (letters) and the PEOPLE in them. For each letter
+found, extract the letter record and one person record per correspondent.
 
-- from:    the author (a person)
-- to:      the addressee (a person OR a collective entity, e.g. "the
-           Jesuits of Portugal", a religious order, an institution)
-- date:    the date the letter was written (as written, e.g. "27 de
-           Janeiro de 1545"; keep the original form)
-- place:   where it was written (as written, e.g. "Cochim")
-- page:    the page number where the letter STARTS (the N of the nearest
-           '--- page N ---' marker before the letter header)
-
-IMPORTANT — use EXACT TEXT from the input for `from`, `to`, `date`,
-`place` and `page`: copy the names and dates verbatim, do not paraphrase,
+IMPORTANT — use EXACT TEXT from the input for every extracted value and
+every attribute: copy names and dates verbatim, do not paraphrase,
 modernize, or expand abbreviations (e.g. keep "S. Francisco Xavier", not
-"São Francisco Xavier"). This keeps every record verifiable against the
-source. List records IN ORDER OF APPEARANCE, with no overlapping letters.
+"São Francisco Xavier"). List records IN ORDER OF APPEARANCE, with no
+overlapping letters. For `page`, use the N of the nearest
+'--- page N ---' marker before the letter header.
 
-Return a JSON array of records. Each record:
+Output a JSON array. Each item is one extraction in this flat form:
 
-  {"from": "...", "to": "...", "date": "...", "place": "...", "page": N}
+  {"person": "<verbatim person text>",
+   "person_attributes": {"title": "...", "name": "...", "role": "..."}},
+  {"letter": "<verbatim letter header>",
+   "letter_attributes": {"from": "...", "to": "...", "date": "...",
+                         "place": "...", "page": N}}
+
+- person.title / person.name / person.role: split the person text into
+  title (e.g. "Padre Mestre S."), name (e.g. "Francisco Xavier") and role
+  (e.g. "Provincial de Portugal"), each as exact substrings of the text.
+- letter.from / letter.to: the author and addressee names (exact text).
+- letter.date / letter.place: as written (e.g. "27 de Janeiro de 1545",
+  "Cochim").
 
 List EVERY letter you find — do not stop at the first few. Only include
-letters you are confident about. Output ONLY the JSON array, with no
+extractions you are confident about. Output ONLY the JSON array, with no
 preamble, commentary, or markdown fences. The document/collection encoder
 prompt may add specific detection rules (e.g. how letters begin in this
 source) — follow those rules.
+
+## Examples
+
+Q: I 0 Padre Mestre S. Francisco Xavier ao Padre Mestre Simão Rodrigues de Azevedo, Provincial de Portugal (Escripta de Cochim a 27 de Janeiro de 1545)
+
+A:
+[{"person": "Padre Mestre S. Francisco Xavier", "person_attributes": {"title": "Padre Mestre S.", "name": "Francisco Xavier"}},
+ {"person": "Padre Mestre Simão Rodrigues de Azevedo, Provincial de Portugal", "person_attributes": {"title": "Padre Mestre", "name": "Simão Rodrigues de Azevedo", "role": "Provincial de Portugal"}},
+ {"letter": "0 Padre Mestre S. Francisco Xavier ao Padre Mestre Simão Rodrigues de Azevedo, Provincial de Portugal (Escripta de Cochim a 27 de Janeiro de 1545)", "letter_attributes": {"from": "Francisco Xavier", "to": "Simão Rodrigues de Azevedo", "date": "27 de Janeiro de 1545", "place": "Cochim", "page": 27}}]

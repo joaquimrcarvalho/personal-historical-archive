@@ -712,11 +712,44 @@ def _encode_needed(cfg: Config, conn, doc_id: int, encoder: Encoder, resolved: s
     return False
 
 
+def _expand_records(parsed: list) -> list[dict]:
+    """Expand LangExtract-flat items into one record per class.
+
+    An item like
+      {"person": "Padre Mestre S. Francisco Xavier",
+       "person_attributes": {"title": "Padre Mestre S.", "name": "Francisco Xavier"},
+       "letter": "0 Padre Mestre S. Francisco Xavier ao ...",
+       "letter_attributes": {"date": "1545-01-27", "place": "Cochim", ...}}
+    becomes two records:
+      {"kind": "person", "class": "person", "text": "...", "title": ..., "name": ...}
+      {"kind": "letter", "class": "letter", "text": "...", "date": ..., ...}
+    Plain records (no '<class>_attributes' keys) pass through unchanged."""
+    out: list[dict] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        attr_keys = [k for k in item if isinstance(k, str) and k.endswith("_attributes")]
+        if not attr_keys:
+            out.append(item)
+            continue
+        for k, v in item.items():
+            if not isinstance(k, str) or k.endswith("_attributes") or k.endswith("_index"):
+                continue
+            if not isinstance(v, (str, int, float)):
+                continue
+            rec = {"kind": k, "class": k, "text": str(v)}
+            attrs = item.get(k + "_attributes")
+            if isinstance(attrs, dict):
+                rec.update(attrs)
+            out.append(rec)
+    return out
+
+
 def _record_key(rec: dict) -> tuple:
-    """Dedupe key: normalized from/to/date/place so the same letter found in
-    two overlapping chunks collapses into one record."""
-    parts = []
-    for k in ("from", "to", "date", "place"):
+    """Dedupe key: kind + normalized text/from/to/date/place so the same
+    extraction found in two overlapping chunks or passes collapses."""
+    parts = [str(rec.get("kind") or "record")]
+    for k in ("text", "from", "to", "date", "place"):
         v = rec.get(k)
         if isinstance(v, str):
             v = re.sub(r"\s+", " ", v.strip().lower())
@@ -725,15 +758,21 @@ def _record_key(rec: dict) -> tuple:
 
 
 def _record_similar(a: dict, b: dict) -> float:
-    """Fuzzy similarity of two records' metadata (LangExtract-style fuzzy
-    alignment): ratio of the normalized concatenated from|to|date|place."""
+    """Fuzzy similarity of two records of the SAME kind (LangExtract-style
+    fuzzy alignment): ratio over all string/scalar fields. Different kinds
+    are never similar (a letter and a person never collapse)."""
+    if (a.get("kind") or "record") != (b.get("kind") or "record"):
+        return 0.0
     import difflib
 
     def flat(rec: dict) -> str:
-        return " | ".join(
-            re.sub(r"\s+", " ", str(rec.get(k) or "")).strip().lower()
-            for k in ("from", "to", "date", "place")
-        )
+        vals = []
+        for k, v in rec.items():
+            if k in ("kind", "class", "page"):
+                continue
+            if isinstance(v, (str, int, float)):
+                vals.append(re.sub(r"\s+", " ", str(v)).strip().lower())
+        return " | ".join(vals)
 
     return difflib.SequenceMatcher(None, flat(a), flat(b)).ratio()
 
@@ -763,12 +802,16 @@ def write_records_file(cfg: Config, conn, doc_id: int, encoder_id: str) -> Path 
     rel_dir = Path(doc["dir_path"] or "")
     out_dir = cfg.library / rel_dir / slug
     out_dir.mkdir(parents=True, exist_ok=True)
-    records = [json.loads(r["data"]) for r in db.records_for_document(conn, doc_id)
-               if r["encoder"] == encoder_id]
+    rows = [r for r in db.records_for_document(conn, doc_id)
+            if r["encoder"] == encoder_id]
+    records = [json.loads(r["data"]) for r in rows]
+    by_kind: dict[str, list] = {}
+    for rec in records:
+        by_kind.setdefault(rec.get("kind") or "record", []).append(rec)
     payload = {
         "document": doc["path"],
         "encoder": encoder_id,
-        "records": records,
+        "records": by_kind,
     }
     out = out_dir / f"records-{encoder_id}.json"
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -864,9 +907,7 @@ def encode_document(
                 if verbose and not parsed and out.strip():
                     print(f"    (model returned no parseable JSON array; "
                           f"response {len(out)} chars, head: {out[:160]!r})", flush=True)
-                for rec in parsed:
-                    if not isinstance(rec, dict):
-                        continue
+                for rec in _expand_records(parsed):
                     key = _record_key(rec)
                     if key in seen:
                         continue
@@ -891,7 +932,7 @@ def encode_document(
 
     db.clear_records(conn, doc_id, resolved)
     for rec in records:
-        db.add_record(conn, doc_id, resolved, str(rec.get("type") or rec.get("kind") or ""),
+        db.add_record(conn, doc_id, resolved, str(rec.get("kind") or rec.get("type") or "record"),
                       json.dumps(rec, ensure_ascii=False), str(rec.get("page") or ""))
     if doc["encoder"] != resolved:
         db.update_document(conn, doc_id, encoder=resolved)

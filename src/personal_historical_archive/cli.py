@@ -292,6 +292,9 @@ def cmd_key(cfg: Config, args) -> None:
 
 
 def cmd_encoder(cfg: Config, args) -> None:
+    if getattr(args, "new", False):
+        cmd_encoder_new(cfg, args)
+        return
     if args.file:
         p = cfg.dropbox / args.file if not (cfg.root / args.file).exists() else cfg.root / args.file
         if not p.exists():
@@ -328,6 +331,11 @@ def cmd_encode(cfg: Config, args) -> None:
             print(f"  + {r['filename']} [{r['encoder']}] ({r['records']} records)")
         elif r["reason"] not in ("no encoder configured", "records up to date"):
             print(f"  ! {r['filename']}: {r.get('reason', r['action'])}")
+
+
+def cmd_encoder_new(cfg: Config, args) -> None:
+    from .encoder_helper import run
+    raise SystemExit(run(cfg))
 
 
 def cmd_mcp(cfg: Config, args) -> None:
@@ -400,8 +408,10 @@ def main(argv: list[str] | None = None) -> None:
     e2.add_argument("--reprocess", action="store_true", help="re-edit everything")
     e2.set_defaults(fn=cmd_edit)
 
-    en = sub.add_parser("encoder", help="show encoder resolution for a file")
-    en.add_argument("file", nargs="?")
+    en = sub.add_parser("encoder", help="show encoder resolution for a file, or create one")
+    en.add_argument("file", nargs="?", help="file to show encoder resolution for")
+    en.add_argument("--new", action="store_true",
+                    help="interactive wizard: create a new encoder file from samples")
     en.set_defaults(fn=cmd_encoder)
 
     ec = sub.add_parser("encode", help="run the encoder pass (structured records) over documents with an encoder")

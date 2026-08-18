@@ -327,8 +327,22 @@ dropbox/collections/letters-from-missons/encoder.prompt.md  →  letter-detectio
 ```
 
 - `pha encode` runs the encoder pass; `pha encoder [file]` shows resolution.
+- **`pha encoder --new` creates an encoder interactively** — a wizard that asks
+  a non-technical user plain-language questions (what the material is, a sample
+  passage, which things matter and what to record about each), uses the chosen
+  model to propose classes/attributes and draft the example, VERIFIES every
+  extracted value appears verbatim in the sample (grounding), and writes
+  `encoders/<id>.md` — without the user knowing the file format. The same
+  interview is available as a chat prompt in `prompts/encoder-helper.md` for
+  use in any chat model.
 - The encoder prefers the **edited** text (per page) when an editor is
   configured, falling back to the raw transcription.
+- **Multi-class records**: the model outputs LangExtract-flat JSON items —
+  each item is `{"<class>": "<exact text>", "<class>_attributes": {…}}`, one
+  per class (e.g. `person` AND `letter` in the same array). Each item becomes
+  one record with `kind` = class, so a run produces e.g. a persons index plus
+  the letter list, with letters referencing people via `from`/`to`. The
+  records file groups by kind.
 - Records are stored in SQLite and written to
   `library/<dir>/<slug>/records-<encoder>.json`, with the exact input
   concatenated text beside it as `concatenated-<encoder>.md` for inspection.
@@ -343,7 +357,9 @@ dropbox/collections/letters-from-missons/encoder.prompt.md  →  letter-detectio
   - `extraction_passes > 1` re-runs extraction independently and merges
     **first-pass-wins** (recall boost against stochastic misses);
   - prompts demand **exact text** from the input (no paraphrasing) so records
-    stay verifiable against the source.
+    stay verifiable against the source;
+  - **few-shot `## Examples`** in the encoder file teach the model the exact
+    classes/attributes/shapes with grounded Q/A pairs.
 
 ## CLI reference
 
@@ -358,6 +374,8 @@ pha rm ID|NAME
 pha prompts [file]
 pha palaeographer [file]
 pha editor [file]
+pha encoder [file] [--new]
+pha encode [--reprocess]
 pha mcp [--transport stdio|sse] [--port 8000]
 ```
 

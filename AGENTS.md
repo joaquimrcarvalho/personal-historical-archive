@@ -31,6 +31,11 @@
   (e.g. modernizing spelling) and cannot change the output structure. The
   encoder stage uses stage-qualified `encoder.prompt.md` files; plain
   `prompt.md` stays the palaeographer prompt.
+- **Encoders output LangExtract-flat JSON** (`{"<class>": "<exact text>",
+  "<class>_attributes": {...}}`, one item per class, kinds stored per record);
+  `pha encoder --new` is the non-technical wizard that creates encoder files
+  (chat variant: `prompts/encoder-helper.md`). Never write a resolved API key
+  into a generated encoder file — keep `${ENV}` placeholders.
 - **Extraction, the editor pass and the encoder use different models**; LM
   Studio serves one model at a time, so do not run `pha scan` and `pha edit`
   concurrently. Remote models (e.g. MiniMax) don't compete with LM Studio.

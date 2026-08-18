@@ -25,12 +25,17 @@ _MIME = {
 
 def _strip_think(text: str) -> str:
     """Remove a leading reasoning block (<think>...</think>) that some
-    reasoning models (e.g. MiniMax-M3) emit before the actual answer."""
+    reasoning models (e.g. MiniMax-M3) emit before the actual answer.
+    If the think block is truncated (no closing tag — e.g. max_tokens cut it
+    off), keep whatever text follows the opening tag instead of returning
+    empty."""
     t = text.strip()
     if t.startswith("<think>"):
         end = t.find("</think>")
         if end != -1:
             return t[end + len("</think>"):].strip()
+        # truncated reasoning: drop the opening tag, keep the rest
+        return t[len("<think>"):].strip()
     return t
 
 
