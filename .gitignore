@@ -5,6 +5,9 @@ __pycache__/
 .uv-cache/
 .uv-python/
 
+# Secrets (never commit API keys)
+.env
+
 # Generated / user data
 data/
 library/

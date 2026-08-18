@@ -222,7 +222,12 @@ breaks the load. `pha palaeographer` lists the configured palaeographers.
   to prioritise, transcription style such as modernizing spelling) and cannot
   change the output structure.
 - `api_key` supports `${ENV_VAR}` and `${ENV_VAR:-default}` expansion, so keys
-  never need to be committed. Local servers (LM Studio, Ollama) need no key.
+  never need to be committed. Resolution order: real environment → a
+  gitignored `.env` file → the **macOS Keychain** (service `pha`) → empty.
+  Store a key safely with `pha key --set VARNAME` (reads the value from stdin,
+  writes to the Keychain, or `.env` if the Keychain is unavailable);
+  `pha key` shows where each referenced variable resolves. Local servers
+  (LM Studio, Ollama) need no key.
 - Every document records which palaeographer extracted it (shown by
   `pha status`, in search results, and in the library markdown header).
   Editing a palaeographer file re-extracts the documents that use it.

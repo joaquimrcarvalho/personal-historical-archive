@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import re
 import sys
@@ -248,6 +249,47 @@ def cmd_edit(cfg: Config, args) -> None:
             client.close()
 
 
+def cmd_key(cfg: Config, args) -> None:
+    """Manage secrets referenced as ${NAME} in palaeographer/editor files.
+
+    `pha key --set NAME` reads the value from stdin and stores it in the
+    macOS Keychain (or, if unavailable, in the gitignored .env file).
+    `pha key` shows which referenced variables are resolvable.
+    """
+    from .config import _keychain_get, _keychain_set
+
+    if args.set:
+        name = args.set
+        value = sys.stdin.readline().strip()
+        if not value:
+            print(f"no value provided for {name}")
+            return
+        if _keychain_set(name, value):
+            print(f"stored {name} in the macOS Keychain (service 'pha')")
+        else:
+            envp = cfg.root / ".env"
+            lines = [l for l in envp.read_text().splitlines()
+                     if l.strip() and not l.startswith(f"{name}=")] if envp.exists() else []
+            lines.append(f"{name}={value}")
+            envp.write_text("\n".join(lines) + "\n")
+            print(f"Keychain unavailable; stored {name} in {envp} (gitignored)")
+        return
+    names = set()
+    for d in (cfg.palaeographers_dir, cfg.editors_dir):
+        for f in d.glob("*.md"):
+            for line in f.read_text().splitlines():
+                if line.strip().startswith("api_key:"):
+                    m = re.search(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", line)
+                    if m:
+                        names.add(m.group(1))
+    if not names:
+        print("no ${...} api_key references found in palaeographers/editors")
+        return
+    for name in sorted(names):
+        src = "environment" if os.environ.get(name) else ("Keychain" if _keychain_get(name) else "unset")
+        print(f"  {name}: {src}")
+
+
 def cmd_mcp(cfg: Config, args) -> None:
     from . import mcp_server
 
@@ -317,6 +359,10 @@ def main(argv: list[str] | None = None) -> None:
     e2 = sub.add_parser("edit", help="run the editor pass over all documents with an editor")
     e2.add_argument("--reprocess", action="store_true", help="re-edit everything")
     e2.set_defaults(fn=cmd_edit)
+
+    k = sub.add_parser("key", help="manage API keys (Keychain or .env)")
+    k.add_argument("--set", metavar="NAME", help="store a value for NAME (read from stdin)")
+    k.set_defaults(fn=cmd_key)
 
     args = parser.parse_args(argv)
     args.fn(cfg, args)

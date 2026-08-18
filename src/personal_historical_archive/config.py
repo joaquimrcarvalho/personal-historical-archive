@@ -2,22 +2,80 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+_DOTENV: dict[str, str] | None = None
 
 
 def _expand(value: str) -> str:
-    """Expand ${ENV} and ${ENV:-default} in config strings."""
+    """Expand ${ENV} and ${ENV:-default} in config strings.
+
+    Resolution order for a variable:
+      1. the real environment,
+      2. a gitignored .env file in the project root,
+      3. the macOS Keychain (service 'pha', account = variable name),
+      4. the ${VAR:-default} fallback, or ''.
+    """
 
     def repl(m: re.Match) -> str:
         name, default = m.group(1), m.group(2)
-        return os.environ.get(name, default or "")
+        v = os.environ.get(name)
+        if not v:
+            v = _dotenv().get(name, "")
+        if not v and sys.platform == "darwin":
+            v = _keychain_get(name)
+        return v or default or ""
 
     return _ENV_RE.sub(repl, value)
+
+
+def _dotenv() -> dict[str, str]:
+    global _DOTENV
+    if _DOTENV is None:
+        _DOTENV = {}
+        p = find_project_root() / ".env"
+        if p.exists():
+            for line in p.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                _DOTENV[k.strip()] = v.strip().strip('"').strip("'")
+    return _DOTENV
+
+
+def _keychain_get(name: str) -> str:
+    try:
+        r = subprocess.run(
+            ["security", "find-generic-password", "-a", "pha", "-s", name, "-w"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ""
+
+
+def _keychain_set(name: str, value: str) -> bool:
+    """Store a secret in the macOS Keychain (service 'pha')."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        r = subprocess.run(
+            ["security", "add-generic-password", "-a", "pha", "-s", name, "-w", value,
+             "-U"],  # -U: update if it already exists
+            capture_output=True, text=True, timeout=10,
+        )
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def find_project_root(start: Path | None = None) -> Path:
