@@ -9,9 +9,10 @@ from datetime import datetime
 
 from . import db
 from .config import Config
-from .extract import is_supported, resolve_editor_id, resolve_palaeographer_id, resolve_prompt
+from .extract import is_supported, resolve_editor_id, resolve_encoder_id, resolve_palaeographer_id, resolve_prompt
 from .ingest import (
     edit_all,
+    encode_all,
     make_vision_client,
     reindex_all,
     remove_library_artifact,
@@ -290,6 +291,45 @@ def cmd_key(cfg: Config, args) -> None:
         print(f"  {name}: {src}")
 
 
+def cmd_encoder(cfg: Config, args) -> None:
+    if args.file:
+        p = cfg.dropbox / args.file if not (cfg.root / args.file).exists() else cfg.root / args.file
+        if not p.exists():
+            print(f"not found: {args.file}")
+            return
+        enc_id, source = resolve_encoder_id(p.stem, p if p.is_dir() else p.parent, cfg.dropbox)
+        if enc_id and enc_id in cfg.encoders:
+            e = cfg.encoders[enc_id]
+            print(f"encoder: {e.id} ({e.description or e.model})")
+        else:
+            print(f"encoder: {enc_id or 'none (no encoding)'}")
+        print(f"source: {source or '(none — no encoder configured)'}")
+        return
+    print(f"configured encoders ({cfg.encoders_dir}):")
+    for enc_id in sorted(cfg.encoders):
+        e = cfg.encoders[enc_id]
+        print(f"  {enc_id}: {e.description or e.model} @ {e.model} (batch {e.batch_pages})")
+    print("selection files in the dropbox:")
+    enc_files = []
+    for pat in ("encoder", "encoder.txt", "encoder.md",
+                "*.encoder", "*.encoder.txt", "*.encoder.md"):
+        enc_files.extend(cfg.dropbox.rglob(pat))
+    for f in sorted(set(enc_files)):
+        enc_id = re.sub(r"^[#\-*\s]+", "", f.read_text().strip().splitlines()[0]).strip() if f.read_text().strip() else ""
+        print(f"  {f}: {enc_id or '(empty)'}")
+
+
+def cmd_encode(cfg: Config, args) -> None:
+    res = encode_all(cfg, reprocess=args.reprocess, verbose=True)
+    encoded = sum(1 for r in res["results"] if r["action"] == "encoded")
+    print(f"encoded {encoded} document(s)")
+    for r in res["results"]:
+        if r["action"] == "encoded":
+            print(f"  + {r['filename']} [{r['encoder']}] ({r['records']} records)")
+        elif r["reason"] not in ("no encoder configured", "records up to date"):
+            print(f"  ! {r['filename']}: {r.get('reason', r['action'])}")
+
+
 def cmd_mcp(cfg: Config, args) -> None:
     from . import mcp_server
 
@@ -359,6 +399,14 @@ def main(argv: list[str] | None = None) -> None:
     e2 = sub.add_parser("edit", help="run the editor pass over all documents with an editor")
     e2.add_argument("--reprocess", action="store_true", help="re-edit everything")
     e2.set_defaults(fn=cmd_edit)
+
+    en = sub.add_parser("encoder", help="show encoder resolution for a file")
+    en.add_argument("file", nargs="?")
+    en.set_defaults(fn=cmd_encoder)
+
+    ec = sub.add_parser("encode", help="run the encoder pass (structured records) over documents with an encoder")
+    ec.add_argument("--reprocess", action="store_true", help="re-encode everything")
+    ec.set_defaults(fn=cmd_encode)
 
     k = sub.add_parser("key", help="manage API keys (OS secret store or .env)")
     k.add_argument("--set", metavar="NAME", help="store a value for NAME (read from stdin)")

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -13,12 +15,13 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from . import db
-from .config import Config, Editor, Palaeographer
+from .config import Config, Editor, Encoder, Palaeographer
 from .embed import pack, prefixed
 from .extract import (
     build_page_prompt,
     compose_prompts,
     editor_candidates,
+    encoder_candidates,
     format_notes,
     is_supported,
     page_count,
@@ -26,6 +29,7 @@ from .extract import (
     prompt_candidates,
     render_document,
     resolve_editor_id,
+    resolve_encoder_id,
     resolve_palaeographer_id,
     resolve_prompt,
 )
@@ -600,6 +604,193 @@ def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> dict
         results = []
         for d in db.list_documents(conn, limit=10000):
             results.append(edit_document(cfg, conn, d["id"], reprocess=reprocess, verbose=verbose))
+        return {"results": results}
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- encoders (structured records)
+
+def make_encoder_client(cfg: Config, encoder_id: str) -> tuple[ModelClient, Encoder]:
+    encoder = cfg.get_encoder(encoder_id)
+    return ModelClient(encoder.base_url, timeout_s=encoder.timeout_s, api_key=encoder.api_key), encoder
+
+
+def _parse_json_array(text: str) -> list:
+    """Extract the first balanced JSON array from a model response."""
+    if not text:
+        return []
+    start = text.find("[")
+    if start == -1:
+        return []
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start : i + 1])
+                except json.JSONDecodeError:
+                    return []
+    return []
+
+
+def _encode_needed(cfg: Config, conn, doc_id: int, encoder: Encoder, resolved: str,
+                   doc_path: Path, reprocess: bool) -> bool:
+    """Re-encode when no records yet, or the encoder file / the document's
+    encoder.prompt.md changed since the records were created."""
+    if reprocess:
+        return True
+    row = conn.execute(
+        "SELECT MAX(created_at) AS m FROM records WHERE document_id = ? AND encoder = ?",
+        (doc_id, resolved),
+    ).fetchone()
+    if not row or not row["m"]:
+        return True
+    latest = row["m"]
+    candidates = []
+    if encoder.prompt_file:
+        candidates.append(encoder.prompt_file)
+    prompt, _src = resolve_prompt(
+        doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
+        cfg.dropbox, cfg.prompts, kind="encoder.prompt",
+    )
+    for cand in encoder_candidates(doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent, cfg.dropbox):
+        if cand.exists():
+            candidates.append(cand)
+    for cand in candidates:
+        try:
+            if cand.stat().st_mtime > latest:
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def write_records_file(cfg: Config, conn, doc_id: int, encoder_id: str) -> Path | None:
+    doc = db.get_document(conn, doc_id)
+    if not doc:
+        return None
+    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    rel_dir = Path(doc["dir_path"] or "")
+    out_dir = cfg.library / rel_dir / slug
+    out_dir.mkdir(parents=True, exist_ok=True)
+    records = [json.loads(r["data"]) for r in db.records_for_document(conn, doc_id)
+               if r["encoder"] == encoder_id]
+    payload = {
+        "document": doc["path"],
+        "encoder": encoder_id,
+        "records": records,
+    }
+    out = out_dir / f"records-{encoder_id}.json"
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+    return out
+
+
+def encode_document(
+    cfg: Config,
+    conn,
+    doc_id: int,
+    encoder_id: str | None = None,
+    reprocess: bool = False,
+    verbose: bool = True,
+) -> dict:
+    """Run the encoder over a document's transcription (edited text when the
+    document has an editor, else raw), producing structured records in
+    batches of pages. The encoder prompt is composed as:
+    [encoder base prompt] + [document/collection encoder.prompt.md]."""
+    doc = db.get_document(conn, doc_id)
+    if not doc:
+        return {"action": "skipped", "filename": "?", "reason": "no document"}
+    doc_path = Path(doc["path"])
+    if encoder_id:
+        resolved = encoder_id
+    else:
+        enc_id, _src = resolve_encoder_id(
+            doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent, cfg.dropbox
+        )
+        resolved = enc_id or (doc["encoder"] if doc["encoder"] in cfg.encoders else None)
+    if not resolved:
+        return {"action": "skipped", "filename": doc["filename"], "reason": "no encoder configured"}
+    encoder = cfg.get_encoder(resolved)
+
+    pages = db.get_pages(conn, doc_id)
+    edits: dict[int, str] = {}
+    if doc["editor"]:
+        for e in db.edits_for_document(conn, doc_id, doc["editor"]):
+            if e["status"] == "done" and e["text"]:
+                edits[e["page_id"]] = e["text"]
+    texts = [(p["page_no"], (edits.get(p["id"]) or p["raw_text"] or "").strip())
+             for p in pages if (edits.get(p["id"]) or p["raw_text"] or "").strip()]
+    if not texts:
+        return {"action": "skipped", "filename": doc["filename"], "reason": "no text"}
+
+    if not _encode_needed(cfg, conn, doc_id, encoder, resolved, doc_path, reprocess):
+        return {"action": "skipped", "filename": doc["filename"], "reason": "records up to date"}
+
+    doc_prompt, _src = resolve_prompt(
+        doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
+        cfg.dropbox, cfg.prompts, kind="encoder.prompt",
+    )
+    base_prompt = compose_prompts(encoder.prompt_text, doc_prompt)
+
+    client, _ = make_encoder_client(cfg, resolved)
+    records: list[dict] = []
+    batch_size = max(1, encoder.batch_pages)
+    try:
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start : start + batch_size]
+            block = "\n\n".join(f"--- page {pno} ---\n{t}" for pno, t in batch)
+            prompt = (
+                f"{base_prompt}\n\n"
+                f"Document: {doc['filename']}\nPages: {batch[0][0]}-{batch[-1][0]}\n\n"
+                f"{block}"
+            )
+            if verbose:
+                print(f"  encoding pages {batch[0][0]}-{batch[-1][0]} ...", flush=True)
+            out = client.chat_text(encoder.model, prompt, encoder.temperature,
+                                   encoder.max_tokens, thinking=encoder.thinking)
+            for rec in _parse_json_array(out):
+                if isinstance(rec, dict):
+                    records.append(rec)
+            conn.commit()
+    finally:
+        client.close()
+
+    db.clear_records(conn, doc_id, resolved)
+    for rec in records:
+        db.add_record(conn, doc_id, resolved, str(rec.get("type") or rec.get("kind") or ""),
+                      json.dumps(rec, ensure_ascii=False), str(rec.get("page") or ""))
+    if doc["encoder"] != resolved:
+        db.update_document(conn, doc_id, encoder=resolved)
+    conn.commit()
+    write_records_file(cfg, conn, doc_id, resolved)
+    return {"action": "encoded", "filename": doc["filename"], "encoder": resolved, "records": len(records)}
+
+
+def encode_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> dict:
+    """Run the encoder pass for every document that has an encoder configured."""
+    cfg.ensure_dirs()
+    conn = db.connect(cfg.db_path)
+    try:
+        results = []
+        for d in db.list_documents(conn, limit=10000):
+            results.append(encode_document(cfg, conn, d["id"], reprocess=reprocess, verbose=verbose))
         return {"results": results}
     finally:
         conn.close()

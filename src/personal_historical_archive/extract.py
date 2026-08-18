@@ -65,39 +65,46 @@ def prompt_candidates(
     dropbox: Path,
     prompts_dir: Path,
     explicit: str | None = None,
+    kind: str = "prompt",
 ) -> list[Path]:
     """Candidate prompt files in resolution order.
 
+    `kind` qualifies the stage: "prompt" = palaeographer stage (file name
+    `prompt.md`), "encoder.prompt" = encoder stage (file name
+    `encoder.prompt.md`), etc. A document/collection can therefore carry
+    per-stage prompts side by side.
+
     Order:
       1. explicit prompt file (--prompt flag)
-      2. next to the document: <stem>.prompt.md / <stem>.pdf.prompt.md
+      2. next to the document: <stem>.<kind>.md / <stem>.pdf.<kind>.md
       3. directory chain (nearest first):
-           <dir>/prompt.md, <dir>/<dirname>.prompt.md,
-           <parent>/<dirname>.prompt.md (sidecar next to the directory),
+           <dir>/<kind>.md, <dir>/<dirname>.<kind>.md,
+           <parent>/<dirname>.<kind>.md (sidecar next to the directory),
          walking up to the dropbox root — this is how a collection-level prompt
          (e.g. dropbox/collections/COLX/prompt.md) applies to everything under
          it, and how a document-directory of images gets one prompt for all pages
-      4. prompts dir: <stem>.prompt.md
+      4. prompts dir: <stem>.<kind>.md
     """
+    suffix = kind if kind == "prompt" else kind
     if explicit:
         p = Path(explicit)
         if not p.is_absolute():
             p = prompts_dir / explicit
         return [p]
     cands: list[Path] = [
-        file_dir / f"{stem}.prompt.md",
-        file_dir / f"{stem}.pdf.prompt.md",
+        file_dir / f"{stem}.{suffix}.md",
+        file_dir / f"{stem}.pdf.{suffix}.md",
     ]
     d = file_dir
     while True:
-        cands.append(d / "prompt.md")
-        cands.append(d / f"{d.name}.prompt.md")
+        cands.append(d / f"{suffix}.md")
+        cands.append(d / f"{d.name}.{suffix}.md")
         if d != dropbox and dropbox in d.parents:
-            cands.append(d.parent / f"{d.name}.prompt.md")
+            cands.append(d.parent / f"{d.name}.{suffix}.md")
         if d == dropbox or dropbox not in d.parents:
             break
         d = d.parent
-    cands.append(prompts_dir / f"{stem}.prompt.md")
+    cands.append(prompts_dir / f"{stem}.{suffix}.md")
     return cands
 
 
@@ -107,20 +114,24 @@ def resolve_prompt(
     dropbox: Path,
     prompts_dir: Path,
     explicit: str | None = None,
+    kind: str = "prompt",
 ) -> tuple[str, str]:
     """Return (prompt_text, source) for a document at file_dir.
 
     Resolution order: explicit --prompt, file-sidecar, directory/collection
-    chain (nearest first), prompts/<stem>.prompt.md, prompts/default_prompt.md,
-    built-in default.
+    chain (nearest first), prompts/<stem>.<kind>.md, prompts/default_prompt.md,
+    built-in default. `kind` selects the stage ("prompt" for the palaeographer
+    stage, "encoder.prompt" for the encoder stage, ...).
     """
-    for cand in prompt_candidates(stem, file_dir, dropbox, prompts_dir, explicit):
+    for cand in prompt_candidates(stem, file_dir, dropbox, prompts_dir, explicit, kind):
         if cand.exists():
             return cand.read_text(), str(cand)
-    default = prompts_dir / "default_prompt.md"
-    if default.exists():
-        return default.read_text(), str(default)
-    return DEFAULT_PROMPT, "builtin"
+    if kind == "prompt":
+        default = prompts_dir / "default_prompt.md"
+        if default.exists():
+            return default.read_text(), str(default)
+        return DEFAULT_PROMPT, "builtin"
+    return "", "none"
 
 
 def compose_prompts(palaeographer_prompt: str, doc_prompt: str) -> str:
@@ -293,4 +304,37 @@ def resolve_editor_id(
                 ed_id = re.sub(r"^[#\-*\s]+", "", text.splitlines()[0]).strip()
                 if ed_id:
                     return ed_id, str(cand)
+    return None, None
+
+
+# --------------------------------------------------------------------------- encoder selection
+
+def encoder_candidates(stem: str, file_dir: Path, dropbox: Path) -> list[Path]:
+    """Candidate 'encoder' files in resolution order (same chain as
+    palaeographers/editors; plain, .txt and .md variants per location)."""
+    exts = ("", ".txt", ".md")
+    cands: list[Path] = [file_dir / f"{stem}.encoder{ext}" for ext in exts]
+    d = file_dir
+    while True:
+        for ext in exts:
+            cands.append(d / f"encoder{ext}")
+        if d == dropbox or dropbox not in d.parents:
+            break
+        d = d.parent
+    return cands
+
+
+def resolve_encoder_id(
+    stem: str, file_dir: Path, dropbox: Path, explicit: str | None = None
+) -> tuple[str | None, str | None]:
+    """Return (encoder_id, source) for a document, or (None, None) for none."""
+    if explicit:
+        return explicit, f"flag:{explicit}"
+    for cand in encoder_candidates(stem, file_dir, dropbox):
+        if cand.exists():
+            text = cand.read_text().strip()
+            if text:
+                enc_id = re.sub(r"^[#\-*\s]+", "", text.splitlines()[0]).strip()
+                if enc_id:
+                    return enc_id, str(cand)
     return None, None

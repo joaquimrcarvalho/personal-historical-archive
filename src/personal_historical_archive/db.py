@@ -53,9 +53,19 @@ CREATE TABLE IF NOT EXISTS page_edits (
     UNIQUE (page_id, editor)
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text);
+CREATE TABLE IF NOT EXISTS records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    encoder TEXT NOT NULL,
+    kind TEXT,
+    data TEXT NOT NULL,
+    source TEXT,
+    created_at REAL
+);
 CREATE INDEX IF NOT EXISTS idx_pages_doc ON pages(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS idx_edits_page ON page_edits(page_id);
+CREATE INDEX IF NOT EXISTS idx_records_doc ON records(document_id);
 """
 
 
@@ -85,6 +95,8 @@ def migrate(conn: sqlite3.Connection) -> None:
         statements.append("ALTER TABLE documents ADD COLUMN palaeographer TEXT")
     if "editor" not in cols:
         statements.append("ALTER TABLE documents ADD COLUMN editor TEXT")
+    if "encoder" not in cols:
+        statements.append("ALTER TABLE documents ADD COLUMN encoder TEXT")
     if statements:
         import time
 
@@ -453,3 +465,32 @@ def _write(conn: sqlite3.Connection, sql: str, params=()):
             if "locked" not in str(e).lower() or attempt >= 5:
                 raise
             _t.sleep(1 + attempt * 2)
+
+
+# --------------------------------------------------------------------------- records (encoders)
+
+def clear_records(conn: sqlite3.Connection, doc_id: int, encoder: str) -> None:
+    _write(conn, "DELETE FROM records WHERE document_id = ? AND encoder = ?", (doc_id, encoder))
+
+
+def add_record(
+    conn: sqlite3.Connection,
+    doc_id: int,
+    encoder: str,
+    kind: str | None,
+    data: str,
+    source: str | None = None,
+) -> None:
+    import time as _t
+
+    _write(
+        conn,
+        "INSERT INTO records (document_id, encoder, kind, data, source, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (doc_id, encoder, kind, data, source, _t.time()),
+    )
+
+
+def records_for_document(conn: sqlite3.Connection, doc_id: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM records WHERE document_id = ? ORDER BY id", (doc_id,)
+    ).fetchall()

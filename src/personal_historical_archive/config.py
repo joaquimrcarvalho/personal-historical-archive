@@ -216,6 +216,27 @@ class Editor:
 
 
 @dataclass
+class Encoder:
+    """A named text model that turns (edited) transcriptions into structured
+    records (e.g. letter metadata: from/to/date/place). The third stage of the
+    pipeline: palaeographer reads -> editor transforms -> encoder structures.
+    Runs on its own endpoint (local or remote) with its encoding prompt."""
+
+    id: str
+    description: str
+    base_url: str
+    api_key: str
+    model: str
+    temperature: float
+    max_tokens: int
+    timeout_s: int
+    prompt_text: str
+    prompt_file: Path | None = None
+    thinking: bool = True
+    batch_pages: int = 20
+
+
+@dataclass
 class Config:
     root: Path
     # paths
@@ -226,12 +247,15 @@ class Config:
     prompts: Path
     palaeographers_dir: Path
     editors_dir: Path
+    encoders_dir: Path
     db_path: Path
     # palaeographers (vision models)
     palaeographers: dict[str, Palaeographer]
     active_palaeographer: str
     # editors (text models that transform transcriptions)
     editors: dict[str, Editor]
+    # encoders (text models that extract structured records)
+    encoders: dict[str, Encoder]
     # embedding model
     embed_backend: str
     embed_base_url: str
@@ -264,9 +288,11 @@ class Config:
         prompts_dir = _p(root, paths.get("prompts", "prompts"))
         pal_dir = _p(root, paths.get("palaeographers", "palaeographers"))
         ed_dir = _p(root, paths.get("editors", "editors"))
+        enc_dir = _p(root, paths.get("encoders", "encoders"))
 
         palaeographers, active = _parse_palaeographers(raw, vis, prompts_dir, root, pal_dir)
         editors = _parse_editors(raw, prompts_dir, root, ed_dir)
+        encoders = _parse_encoders(enc_dir)
 
         return cls(
             root=root,
@@ -277,10 +303,12 @@ class Config:
             prompts=prompts_dir,
             palaeographers_dir=pal_dir,
             editors_dir=ed_dir,
+            encoders_dir=enc_dir,
             db_path=_p(root, paths.get("db", "data/archive.db")),
             palaeographers=palaeographers,
             active_palaeographer=active,
             editors=editors,
+            encoders=encoders,
             embed_backend=str(emb.get("backend", "lmstudio")),
             embed_base_url=str(emb.get("base_url", "http://127.0.0.1:1234/v1")),
             embed_model=str(emb.get("model", "text-embedding-nomic-embed-text-v1.5@q4_k_m")),
@@ -309,13 +337,19 @@ class Config:
             raise KeyError(f"unknown editor {editor_id!r}; configured: {sorted(self.editors)}")
         return self.editors[editor_id]
 
+    def get_encoder(self, encoder_id: str) -> Encoder:
+        if encoder_id not in self.encoders:
+            raise KeyError(f"unknown encoder {encoder_id!r}; configured: {sorted(self.encoders)}")
+        return self.encoders[encoder_id]
+
     def ensure_dirs(self) -> None:
         for d in (self.dropbox, self.library, self.data, self.renders, self.prompts,
-                  self.palaeographers_dir, self.editors_dir):
+                  self.palaeographers_dir, self.editors_dir, self.encoders_dir):
             d.mkdir(parents=True, exist_ok=True)
         # seed sample configuration files on first run
         _seed_sample(self.palaeographers_dir, "_sample.md", _PAL_SAMPLE)
         _seed_sample(self.editors_dir, "_sample.md", _ED_SAMPLE)
+        _seed_sample(self.encoders_dir, "_sample.md", _ENC_SAMPLE)
 
 
 def _parse_palaeographers(
@@ -512,6 +546,30 @@ def _editor_from_frontmatter(ed_id: str, text: str, file: Path) -> Editor | None
     )
 
 
+def _parse_encoders(enc_dir: Path) -> dict[str, Encoder]:
+    """Encoders are one file per encoder in `encoders/` (front matter = model
+    config, body = the base encoding prompt)."""
+    return _load_model_dir(enc_dir, "encoder", _encoder_from_frontmatter)
+
+
+def _encoder_from_frontmatter(enc_id: str, text: str, file: Path) -> Encoder | None:
+    fm, body = _split_frontmatter(text)
+    return Encoder(
+        id=enc_id,
+        description=str(fm.get("description", "")),
+        base_url=_expand(str(fm.get("base_url", "http://127.0.0.1:1234/v1"))),
+        api_key=_expand(str(fm.get("api_key", ""))),
+        model=str(fm.get("model", "")),
+        temperature=float(fm.get("temperature", 0.0)),
+        max_tokens=int(fm.get("max_tokens", 4096)),
+        timeout_s=int(fm.get("timeout_s", 300)),
+        thinking=_thinking(fm),
+        prompt_text=body,
+        prompt_file=file,
+        batch_pages=int(fm.get("batch_pages", 20)),
+    )
+
+
 def _thinking(fm: dict) -> bool:
     v = fm.get("thinking", True)
     if isinstance(v, str):
@@ -580,4 +638,34 @@ timeout_s: 300
 You are a scholarly editor. Transform the transcription as requested by these
 instructions. Keep the content faithful: do not add, remove or reorder
 information. Keep the document structure. Output only the edited text.
+"""
+
+
+_ENC_SAMPLE = """---
+# HOW TO CREATE A NEW ENCODER
+#   1. Duplicate this file and give it a new name (the file name, without the
+#      extension, becomes the encoder's id, e.g. "letters.md").
+#   2. Edit the settings below. The encoder is a TEXT model; it reads the
+#      transcription and returns STRUCTURED RECORDS (e.g. letter metadata:
+#      from/to/date/place).
+#   3. Replace this body with the generic encoding framing (what records to
+#      produce, output format). Collection/document-specific detection rules
+#      go in an 'encoder.prompt.md' file next to the documents.
+#   4. Save — the encoder is ready. Select it per document/collection with an
+#      'encoder' file next to the document.
+# Files starting with '_' are ignored (this sample is never loaded).
+description: example encoder — edit me
+base_url: http://127.0.0.1:1234/v1
+model: amalia-9b-0626-dpo
+api_key: ""
+temperature: 0.0
+max_tokens: 4096
+timeout_s: 300
+batch_pages: 20
+---
+
+You extract structured records from transcriptions. Read the pages provided
+(between '--- page N ---' markers) and return a JSON array of records as
+described by the document/collection encoder prompt. Output ONLY the JSON
+array, with no preamble or commentary.
 """

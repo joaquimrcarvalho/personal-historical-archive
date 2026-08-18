@@ -13,6 +13,7 @@ paths:
   prompts: prompts        # default + per-file prompt files
   palaeographers: palaeographers   # one file per palaeographer (front matter = config, body = base prompt)
   editors: editors        # one file per editor (front matter = config, body = editing prompt)
+  encoders: encoders      # one file per encoder (front matter = config, body = encoding prompt)
   db: data/archive.db
 
 # Palaeographers live as one file per model in the 'palaeographers/' directory.
@@ -30,6 +31,15 @@ vision:
 # is a DIFFERENT (text) model than the palaeographer; its body prompt
 # transforms the transcription (modernize, translate, ...). Select per
 # document/collection with an 'editor' file next to it.
+
+# Encoders live as one file per model in the 'encoders/' directory (same
+# convention: duplicate encoders/_sample.md, rename, edit, save). Each
+# encoder is a (text) model that turns transcriptions into structured
+# records (e.g. letter metadata); it runs over the EDITED text when
+# available. The encoder prompt for a document/collection is a
+# stage-qualified 'encoder.prompt.md' file next to it (plain 'prompt.md'
+# stays the palaeographer prompt). Select per document/collection with an
+# 'encoder' file next to it.
 
 # Embedding model for semantic search (independent of palaeographers).
 # LM Studio serves text-embedding-nomic-embed-text-v1.5 if downloaded;
