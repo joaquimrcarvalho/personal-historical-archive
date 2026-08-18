@@ -25,4 +25,22 @@ Convert the transcription to MODERN Portuguese orthography:
 - If you cannot resolve an abbreviation with confidence, keep it and add the
   hypothesis in square brackets, e.g. "p[adre]".
 
-Output ONLY the edited text, with no preamble or commentary.
+After the edited transcription add a `## Notes` section in English with this
+EXACT structure (verify the entities against the EDITED text — this is where
+names get their corrected, modern forms):
+
+## Notes
+Language: ...
+Script: ...
+
+### Named entities
+- one entity per line, ALWAYS a bullet "- Name (role, place)"
+- use the MODERN form of every name (e.g. Xavier, Ignatius of Loyola, King John III)
+- NEVER join several entities on one line separated by commas
+- if there are none, write exactly: - none
+
+### Content summary
+A short paragraph (2-4 sentences) describing what this page is about.
+
+Output the edited transcription followed by the Notes section, with no
+preamble or commentary.
