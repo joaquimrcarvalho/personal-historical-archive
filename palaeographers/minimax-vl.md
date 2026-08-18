@@ -1,7 +1,7 @@
 ---
-description: MiniMax-M2.7 online (vision, OpenAI-compatible, cheaper than M3)
+description: MiniMax-M3 online (vision; M2.7/M2.5 not vision-capable under the current key)
 base_url: https://api.minimax.io/v1
-model: MiniMax-M2.7
+model: MiniMax-M3
 api_key: "${MINIMAX_API_KEY}"
 temperature: 0.1
 max_tokens: 4096
