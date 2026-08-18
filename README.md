@@ -316,10 +316,10 @@ pages (a letter header on one page, its body on the next) is seen whole:
   records file.
 
 Each encoder is **one file** in the `encoders/` directory (same convention as
-palaeographers/editors; add `batch_pages`, `max_input_chars`, `overlap_pages`
-in the front matter). Select one per document/collection with an **`encoder`
-file**; stage-qualified prompts live in **`encoder.prompt.md`** files (plain
-`prompt.md` stays the palaeographer prompt):
+palaeographers/editors; add `batch_pages`, `max_input_chars`, `overlap_pages`,
+`extraction_passes` in the front matter). Select one per document/collection
+with an **`encoder` file**; stage-qualified prompts live in **`encoder.prompt.md`**
+files (plain `prompt.md` stays the palaeographer prompt):
 
 ```
 dropbox/collections/letters-from-missons/encoder            →  "letters"
@@ -334,6 +334,16 @@ dropbox/collections/letters-from-missons/encoder.prompt.md  →  letter-detectio
   concatenated text beside it as `concatenated-<encoder>.md` for inspection.
 - Re-encodes when the encoder file, its `encoder.prompt.md`, or the source
   transcription (raw or edited) changes since the records were created.
+- **Long-document techniques** (inspired by
+  [LangExtract](https://github.com/google/langextract)):
+  - the whole document is one **concatenated text** (records spanning pages
+    are seen whole); single call when it fits `max_input_chars`, otherwise
+    overlapping chunks;
+  - **page grounding**: every record carries the page it starts on;
+  - `extraction_passes > 1` re-runs extraction independently and merges
+    **first-pass-wins** (recall boost against stochastic misses);
+  - prompts demand **exact text** from the input (no paraphrasing) so records
+    stay verifiable against the source.
 
 ## CLI reference
 

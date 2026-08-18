@@ -10,6 +10,7 @@ thinking: disabled
 batch_pages: 20
 max_input_chars: 600000
 overlap_pages: 4
+extraction_passes: 2
 ---
 
 You are a scholarly encoder for a historical letter collection. You are
@@ -30,7 +31,13 @@ Detect CORRESPONDENCE (letters). For each letter found, extract:
 - page:    the page number where the letter STARTS (the N of the nearest
            '--- page N ---' marker before the letter header)
 
-Return a JSON array of records, IN ORDER OF APPEARANCE. Each record:
+IMPORTANT — use EXACT TEXT from the input for `from`, `to`, `date`,
+`place` and `page`: copy the names and dates verbatim, do not paraphrase,
+modernize, or expand abbreviations (e.g. keep "S. Francisco Xavier", not
+"São Francisco Xavier"). This keeps every record verifiable against the
+source. List records IN ORDER OF APPEARANCE, with no overlapping letters.
+
+Return a JSON array of records. Each record:
 
   {"from": "...", "to": "...", "date": "...", "place": "...", "page": N}
 

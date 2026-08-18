@@ -724,6 +724,20 @@ def _record_key(rec: dict) -> tuple:
     return tuple(parts)
 
 
+def _record_similar(a: dict, b: dict) -> float:
+    """Fuzzy similarity of two records' metadata (LangExtract-style fuzzy
+    alignment): ratio of the normalized concatenated from|to|date|place."""
+    import difflib
+
+    def flat(rec: dict) -> str:
+        return " | ".join(
+            re.sub(r"\s+", " ", str(rec.get(k) or "")).strip().lower()
+            for k in ("from", "to", "date", "place")
+        )
+
+    return difflib.SequenceMatcher(None, flat(a), flat(b)).ratio()
+
+
 def write_concatenated_file(cfg: Config, conn, doc_id: int, texts: list,
                             encoder_id: str) -> Path | None:
     """Write the concatenated document text the encoder consumed
@@ -830,31 +844,48 @@ def encode_document(
                     break
                 start += batch - ov
         seen: set = set()
-        for chunk, block in calls:
-            prompt = (
-                f"{base_prompt}\n\n"
-                f"Document: {doc['filename']}\nPages: {chunk[0][0]}-{chunk[-1][0]}\n\n"
-                f"{block}"
-            )
-            if verbose:
-                mode = "single-pass" if len(calls) == 1 else "chunked"
-                print(f"  encoding pages {chunk[0][0]}-{chunk[-1][0]} "
-                      f"({mode}, {len(block)} chars)", flush=True)
-            out = client.chat_text(encoder.model, prompt, encoder.temperature,
-                                   encoder.max_tokens, thinking=encoder.thinking)
-            parsed = _parse_json_array(out)
-            if verbose and not parsed and out.strip():
-                print(f"    (model returned no parseable JSON array; "
-                      f"response {len(out)} chars, head: {out[:160]!r})", flush=True)
-            for rec in parsed:
-                if not isinstance(rec, dict):
-                    continue
-                key = _record_key(rec)
-                if key in seen:
-                    continue
-                seen.add(key)
-                records.append(rec)
-            conn.commit()
+        passes = max(1, encoder.extraction_passes)
+        for pass_num in range(passes):
+            if verbose and passes > 1:
+                print(f"  pass {pass_num + 1}/{passes}", flush=True)
+            for chunk, block in calls:
+                prompt = (
+                    f"{base_prompt}\n\n"
+                    f"Document: {doc['filename']}\nPages: {chunk[0][0]}-{chunk[-1][0]}\n\n"
+                    f"{block}"
+                )
+                if verbose:
+                    mode = "single-pass" if len(calls) == 1 else "chunked"
+                    print(f"  encoding pages {chunk[0][0]}-{chunk[-1][0]} "
+                          f"({mode}, {len(block)} chars)", flush=True)
+                out = client.chat_text(encoder.model, prompt, encoder.temperature,
+                                       encoder.max_tokens, thinking=encoder.thinking)
+                parsed = _parse_json_array(out)
+                if verbose and not parsed and out.strip():
+                    print(f"    (model returned no parseable JSON array; "
+                          f"response {len(out)} chars, head: {out[:160]!r})", flush=True)
+                for rec in parsed:
+                    if not isinstance(rec, dict):
+                        continue
+                    key = _record_key(rec)
+                    if key in seen:
+                        continue
+                    # first-pass wins on the same page: a later-pass record
+                    # starting on the same page with near-identical metadata
+                    # (e.g. "Santo" vs "São") is the same letter (LangExtract
+                    # drops overlapping extractions from later passes).
+                    page = rec.get("page")
+                    dup = False
+                    if page is not None:
+                        for prev in records:
+                            if prev.get("page") == page and _record_similar(prev, rec) >= 0.75:
+                                dup = True
+                                break
+                    if dup:
+                        continue
+                    seen.add(key)
+                    records.append(rec)
+                conn.commit()
     finally:
         client.close()
 

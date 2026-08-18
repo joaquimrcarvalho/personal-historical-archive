@@ -236,6 +236,7 @@ class Encoder:
     batch_pages: int = 20
     max_input_chars: int = 600_000
     overlap_pages: int = 4
+    extraction_passes: int = 1
 
 
 @dataclass
@@ -571,6 +572,7 @@ def _encoder_from_frontmatter(enc_id: str, text: str, file: Path) -> Encoder | N
         batch_pages=int(fm.get("batch_pages", 20)),
         max_input_chars=int(fm.get("max_input_chars", 600_000)),
         overlap_pages=int(fm.get("overlap_pages", 4)),
+        extraction_passes=int(fm.get("extraction_passes", 1)),
     )
 
 
@@ -660,7 +662,9 @@ _ENC_SAMPLE = """---
 # The encoder is fed the document as ONE CONCATENATED text ('--- page N ---'
 # markers between pages), in a single call when it fits max_input_chars;
 # larger documents are chunked with overlap_pages of overlap and records are
-# deduplicated. Ask the model to cite the page each record starts on.
+# deduplicated. Ask the model to cite the page each record starts on and to
+# use EXACT TEXT from the input. extraction_passes > 1 re-runs the whole
+# extraction and keeps first-pass-wins (LangExtract-style recall boost).
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example encoder — edit me
 base_url: http://127.0.0.1:1234/v1
@@ -672,12 +676,14 @@ timeout_s: 300
 batch_pages: 20
 max_input_chars: 600000
 overlap_pages: 4
+extraction_passes: 1
 ---
 
 You extract structured records from transcriptions. You are given the
 document as a single CONCATENATED text with '--- page N ---' markers
 between pages — records may span several pages, so read the whole text
-before deciding. Return a JSON array of records as described by the
-document/collection encoder prompt. Output ONLY the JSON array, with no
-preamble or commentary.
+before deciding. Use EXACT TEXT from the input for every extracted value
+(do not paraphrase), and list records in order of appearance. Return a
+JSON array of records as described by the document/collection encoder
+prompt. Output ONLY the JSON array, with no preamble or commentary.
 """
