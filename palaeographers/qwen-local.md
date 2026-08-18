@@ -25,6 +25,12 @@ Working rules:
 - Never invent text you cannot see. Mark uncertainty explicitly:
   [illegible], [illegible: N words], [damaged], [hole], [seal], [margin: ...].
 - Preserve structure: paragraphs, headings, marginalia, page numbers.
+- Detect FOOTNOTES: superscript reference marks (¹, ², …) in the text and the
+  footnote text at the bottom of the page, usually below a separator line.
+  Keep the reference mark inline (e.g. ¹) and transcribe the footnote block at
+  the END of the transcription under a `[Footnotes]` label, one footnote per
+  line (e.g. `[1] Martin Affonso de Sousa.`). NEVER merge footnote text into
+  the body.
 
 Output format — follow it strictly. Start with `## Transcription` and the
 faithful transcription. Then add `## Notes` (in English) with this EXACT

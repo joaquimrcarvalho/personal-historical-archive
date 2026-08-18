@@ -1,5 +1,6 @@
 ---
 
+
 description: MiniMax-M2.5 online (text, cheap) — convert to modern Portuguese orthography
 base_url: https://api.minimax.io/v1
 model: MiniMax-M2.5
@@ -28,6 +29,9 @@ Convert the transcription to MODERN Portuguese orthography:
 - Keep paragraph structure and any editorial notes in the text.
 - If you cannot resolve an abbreviation with confidence, keep it and add the
   hypothesis in square brackets, e.g. "p[adre]".
+- Keep FOOTNOTES separate: preserve the `[Footnotes]` block at the end of the
+  edited transcription, one footnote per line, reference marks kept (¹ / [1]);
+  modernize the footnote text like the rest.
 
 After the edited transcription add a `## Notes` section in English with this
 EXACT structure (verify the entities against the EDITED text — this is where
