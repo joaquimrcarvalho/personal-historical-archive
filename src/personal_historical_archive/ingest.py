@@ -556,6 +556,32 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
     return out_dir
 
 
+def _edit_null(cfg: Config, conn, doc_id: int, resolved: str,
+               reprocess: bool, verbose: bool) -> dict:
+    """Null/passthrough editor: copy each page's transcription verbatim as
+    the 'edited' text (no model call). Produces edited-<resolved>/ pages and
+    records the editor on the document for provenance."""
+    doc = db.get_document(conn, doc_id)
+    pages = db.get_pages(conn, doc_id)
+    edited = 0
+    for p in pages:
+        raw = (p["raw_text"] or "").strip()
+        if not raw:
+            continue
+        row = db.get_page_edit(conn, p["id"], resolved)
+        if not reprocess and row is not None and row["status"] == "done" and row["text"] == raw:
+            continue
+        db.set_page_edit(conn, p["id"], resolved, text=raw, raw_sha=_raw_sha(raw))
+        edited += 1
+        conn.commit()
+        write_edited_pages(cfg, conn, doc_id, resolved)
+    if doc["editor"] != resolved:
+        db.update_document(conn, doc_id, editor=resolved)
+        conn.commit()
+    write_edited_pages(cfg, conn, doc_id, resolved)
+    return {"action": "edited", "filename": doc["filename"], "editor": resolved, "pages": edited}
+
+
 def edit_document(
     cfg: Config,
     conn,
@@ -566,7 +592,13 @@ def edit_document(
 ) -> dict:
     """Run the editor pass over a document's transcription pages. The editor is
     a DIFFERENT (text) model than the palaeographer; it transforms each page's
-    transcription with its editing prompt (modernize, translate, ...)."""
+    transcription with its editing prompt (modernize, translate, ...).
+
+    The special editor id 'null' (or 'passthrough') keeps the transcription
+    verbatim: it copies each page's raw text as the 'edited' text without a
+    model call, so documents without a real editor still flow through the
+    same pipeline (edited-<editor>/ folder, both-variant indexing, encoder
+    input) with explicit provenance."""
     doc = db.get_document(conn, doc_id)
     if not doc:
         return {"action": "skipped", "filename": "?", "reason": "no document"}
@@ -580,6 +612,8 @@ def edit_document(
         resolved = ed_id or (doc["editor"] if doc["editor"] in cfg.editors else None)
     if not resolved:
         return {"action": "skipped", "filename": doc["filename"], "reason": "no editor configured"}
+    if resolved in ("null", "passthrough"):
+        return _edit_null(cfg, conn, doc_id, resolved, reprocess, verbose)
     editor = cfg.get_editor(resolved)
     pages = db.get_pages(conn, doc_id)
     client, _ = make_editor_client(cfg, resolved)
@@ -689,8 +723,8 @@ def _parse_json_array(text: str) -> list:
 def _encode_needed(cfg: Config, conn, doc_id: int, encoder: Encoder, resolved: str,
                    doc_path: Path, reprocess: bool) -> bool:
     """Re-encode when no records yet, or the encoder file / the document's
-    encoder.prompt.md / the source transcription changed since the records
-    were created."""
+    encoder.prompt.md / encoder-prompt-langextract.md / the source
+    transcription changed since the records were created."""
     if reprocess:
         return True
     row = conn.execute(
@@ -703,10 +737,13 @@ def _encode_needed(cfg: Config, conn, doc_id: int, encoder: Encoder, resolved: s
     candidates = []
     if encoder.prompt_file:
         candidates.append(encoder.prompt_file)
-    prompt, _src = resolve_prompt(
-        doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
-        cfg.dropbox, cfg.prompts, kind="encoder.prompt",
-    )
+    for kind in ("encoder.prompt", "encoder.prompt.langextract"):
+        prompt, src = resolve_prompt(
+            doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
+            cfg.dropbox, cfg.prompts, kind=kind,
+        )
+        if src and src != "none" and not src.startswith("builtin"):
+            candidates.append(Path(src))
     for cand in encoder_candidates(doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent, cfg.dropbox):
         if cand.exists():
             candidates.append(cand)
@@ -884,7 +921,16 @@ def encode_document(
         doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
         cfg.dropbox, cfg.prompts, kind="encoder.prompt",
     )
+    # LangExtract-formatted encoder content (fields + examples) lives next to
+    # the source as 'encoder-prompt-langextract.md' — composed last, so it
+    # carries the collection-specific schema and few-shot examples.
+    lx_prompt, _lx_src = resolve_prompt(
+        doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
+        cfg.dropbox, cfg.prompts, kind="encoder.prompt.langextract",
+    )
     base_prompt = compose_prompts(encoder.prompt_text, doc_prompt)
+    if lx_prompt:
+        base_prompt = compose_prompts(base_prompt, lx_prompt)
 
     client, _ = make_encoder_client(cfg, resolved)
     records: list[dict] = []

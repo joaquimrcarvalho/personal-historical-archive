@@ -452,11 +452,9 @@ def run(cfg: Config) -> int:
         samples.append((sample, items))
         want_more = _ask_yesno("\nAdd another sample (recommended for variety)?", False)
 
-    # write the encoder file
+    # write the encoder file (model config + generic framing)
     examples_md = _render_examples(samples)
     instructions = _instructions_from_classes(classes)
-    body = _BODY_TEMPLATE.format(description=description, instructions=instructions,
-                                 examples=examples_md)
     front = _FRONT_MATTER.format(
         description=description,
         base_url=model["base_url"],
@@ -470,22 +468,41 @@ def run(cfg: Config) -> int:
     enc_dir = cfg.encoders_dir
     enc_dir.mkdir(parents=True, exist_ok=True)
     out = enc_dir / f"{enc_id}.md"
-    out.write_text(front + "\n" + body, encoding="utf-8")
-    print(f"\nWrote {out}")
 
-    # optionally wire up a collection
-    if _ask_yesno("Also write encoder.prompt.md + an 'encoder' selection file for a collection?", False):
-        coll = _ask("Collection path under the dropbox (e.g. collections/letters-from-missons)",
-                    "collections/letters-from-missons")
+    # where do the collection-specific schema + examples live?
+    # default: next to the source (encoder-prompt-langextract.md) so they
+    # travel with the collection; the encoder file stays generic.
+    if _ask_yesno("Write collection files (selection + encoder.prompt.md + encoder-prompt-langextract.md with the examples)?", True):
+        coll = _ask("Collection path under the dropbox (e.g. collections/pfister-notices)",
+                    "collections/pfister-notices")
         coll_dir = cfg.dropbox / coll
         if not coll_dir.is_dir():
-            print(f"  (directory {coll_dir} does not exist — skipping collection files)")
-        else:
-            (coll_dir / "encoder.prompt.md").write_text(
-                f"# Encoder prompt — {description}\n\n(optional: add collection-specific detection rules here.)\n",
-                encoding="utf-8")
-            (coll_dir / "encoder").write_text(enc_id + "\n", encoding="utf-8")
-            print(f"Wrote {coll_dir / 'encoder.prompt.md'} and {coll_dir / 'encoder'}")
+            print(f"  (directory {coll_dir} does not exist — creating it)")
+            coll_dir.mkdir(parents=True, exist_ok=True)
+        (coll_dir / "encoder").write_text(enc_id + "\n", encoding="utf-8")
+        (coll_dir / "encoder.prompt.md").write_text(
+            f"# Encoder prompt — {description}\n\n(optional: add collection-specific detection rules here.)\n",
+            encoding="utf-8")
+        (coll_dir / "encoder-prompt-langextract.md").write_text(
+            f"# Encoder prompt (LangExtract format) — {description}\n\n"
+            f"This file carries the collection-specific schema and few-shot examples. "
+            f"It is composed AFTER the encoder base prompt and after `encoder.prompt.md` "
+            f"(detection rules). It lives next to the source PDFs so it travels with the "
+            f"collection.\n\n## Attributes (this source)\n\n{instructions}\n\n## Examples\n\n{examples_md}\n",
+            encoding="utf-8")
+        print(f"Wrote {coll_dir / 'encoder'}, {coll_dir / 'encoder.prompt.md'} and "
+              f"{coll_dir / 'encoder-prompt-langextract.md'}")
+        body = _BODY_TEMPLATE.format(
+            description=description, instructions=instructions,
+            examples="(see the collection's encoder-prompt-langextract.md)",
+        )
+        out.write_text(front + "\n" + body, encoding="utf-8")
+        print(f"Wrote {out} (generic — examples live in the collection)")
+    else:
+        body = _BODY_TEMPLATE.format(description=description, instructions=instructions,
+                                     examples=examples_md)
+        out.write_text(front + "\n" + body, encoding="utf-8")
+        print(f"\nWrote {out} (examples embedded)")
 
     print("\nDone. Run `pha encode --reprocess` to use the new encoder, or `pha encoder` to check it.")
     return 0

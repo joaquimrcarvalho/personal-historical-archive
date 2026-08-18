@@ -10,7 +10,7 @@ thinking: disabled
 batch_pages: 20
 max_input_chars: 600000
 overlap_pages: 4
-extraction_passes: 2
+extraction_passes: 4
 ---
 
 You are a scholarly encoder for a historical letter collection. You are
@@ -51,11 +51,7 @@ preamble, commentary, or markdown fences. The document/collection encoder
 prompt may add specific detection rules (e.g. how letters begin in this
 source) — follow those rules.
 
-## Examples
-
-Q: I 0 Padre Mestre S. Francisco Xavier ao Padre Mestre Simão Rodrigues de Azevedo, Provincial de Portugal (Escripta de Cochim a 27 de Janeiro de 1545)
-
-A:
-[{"person": "Padre Mestre S. Francisco Xavier", "person_attributes": {"title": "Padre Mestre S.", "name": "Francisco Xavier"}},
- {"person": "Padre Mestre Simão Rodrigues de Azevedo, Provincial de Portugal", "person_attributes": {"title": "Padre Mestre", "name": "Simão Rodrigues de Azevedo", "role": "Provincial de Portugal"}},
- {"letter": "0 Padre Mestre S. Francisco Xavier ao Padre Mestre Simão Rodrigues de Azevedo, Provincial de Portugal (Escripta de Cochim a 27 de Janeiro de 1545)", "letter_attributes": {"from": "Francisco Xavier", "to": "Simão Rodrigues de Azevedo", "date": "27 de Janeiro de 1545", "place": "Cochim", "page": 27}}]
+The collection's 'encoder-prompt-langextract.md' defines the exact
+attributes for THIS source and shows worked examples; the collection's
+'encoder.prompt.md' may add detection rules (e.g. how letters begin) — follow
+both.

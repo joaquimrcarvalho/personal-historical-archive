@@ -29,8 +29,15 @@
 - **Prompt layering**: the palaeographer base prompt is the format authority
   and goes first; document/collection prompts add aspects only
   (e.g. modernizing spelling) and cannot change the output structure. The
-  encoder stage uses stage-qualified `encoder.prompt.md` files; plain
-  `prompt.md` stays the palaeographer prompt.
+  encoder stage composes three layers in order: encoder base prompt
+  (model config + generic framing in `encoders/<id>.md`) → `encoder.prompt.md`
+  (collection detection rules) → `encoder-prompt-langextract.md`
+  (collection schema + few-shot examples, lives next to the source).
+- **The null editor**: editor id `null`/`passthrough` copies the
+  transcription verbatim as the "edited" text (no model call), so documents
+  without a real editor still get `edited-null/` output, both-variant
+  indexing and explicit provenance. With no editor at all, the encoder and
+  indexer fall back to the raw transcription per page.
 - **Encoders output LangExtract-flat JSON** (`{"<class>": "<exact text>",
   "<class>_attributes": {...}}`, one item per class, kinds stored per record);
   `pha encoder --new` is the non-technical wizard that creates encoder files
