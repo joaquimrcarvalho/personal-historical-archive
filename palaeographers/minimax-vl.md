@@ -1,7 +1,7 @@
 ---
-description: MiniMax-M3 online (multimodal, OpenAI-compatible)
+description: MiniMax-M2.5 online (vision, OpenAI-compatible, cheaper than M3)
 base_url: https://api.minimax.io/v1
-model: MiniMax-M3
+model: MiniMax-M2.5
 api_key: "${MINIMAX_API_KEY}"
 temperature: 0.1
 max_tokens: 4096
