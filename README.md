@@ -225,7 +225,7 @@ breaks the load. `pha palaeographer` lists the configured palaeographers.
   never need to be committed. Resolution order: real environment → a
   gitignored `.env` file → the **macOS Keychain** (service `pha`) → empty.
   Store a key safely with `pha key --set VARNAME` (reads the value from stdin,
-  writes to the Keychain, or `.env` if the Keychain is unavailable);
+  writes to the OS secret store, or `.env` if it is unavailable);
   `pha key` shows where each referenced variable resolves. Local servers
   (LM Studio, Ollama) need no key.
 - Every document records which palaeographer extracted it (shown by

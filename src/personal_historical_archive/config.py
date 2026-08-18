@@ -28,8 +28,8 @@ def _expand(value: str) -> str:
         v = os.environ.get(name)
         if not v:
             v = _dotenv().get(name, "")
-        if not v and sys.platform == "darwin":
-            v = _keychain_get(name)
+        if not v:
+            v = _secret_get(name)
         return v or default or ""
 
     return _ENV_RE.sub(repl, value)
@@ -50,32 +50,107 @@ def _dotenv() -> dict[str, str]:
     return _DOTENV
 
 
-def _keychain_get(name: str) -> str:
+# --------------------------------------------------------------------------- native secret stores
+
+def _secret_get(name: str) -> str:
+    """Read a secret from the platform's secure store: macOS Keychain,
+    Linux libsecret (secret-tool), or Windows DPAPI (encrypted blob)."""
     try:
-        r = subprocess.run(
-            ["security", "find-generic-password", "-a", "pha", "-s", name, "-w"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if r.returncode == 0:
-            return r.stdout.strip()
+        if sys.platform == "darwin":
+            r = subprocess.run(
+                ["security", "find-generic-password", "-a", "pha", "-s", name, "-w"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return r.stdout.strip() if r.returncode == 0 else ""
+        if sys.platform.startswith("linux"):
+            r = subprocess.run(
+                ["secret-tool", "lookup", "service", "pha", "key", name],
+                capture_output=True, text=True, timeout=5,
+            )
+            return r.stdout.strip() if r.returncode == 0 else ""
+        if sys.platform == "win32":
+            blob = _dpapi_read(name)
+            return blob.decode() if blob else ""
     except (OSError, subprocess.SubprocessError):
         pass
     return ""
 
 
-def _keychain_set(name: str, value: str) -> bool:
-    """Store a secret in the macOS Keychain (service 'pha')."""
-    if sys.platform != "darwin":
-        return False
+def _secret_set(name: str, value: str) -> bool:
+    """Store a secret in the platform's secure store. Returns False when the
+    store is unavailable (caller falls back to a gitignored .env file)."""
     try:
-        r = subprocess.run(
-            ["security", "add-generic-password", "-a", "pha", "-s", name, "-w", value,
-             "-U"],  # -U: update if it already exists
-            capture_output=True, text=True, timeout=10,
-        )
-        return r.returncode == 0
+        if sys.platform == "darwin":
+            r = subprocess.run(
+                ["security", "add-generic-password", "-a", "pha", "-s", name, "-w", value, "-U"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return r.returncode == 0
+        if sys.platform.startswith("linux"):
+            r = subprocess.run(
+                ["secret-tool", "store", "--label=pha", "service", "pha", "key", name],
+                input=value + "\n", capture_output=True, text=True, timeout=10,
+            )
+            return r.returncode == 0
+        if sys.platform == "win32":
+            _dpapi_write(name, value.encode())
+            return _dpapi_read(name) == value.encode()
     except (OSError, subprocess.SubprocessError):
-        return False
+        pass
+    return False
+
+
+def _dpapi_path(name: str) -> Path:
+    return find_project_root() / "data" / "secrets" / f"{name}.bin"
+
+
+def _dpapi_write(name: str, data: bytes) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+    def to_blob(raw: bytes) -> DATA_BLOB:
+        buf = ctypes.create_string_buffer(raw, len(raw))
+        return DATA_BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
+
+    crypt32 = ctypes.windll.crypt32
+    pin = to_blob(data)
+    pout = DATA_BLOB()
+    if crypt32.CryptProtectData(ctypes.byref(pin), None, None, None, None, 0, ctypes.byref(pout)):
+        try:
+            out = ctypes.string_at(pout.pbData, pout.cbData)
+            path = _dpapi_path(name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(out)
+        finally:
+            ctypes.windll.kernel32.LocalFree(pout.pbData)
+
+
+def _dpapi_read(name: str) -> bytes:
+    import ctypes
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+    def to_blob(raw: bytes) -> DATA_BLOB:
+        buf = ctypes.create_string_buffer(raw, len(raw))
+        return DATA_BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
+
+    path = _dpapi_path(name)
+    if not path.exists():
+        return b""
+    crypt32 = ctypes.windll.crypt32
+    pin = to_blob(path.read_bytes())
+    pout = DATA_BLOB()
+    if crypt32.CryptUnprotectData(ctypes.byref(pin), None, None, None, None, 0, ctypes.byref(pout)):
+        try:
+            return ctypes.string_at(pout.pbData, pout.cbData)
+        finally:
+            ctypes.windll.kernel32.LocalFree(pout.pbData)
+    return b""
 
 
 def find_project_root(start: Path | None = None) -> Path:
