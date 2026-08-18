@@ -237,6 +237,15 @@ class Encoder:
     max_input_chars: int = 600_000
     overlap_pages: int = 4
     extraction_passes: int = 1
+    # Deterministic entry detection (fast path). When both are set, pages whose
+    # text matches candidate_pattern (e.g. a lone Roman numeral line) and whose
+    # following lines match candidate_header (e.g. a 'Name aos Name' header)
+    # are treated as entry starts; the model then extracts each entry from its
+    # own small span (page told to it) instead of hunting the whole document.
+    # Without these, detection falls back to a cheap model scan per chunk
+    # driven by the detection rules in the collection's encoder.prompt.md.
+    candidate_pattern: str | None = None
+    candidate_header: str | None = None
 
 
 @dataclass
@@ -573,6 +582,8 @@ def _encoder_from_frontmatter(enc_id: str, text: str, file: Path) -> Encoder | N
         max_input_chars=int(fm.get("max_input_chars", 600_000)),
         overlap_pages=int(fm.get("overlap_pages", 4)),
         extraction_passes=int(fm.get("extraction_passes", 1)),
+        candidate_pattern=str(fm.get("candidate_pattern", "") or "") or None,
+        candidate_header=str(fm.get("candidate_header", "") or "") or None,
     )
 
 

@@ -57,6 +57,72 @@ def _raw_sha(text: str) -> str:
     return hashlib.sha256((text or "").encode()).hexdigest()
 
 
+_HEADER_WINDOW = 4  # lines after a candidate start line to look for a header
+
+
+def _regex_candidates(texts: list, encoder: Encoder) -> list[int]:
+    """Regex fast-path: pages whose text matches the encoder's
+    candidate_pattern (e.g. a lone Roman numeral line) and whose following
+    lines match candidate_header (e.g. a 'Name aos Name' header)."""
+    if not encoder.candidate_pattern:
+        return []
+    try:
+        re_start = re.compile(encoder.candidate_pattern, re.MULTILINE)
+        re_header = re.compile(encoder.candidate_header or "", re.MULTILINE)
+    except re.error:
+        return []
+    hits: list[int] = []
+    for pno, text in texts:
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            if re_start.search(line):
+                window = lines[i + 1 : i + 1 + _HEADER_WINDOW]
+                if re_header.pattern and any(re_header.search(w) for w in window):
+                    hits.append(pno)
+                    break
+    return hits
+
+
+def detect_entry_pages(texts: list, encoder: Encoder) -> list[int]:
+    """Determine where entries start, two ways:
+    - regex fast-path from the encoder config (candidate_pattern/header), or
+    - (future) a cheap model scan per chunk driven by the collection's
+      detection rules in encoder.prompt.md. Today the regex path is the
+      general configurable mechanism; a collection without patterns falls
+      back to no detection (single-pass)."""
+    return _regex_candidates(texts, encoder)
+
+
+def _build_entry_spans(texts: list, starts: list[int],
+                       max_pages: int = 30) -> list[tuple[list, str, int | None]]:
+    """Slice the document into per-entry spans: each span runs from one
+    detected start page through the pages before the NEXT start (so the entry
+    and its body are seen whole). A span is capped at `max_pages` so a long
+    entry never swallows the whole document; the pages beyond the cap (up to
+    the next start, or the end) become a no-hint continuation span so no page
+    is dropped."""
+    idx = [i for i, (pno, _) in enumerate(texts) if pno in set(starts)]
+    calls: list[tuple[list, str, int | None]] = []
+    if idx and idx[0] > 0:  # pages before the first start (front matter etc.)
+        pre = texts[: idx[0]]
+        block = "\n\n".join(f"--- page {p_} ---\n{t}" for p_, t in pre)
+        calls.append((pre, block, None))
+    for k, j in enumerate(idx):
+        end = idx[k + 1] if k + 1 < len(idx) else len(texts)
+        limit = min(end, j + max_pages)
+        span = texts[j:limit]
+        block = "\n\n".join(f"--- page {p_} ---\n{t}" for p_, t in span)
+        calls.append((span, block, texts[j][0]))
+        if limit < end:  # continuation beyond the cap (no new entry starts here)
+            rest = texts[limit:end]
+            block2 = "\n\n".join(f"--- page {p_} ---\n{t}" for p_, t in rest)
+            calls.append((rest, block2, None))
+    if not calls:
+        block = "\n\n".join(f"--- page {p_} ---\n{t}" for p_, t in texts)
+        calls = [(texts, block, None)]
+    return calls
+
+
 # --------------------------------------------------------------------------- scan lock
 
 def _pid_alive(pid: int) -> bool:
@@ -935,42 +1001,81 @@ def encode_document(
     client, _ = make_encoder_client(cfg, resolved)
     records: list[dict] = []
     try:
-        # The encoder reads the document as ONE concatenated text so records
-        # that span several pages (e.g. a letter whose header is on one page
-        # and body on the next) are seen whole. Single call when it fits the
-        # model window; otherwise overlapping chunks + dedupe.
-        concat = "\n\n".join(f"--- page {pno} ---\n{t}" for pno, t in texts)
-        if len(concat) <= encoder.max_input_chars:
-            calls = [(texts, concat)]
+        # Two-stage encoding:
+        #   1. DETECT where entries start (regex fast-path from the encoder
+        #      config, else a cheap model scan per chunk driven by the
+        #      collection's detection rules).
+        #   2. EXTRACT each entry in its own small call with the page TOLD to
+        #      the model ("an entry starts at page N — extract only it"), a
+        #      confirmation task instead of hunting a huge document. This is
+        #      deterministic on recall (detection) and reliable on precision
+        #      (small per-entry context) — no multi-pass / merging needed.
+        # Fallback: no detection -> single whole-document pass or overlapping
+        # chunks (the pre-two-stage behaviour).
+        starts = detect_entry_pages(texts, encoder)
+        if starts:
+            calls = _build_entry_spans(texts, starts)  # (span_texts, block, start_page|None)
         else:
-            batch = max(1, encoder.batch_pages)
-            ov = max(0, min(encoder.overlap_pages, batch - 1))
-            calls = []
-            start = 0
-            while start < len(texts):
-                chunk = texts[start : start + batch]
-                calls.append((chunk, "\n\n".join(f"--- page {pno} ---\n{t}" for pno, t in chunk)))
-                if start + batch >= len(texts):
-                    break
-                start += batch - ov
+            concat = "\n\n".join(f"--- page {pno} ---\n{t}" for pno, t in texts)
+            if len(concat) <= encoder.max_input_chars:
+                calls = [(texts, concat, None)]
+            else:
+                batch = max(1, encoder.batch_pages)
+                ov = max(0, min(encoder.overlap_pages, batch - 1))
+                calls = []
+                start = 0
+                while start < len(texts):
+                    chunk = texts[start : start + batch]
+                    calls.append((chunk, "\n\n".join(f"--- page {pno} ---\n{t}" for pno, t in chunk), None))
+                    if start + batch >= len(texts):
+                        break
+                    start += batch - ov
         seen: set = set()
         passes = max(1, encoder.extraction_passes)
         for pass_num in range(passes):
             if verbose and passes > 1:
                 print(f"  pass {pass_num + 1}/{passes}", flush=True)
-            for chunk, block in calls:
+            for chunk, block, start_page in calls:
+                entry_hint = (
+                    f"\n\nAn entry STARTS at page {start_page} in the text below.\n"
+                    f"Extract ONLY that entry (and its sub-records). The page\n"
+                    f"attribute of its main record MUST be {start_page}.\n"
+                    f"If page {start_page} is not really an entry after all, return []."
+                ) if start_page else ""
                 prompt = (
-                    f"{base_prompt}\n\n"
+                    f"{base_prompt}{entry_hint}\n\n"
                     f"Document: {doc['filename']}\nPages: {chunk[0][0]}-{chunk[-1][0]}\n\n"
                     f"{block}"
                 )
                 if verbose:
-                    mode = "single-pass" if len(calls) == 1 else "chunked"
+                    mode = "entry-spans" if starts else ("single-pass" if len(calls) == 1 else "chunked")
                     print(f"  encoding pages {chunk[0][0]}-{chunk[-1][0]} "
                           f"({mode}, {len(block)} chars)", flush=True)
-                out = client.chat_text(encoder.model, prompt, encoder.temperature,
-                                       encoder.max_tokens, thinking=encoder.thinking)
-                parsed = _parse_json_array(out)
+                # Retry empty/unparseable responses: models sometimes return
+                # '' or prose instead of the JSON array (flaky); a couple of
+                # retries fix most of it. A generous max_tokens matters:
+                # reasoning models emit a <think> block even with thinking
+                # disabled, and a tight cap makes them return [] rather than
+                # risk truncating their answer.
+                parsed: list = []
+                for attempt in range(3):
+                    out = client.chat_text(encoder.model, prompt, encoder.temperature,
+                                           max(8192, encoder.max_tokens),
+                                           thinking=encoder.thinking)
+                    parsed = _parse_json_array(out)
+                    if parsed or not out.strip():
+                        break
+                    if verbose:
+                        print(f"    (retry {attempt + 1}: response {len(out)} chars not parseable, "
+                              f"head: {out[:120]!r})", flush=True)
+                    if start_page and attempt >= 1:
+                        # The detector flagged this page; drop the escape
+                        # hatch and insist, in case the model is being overly
+                        # conservative (returning [] instead of extracting).
+                        prompt = prompt.replace(
+                            "If page {0} is not really an entry after all, return [].".format(start_page),
+                            "A detector flagged page {0} as an entry start. Extract it.".format(start_page),
+                        )
                 if verbose and not parsed and out.strip():
                     print(f"    (model returned no parseable JSON array; "
                           f"response {len(out)} chars, head: {out[:160]!r})", flush=True)
