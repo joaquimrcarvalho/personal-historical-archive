@@ -348,6 +348,7 @@ def ingest_file(
             text = client.chat_vision(
                 palaeographer.model, prompt_txt, img,
                 palaeographer.temperature, palaeographer.max_tokens,
+                thinking=palaeographer.thinking,
             )
             db.set_page_result(conn, page_id, raw_text=text)
             consecutive_failures = 0
@@ -574,7 +575,8 @@ def edit_document(
                 f"Transcription to edit:\n{raw}"
             )
             try:
-                out = client.chat_text(editor.model, prompt, editor.temperature, editor.max_tokens)
+                out = client.chat_text(editor.model, prompt, editor.temperature, editor.max_tokens,
+                                       thinking=editor.thinking)
                 db.set_page_edit(conn, p["id"], resolved, text=out, raw_sha=_raw_sha(raw))
                 edited += 1
             except ModelError as e:

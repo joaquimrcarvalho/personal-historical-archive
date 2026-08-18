@@ -53,6 +53,7 @@ class Palaeographer:
     timeout_s: int
     prompt_text: str
     prompt_file: Path | None = None
+    thinking: bool = True
 
     @property
     def prompt_source(self) -> str:
@@ -78,6 +79,7 @@ class Editor:
     timeout_s: int
     prompt_text: str
     prompt_file: Path | None = None
+    thinking: bool = True
 
 
 @dataclass
@@ -354,6 +356,7 @@ def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path) -> Palae
         temperature=float(fm.get("temperature", 0.1)),
         max_tokens=int(fm.get("max_tokens", 4096)),
         timeout_s=int(fm.get("timeout_s", 900)),
+        thinking=_thinking(fm),
         prompt_text=body,
         prompt_file=file,
     )
@@ -370,9 +373,17 @@ def _editor_from_frontmatter(ed_id: str, text: str, file: Path) -> Editor | None
         temperature=float(fm.get("temperature", 0.1)),
         max_tokens=int(fm.get("max_tokens", 4096)),
         timeout_s=int(fm.get("timeout_s", 300)),
+        thinking=_thinking(fm),
         prompt_text=body,
         prompt_file=file,
     )
+
+
+def _thinking(fm: dict) -> bool:
+    v = fm.get("thinking", True)
+    if isinstance(v, str):
+        return v.strip().lower() not in ("disabled", "false", "off", "no", "0")
+    return bool(v)
 
 
 def _p(root: Path, s: str) -> Path:

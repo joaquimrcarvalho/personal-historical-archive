@@ -23,6 +23,17 @@ _MIME = {
 }
 
 
+def _strip_think(text: str) -> str:
+    """Remove a leading reasoning block (<think>...</think>) that some
+    reasoning models (e.g. MiniMax-M3) emit before the actual answer."""
+    t = text.strip()
+    if t.startswith("<think>"):
+        end = t.find("</think>")
+        if end != -1:
+            return t[end + len("</think>"):].strip()
+    return t
+
+
 class ModelClient:
     """OpenAI-compatible client — works with LM Studio, Ollama (/v1), llama.cpp,
     vLLM, and remote APIs (OpenAI, OpenRouter, Groq, ...) that need an api_key."""
@@ -96,6 +107,7 @@ class ModelClient:
         image_path: str | Path,
         temperature: float = 0.1,
         max_tokens: int = 4096,
+        thinking: bool = True,
     ) -> str:
         image_path = Path(image_path)
         b64 = base64.b64encode(image_path.read_bytes()).decode()
@@ -115,9 +127,11 @@ class ModelClient:
             "max_tokens": max_tokens,
             "stream": False,
         }
+        if not thinking:
+            payload["thinking"] = {"type": "disabled"}  # reasoning models (e.g. MiniMax-M3)
         data = self._post("/chat/completions", payload)
         try:
-            return data["choices"][0]["message"]["content"].strip()
+            return _strip_think(data["choices"][0]["message"]["content"])
         except (KeyError, IndexError, AttributeError) as e:
             raise ModelError(f"Unexpected chat response: {data!r}") from e
 
@@ -127,6 +141,7 @@ class ModelClient:
         prompt: str,
         temperature: float = 0.1,
         max_tokens: int = 4096,
+        thinking: bool = True,
     ) -> str:
         """Text-only completion (no image) — used by editors to transform
         transcriptions with a DIFFERENT model than the palaeographer."""
@@ -137,9 +152,11 @@ class ModelClient:
             "max_tokens": max_tokens,
             "stream": False,
         }
+        if not thinking:
+            payload["thinking"] = {"type": "disabled"}
         data = self._post("/chat/completions", payload)
         try:
-            return data["choices"][0]["message"]["content"].strip()
+            return _strip_think(data["choices"][0]["message"]["content"])
         except (KeyError, IndexError, AttributeError) as e:
             raise ModelError(f"Unexpected chat response: {data!r}") from e
 

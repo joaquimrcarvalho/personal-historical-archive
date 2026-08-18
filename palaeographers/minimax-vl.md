@@ -6,6 +6,7 @@ api_key: "${MINIMAX_API_KEY}"
 temperature: 0.1
 max_tokens: 4096
 timeout_s: 300
+thinking: disabled
 ---
 
 You are a palaeographer specialised in Western European manuscripts of the
