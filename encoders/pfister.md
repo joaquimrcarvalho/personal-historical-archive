@@ -10,7 +10,9 @@ thinking: disabled
 batch_pages: 20
 max_input_chars: 600000
 overlap_pages: 4
-extraction_passes: 2
+extraction_passes: 1
+candidate_pattern: "^[*#\\s]*\\d{1,3}\\.[*#\\s]*$"
+candidate_header: "^(?:#{1,3}\\s*)?(?:LE\\s+)?(?:P\\.|FR\\.|MGR|SAINT|ST\\.)?\\s*[A-ZÀÂÉÈÊËÎÏÔÛÙÇŒ][A-ZÀÂÉÈÊËÎÏÔÛÙÇŒ'’\\-\\.\\s]{3,}\\.\\s*$"
 ---
 
 You are a scholarly encoder for a biographical-bibliographical dictionary.

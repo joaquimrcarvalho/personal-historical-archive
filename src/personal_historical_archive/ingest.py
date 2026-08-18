@@ -57,13 +57,19 @@ def _raw_sha(text: str) -> str:
     return hashlib.sha256((text or "").encode()).hexdigest()
 
 
-_HEADER_WINDOW = 4  # lines after a candidate start line to look for a header
+_HEADER_WINDOW = 6  # lines after a candidate start line to look for a header
+
+
+def _line_matches(re_header, line: str) -> bool:
+    return bool(re_header.pattern) and bool(re_header.search(line))
 
 
 def _regex_candidates(texts: list, encoder: Encoder) -> list[int]:
-    """Regex fast-path: pages whose text matches the encoder's
-    candidate_pattern (e.g. a lone Roman numeral line) and whose following
-    lines match candidate_header (e.g. a 'Name aos Name' header)."""
+    """Regex fast-path: pages where a line matches the encoder's
+    candidate_pattern (e.g. a lone Roman numeral or a bare notice number) and
+    a following NON-BLANK line (or a 1-2 line wrapped name) matches
+    candidate_header (e.g. a 'Name aos Name' letter header or an ALL-CAPS
+    biography name that may wrap across two lines)."""
     if not encoder.candidate_pattern:
         return []
     try:
@@ -75,11 +81,17 @@ def _regex_candidates(texts: list, encoder: Encoder) -> list[int]:
     for pno, text in texts:
         lines = text.splitlines()
         for i, line in enumerate(lines):
-            if re_start.search(line):
-                window = lines[i + 1 : i + 1 + _HEADER_WINDOW]
-                if re_header.pattern and any(re_header.search(w) for w in window):
-                    hits.append(pno)
-                    break
+            if not re_start.search(line):
+                continue
+            window = [w for w in lines[i + 1 : i + 1 + _HEADER_WINDOW] if w.strip()]
+            # header is the first caps line; if it has no trailing '.', it may
+            # wrap: try "first + second caps line" as the header too.
+            ok = bool(window) and _line_matches(re_header, window[0])
+            if not ok and len(window) >= 2:
+                ok = _line_matches(re_header, window[0] + " " + window[1])
+            if ok:
+                hits.append(pno)
+                break
     return hits
 
 
