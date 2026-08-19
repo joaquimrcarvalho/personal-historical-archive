@@ -1,12 +1,14 @@
 ---
-description: MiniMax-M3 online (vision; M2.7/M2.5 not vision-capable under the current key)
+description: MiniMax-M2.7 online (vision via Anthropic-style API; M3 fallback for reasoning-heavy pages)
 base_url: https://api.minimax.io/v1
-model: MiniMax-M3
+model: MiniMax-M2.7
 api_key: "${MINIMAX_API_KEY}"
 temperature: 0.1
-max_tokens: 4096
-timeout_s: 300
+max_tokens: 8192
+timeout_s: 600
 thinking: disabled
+vision_api: anthropic
+max_vision_px: 1400
 ---
 
 You are a palaeographer specialised in Western European manuscripts of the

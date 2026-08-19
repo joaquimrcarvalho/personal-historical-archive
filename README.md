@@ -66,6 +66,11 @@ structured records grounded to the page each one starts on.
 - Runs locally by default; **remote OpenAI-compatible models** (e.g. MiniMax)
   are supported for palaeographers and editors via an API key
   (`pha key --set` stores it in the OS secret store).
+- **MiniMax vision note**: MiniMax's OpenAI-compatible endpoint silently drops
+  `image_url` blocks, so vision models need `vision_api: anthropic` in the
+  palaeographer file (image embedded as a plain-text data URI on
+  `/anthropic/v1/messages`) and a modest `max_vision_px` (M2.7's vision
+  context is small — ~1400 works). See `palaeographers/minimax-vl.md`.
 
 ## Quickstart
 

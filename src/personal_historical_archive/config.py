@@ -187,6 +187,16 @@ class Palaeographer:
     prompt_text: str
     prompt_file: Path | None = None
     thinking: bool = True
+    # vision_api: how images are sent to the model.
+    #   "openai"   (default) - OpenAI-style /chat/completions with an
+    #              image_url content block. Works with LM Studio, Ollama, vLLM.
+    #   "anthropic" - Anthropic-style endpoint (MiniMax /anthropic/v1/messages)
+    #              with the image embedded as a plain-text data URI in content.
+    #              MiniMax's OpenAI-compatible endpoint silently drops
+    #              image_url blocks, so M2.7 vision needs this.
+    #              max_vision_px caps the image (M2.7's vision context is small).
+    vision_api: str = "openai"
+    max_vision_px: int = 1800
 
     @property
     def prompt_source(self) -> str:
@@ -538,6 +548,8 @@ def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path) -> Palae
         thinking=_thinking(fm),
         prompt_text=body,
         prompt_file=file,
+        vision_api=str(fm.get("vision_api", "openai")).strip().lower() or "openai",
+        max_vision_px=int(fm.get("max_vision_px", 1800)),
     )
 
 
@@ -614,6 +626,12 @@ _PAL_SAMPLE = """---
 #      follow when transcribing (your palaeographic expertise).
 #   4. Save — the palaeographer is ready. Select it per document/collection
 #      with a 'palaeographer' file next to the document.
+# Optional front matter:
+#   vision_api: "openai" (default) or "anthropic" — MiniMax models need
+#     "anthropic" (/anthropic/v1/messages with the image as a plain-text data
+#     URI; their OpenAI-compatible endpoint silently drops image_url blocks).
+#   max_vision_px: longest image edge sent to the model (MiniMax's vision
+#     context is small; default 1800, use ~1400 for MiniMax).
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example palaeographer — edit me
 base_url: http://127.0.0.1:1234/v1
