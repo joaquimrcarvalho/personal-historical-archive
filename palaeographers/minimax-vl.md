@@ -8,7 +8,8 @@ max_tokens: 8192
 timeout_s: 600
 thinking: disabled
 api_style: anthropic
-max_vision_px: 1400
+max_vision_px: 1800
+vision_jpeg_quality: 55
 ---
 
 You are a palaeographer specialised in Western European manuscripts of the

@@ -455,6 +455,7 @@ def ingest_file(
                 palaeographer.temperature, palaeographer.max_tokens,
                 thinking=palaeographer.thinking,
                 max_vision_px=palaeographer.max_vision_px,
+                jpeg_quality=palaeographer.vision_jpeg_quality,
             )
             db.set_page_result(conn, page_id, raw_text=text)
             consecutive_failures = 0

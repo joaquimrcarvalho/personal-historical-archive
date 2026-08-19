@@ -73,12 +73,15 @@ structured records grounded to the page each one starts on.
     (`/anthropic/v1/messages`; needed for MiniMax, whose OpenAI-compatible
     endpoint silently drops `image_url` blocks — the image goes as a
     plain-text data URI);
-  - `max_vision_px` (palaeographer) — caps the longest image edge for models
-    with a small vision context (MiniMax M2.7 works well at ~1400);
+  - `max_vision_px` + `vision_jpeg_quality` (palaeographer): in the
+    anthropic form the base64 travels as TEXT (~2 chars/token, a full render
+    ~= 190k tokens), so MiniMax keeps full 1800px resolution at q55 (~150k
+    tokens) instead of downsizing — see `palaeographers/minimax-vl.md`. Local
+    openai-style images are sent as rendered, untouched;
   - `context_tokens` (encoder) — the model's input window; the
     single-pass/chunked decision is derived from it (~4 chars/token,
     override with `max_input_chars`). MiniMax M2.5 = 200000; a local 7B
-    might be 32768. See `palaeographers/minimax-vl.md` and the samples.
+    might be 32768. See the samples.
 
 ## Quickstart
 

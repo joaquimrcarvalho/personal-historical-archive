@@ -12,8 +12,14 @@
 #     calls. MiniMax models need "anthropic" (/anthropic/v1/messages with the
 #     image as a plain-text data URI; their OpenAI-compatible endpoint
 #     silently drops image_url blocks).
-#   max_vision_px: longest image edge sent to the model (MiniMax's vision
-#     context is small; default 1800, use ~1400 for MiniMax).
+#   max_vision_px: longest image edge (default 1800 = our render cap, so
+#     local models are sent full-size untouched). Only models that need it
+#     (e.g. MiniMax M2.7) set a lower value.
+#   vision_jpeg_quality: JPEG quality when re-encoding for the anthropic
+#     path (the image travels as base64 TEXT, ~2 chars/token — a full render
+#     is ~190k tokens). Lower quality keeps full resolution at a smaller
+#     token cost: q55 @ 1800px ~= 150k tokens. Openai-style images are sent
+#     as rendered, untouched.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example palaeographer — edit me
 base_url: http://127.0.0.1:1234/v1

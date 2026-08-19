@@ -39,52 +39,65 @@ def _strip_think(text: str) -> str:
     return t
 
 
-def _resize_image_b64(image_path: Path, max_side: int) -> tuple[str, str]:
-    """Return (base64, mime) for an image, resized so its longest edge is
-    <= max_side. MiniMax's M2.x vision context is small — full-resolution
-    renders (e.g. 1126x1800) exceed it ("context window exceeds limit").
+def _prepare_image_b64(image_path: Path, max_side: int, jpeg_quality: int = 88) -> tuple[str, str]:
+    """Return (base64, mime) for a page image, re-encoded for the
+    anthropic-style path where the image travels as base64 TEXT (~2
+    chars/token — a full-res render can cost ~190k input tokens).
+
+    - if the longest edge exceeds `max_side`, it is resized down;
+    - the JPEG is always re-encoded at `jpeg_quality`, so a user can keep
+      FULL resolution at a lower quality (q55 at 1800px ~= 150k tokens vs
+      q88 ~= 195k) instead of losing resolution to fit the context.
+
     Uses `sips` on macOS (stdlib has no image resizing); falls back to the
-    original bytes if resizing is unavailable or the image is already small.
+    original bytes if re-encoding is unavailable.
     """
     mime = _MIME.get(image_path.suffix.lower(), "image/jpeg")
+    longest = _jpeg_longest_edge(image_path) if image_path.suffix.lower() == ".jpg" else max_side
+    if longest <= max_side:
+        return _reencode_b64(image_path, max_side, jpeg_quality, mime)
+    return _reencode_b64(image_path, max_side, jpeg_quality, mime)
+
+
+def _jpeg_longest_edge(image_path: Path) -> int:
     try:
         import struct
 
         with open(image_path, "rb") as f:
             head = f.read(2)
-            if head == b"\xff\xd8":  # JPEG: parse SOF for dimensions
-                f.seek(2)
-                while True:
+            if head != b"\xff\xd8":
+                return 0
+            f.seek(2)
+            while True:
+                marker = f.read(1)
+                while marker != b"\xff":
                     marker = f.read(1)
-                    while marker != b"\xff":
-                        marker = f.read(1)
-                    while marker == b"\xff":
-                        marker = f.read(1)
-                    if marker in (b"\xc0", b"\xc1", b"\xc2", b"\xc3"):
-                        f.read(3)
-                        h, w = struct.unpack(">HH", f.read(4))
-                        break
-                    else:
-                        ln = struct.unpack(">H", f.read(2))[0]
-                        f.seek(ln - 2, 1)
-                longest = max(w, h)
-            else:
-                longest = max_side  # unknown format: don't resize
+                while marker == b"\xff":
+                    marker = f.read(1)
+                if marker in (b"\xc0", b"\xc1", b"\xc2", b"\xc3"):
+                    f.read(3)
+                    h, w = struct.unpack(">HH", f.read(4))
+                    return max(w, h)
+                ln = struct.unpack(">H", f.read(2))[0]
+                f.seek(ln - 2, 1)
     except (OSError, struct.error):
-        longest = max_side
-    if longest <= max_side:
-        return base64.b64encode(image_path.read_bytes()).decode(), mime
-    out = image_path.with_name(f"{image_path.stem}__r{max_side}.jpg")
+        return 0
+
+
+def _reencode_b64(image_path: Path, max_side: int, jpeg_quality: int, mime: str) -> tuple[str, str]:
+    """Re-encode via sips (resize to <=max_side, JPEG at jpeg_quality) and
+    base64 it. Falls back to the original bytes if sips is unavailable."""
+    out = image_path.with_name(f"{image_path.stem}__enc.jpg")
     try:
         import subprocess
 
         subprocess.run(
             ["sips", "-Z", str(max_side), "-s", "format", "jpeg",
-             "-s", "formatOptions", "90", str(image_path), "--out", str(out)],
+             "-s", "formatOptions", str(jpeg_quality), str(image_path), "--out", str(out)],
             capture_output=True, check=True, timeout=60,
         )
         return base64.b64encode(out.read_bytes()).decode(), "image/jpeg"
-    except Exception:  # noqa: BLE001 - resize failed; send original
+    except Exception:  # noqa: BLE001 - re-encode failed; send original
         return base64.b64encode(image_path.read_bytes()).decode(), mime
     finally:
         try:
@@ -228,6 +241,7 @@ class ModelClient:
         max_tokens: int = 4096,
         thinking: bool = True,
         max_vision_px: int = 1800,
+        jpeg_quality: int = 88,
     ) -> str:
         """Vision call. The wire format follows self.api_style:
 
@@ -236,12 +250,14 @@ class ModelClient:
         - "anthropic": /anthropic/v1/messages with the image embedded as a
           PLAIN-TEXT data URI in content (MiniMax's OpenAI-compatible
           endpoint silently drops image_url blocks, so their vision requires
-          this form); the image is resized to max_vision_px because many
-          vision models have a small image context.
+          this form). The image is re-encoded via `_prepare_image_b64`
+          (resized to max_vision_px and re-compressed at jpeg_quality) because
+          in this form the base64 travels as TEXT (~2 chars/token) and a full
+          render can exceed the model's context window.
         """
         image_path = Path(image_path)
         if self.api_style == "anthropic":
-            b64, mime = _resize_image_b64(image_path, max_vision_px)
+            b64, mime = _prepare_image_b64(image_path, max_vision_px, jpeg_quality)
             payload = {
                 "model": model,
                 "max_tokens": max_tokens,

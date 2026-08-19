@@ -199,6 +199,13 @@ class Palaeographer:
     # image context (e.g. MiniMax M2.7 works well at ~1400).
     api_style: str = "openai"
     max_vision_px: int = 1800
+    # vision_jpeg_quality: JPEG quality used when re-encoding the page for the
+    # anthropic-style path (the image travels as base64 TEXT, ~2 chars/token,
+    # so a full-res render can cost ~190k input tokens). Lower quality keeps
+    # full resolution while shrinking the base64: q55 at 1800px ~= 150k tokens
+    # vs q88 ~= 195k. Only affects re-encoding for anthropic-style models;
+    # openai-style images (LM Studio, qwen) are sent as rendered, untouched.
+    vision_jpeg_quality: int = 88
 
     @property
     def prompt_source(self) -> str:
@@ -570,6 +577,7 @@ def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path) -> Palae
         prompt_file=file,
         api_style=str(fm.get("api_style", "openai")).strip().lower() or "openai",
         max_vision_px=int(fm.get("max_vision_px", 1800)),
+        vision_jpeg_quality=int(fm.get("vision_jpeg_quality", 88)),
     )
 
 
@@ -654,8 +662,14 @@ _PAL_SAMPLE = """---
 #     calls. MiniMax models need "anthropic" (/anthropic/v1/messages with the
 #     image as a plain-text data URI; their OpenAI-compatible endpoint
 #     silently drops image_url blocks).
-#   max_vision_px: longest image edge sent to the model (MiniMax's vision
-#     context is small; default 1800, use ~1400 for MiniMax).
+#   max_vision_px: longest image edge (default 1800 = our render cap, so
+#     local models are sent full-size untouched). Only models that need it
+#     (e.g. MiniMax M2.7) set a lower value.
+#   vision_jpeg_quality: JPEG quality when re-encoding for the anthropic
+#     path (the image travels as base64 TEXT, ~2 chars/token — a full render
+#     is ~190k tokens). Lower quality keeps full resolution at a smaller
+#     token cost: q55 @ 1800px ~= 150k tokens. Openai-style images are sent
+#     as rendered, untouched.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example palaeographer — edit me
 base_url: http://127.0.0.1:1234/v1
