@@ -356,7 +356,9 @@ dropbox/collections/pfister-notices/encoders/
 
 A document with several structural sections defines one encoder per section;
 `pha encode` runs them **in page order** (`pages:` front matter, whole-doc
-encoders last).
+encoders last). `pages:` uses **PDF page numbers** — the position in the PDF,
+NOT the number printed on the page (e.g. Pfister's chronological table is
+printed i–xv but occupies PDF pages 1-15).
 
 - `pha encode` runs every encoder found next to a document; `pha encoder
   [file]` shows resolution.

@@ -62,10 +62,14 @@ Xavier' — should I use that?" Only use what the text actually contains.
 
 ### Step 7 — produce the encoder file
 When the historian is happy, output the COMPLETE encoder file in a single
-code block, ready to save. Front matter fields and body exactly as below
-(keep the `description` from Step 1, `base_url`/`model` from the historian's
-preferred model — default to MiniMax-M2.5 online; `api_key` as
-"${MINIMAX_API_KEY}" if online, or empty for local LM Studio):
+code block, ready to save. It goes in an `encoders/` folder NEXT TO THE
+SOURCE: `dropbox/collections/COLX/encoders/<name>.md` (with
+`<name>.prompt.md` for detection rules and `<name>.langextract.md` for the
+schema + examples), so the encoder travels with the documents. Front matter
+fields and body exactly as below (keep the `description` from Step 1,
+`base_url`/`model` from the historian's preferred model — default to
+MiniMax-M2.5 online; `api_key` as "${MINIMAX_API_KEY}" if online, or empty
+for local LM Studio):
 
 ```markdown
 ---
@@ -78,9 +82,10 @@ max_tokens: 4096
 timeout_s: 600
 thinking: disabled
 batch_pages: 20
-max_input_chars: 600000
+context_tokens: 200000
 overlap_pages: 4
 extraction_passes: 2
+pages: <optional: PDF page numbers this encoder handles, e.g. 1-15>
 ---
 
 <Write 2-4 sentences describing the task in plain words: what the documents
@@ -107,6 +112,12 @@ Q: <sample 2, verbatim>
 A:
 [<the JSON array you built for sample 2>]
 ```
+
+> `pages` uses **PDF page numbers** — the position in the PDF, NOT the number
+> printed on the page. E.g. Pfister's chronological table is printed i–xv but
+> occupies PDF pages 1-15, so `pages: 1-15`. A document with several
+> structure types gets one encoder file per type (table.md, biographies.md,
+> ...), each with its own `pages`; they run in page order.
 
 ## Hard rules
 

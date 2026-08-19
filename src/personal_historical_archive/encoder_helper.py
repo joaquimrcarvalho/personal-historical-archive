@@ -369,6 +369,62 @@ def _instructions_from_classes(classes: list[dict]) -> str:
 
 # --------------------------------------------------------------------------- main
 
+def _test_encoder(cfg, model: dict, description: str, classes: list[dict],
+                  samples: list[tuple[str, list]], enc_name: str) -> bool:
+    """Compose the encoder prompt the way encode_document will and run it
+    against a real page, so the historian sees actual records before saving.
+    Returns True if the user is happy, False to iterate."""
+    instructions = _instructions_from_classes(classes)
+    examples_md = _render_examples(samples)
+    body = _BODY_TEMPLATE.format(description=description, instructions=instructions,
+                                 examples=examples_md)
+    while True:
+        sample = _pick_sample(cfg)
+        if not sample:
+            print("  (no test text — skipping test)")
+            return True
+        prompt = f"{body}\n\nDocument: (test page)\nPages: (sample)\n\n{sample}"
+        print(f"\nTesting the encoder against this text ({len(sample)} chars) ...", flush=True)
+        try:
+            out = _call_model(model, prompt)
+        except Exception as e:  # noqa: BLE001
+            print(f"  (test call failed: {e})")
+            return _ask_yesno("Save the encoder anyway?", True)
+        items = _parse_json_array(out)
+        if not items:
+            print("  The model returned no parseable records for this test page:")
+            print(f"    {out[:200]!r}")
+            if not _ask_yesno("Retry with a different page?", True):
+                return _ask_yesno("Save the encoder anyway?", True)
+            continue
+        print("\nRecords extracted from the test page:")
+        for i, item in enumerate(items, 1):
+            if not isinstance(item, dict):
+                continue
+            for k, v in item.items():
+                if k.endswith("_attributes") or k.endswith("_index"):
+                    continue
+                attrs = item.get(k + "_attributes") or {}
+                print(f"  {i}. {k}: {str(v)[:60]!r} {attrs}")
+        if _ask_yesno("\nDoes this look right?", True):
+            return True
+        if not _ask_yesno("Adjust classes/attributes and retest?", True):
+            return _ask_yesno("Save the encoder anyway?", True)
+        # let the user tweak attributes, then loop to retest
+        print("Classes/attributes currently:")
+        for c in classes:
+            print(f"  {c['class']}: {', '.join(str(a) for a in c.get('attributes') or [])}")
+        keep = _ask("Edit attributes (class=attr1,attr2; ...) or leave empty to keep", "")
+        if keep.strip():
+            for spec in keep.split(";"):
+                if "=" not in spec:
+                    continue
+                cname, attrs = spec.split("=", 1)
+                for c in classes:
+                    if c["class"] == cname.strip():
+                        c["attributes"] = [a.strip() for a in attrs.split(",") if a.strip()]
+
+
 def run(cfg: Config) -> int:
     print("pha encoder new — create an encoder by answering a few questions.\n")
 
@@ -456,6 +512,12 @@ def run(cfg: Config) -> int:
         samples.append((sample, items))
         want_more = _ask_yesno("\nAdd another sample (recommended for variety)?", False)
 
+    # test-run step: compose the prompt as encode_document will and try it on
+    # a real page, so the historian sees actual records before storing.
+    print("\n--- test-run ---")
+    if _ask_yesno("Test this encoder against a real page before saving?", True):
+        _test_encoder(cfg, model, description, classes, samples, enc_id)
+
     # write the encoder files into the collection so they travel with the
     # source (dropbox/collections/COLX/encoders/<name>.md + stage prompts)
     examples_md = _render_examples(samples)
@@ -468,7 +530,8 @@ def run(cfg: Config) -> int:
         coll_dir.mkdir(parents=True, exist_ok=True)
     enc_name = _ask("Encoder name (one file per structure type, e.g. table, biographies, letters)",
                     enc_id)
-    pages = _ask("Pages this encoder handles (e.g. 1-15, or leave empty for the whole document)", "")
+    pages = _ask("Pages this encoder handles (PDF page numbers, e.g. 1-15, or leave empty for the whole document). "
+                 "Note: PDF page number, NOT the number printed on the page.", "")
 
     enc_dir = coll_dir / "encoders"
     enc_dir.mkdir(parents=True, exist_ok=True)

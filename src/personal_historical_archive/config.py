@@ -274,9 +274,11 @@ class Encoder:
     # driven by the detection rules in the collection's encoder.prompt.md.
     candidate_pattern: str | None = None
     candidate_header: str | None = None
-    # pages: which pages of the document this encoder handles, e.g. "1-15"
-    # (the chronological table in Pfister's front matter) or "" for the whole
-    # document. Multiple encoders in one collection run in page order.
+    # pages: which PDF pages of the document this encoder handles, e.g. "1-15"
+    # (the chronological table in Pfister's front matter). These are PDF page
+    # numbers — NOT the numbers printed on the page (Pfister's table is printed
+    # i–xv but occupies PDF pages 1-15). Empty = the whole document. Multiple
+    # encoders in one collection run in page order.
     pages: str = ""
 
     @property
@@ -739,8 +741,10 @@ _ENC_SAMPLE = """---
 #   2. Edit the settings below. The encoder is a TEXT model; it reads the
 #      transcription and returns STRUCTURED RECORDS (e.g. person metadata) as
 #      LangExtract-flat JSON items, one per class.
-#   3. `pages: "1-15"` limits this encoder to those pages (empty = the whole
-#      document). Multiple encoders run in page order.
+#   3. `pages: "1-15"` limits this encoder to those PDF page numbers (the
+#      number in the PDF, NOT the number printed on the page — e.g. Pfister's
+#      chronological table is printed as i–xv but occupies PDF pages 1-15).
+#      Empty = the whole document. Multiple encoders run in page order.
 #   4. Replace this body with the generic encoding framing (what records to
 #      produce, output format). Collection-specific detection rules go in
 #      encoders/<name>.prompt.md next to this file.
