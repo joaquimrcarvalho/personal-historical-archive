@@ -274,6 +274,10 @@ class Encoder:
     # driven by the detection rules in the collection's encoder.prompt.md.
     candidate_pattern: str | None = None
     candidate_header: str | None = None
+    # pages: which pages of the document this encoder handles, e.g. "1-15"
+    # (the chronological table in Pfister's front matter) or "" for the whole
+    # document. Multiple encoders in one collection run in page order.
+    pages: str = ""
 
     @property
     def effective_max_input_chars(self) -> int:
@@ -390,6 +394,17 @@ class Config:
         if encoder_id not in self.encoders:
             raise KeyError(f"unknown encoder {encoder_id!r}; configured: {sorted(self.encoders)}")
         return self.encoders[encoder_id]
+
+    def encoder_from_file(self, path: Path) -> Encoder | None:
+        """Load a single encoder definition file (collection-local:
+        dropbox/collections/COLX/encoders/<name>.md). None on failure."""
+        if not path.exists():
+            return None
+        try:
+            return _encoder_from_frontmatter(path.stem, path.read_text(encoding="utf-8"), path)
+        except Exception as e:  # noqa: BLE001 - a bad file must not break the load
+            print(f"warning: invalid encoder file {path}: {e}")
+            return None
 
     def ensure_dirs(self) -> None:
         for d in (self.dropbox, self.library, self.data, self.renders, self.prompts,
@@ -627,6 +642,7 @@ def _encoder_from_frontmatter(enc_id: str, text: str, file: Path) -> Encoder | N
         extraction_passes=int(fm.get("extraction_passes", 1)),
         candidate_pattern=str(fm.get("candidate_pattern", "") or "") or None,
         candidate_header=str(fm.get("candidate_header", "") or "") or None,
+        pages=str(fm.get("pages", "") or "").strip(),
     )
 
 
@@ -716,20 +732,22 @@ information. Keep the document structure. Output only the edited text.
 
 _ENC_SAMPLE = """---
 # HOW TO CREATE A NEW ENCODER
-#   1. Duplicate this file and give it a new name (the file name, without the
-#      extension, becomes the encoder's id, e.g. "letters.md").
+#   1. Create a folder next to your documents: dropbox/collections/COLX/encoders/
+#      and add one file per STRUCTURE TYPE in the document (e.g. table.md for
+#      the chronological table, biographies.md for the person notices). The
+#      encoder files travel with the source PDFs.
 #   2. Edit the settings below. The encoder is a TEXT model; it reads the
-#      transcription and returns STRUCTURED RECORDS (e.g. letter metadata:
-#      from/to/date/place) as LangExtract-flat JSON items, one per class.
-#   3. Replace this body with the generic encoding framing (what records to
-#      produce, output format). Collection/document-specific detection rules
-#      go in an 'encoder.prompt.md' file next to the documents.
-#   4. Add a '## Examples' section: one 'Q:' sample text and 'A:' JSON array
-#      per letter/record TYPE in the collection. To produce this without
-#      knowing the format, run 'pha encoder new' or paste the interview from
-#      prompts/encoder-helper.md into any chat model.
-#   5. Save — the encoder is ready. Select it per document/collection with an
-#      'encoder' file next to the document.
+#      transcription and returns STRUCTURED RECORDS (e.g. person metadata) as
+#      LangExtract-flat JSON items, one per class.
+#   3. `pages: "1-15"` limits this encoder to those pages (empty = the whole
+#      document). Multiple encoders run in page order.
+#   4. Replace this body with the generic encoding framing (what records to
+#      produce, output format). Collection-specific detection rules go in
+#      encoders/<name>.prompt.md next to this file.
+#   5. Add a '## Examples' section — or, better, put schema + examples in
+#      encoders/<name>.langextract.md. To produce these without knowing the
+#      format, run 'pha encoder new' or paste prompts/encoder-helper.md into
+#      any chat model.
 # The encoder is fed the document as ONE CONCATENATED text ('--- page N ---'
 # markers between pages), in a single call when it fits the model window;
 # larger documents are chunked with overlap_pages of overlap and records are

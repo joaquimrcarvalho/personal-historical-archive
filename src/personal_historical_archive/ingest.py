@@ -748,8 +748,12 @@ def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> dict
 
 # --------------------------------------------------------------------------- encoders (structured records)
 
-def make_encoder_client(cfg: Config, encoder_id: str) -> tuple[ModelClient, Encoder]:
-    encoder = cfg.get_encoder(encoder_id)
+def make_encoder_client(cfg: Config, encoder_id: str | None = None,
+                        encoder: Encoder | None = None) -> tuple[ModelClient, Encoder]:
+    """Create a ModelClient for an encoder. Pass either a global encoder_id
+    (legacy) or the loaded encoder object (collection-local)."""
+    if encoder is None:
+        encoder = cfg.get_encoder(encoder_id)
     return ModelClient(encoder.base_url, timeout_s=encoder.timeout_s, api_key=encoder.api_key,
                        api_style=encoder.api_style), encoder
 
@@ -804,7 +808,7 @@ def _parse_json_array(text: str) -> list:
 
 
 def _encode_needed(cfg: Config, conn, doc_id: int, encoder: Encoder, resolved: str,
-                   doc_path: Path, reprocess: bool) -> bool:
+                   doc_path: Path, reprocess: bool, enc_file: Path | None = None) -> bool:
     """Re-encode when no records yet, or the encoder file / the document's
     encoder.prompt.md / encoder-prompt-langextract.md / the source
     transcription changed since the records were created."""
@@ -820,13 +824,20 @@ def _encode_needed(cfg: Config, conn, doc_id: int, encoder: Encoder, resolved: s
     candidates = []
     if encoder.prompt_file:
         candidates.append(encoder.prompt_file)
-    for kind in ("encoder.prompt", "encoder.prompt.langextract"):
-        prompt, src = resolve_prompt(
-            doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
-            cfg.dropbox, cfg.prompts, kind=kind,
-        )
-        if src and src != "none" and not src.startswith("builtin"):
-            candidates.append(Path(src))
+    if enc_file is not None:
+        from .extract import resolve_encoder_prompt
+        for kind in ("encoder.prompt", "encoder.prompt.langextract"):
+            _txt, src = resolve_encoder_prompt(enc_file, kind)
+            if src and src != "none":
+                candidates.append(Path(src))
+    else:
+        for kind in ("encoder.prompt", "encoder.prompt.langextract"):
+            prompt, src = resolve_prompt(
+                doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
+                cfg.dropbox, cfg.prompts, kind=kind,
+            )
+            if src and src != "none" and not src.startswith("builtin"):
+                candidates.append(Path(src))
     for cand in encoder_candidates(doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent, cfg.dropbox):
         if cand.exists():
             candidates.append(cand)
@@ -959,32 +970,71 @@ def write_records_file(cfg: Config, conn, doc_id: int, encoder_id: str) -> Path 
     return out
 
 
+def _page_filter(encoder: Encoder) -> set[int] | None:
+    """Return the set of page numbers this encoder handles, or None for all.
+    `pages` in the encoder front matter: "1-15", "1-15,40", "all"."""
+    if not encoder.pages or encoder.pages.strip().lower() in ("all", "*", ""):
+        return None
+    wanted: set[int] = set()
+    for part in encoder.pages.replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, _, b = part.partition("-")
+            try:
+                wanted.update(range(int(a), int(b) + 1))
+            except ValueError:
+                continue
+        else:
+            try:
+                wanted.add(int(part))
+            except ValueError:
+                continue
+    return wanted or None
+
+
 def encode_document(
     cfg: Config,
     conn,
     doc_id: int,
     encoder_id: str | None = None,
+    enc_file: Path | None = None,
     reprocess: bool = False,
     verbose: bool = True,
 ) -> dict:
     """Run the encoder over a document's transcription (edited text when the
-    document has an editor, else raw), producing structured records in
-    batches of pages. The encoder prompt is composed as:
-    [encoder base prompt] + [document/collection encoder.prompt.md]."""
+    document has an editor, else raw), producing structured records.
+
+    `enc_file` is a collection-local encoder definition
+    (dropbox/collections/COLX/encoders/<name>.md); when given, the stage
+    prompts (encoders/<name>.prompt.md, encoders/<name>.langextract.md) are
+    resolved NEXT TO it and the encoder's `pages` range filters which pages
+    it processes. `encoder_id` (a global id) is the legacy path. The encoder
+    prompt is composed as:
+    [encoder base prompt] + [encoders/<name>.prompt.md] + [encoders/<name>.langextract.md].
+    """
     doc = db.get_document(conn, doc_id)
     if not doc:
         return {"action": "skipped", "filename": "?", "reason": "no document"}
     doc_path = Path(doc["path"])
-    if encoder_id:
-        resolved = encoder_id
+
+    if enc_file is not None:
+        encoder = cfg.encoder_from_file(enc_file)
+        if encoder is None:
+            return {"action": "skipped", "filename": doc["filename"], "reason": "invalid encoder file"}
+        resolved = enc_file.stem
     else:
-        enc_id, _src = resolve_encoder_id(
-            doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent, cfg.dropbox
-        )
-        resolved = enc_id or (doc["encoder"] if doc["encoder"] in cfg.encoders else None)
-    if not resolved:
-        return {"action": "skipped", "filename": doc["filename"], "reason": "no encoder configured"}
-    encoder = cfg.get_encoder(resolved)
+        if encoder_id:
+            resolved = encoder_id
+        else:
+            enc_id, _src = resolve_encoder_id(
+                doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent, cfg.dropbox
+            )
+            resolved = enc_id or (doc["encoder"] if doc["encoder"] in cfg.encoders else None)
+        if not resolved:
+            return {"action": "skipped", "filename": doc["filename"], "reason": "no encoder configured"}
+        encoder = cfg.get_encoder(resolved)
 
     pages = db.get_pages(conn, doc_id)
     edits: dict[int, str] = {}
@@ -994,28 +1044,33 @@ def encode_document(
                 edits[e["page_id"]] = e["text"]
     texts = [(p["page_no"], (edits.get(p["id"]) or p["raw_text"] or "").strip())
              for p in pages if (edits.get(p["id"]) or p["raw_text"] or "").strip()]
+    page_filter = _page_filter(encoder)
+    if page_filter is not None:
+        texts = [x for x in texts if x[0] in page_filter]
     if not texts:
         return {"action": "skipped", "filename": doc["filename"], "reason": "no text"}
 
-    if not _encode_needed(cfg, conn, doc_id, encoder, resolved, doc_path, reprocess):
+    if not _encode_needed(cfg, conn, doc_id, encoder, resolved, doc_path, reprocess, enc_file):
         return {"action": "skipped", "filename": doc["filename"], "reason": "records up to date"}
 
-    doc_prompt, _src = resolve_prompt(
-        doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
-        cfg.dropbox, cfg.prompts, kind="encoder.prompt",
-    )
-    # LangExtract-formatted encoder content (fields + examples) lives next to
-    # the source as 'encoder-prompt-langextract.md' — composed last, so it
-    # carries the collection-specific schema and few-shot examples.
-    lx_prompt, _lx_src = resolve_prompt(
-        doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
-        cfg.dropbox, cfg.prompts, kind="encoder.prompt.langextract",
-    )
+    if enc_file is not None:
+        from .extract import resolve_encoder_prompt
+        doc_prompt, _src = resolve_encoder_prompt(enc_file, "encoder.prompt")
+        lx_prompt, _lx_src = resolve_encoder_prompt(enc_file, "encoder.prompt.langextract")
+    else:
+        doc_prompt, _src = resolve_prompt(
+            doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
+            cfg.dropbox, cfg.prompts, kind="encoder.prompt",
+        )
+        lx_prompt, _lx_src = resolve_prompt(
+            doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
+            cfg.dropbox, cfg.prompts, kind="encoder.prompt.langextract",
+        )
     base_prompt = compose_prompts(encoder.prompt_text, doc_prompt)
     if lx_prompt:
         base_prompt = compose_prompts(base_prompt, lx_prompt)
 
-    client, _ = make_encoder_client(cfg, resolved)
+    client, _ = make_encoder_client(cfg, encoder=encoder)
     records: list[dict] = []
     try:
         # Two-stage encoding:
@@ -1132,13 +1187,40 @@ def encode_document(
 
 
 def encode_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> dict:
-    """Run the encoder pass for every document that has an encoder configured."""
+    """Run the encoder pass for every document that has encoders configured.
+
+    Encoders live NEXT TO THE SOURCE (dropbox/collections/COLX/encoders/*.md),
+    one file per structure type in the document. All of a document's encoders
+    run in succession, ordered by their `pages` front matter (e.g. the
+    chronological table on pages 1-15 first, then the person notices on the
+    rest)."""
+    from .extract import encoder_files_for
+
     cfg.ensure_dirs()
     conn = db.connect(cfg.db_path)
     try:
         results = []
         for d in db.list_documents(conn, limit=10000):
-            results.append(encode_document(cfg, conn, d["id"], reprocess=reprocess, verbose=verbose))
+            doc_path = Path(d["path"])
+            enc_files = encoder_files_for(
+                doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent, cfg.dropbox
+            )
+            if not enc_files:
+                # legacy: single global encoder via the 'encoder' selection file
+                results.append(encode_document(cfg, conn, d["id"], reprocess=reprocess, verbose=verbose))
+                continue
+            # order by page range start (empty pages => whole document => last)
+            def _page_start(f: Path) -> int:
+                e = cfg.encoder_from_file(f)
+                if e and e.pages and "-" in e.pages:
+                    try:
+                        return int(e.pages.split("-")[0])
+                    except ValueError:
+                        return 10**9
+                return 10**9  # whole-document encoders run after section ones
+            for f in sorted(enc_files, key=_page_start):
+                results.append(encode_document(cfg, conn, d["id"], enc_file=f,
+                                               reprocess=reprocess, verbose=verbose))
         return {"results": results}
     finally:
         conn.close()

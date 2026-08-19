@@ -9,7 +9,7 @@ from datetime import datetime
 
 from . import db
 from .config import Config
-from .extract import is_supported, resolve_editor_id, resolve_encoder_id, resolve_palaeographer_id, resolve_prompt
+from .extract import is_supported, resolve_editor_id, resolve_encoder_id, resolve_palaeographer_id, resolve_prompt, encoder_files_for
 from .ingest import (
     edit_all,
     encode_all,
@@ -300,26 +300,28 @@ def cmd_encoder(cfg: Config, args) -> None:
         if not p.exists():
             print(f"not found: {args.file}")
             return
-        enc_id, source = resolve_encoder_id(p.stem, p if p.is_dir() else p.parent, cfg.dropbox)
-        if enc_id and enc_id in cfg.encoders:
-            e = cfg.encoders[enc_id]
-            print(f"encoder: {e.id} ({e.description or e.model})")
+        enc_files = encoder_files_for(p.stem, p if p.is_dir() else p.parent, cfg.dropbox)
+        if enc_files:
+            for f in enc_files:
+                e = cfg.encoder_from_file(f)
+                pages = f" pages={e.pages}" if e and e.pages else ""
+                print(f"encoder: {f.stem} ({e.description or e.model if e else '?'}){pages}")
+                print(f"  source: {f}")
         else:
-            print(f"encoder: {enc_id or 'none (no encoding)'}")
-        print(f"source: {source or '(none — no encoder configured)'}")
+            print("encoder: none (no encoding)")
         return
-    print(f"configured encoders ({cfg.encoders_dir}):")
-    for enc_id in sorted(cfg.encoders):
-        e = cfg.encoders[enc_id]
-        print(f"  {enc_id}: {e.description or e.model} @ {e.model} (batch {e.batch_pages})")
-    print("selection files in the dropbox:")
-    enc_files = []
-    for pat in ("encoder", "encoder.txt", "encoder.md",
-                "*.encoder", "*.encoder.txt", "*.encoder.md"):
-        enc_files.extend(cfg.dropbox.rglob(pat))
-    for f in sorted(set(enc_files)):
-        enc_id = re.sub(r"^[#\-*\s]+", "", f.read_text().strip().splitlines()[0]).strip() if f.read_text().strip() else ""
-        print(f"  {f}: {enc_id or '(empty)'}")
+    # list all collection-local encoders
+    found = sorted(cfg.dropbox.rglob("encoders/*.md"))
+    found = [f for f in found if not f.name.startswith("_")
+             and not __import__("re").search(r"\.(prompt|langextract)\.md$", f.name)]
+    if not found:
+        print("no encoders configured (drop encoders/*.md files next to your documents)")
+        return
+    print("encoders (next to their sources):")
+    for f in found:
+        e = cfg.encoder_from_file(f)
+        pages = f" pages={e.pages}" if e and e.pages else ""
+        print(f"  {f}: {e.description if e else '?'}{pages}")
 
 
 def cmd_encode(cfg: Config, args) -> None:

@@ -32,9 +32,14 @@
   and goes first; document/collection prompts add aspects only
   (e.g. modernizing spelling) and cannot change the output structure. The
   encoder stage composes three layers in order: encoder base prompt
-  (model config + generic framing in `encoders/<id>.md`) → `encoder.prompt.md`
-  (collection detection rules) → `encoder-prompt-langextract.md`
-  (collection schema + few-shot examples, lives next to the source).
+  (model config + generic framing in the collection's `encoders/<name>.md`)
+  → `encoders/<name>.prompt.md` (detection rules) →
+  `encoders/<name>.langextract.md` (schema + few-shot examples).
+- **Encoders live next to their sources**: dropbox/collections/COLX/encoders/
+  has one file per structure type (table.md, biographies.md, letters.md);
+  `pages:` in the front matter scopes an encoder to a page range and
+  `pha encode` runs a document's encoders in page order (whole-doc last).
+  The top-level `encoders/` dir holds only the sample template.
 - **The null editor**: editor id `null`/`passthrough` copies the
   transcription verbatim as the "edited" text (no model call), so documents
   without a real editor still get `edited-null/` output, both-variant

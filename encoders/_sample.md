@@ -1,19 +1,21 @@
 ---
 # HOW TO CREATE A NEW ENCODER
-#   1. Duplicate this file and give it a new name (the file name, without the
-#      extension, becomes the encoder's id, e.g. "letters.md").
+#   1. Create a folder next to your documents: dropbox/collections/COLX/encoders/
+#      and add one file per STRUCTURE TYPE in the document (e.g. table.md for
+#      the chronological table, biographies.md for the person notices). The
+#      encoder files travel with the source PDFs.
 #   2. Edit the settings below. The encoder is a TEXT model; it reads the
-#      transcription and returns STRUCTURED RECORDS (e.g. letter metadata:
-#      from/to/date/place) as LangExtract-flat JSON items, one per class.
-#   3. Replace this body with the generic encoding framing (what records to
-#      produce, output format). Collection/document-specific detection rules
-#      go in an 'encoder.prompt.md' file next to the documents.
-#   4. Add a '## Examples' section: one 'Q:' sample text and 'A:' JSON array
-#      per letter/record TYPE in the collection. To produce this without
-#      knowing the format, run 'pha encoder new' or paste the interview from
-#      prompts/encoder-helper.md into any chat model.
-#   5. Save — the encoder is ready. Select it per document/collection with an
-#      'encoder' file next to the document.
+#      transcription and returns STRUCTURED RECORDS (e.g. person metadata) as
+#      LangExtract-flat JSON items, one per class.
+#   3. `pages: "1-15"` limits this encoder to those pages (empty = the whole
+#      document). Multiple encoders run in page order.
+#   4. Replace this body with the generic encoding framing (what records to
+#      produce, output format). Collection-specific detection rules go in
+#      encoders/<name>.prompt.md next to this file.
+#   5. Add a '## Examples' section — or, better, put schema + examples in
+#      encoders/<name>.langextract.md. To produce these without knowing the
+#      format, run 'pha encoder new' or paste prompts/encoder-helper.md into
+#      any chat model.
 # The encoder is fed the document as ONE CONCATENATED text ('--- page N ---'
 # markers between pages), in a single call when it fits the model window;
 # larger documents are chunked with overlap_pages of overlap and records are

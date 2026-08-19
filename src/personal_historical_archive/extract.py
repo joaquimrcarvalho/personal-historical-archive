@@ -74,6 +74,33 @@ def _kind_stem(kind: str) -> str:
     return _KIND_FILE.get(kind, kind)
 
 
+def resolve_encoder_prompt(enc_file: Path, kind: str) -> tuple[str, str]:
+    """Resolve a per-encoder stage prompt next to an encoder definition file.
+
+    For encoders/<name>.md in a collection, the stage prompts live in the
+    same folder as encoders/<name>.prompt.md (detection rules) and
+    encoders/<name>.langextract.md (schema + examples). Falls back to the
+    collection-level files (encoder.prompt.md / encoder-prompt-langextract.md)
+    in the parent, then to "".
+    """
+    if kind == "encoder.prompt":
+        local_stem = f"{enc_file.stem}.prompt"
+        coll_stem = "encoder.prompt"
+    elif kind == "encoder.prompt.langextract":
+        local_stem = f"{enc_file.stem}.langextract"
+        coll_stem = "encoder-prompt-langextract"
+    else:
+        return "", "none"
+    local = enc_file.with_name(f"{local_stem}.md")
+    if local.exists():
+        return local.read_text(encoding="utf-8"), str(local)
+    parent = enc_file.parent
+    coll = parent.parent / f"{coll_stem}.md"
+    if coll.exists():
+        return coll.read_text(encoding="utf-8"), str(coll)
+    return "", "none"
+
+
 def prompt_candidates(
     stem: str,
     file_dir: Path,
@@ -354,3 +381,42 @@ def resolve_encoder_id(
                 if enc_id:
                     return enc_id, str(cand)
     return None, None
+
+
+def encoder_files_for(stem: str, file_dir: Path, dropbox: Path) -> list[Path]:
+    """Encoder definition files for a document, in resolution order.
+
+    Encoders live NEXT TO THE SOURCE so they travel with the documents:
+    an `encoders/` subdirectory in the document's collection (nearest-wins,
+    walking up to the dropbox root). Each *.md file in it is one encoder
+    (e.g. encoders/table.md, encoders/biographies.md); a file whose name
+    starts with '_' is ignored. Sidecar variants next to the document
+    (<stem>.encoder.md) are also considered.
+    """
+    found: list[Path] = []
+    seen: set[Path] = set()
+    sidecars = [file_dir / f"{stem}.encoder.md", file_dir / f"{stem}.encoder.txt"]
+    for c in sidecars:
+        if c.exists():
+            found.append(c)
+            seen.add(c)
+    d = file_dir
+    while True:
+        enc_dir = d / "encoders"
+        if enc_dir.is_dir():
+            for f in sorted(enc_dir.iterdir()):
+                if not f.is_file() or f.name.startswith("_"):
+                    continue
+                if f.suffix.lower() not in (".md", ".txt"):
+                    continue
+                # stage prompts (name.prompt.md / name.langextract.md) are
+                # companions of a definition, not definitions themselves
+                if re.search(r"\.(prompt|langextract)\.(md|txt)$", f.name):
+                    continue
+                if f not in seen:
+                    found.append(f)
+                    seen.add(f)
+        if d == dropbox or dropbox not in d.parents:
+            break
+        d = d.parent
+    return found
