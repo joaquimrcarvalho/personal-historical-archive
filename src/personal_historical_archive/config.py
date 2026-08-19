@@ -187,15 +187,17 @@ class Palaeographer:
     prompt_text: str
     prompt_file: Path | None = None
     thinking: bool = True
-    # vision_api: how images are sent to the model.
-    #   "openai"   (default) - OpenAI-style /chat/completions with an
-    #              image_url content block. Works with LM Studio, Ollama, vLLM.
-    #   "anthropic" - Anthropic-style endpoint (MiniMax /anthropic/v1/messages)
-    #              with the image embedded as a plain-text data URI in content.
-    #              MiniMax's OpenAI-compatible endpoint silently drops
-    #              image_url blocks, so M2.7 vision needs this.
-    #              max_vision_px caps the image (M2.7's vision context is small).
-    vision_api: str = "openai"
+    # api_style: the wire format for ALL calls to this model.
+    #   "openai"   (default) - /chat/completions, OpenAI-style messages with
+    #              image_url blocks. Works with LM Studio, Ollama, vLLM,
+    #              OpenAI, OpenRouter, Groq, ...
+    #   "anthropic" - /anthropic/v1/messages (host root), image embedded as a
+    #              plain-text data URI in content. Needed for MiniMax vision
+    #              (their OpenAI-compatible endpoint silently drops image_url
+    #              blocks) and any Anthropic-compatible service.
+    # max_vision_px caps the longest image edge for vision models with a small
+    # image context (e.g. MiniMax M2.7 works well at ~1400).
+    api_style: str = "openai"
     max_vision_px: int = 1800
 
     @property
@@ -223,6 +225,7 @@ class Editor:
     prompt_text: str
     prompt_file: Path | None = None
     thinking: bool = True
+    api_style: str = "openai"
 
 
 @dataclass
@@ -243,8 +246,16 @@ class Encoder:
     prompt_text: str
     prompt_file: Path | None = None
     thinking: bool = True
+    api_style: str = "openai"
     batch_pages: int = 20
-    max_input_chars: int = 600_000
+    # context_tokens: the model's input context window in tokens. The encoder
+    # feeds the document as ONE concatenated text when it fits the window
+    # (max_input_chars, derived from context_tokens at ~4 chars/token); larger
+    # documents are chunked. Different models have different windows (MiniMax
+    # M2.5 = 200k; a local 7B might be 32k) — set this per encoder so the
+    # single-pass/chunked decision matches the model.
+    context_tokens: int = 200_000
+    max_input_chars: int | None = None
     overlap_pages: int = 4
     extraction_passes: int = 1
     # Deterministic entry detection (fast path). When both are set, pages whose
@@ -256,6 +267,15 @@ class Encoder:
     # driven by the detection rules in the collection's encoder.prompt.md.
     candidate_pattern: str | None = None
     candidate_header: str | None = None
+
+    @property
+    def effective_max_input_chars(self) -> int:
+        """max_input_chars if set in the encoder file, else derived from
+        context_tokens at ~4 chars/token (a reasonable average for European
+        languages, incl. accented historical text)."""
+        if self.max_input_chars:
+            return self.max_input_chars
+        return max(4_000, self.context_tokens * 4)
 
 
 @dataclass
@@ -548,7 +568,7 @@ def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path) -> Palae
         thinking=_thinking(fm),
         prompt_text=body,
         prompt_file=file,
-        vision_api=str(fm.get("vision_api", "openai")).strip().lower() or "openai",
+        api_style=str(fm.get("api_style", "openai")).strip().lower() or "openai",
         max_vision_px=int(fm.get("max_vision_px", 1800)),
     )
 
@@ -567,6 +587,7 @@ def _editor_from_frontmatter(ed_id: str, text: str, file: Path) -> Editor | None
         thinking=_thinking(fm),
         prompt_text=body,
         prompt_file=file,
+        api_style=str(fm.get("api_style", "openai")).strip().lower() or "openai",
     )
 
 
@@ -590,8 +611,10 @@ def _encoder_from_frontmatter(enc_id: str, text: str, file: Path) -> Encoder | N
         thinking=_thinking(fm),
         prompt_text=body,
         prompt_file=file,
+        api_style=str(fm.get("api_style", "openai")).strip().lower() or "openai",
         batch_pages=int(fm.get("batch_pages", 20)),
-        max_input_chars=int(fm.get("max_input_chars", 600_000)),
+        context_tokens=int(fm.get("context_tokens", 200_000)),
+        max_input_chars=(int(fm["max_input_chars"]) if fm.get("max_input_chars") else None),
         overlap_pages=int(fm.get("overlap_pages", 4)),
         extraction_passes=int(fm.get("extraction_passes", 1)),
         candidate_pattern=str(fm.get("candidate_pattern", "") or "") or None,
@@ -627,9 +650,10 @@ _PAL_SAMPLE = """---
 #   4. Save — the palaeographer is ready. Select it per document/collection
 #      with a 'palaeographer' file next to the document.
 # Optional front matter:
-#   vision_api: "openai" (default) or "anthropic" — MiniMax models need
-#     "anthropic" (/anthropic/v1/messages with the image as a plain-text data
-#     URI; their OpenAI-compatible endpoint silently drops image_url blocks).
+#   api_style: "openai" (default) or "anthropic" — the wire format for all
+#     calls. MiniMax models need "anthropic" (/anthropic/v1/messages with the
+#     image as a plain-text data URI; their OpenAI-compatible endpoint
+#     silently drops image_url blocks).
 #   max_vision_px: longest image edge sent to the model (MiniMax's vision
 #     context is small; default 1800, use ~1400 for MiniMax).
 # Files starting with '_' are ignored (this sample is never loaded).
@@ -693,7 +717,7 @@ _ENC_SAMPLE = """---
 #   5. Save — the encoder is ready. Select it per document/collection with an
 #      'encoder' file next to the document.
 # The encoder is fed the document as ONE CONCATENATED text ('--- page N ---'
-# markers between pages), in a single call when it fits max_input_chars;
+# markers between pages), in a single call when it fits the model window;
 # larger documents are chunked with overlap_pages of overlap and records are
 # deduplicated. Ask the model to cite the page each record starts on and to
 # use EXACT TEXT from the input. extraction_passes > 1 re-runs the whole
@@ -701,6 +725,12 @@ _ENC_SAMPLE = """---
 # Output items use the flat form {class: text, class_attributes: {...}} and
 # may mix several classes (e.g. person + letter) in one array; each item is
 # stored as one record with kind = class.
+# Model-dependent settings:
+#   api_style: "openai" (default) or "anthropic" — wire format for text calls
+#     (MiniMax text works via openai-compatible; some services need anthropic).
+#   context_tokens: the model's input window in tokens (MiniMax M2.5 = 200000;
+#     a local 7B might be 32768). The single-pass/chunked threshold is derived
+#     from it (~4 chars/token); set max_input_chars to override explicitly.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example encoder — edit me
 base_url: http://127.0.0.1:1234/v1
@@ -709,8 +739,9 @@ api_key: ""
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
+api_style: openai
 batch_pages: 20
-max_input_chars: 600000
+context_tokens: 32768
 overlap_pages: 4
 extraction_passes: 1
 ---

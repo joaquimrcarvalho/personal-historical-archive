@@ -8,9 +8,10 @@
 #   4. Save — the palaeographer is ready. Select it per document/collection
 #      with a 'palaeographer' file next to the document.
 # Optional front matter:
-#   vision_api: "openai" (default) or "anthropic" — MiniMax models need
-#     "anthropic" (/anthropic/v1/messages with the image as a plain-text data
-#     URI; their OpenAI-compatible endpoint silently drops image_url blocks).
+#   api_style: "openai" (default) or "anthropic" — the wire format for all
+#     calls. MiniMax models need "anthropic" (/anthropic/v1/messages with the
+#     image as a plain-text data URI; their OpenAI-compatible endpoint
+#     silently drops image_url blocks).
 #   max_vision_px: longest image edge sent to the model (MiniMax's vision
 #     context is small; default 1800, use ~1400 for MiniMax).
 # Files starting with '_' are ignored (this sample is never loaded).

@@ -41,14 +41,16 @@ def make_vision_client(
 ) -> tuple[ModelClient, Palaeographer]:
     """Create a ModelClient for a palaeographer (or the active one)."""
     pal = cfg.get_palaeographer(pal_id)
-    return ModelClient(pal.base_url, timeout_s=pal.timeout_s, api_key=pal.api_key), pal
+    return ModelClient(pal.base_url, timeout_s=pal.timeout_s, api_key=pal.api_key,
+                       api_style=pal.api_style), pal
 
 
 def make_editor_client(cfg: Config, editor_id: str) -> tuple[ModelClient, Editor]:
     """Create a ModelClient for an editor (a text model, possibly on a
     different endpoint/model than the palaeographer)."""
     editor = cfg.get_editor(editor_id)
-    return ModelClient(editor.base_url, timeout_s=editor.timeout_s, api_key=editor.api_key), editor
+    return ModelClient(editor.base_url, timeout_s=editor.timeout_s, api_key=editor.api_key,
+                       api_style=editor.api_style), editor
 
 
 def _raw_sha(text: str) -> str:
@@ -452,7 +454,6 @@ def ingest_file(
                 palaeographer.model, prompt_txt, img,
                 palaeographer.temperature, palaeographer.max_tokens,
                 thinking=palaeographer.thinking,
-                vision_api=palaeographer.vision_api,
                 max_vision_px=palaeographer.max_vision_px,
             )
             db.set_page_result(conn, page_id, raw_text=text)
@@ -748,7 +749,8 @@ def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> dict
 
 def make_encoder_client(cfg: Config, encoder_id: str) -> tuple[ModelClient, Encoder]:
     encoder = cfg.get_encoder(encoder_id)
-    return ModelClient(encoder.base_url, timeout_s=encoder.timeout_s, api_key=encoder.api_key), encoder
+    return ModelClient(encoder.base_url, timeout_s=encoder.timeout_s, api_key=encoder.api_key,
+                       api_style=encoder.api_style), encoder
 
 
 def _parse_json_array(text: str) -> list:
@@ -1031,7 +1033,7 @@ def encode_document(
             calls = _build_entry_spans(texts, starts)  # (span_texts, block, start_page|None)
         else:
             concat = "\n\n".join(f"--- page {pno} ---\n{t}" for pno, t in texts)
-            if len(concat) <= encoder.max_input_chars:
+            if len(concat) <= encoder.effective_max_input_chars:
                 calls = [(texts, concat, None)]
             else:
                 batch = max(1, encoder.batch_pages)

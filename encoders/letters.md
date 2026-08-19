@@ -8,7 +8,7 @@ max_tokens: 4096
 timeout_s: 600
 thinking: disabled
 batch_pages: 20
-max_input_chars: 600000
+context_tokens: 200000  # MiniMax M2.5 window (~800k chars)
 overlap_pages: 4
 extraction_passes: 1
 candidate_pattern: '^\s*(?:#+\s*|\*\*)?\s*[IVXLCDM]+\s*(?:\.|,)?\s*(?:\*\*)?\s*$'

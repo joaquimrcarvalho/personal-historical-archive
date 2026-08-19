@@ -66,11 +66,19 @@ structured records grounded to the page each one starts on.
 - Runs locally by default; **remote OpenAI-compatible models** (e.g. MiniMax)
   are supported for palaeographers and editors via an API key
   (`pha key --set` stores it in the OS secret store).
-- **MiniMax vision note**: MiniMax's OpenAI-compatible endpoint silently drops
-  `image_url` blocks, so vision models need `vision_api: anthropic` in the
-  palaeographer file (image embedded as a plain-text data URI on
-  `/anthropic/v1/messages`) and a modest `max_vision_px` (M2.7's vision
-  context is small — ~1400 works). See `palaeographers/minimax-vl.md`.
+- **Model endpoints & contexts are per-model config**: every palaeographer /
+  editor / encoder file can declare
+  - `api_style: openai` (default — `/chat/completions`, works with LM Studio,
+    Ollama, vLLM, OpenAI, OpenRouter, ...) **or** `anthropic`
+    (`/anthropic/v1/messages`; needed for MiniMax, whose OpenAI-compatible
+    endpoint silently drops `image_url` blocks — the image goes as a
+    plain-text data URI);
+  - `max_vision_px` (palaeographer) — caps the longest image edge for models
+    with a small vision context (MiniMax M2.7 works well at ~1400);
+  - `context_tokens` (encoder) — the model's input window; the
+    single-pass/chunked decision is derived from it (~4 chars/token,
+    override with `max_input_chars`). MiniMax M2.5 = 200000; a local 7B
+    might be 32768. See `palaeographers/minimax-vl.md` and the samples.
 
 ## Quickstart
 

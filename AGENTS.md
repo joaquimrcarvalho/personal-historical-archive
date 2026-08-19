@@ -20,7 +20,9 @@
 - **Palaeographers (vision models), editors (text models) and encoders (text
   models) are one file each** in the top-level `palaeographers/`, `editors/`
   and `encoders/` directories: YAML front matter = model config (endpoint,
-  model, api key, temperature), body = the prompt. To add one: duplicate
+  model, api key, temperature, `api_style: openai|anthropic`, and for
+  encoders `context_tokens` — the model's input window that drives the
+  single-pass/chunked decision), body = the prompt. To add one: duplicate
   `_sample.md`, rename, edit, save. The file stem is the id.
 - **Staleness by mtime**: editing a palaeographer / editor / encoder / prompt
   file triggers re-extraction / re-editing / re-encoding of affected documents

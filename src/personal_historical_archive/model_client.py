@@ -94,8 +94,20 @@ def _resize_image_b64(image_path: Path, max_side: int) -> tuple[str, str]:
 
 
 class ModelClient:
-    """OpenAI-compatible client — works with LM Studio, Ollama (/v1), llama.cpp,
-    vLLM, and remote APIs (OpenAI, OpenRouter, Groq, ...) that need an api_key."""
+    """Client for chat/embedding endpoints. `api_style` selects the wire
+    format:
+
+    - "openai" (default): /chat/completions with OpenAI-style messages.
+      Works with LM Studio, Ollama (/v1), llama.cpp, vLLM, OpenAI,
+      OpenRouter, Groq, and any OpenAI-compatible remote.
+    - "anthropic": /anthropic/v1/messages (host-root). Used by MiniMax
+      (whose OpenAI-compatible endpoint silently drops image_url blocks)
+      and any Anthropic-compatible service. Images are embedded as a
+      plain-text data URI in content.
+
+    `base_url` is the API root as configured (e.g. http://127.0.0.1:1234/v1
+    or https://api.minimax.io/v1); for anthropic style a trailing /v1 is
+    stripped to reach the host-root anthropic endpoint."""
 
     def __init__(
         self,
@@ -103,13 +115,24 @@ class ModelClient:
         timeout_s: int = 900,
         retries: int = 2,
         api_key: str | None = None,
+        api_style: str = "openai",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
         self.retries = retries
         self.api_key = api_key or None
+        self.api_style = (api_style or "openai").strip().lower()
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         self._http = httpx.Client(base_url=self.base_url, timeout=timeout_s, headers=headers)
+
+    @property
+    def _anthropic_root(self) -> str:
+        """Host root for Anthropic-style endpoints: base_url minus a
+        trailing /v1 (the anthropic API lives at /anthropic/v1/messages)."""
+        root = self.base_url
+        if root.endswith("/v1"):
+            root = root[: -len("/v1")]
+        return root
 
     def close(self) -> None:
         self._http.close()
@@ -178,6 +201,24 @@ class ModelClient:
                 f"Available: {available or '(none — is the server running? did you load a model?)'}"
             )
 
+    def _anthropic_chat(self, payload: dict[str, Any]) -> str:
+        """POST an Anthropic-format chat payload and return the text."""
+        data = self._post_to(f"{self._anthropic_root}/anthropic/v1/messages", payload)
+        try:
+            return _strip_think(" ".join(
+                b.get("text", "") for b in data["content"] if b.get("type") == "text"
+            ))
+        except (KeyError, TypeError) as e:
+            raise ModelError(f"Unexpected anthropic response: {data!r}") from e
+
+    def _openai_chat(self, payload: dict[str, Any]) -> str:
+        """POST an OpenAI-format chat payload and return the text."""
+        data = self._post("/chat/completions", payload)
+        try:
+            return _strip_think(data["choices"][0]["message"]["content"])
+        except (KeyError, IndexError, AttributeError) as e:
+            raise ModelError(f"Unexpected chat response: {data!r}") from e
+
     def chat_vision(
         self,
         model: str,
@@ -186,21 +227,20 @@ class ModelClient:
         temperature: float = 0.1,
         max_tokens: int = 4096,
         thinking: bool = True,
-        vision_api: str = "openai",
         max_vision_px: int = 1800,
     ) -> str:
-        """Vision call. `vision_api` selects how the image is sent:
+        """Vision call. The wire format follows self.api_style:
 
-        - "openai" (default): /chat/completions with an image_url content
-          block. Works with LM Studio, Ollama, vLLM and OpenAI-style remotes.
-        - "anthropic": the image is embedded as a PLAIN-TEXT data URI in
-          `content` and the request goes to /anthropic/v1/messages. MiniMax's
-          OpenAI-compatible endpoint silently drops image_url blocks (M2.7
-          replies "no image"), so their vision requires this form; the image
-          must be small enough for the model's vision context (max_vision_px).
+        - "openai": /chat/completions with an image_url content block.
+          Works with LM Studio, Ollama, vLLM and OpenAI-style remotes.
+        - "anthropic": /anthropic/v1/messages with the image embedded as a
+          PLAIN-TEXT data URI in content (MiniMax's OpenAI-compatible
+          endpoint silently drops image_url blocks, so their vision requires
+          this form); the image is resized to max_vision_px because many
+          vision models have a small image context.
         """
         image_path = Path(image_path)
-        if vision_api == "anthropic":
+        if self.api_style == "anthropic":
             b64, mime = _resize_image_b64(image_path, max_vision_px)
             payload = {
                 "model": model,
@@ -211,19 +251,7 @@ class ModelClient:
             }
             if not thinking:
                 payload["thinking"] = {"type": "disabled"}
-            # Anthropic-style endpoints live at the HOST root
-            # (/anthropic/v1/messages), not under the OpenAI /v1 prefix that
-            # base_url carries. Strip a trailing /v1 when present.
-            root = self.base_url
-            if root.endswith("/v1"):
-                root = root[: -len("/v1")]
-            data = self._post_to(f"{root}/anthropic/v1/messages", payload)
-            try:
-                return _strip_think(" ".join(
-                    b.get("text", "") for b in data["content"] if b.get("type") == "text"
-                ))
-            except (KeyError, TypeError) as e:
-                raise ModelError(f"Unexpected anthropic response: {data!r}") from e
+            return self._anthropic_chat(payload)
 
         b64 = base64.b64encode(image_path.read_bytes()).decode()
         mime = _MIME.get(image_path.suffix.lower(), "image/jpeg")
@@ -244,11 +272,7 @@ class ModelClient:
         }
         if not thinking:
             payload["thinking"] = {"type": "disabled"}  # reasoning models (e.g. MiniMax-M3)
-        data = self._post("/chat/completions", payload)
-        try:
-            return _strip_think(data["choices"][0]["message"]["content"])
-        except (KeyError, IndexError, AttributeError) as e:
-            raise ModelError(f"Unexpected chat response: {data!r}") from e
+        return self._openai_chat(payload)
 
     def chat_text(
         self,
@@ -258,22 +282,21 @@ class ModelClient:
         max_tokens: int = 4096,
         thinking: bool = True,
     ) -> str:
-        """Text-only completion (no image) — used by editors to transform
-        transcriptions with a DIFFERENT model than the palaeographer."""
+        """Text-only completion (no image) — used by editors/encoders to
+        transform transcriptions with a DIFFERENT model than the palaeographer.
+        Wire format follows self.api_style (openai or anthropic)."""
         payload = {
             "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature,
             "max_tokens": max_tokens,
-            "stream": False,
+            "messages": [{"role": "user", "content": prompt}],
         }
         if not thinking:
             payload["thinking"] = {"type": "disabled"}
-        data = self._post("/chat/completions", payload)
-        try:
-            return _strip_think(data["choices"][0]["message"]["content"])
-        except (KeyError, IndexError, AttributeError) as e:
-            raise ModelError(f"Unexpected chat response: {data!r}") from e
+        if self.api_style == "anthropic":
+            return self._anthropic_chat(payload)
+        payload["temperature"] = temperature
+        payload["stream"] = False
+        return self._openai_chat(payload)
 
     def embed(self, model: str, texts: Sequence[str]) -> list[list[float]]:
         data = self._post("/embeddings", {"model": model, "input": list(texts)})

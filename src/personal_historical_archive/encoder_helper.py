@@ -94,6 +94,7 @@ def _text_models(cfg: Config) -> list[dict]:
             "max_tokens": m.max_tokens,
             "timeout_s": m.timeout_s,
             "thinking": m.thinking,
+            "api_style": m.api_style,
         })
     return list(seen.values())
 
@@ -114,13 +115,14 @@ def _pick_model(cfg: Config) -> dict:
         if 1 <= idx <= len(models):
             return dict(models[idx - 1])
         if idx == len(models) + 1:
-            base_url = _ask("OpenAI-compatible base URL", "https://api.minimax.io/v1")
+            base_url = _ask("API base URL", "https://api.minimax.io/v1")
             model = _ask("Model id", "MiniMax-M2.5")
             api_key = _ask("API key (or ${ENV_VAR}, empty for local)")
+            api_style = _ask("API style (openai|anthropic)", "openai")
             return {
                 "base_url": base_url, "model": model, "api_key": api_key,
                 "temperature": 0.0, "max_tokens": 4096, "timeout_s": 600,
-                "thinking": False,
+                "thinking": False, "api_style": api_style,
             }
         print("  (out of range)")
 
@@ -241,7 +243,8 @@ def _call_model(model: dict, prompt: str) -> str:
     # "${MINIMAX_API_KEY}") — expand it for the live call so the generated
     # encoder file never contains the resolved secret
     client = ModelClient(model["base_url"], timeout_s=model.get("timeout_s", 600),
-                         api_key=_expand(str(model.get("api_key") or "")) or None)
+                         api_key=_expand(str(model.get("api_key") or "")) or None,
+                         api_style=model.get("api_style", "openai"))
     try:
         # generous max_tokens: reasoning models emit a long <think> block even
         # with thinking disabled; a small cap truncates it and yields an empty
@@ -318,8 +321,9 @@ temperature: {temperature}
 max_tokens: {max_tokens}
 timeout_s: {timeout_s}
 thinking: {thinking}
+api_style: {api_style}
 batch_pages: 20
-max_input_chars: 600000
+context_tokens: 200000
 overlap_pages: 4
 extraction_passes: 2
 ---
@@ -464,6 +468,7 @@ def run(cfg: Config) -> int:
         max_tokens=model.get("max_tokens", 4096),
         timeout_s=model.get("timeout_s", 600),
         thinking=("disabled" if not model.get("thinking", True) else "true"),
+        api_style=model.get("api_style", "openai"),
     )
     enc_dir = cfg.encoders_dir
     enc_dir.mkdir(parents=True, exist_ok=True)

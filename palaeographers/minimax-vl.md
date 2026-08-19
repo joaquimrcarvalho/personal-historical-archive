@@ -7,7 +7,7 @@ temperature: 0.1
 max_tokens: 8192
 timeout_s: 600
 thinking: disabled
-vision_api: anthropic
+api_style: anthropic
 max_vision_px: 1400
 ---
 

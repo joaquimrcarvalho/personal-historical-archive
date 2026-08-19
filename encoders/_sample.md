@@ -15,7 +15,7 @@
 #   5. Save — the encoder is ready. Select it per document/collection with an
 #      'encoder' file next to the document.
 # The encoder is fed the document as ONE CONCATENATED text ('--- page N ---'
-# markers between pages), in a single call when it fits max_input_chars;
+# markers between pages), in a single call when it fits the model window;
 # larger documents are chunked with overlap_pages of overlap and records are
 # deduplicated. Ask the model to cite the page each record starts on and to
 # use EXACT TEXT from the input. extraction_passes > 1 re-runs the whole
@@ -23,6 +23,12 @@
 # Output items use the flat form {class: text, class_attributes: {...}} and
 # may mix several classes (e.g. person + letter) in one array; each item is
 # stored as one record with kind = class.
+# Model-dependent settings:
+#   api_style: "openai" (default) or "anthropic" — wire format for text calls
+#     (MiniMax text works via openai-compatible; some services need anthropic).
+#   context_tokens: the model's input window in tokens (MiniMax M2.5 = 200000;
+#     a local 7B might be 32768). The single-pass/chunked threshold is derived
+#     from it (~4 chars/token); set max_input_chars to override explicitly.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example encoder — edit me
 base_url: http://127.0.0.1:1234/v1
@@ -31,8 +37,9 @@ api_key: ""
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
+api_style: openai
 batch_pages: 20
-max_input_chars: 600000
+context_tokens: 32768
 overlap_pages: 4
 extraction_passes: 1
 ---
