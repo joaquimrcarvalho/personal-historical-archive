@@ -425,6 +425,22 @@ def _test_encoder(cfg, model: dict, description: str, classes: list[dict],
                         c["attributes"] = [a.strip() for a in attrs.split(",") if a.strip()]
 
 
+def _collection_from_cwd(cfg: Config) -> str:
+    """If the user ran `pha encoder --new` from inside the dropbox, return the
+    collection path relative to it (e.g. "collections/pfister-notices"), else
+    an empty string. This makes the association between the encoder and its
+    documents positional: run the wizard inside the collection folder."""
+    try:
+        cwd = Path.cwd().resolve()
+        db = cfg.dropbox.resolve()
+        if db in cwd.parents or cwd == db:
+            rel = cwd.relative_to(db)
+            return str(rel) if rel != Path(".") else ""
+    except (OSError, ValueError):
+        pass
+    return ""
+
+
 def run(cfg: Config) -> int:
     print("pha encoder new — create an encoder by answering a few questions.\n")
 
@@ -522,8 +538,13 @@ def run(cfg: Config) -> int:
     # source (dropbox/collections/COLX/encoders/<name>.md + stage prompts)
     examples_md = _render_examples(samples)
     instructions = _instructions_from_classes(classes)
-    coll = _ask("Collection path under the dropbox (e.g. collections/pfister-notices)",
-                "collections/pfister-notices")
+    # association: positional — the encoder goes next to its documents. Prefer
+    # the current directory when the user ran the wizard from inside the
+    # dropbox (e.g. inside collections/pfister-notices).
+    default_coll = _collection_from_cwd(cfg)
+    hint = f" (current directory)" if default_coll else ""
+    coll = _ask(f"Collection path under the dropbox (e.g. collections/pfister-notices){hint}",
+                default_coll or "collections/pfister-notices")
     coll_dir = cfg.dropbox / coll
     if not coll_dir.is_dir():
         print(f"  (directory {coll_dir} does not exist — creating it)")
