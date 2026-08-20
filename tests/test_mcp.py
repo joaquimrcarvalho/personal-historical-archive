@@ -107,3 +107,30 @@ def test_collection_status_default_palaeographer(tmp_path):
     doc = rootgroup["documents"][0]
     assert doc["config_resolved"]["palaeographer"] == "qwen-local"
     assert "default" in (doc["config_resolved"]["palaeographer_source"] or "")
+
+
+def test_get_page_versions(tmp_path):
+    """pha_get_page returns transcribed, edited and encoded versions of a page."""
+    cfg = _make_config(tmp_path)
+    seed = _seed(cfg)
+    doc_id = seed["doc1"]
+    conn = db.connect(cfg.db_path)
+    try:
+        # an edited version + an encoded record on page 1
+        pg = conn.execute("SELECT id FROM pages WHERE document_id=? AND page_no=1",
+                          (doc_id,)).fetchone()
+        db.set_page_edit(conn, pg["id"], "generic", text="EDITED TEXT")
+        db.add_record(conn, doc_id, "letters", "letter",
+                      '{"letter": "x", "letter_attributes": {"from": "a"}}', "1")
+        conn.commit()
+    finally:
+        conn.close()
+
+    import asyncio
+    mcp = mcp_server.make_server(cfg)
+    fns = {t.name: t.fn for t in asyncio.run(mcp.list_tools())}
+    r = fns["pha_get_page"](doc_id, 1)
+    assert r["transcribed"] == "text"           # raw_text set in _seed
+    assert r["edited"] == {"generic": "EDITED TEXT"}
+    assert len(r["encoded"]) == 1
+    assert r["encoded"][0]["kind"] == "letter"

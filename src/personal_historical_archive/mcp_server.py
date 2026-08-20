@@ -83,6 +83,79 @@ def make_server(cfg: Config) -> FastMCP:
             conn.close()
 
     @mcp.tool()
+    def pha_get_page(document_id: int, page_no: int, include_image: bool = False) -> dict:
+        """Return every version of ONE page of a document.
+
+        Args:
+            document_id: id from `pha_list_documents`.
+            page_no: the page number (1-based PDF/page number).
+            include_image: also return the cached page render as base64 JPEG
+                (the image that was sent to the model to read this page).
+
+        Returns, when present:
+            transcribed: the faithful raw transcription (palaeographer output).
+            edited: dict of editor-id -> edited text (optional editor pass).
+            encoded: list of structured records derived from this page
+                (encoder output; records tag their source page number).
+            image_base64: JPEG bytes of the page render (if include_image and
+                the render exists), plus its JPEG size.
+        """
+        import base64
+        from pathlib import Path
+        conn = db.connect(cfg.db_path)
+        try:
+            doc = db.get_document(conn, document_id)
+            if not doc:
+                return {"error": f"no document with id {document_id}"}
+            page = None
+            for p in db.get_pages(conn, document_id):
+                if p["page_no"] == page_no:
+                    page = p
+                    break
+            if page is None:
+                return {"error": f"no page {page_no} in document {document_id}",
+                        "page_count": doc["page_count"]}
+            out = {
+                "document_id": document_id,
+                "filename": doc["filename"],
+                "page_no": page_no,
+                "status": page["status"],
+                "transcribed": page["raw_text"] or None,
+            }
+            # edited versions (all editors that produced one)
+            edits = conn.execute(
+                "SELECT editor, text FROM page_edits WHERE page_id = ? AND status='done'",
+                (page["id"],)).fetchall()
+            out["edited"] = {r["editor"]: r["text"] for r in edits} or None
+            # encoded records for this page (source is the page number)
+            recs = conn.execute(
+                "SELECT id, encoder, kind, data FROM records WHERE document_id=? AND source=?",
+                (document_id, str(page_no))).fetchall()
+            out["encoded"] = []
+            for r in recs:
+                try:
+                    out["encoded"].append({"id": r["id"], "encoder": r["encoder"],
+                                           "kind": r["kind"], "data": r["data"]})
+                except Exception:
+                    continue
+            out["encoded"] = out["encoded"] or None
+            # cached page render (the image the model actually read)
+            if include_image:
+                render_dir = cfg.renders / doc["sha256"]
+                img = render_dir / f"p{page_no:03d}.jpg"
+                if img.exists():
+                    blob = img.read_bytes()
+                    out["image_base64"] = base64.b64encode(blob).decode()
+                    out["image_bytes"] = len(blob)
+                else:
+                    out["image_base64"] = None
+                    out["image_bytes"] = 0
+                    out["render_missing"] = str(render_dir)
+            return out
+        finally:
+            conn.close()
+
+    @mcp.tool()
     def pha_list_documents(status: str | None = None, limit: int = 100, collection: str | None = None) -> list[dict]:
         """List documents in the archive.
 
@@ -322,12 +395,32 @@ def make_server(cfg: Config) -> FastMCP:
                     "config default (vision.palaeographer)" if eff_pal != pal_id else None)
                 total = d["page_count"] or 0
                 done = counts.get(d["id"], 0)
+                # render phase: how many page images have been rendered to the
+                # cache dir vs how many transcripts exist. If rendered > done,
+                # the scan is (or was) in the render phase.
+                render_dir = cfg.renders / d["sha256"]
+                rendered = 0
+                if render_dir.is_dir():
+                    try:
+                        rendered = len([f for f in render_dir.glob("p*.jpg")
+                                        if f.name[1:-4].isdigit()])
+                    except OSError:
+                        rendered = 0
+                if done >= total and total:
+                    phase = "complete"
+                elif rendered >= total and total:
+                    phase = "transcribing"   # all pages rendered, not yet transcribed
+                else:
+                    phase = "rendering"      # fewer renders than pages
                 items.append({
                     "document_id": d["id"],
                     "filename": d["filename"],
                     "status": d["status"],
                     "progress": {"pages_done": done, "pages_total": total,
                                  "fraction": round(done / total, 3) if total else None},
+                    "render": {"pages_rendered": rendered, "pages_transcribed": done,
+                               "phase": phase,
+                               "render_dir": str(render_dir)},
                     "config_recorded": rec,
                     "config_resolved": {"palaeographer": eff_pal,
                                         "palaeographer_source": pal_src,

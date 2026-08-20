@@ -12,13 +12,15 @@ processed (palaeographer / editor / encoder).
 | --- | --- |
 | `pha_search(query, mode, limit, collection)` | ranked passages — hybrid (keyword+semantic, default), keyword, semantic; optional collection filter |
 | `pha_get_document(document_id, max_chars)` | metadata + full extracted per-page text |
+| `pha_get_page(document_id, page_no, include_image)` | all versions of one page: transcribed, edited (per editor), encoded (per-page records), and the cached page image as base64 |
 | `pha_list_documents(status, limit, collection)` | browse the archive |
 | `pha_upload(kind, name, content_b64, replace, merge)` | put a file into the dropbox (send base64 bytes) |
+| `pha_get_dropbox()` | diagnostic: effective dropbox path + whether each registered doc's file exists on disk |
 | `pha_palaeographers()` | list configured vision (palaeographer) models and the active default |
 | `pha_editors()` | list configured text (editor) models |
 | `pha_encoders(document_relpath)` | list the encoder files that apply to a document |
 | `pha_collection_config(document_relpath)` | resolved palaeographer / editor / prompt for a document or collection |
-| `pha_collection_status(collection)` | per-collection status report: documents with recorded vs resolved pal/editor/encoders, progress (pages done/total), and pipeline stage (transcribed / edited / encoded) |
+| `pha_collection_status(collection)` | per-collection status report: documents with recorded vs resolved pal/editor/encoders, progress (pages done/total), pipeline stage (transcribed / edited / encoded), and render phase (rendering / transcribing / complete) |
 | `pha_scan_now()` | ingest files that were dropped / uploaded into the dropbox |
 | `pha_extraction_status()` | ingestion summary |
 
