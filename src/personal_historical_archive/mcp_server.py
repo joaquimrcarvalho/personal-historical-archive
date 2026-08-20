@@ -221,6 +221,32 @@ def make_server(cfg: Config) -> FastMCP:
         }
 
     @mcp.tool()
+    def pha_get_dropbox() -> dict:
+        """Diagnostic: the server's effective dropbox path and whether the
+        documents registered in the DB still exist on disk at that location.
+
+        Returns the dropbox root, the data/db path, and per-document file
+        existence. Use this to debug a scan that is finding 0 documents (e.g.
+        a dropbox path mismatch, or files that were moved/removed)."""
+        import os
+        conn = db.connect(cfg.db_path)
+        try:
+            docs = db.list_documents(conn, limit=10000)
+        finally:
+            conn.close()
+        return {
+            "dropbox": str(cfg.dropbox),
+            "dropbox_index": list(cfg.dropbox.rglob("*.pdf"))[:10] if cfg.dropbox.exists() else [],
+            "db": str(cfg.db_path),
+            "documents": [
+                {"id": d["id"], "filename": d["filename"],
+                 "recorded_path": d["path"],
+                 "file_on_disk": os.path.exists(d["path"])}
+                for d in docs
+            ],
+        }
+
+    @mcp.tool()
     def pha_collection_status(collection: str | None = None) -> list[dict]:
         """Status report, grouped by collection, for the remote dropbox.
 
