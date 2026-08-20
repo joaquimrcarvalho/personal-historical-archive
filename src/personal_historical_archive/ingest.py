@@ -204,7 +204,7 @@ def _acquire_scan_lock(cfg: Config) -> bool:
                 if pid != os.getpid() and _pid_alive(pid):
                     return False
                 lock.unlink()  # stale lock
-        lock.write_text(str(os.getpid()))
+        lock.write_text(str(os.getpid()), encoding="utf-8")
         return True
     except OSError:
         return True  # cannot lock; proceed (best effort)
