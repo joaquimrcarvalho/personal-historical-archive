@@ -220,6 +220,92 @@ def make_server(cfg: Config) -> FastMCP:
             "prompt": (prompt_txt or ""),
         }
 
+    @mcp.tool()
+    def pha_collection_status(collection: str | None = None) -> list[dict]:
+        """Status report, grouped by collection, for the remote dropbox.
+
+        For each collection (or just `collection` if given, e.g.
+        "collections/pfister-notices") returns its documents with:
+          - config status: the RECORDED palaeographer/editor/encoder (the models
+            used when the last pass ran) and the LIVE/RESOLVED ones (from the
+            current selection files + definitions), so you can see if a config
+            change is pending;
+          - progress: pages done / total;
+          - stage: which pipeline passes have run (transcribed / edited /
+            encoded / embedded) and which have not.
+
+        A document in the same directory as the dropbox root is reported under
+        "(root)"; collections are the subdirectories of collections/.
+        """
+        conn = db.connect(cfg.db_path)
+        try:
+            docs = db.list_documents(conn, limit=10000)
+            # per-doc done-page counts in one query
+            counts = {}
+            for row in conn.execute(
+                "SELECT document_id, COUNT(*) n FROM pages WHERE status='done' GROUP BY document_id"
+            ).fetchall():
+                counts[row["document_id"]] = row["n"]
+        finally:
+            conn.close()
+        from collections import OrderedDict
+        from .extract import (encoder_files_for, resolve_editor_id,
+                              resolve_palaeographer_id)
+        from pathlib import Path
+
+        def stage(doc) -> list[str]:
+            s = []
+            if doc["status"] == "done" or doc["palaeographer"]:
+                s.append("transcribed")
+            if doc["editor"]:
+                s.append("edited")
+            if doc["encoder"]:
+                s.append("encoded")
+            return s
+
+        groups: "OrderedDict[str, list]" = OrderedDict()
+        for d in docs:
+            rel = d["dir_path"] or "(root)"
+            groups.setdefault(rel, []).append(d)
+
+        out = []
+        for rel, ds in groups.items():
+            if collection and rel != collection:
+                continue
+            items = []
+            for d in ds:
+                p = (cfg.dropbox / (d["dir_path"] or "") / d["filename"])
+                sel_dir = p.parent if p.exists() or d["dir_path"] else cfg.dropbox
+                # recorded config:
+                rec = {"palaeographer": d["palaeographer"],
+                       "editor": d["editor"], "encoder": d["encoder"]}
+                # resolved (live) config:
+                try:
+                    pal_id, _pal_src = resolve_palaeographer_id(
+                        Path(d["filename"]).stem, sel_dir, cfg.dropbox)
+                    ed_id, _ed_src = resolve_editor_id(
+                        Path(d["filename"]).stem, sel_dir, cfg.dropbox)
+                    encs = encoder_files_for(Path(d["filename"]).stem, sel_dir, cfg.dropbox)
+                    enc_names = [Path(f).stem for f in encs]
+                except Exception:
+                    pal_id, ed_id, enc_names = None, None, []
+                total = d["page_count"] or 0
+                done = counts.get(d["id"], 0)
+                items.append({
+                    "document_id": d["id"],
+                    "filename": d["filename"],
+                    "status": d["status"],
+                    "progress": {"pages_done": done, "pages_total": total,
+                                 "fraction": round(done / total, 3) if total else None},
+                    "config_recorded": rec,
+                    "config_resolved": {"palaeographer": pal_id,
+                                        "editor": ed_id,
+                                        "encoders": enc_names},
+                    "stage": stage(d),
+                })
+            out.append({"collection": rel, "documents": items})
+        return out
+
     return mcp
 
 

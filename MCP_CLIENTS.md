@@ -18,6 +18,7 @@ processed (palaeographer / editor / encoder).
 | `pha_editors()` | list configured text (editor) models |
 | `pha_encoders(document_relpath)` | list the encoder files that apply to a document |
 | `pha_collection_config(document_relpath)` | resolved palaeographer / editor / prompt for a document or collection |
+| `pha_collection_status(collection)` | per-collection status report: documents with recorded vs resolved pal/editor/encoders, progress (pages done/total), and pipeline stage (transcribed / edited / encoded) |
 | `pha_scan_now()` | ingest files that were dropped / uploaded into the dropbox |
 | `pha_extraction_status()` | ingestion summary |
 
