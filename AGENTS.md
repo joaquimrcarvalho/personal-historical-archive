@@ -62,3 +62,79 @@
   records) → SQLite (FTS5 + embeddings, indexing both raw and edited
   variants) → hybrid search + FastMCP (`pha_*` tools).
 - Full usage: README.md; planned web UI: WEB_INTERFACE_PLAN.md.
+
+## Usage — how agents operate the archive (not just develop it)
+
+These conventions cover everyday *use* of pha, the same way the sections above
+cover code. The archive is meant to be driven by an AI agent: browse, set
+how a collection is processed (palaeographer / editor / encoder), add
+documents, scan, edit, encode, and search.
+
+### How to check how a collection/document is configured
+
+Before processing or changing anything, find out what is already set. A
+collection's processing = the resolved **palaeographer**, **editor**, and
+**encoders** + the effective prompt.
+
+- **Locally** (on the archive machine, via CLI):
+  - `pha palaeographer <collection-or-doc>` → resolved vision model.
+  - `pha editor <collection-or-doc>` → resolved editor, **or "none"** if no
+    editor is configured (a collection with no `editor` selection file and no
+    editor name fallback is processed without an editor, or with the null
+    editor).
+  - `pha prompts <collection-or-doc>` → effective prompt + its source file.
+  - `pha encoder` → lists collection-local encoders; `pha encoder <file>`
+    shows a document's resolved encoders.
+- **Remotely / connected via MCP** (agent on another machine):
+  - `pha_collection_config("collections/COLX")` returns **one object** with
+    the resolved `palaeographer`, `editor` (or `{id: None, ...}` when none is
+    configured), `prompt`, and their `source` files.
+  - `pha_palaeographers()`, `pha_editors()`, `pha_encoders(relpath)` list the
+    available definitions.
+
+Interpretation: an editor value of `None`/empty means the collection currently
+has **no editor** — ask the historian before inventing one, and if an editor
+is wanted, set it (below). The `source` field tells you where the selection
+came from (a dropbox `editor` file, a config default, or nowhere).
+
+### Setting the palaeographer / editor / encoders for a collection
+
+- A collection selects its models with **plain-text selection files** next to
+  the documents: a file named `palaeographer` (or `editor`) containing the id
+  (nearest-wins chain). Encoders are files in `collections/COLX/encoders/`.
+- **Locally**: write the file directly, e.g.
+  `echo qwen-generic > dropbox/collections/COLX/editor` (or create the
+  `encoders/<name>.md` + companions). Then re-process so the change takes
+  effect (`pha scan` re-extracts when the resolved palaeographer changes;
+  `pha edit` re-edits; `pha encode` runs encoders).
+- **Remotely via MCP**: push the selection/encoder file content with
+  `pha_upload` (base64) under the right dropbox path (e.g.
+  `collections/COLX/editor`), then `pha_scan_now()` to ingest/re-process.
+- To add a **new definition** (a palaeographer/editor/encoder `*.md`): the
+  palaeographer/editor definitions live at the project root beside the
+  dropbox — a remote agent cannot write those via `pha_upload` (dropbox-
+  scoped); ask the operator on the archive machine to copy a `*_sample.md`
+  and edit it, or stage it in the dropbox first. Encoder definitions live
+  inside the dropbox and can be uploaded directly.
+
+### Operating discipline (avoid breaking the machine)
+
+- **One local-model job at a time.** `pha scan` and `pha edit` share a lock;
+  never start `pha_edit`/re-edit while a `pha_scan_now` is running on the same
+  machine (two local models → swap → disk fill → hang). Check
+  `pha_extraction_status` / the lock before starting a pass.
+- **Quit LM Studio when not ingesting** — its model page-out is what eats disk
+  space. Do not leave a vision + editor model loaded at the same time.
+- **After changing config**: re-run the matching pass (`pha scan`, `pha edit`,
+  `pha encode`) so staleness-by-mtime picks up the change, then confirm with
+  `pha status` / `pha_extraction_status`.
+
+### Remote / machine-to-machine
+
+- The MCP server runs on the machine that owns the dropbox and models. A
+  client on another machine needs only an MCP connection — no local models or
+  dropbox. Start on the archive machine with
+  `pha mcp --transport sse --host <LAN-IP> --port 8000` (no auth — use a
+  private LAN/VPN/SSH tunnel). See MCP_CLIENTS.md for the full wiring.
+- Upload documents from another machine via `pha_upload(kind, name, content_b64)`
+  (files travel as base64; single files per call), then `pha_scan_now()`.
