@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import os
+import sys
+
 from pathlib import Path
 
 import personal_historical_archive.config as c
 from personal_historical_archive.config import Config
+
+
+def _to_abs(path: str) -> Path:
+    if os.name == "nt":
+        return Path("C:") / path.replace("/", "\\")
+    return Path("/" + path.lstrip("/"))
 
 
 def test_p_expands_tilde():
@@ -12,11 +21,18 @@ def test_p_expands_tilde():
 
 
 def test_p_relative_to_root():
-    assert c._p(Path("/proj"), "data") == Path("/proj/data").resolve()
+    root = Path("/proj")
+    # relative input resolves under root; the exact shape differs by OS
+    if os.name == "nt":
+        assert c._p(root, "data") == (root / "data").resolve()
+    else:
+        assert c._p(root, "data") == Path("/proj/data").resolve()
 
 
 def test_p_absolute_path():
-    assert c._p(Path("/proj"), "/abs/path") == Path("/abs/path")
+    # a path that is absolute on the current platform passes through unchanged
+    abs_path = _to_abs("abs/path")
+    assert c._p(Path("/proj"), str(abs_path)) == abs_path
 
 
 def test_expand_env(monkeypatch):
@@ -44,12 +60,13 @@ def test_config_load_tilde_dropbox(monkeypatch, tmp_path):
 
 def test_config_load_env_dropbox_wins(monkeypatch, tmp_path):
     monkeypatch.delenv("PHA_HOME", raising=False)
-    monkeypatch.setenv("PHA_DROPBOX", "/from/env")
+    abs_env = _to_abs("from/env")  # a genuinely absolute path on this platform
+    monkeypatch.setenv("PHA_DROPBOX", str(abs_env))
     root = tmp_path / "proj"
     root.mkdir()
     (root / "config.yaml").write_text("paths:\n  dropbox: dropbox\n")
     cfg = Config.load(root)
-    assert cfg.dropbox == Path("/from/env")
+    assert cfg.dropbox == abs_env
 
 
 def test_config_load_dotenv_dropbox(monkeypatch, tmp_path):
