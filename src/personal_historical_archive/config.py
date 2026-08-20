@@ -350,10 +350,20 @@ class Config:
         encoders = _parse_encoders(enc_dir)
 
         # Dropbox may live outside the project tree (e.g. a shared documents
-        # folder on another machine). Precedence: PHA_DROPBOX env var > the
-        # paths.dropbox entry (which, like all paths, accepts an absolute path
-        # or a path relative to the project root).
-        dropbox_path = os.environ.get("PHA_DROPBOX") or paths.get("dropbox", "dropbox")
+        # folder on another machine). Precedence: the PHA_DROPBOX env var, then
+        # a PHA_DROPBOX line in the gitignored .env AT THIS ROOT (set via
+        # `pha set dropbox`), then the paths.dropbox entry (absolute path or
+        # relative to the project root).
+        dropbox_env = os.environ.get("PHA_DROPBOX")
+        if not dropbox_env:
+            envp = root / ".env"
+            if envp.exists():
+                for line in envp.read_text().splitlines():
+                    line = line.strip()
+                    if line.startswith("PHA_DROPBOX="):
+                        dropbox_env = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+        dropbox_path = dropbox_env or paths.get("dropbox", "dropbox")
         dropbox = _p(root, str(dropbox_path))
 
         return cls(

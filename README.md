@@ -125,8 +125,12 @@ uv pip install --python .venv/bin/python -e .
 alias pha=".venv/bin/python -m personal_historical_archive"
 
 # 3. point at your documents folder (copy your dropbox/ contents there).
-#    Either edit config.yaml -> paths.dropbox to an ABSOLUTE path, or set:
-export PHA_DROPBOX=/path/to/your/documents   # takes precedence over config.yaml
+#    The friendly way — stores the path in a gitignored .env (not committed):
+pha set dropbox /path/to/your/documents
+#    (or interactively: run `pha set dropbox` and type the path when asked)
+#    Equivalent alternatives: set the PHA_DROPBOX env var (takes precedence),
+#    or put an absolute paths.dropbox in config.yaml (not recommended —
+#    machine-specific).
 
 # 4. start LM Studio, load qwen/qwen3-vl-8b (or your palaeo model), and the
 #    embedding model; start the local server on port 1234
@@ -457,6 +461,8 @@ pha palaeographer [file]
 pha editor [file]
 pha encoder [file] [--new]
 pha encode [--reprocess]
+pha set dropbox [PATH]   # set the documents folder (stored in gitignored .env)
+pha dropbox              # alias for `pha set dropbox`
 pha mcp [--transport stdio|sse] [--port 8000]
 ```
 

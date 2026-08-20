@@ -52,6 +52,18 @@ def test_config_load_env_dropbox_wins(monkeypatch, tmp_path):
     assert cfg.dropbox == Path("/from/env")
 
 
+def test_config_load_dotenv_dropbox(monkeypatch, tmp_path):
+    """PHA_DROPBOX stored in the root .env (via `pha set dropbox`) is honoured."""
+    monkeypatch.delenv("PHA_HOME", raising=False)
+    monkeypatch.delenv("PHA_DROPBOX", raising=False)
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text("paths:\n  dropbox: dropbox\n")
+    (root / ".env").write_text(f"PHA_DROPBOX=~/external-docs\n")
+    cfg = Config.load(root)
+    assert cfg.dropbox == Path.home() / "external-docs"
+
+
 def test_load_palaeographers(tmp_path):
     d = tmp_path / "palaeographers"
     d.mkdir()

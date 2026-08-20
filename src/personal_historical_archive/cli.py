@@ -295,6 +295,43 @@ def cmd_key(cfg: Config, args) -> None:
         print(f"  {name}: {src}")
 
 
+def cmd_set_dropbox(cfg: Config, args) -> None:
+    """`pha set dropbox` (or `pha dropbox`) — point at the documents folder.
+
+    Asks for a path (absolute, or ~ shorthand), stores it as PHA_DROPBOX in
+    the gitignored project .env, and confirms the resolved location. This is
+    the friendly way for a historian to set the dropbox without editing
+    config.yaml or exporting an env var. The value is read back automatically
+    on the next `pha` run (it is not committed)."""
+    path = getattr(args, "path", None) or (getattr(args, "dropbox", None) or None)
+    if not path:
+        try:
+            if not sys.stdin.isatty():
+                path = sys.stdin.readline().strip()
+        except Exception:
+            path = None
+    if not path:
+        cur = getattr(cfg, "dropbox", None)
+        print("Dropbox (documents) folder:")
+        print(f"  current: {cur}")
+        try:
+            path = input("Path (Enter to keep current): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            path = ""
+    if path:
+        expanded = os.path.expanduser(path).strip()
+        if not os.path.isabs(expanded):
+            expanded = str((cfg.root / expanded).resolve())
+        envp = cfg.root / ".env"
+        lines = [l for l in envp.read_text().splitlines()
+                 if l.strip() and not l.startswith("PHA_DROPBOX=")] if envp.exists() else []
+        lines.append(f"PHA_DROPBOX={expanded}")
+        envp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"stored dropbox -> {expanded}  (in {envp}, gitignored)")
+    else:
+        print(f"dropbox unchanged: {cur}")
+
+
 def cmd_encoder(cfg: Config, args) -> None:
     if getattr(args, "new", False):
         cmd_encoder_new(cfg, args)
@@ -430,6 +467,13 @@ def main(argv: list[str] | None = None) -> None:
     k = sub.add_parser("key", help="manage API keys (OS secret store or .env)")
     k.add_argument("--set", metavar="NAME", help="store a value for NAME (read from stdin)")
     k.set_defaults(fn=cmd_key)
+
+    sset = sub.add_parser("set", help="set a project setting (stored in gitignored .env)")
+    ssub = sset.add_subparsers(dest="setting", required=True)
+    sdb = ssub.add_parser("dropbox", help="set the dropbox documents folder path")
+    sdb.add_argument("path", nargs="?", help="path to the documents folder (or prompted)")
+    sdb.set_defaults(fn=cmd_set_dropbox)
+    sub.add_parser("dropbox", help="alias for `pha set dropbox`").set_defaults(fn=cmd_set_dropbox)
 
     args = parser.parse_args(argv)
     args.fn(cfg, args)
