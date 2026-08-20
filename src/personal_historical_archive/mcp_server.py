@@ -279,16 +279,21 @@ def make_server(cfg: Config) -> FastMCP:
                 # recorded config:
                 rec = {"palaeographer": d["palaeographer"],
                        "editor": d["editor"], "encoder": d["encoder"]}
-                # resolved (live) config:
+                # resolved (live) config: explicit selection, else the
+                # effective default that would actually run.
                 try:
-                    pal_id, _pal_src = resolve_palaeographer_id(
+                    pal_id, pal_src = resolve_palaeographer_id(
                         Path(d["filename"]).stem, sel_dir, cfg.dropbox)
-                    ed_id, _ed_src = resolve_editor_id(
+                    ed_id, ed_src = resolve_editor_id(
                         Path(d["filename"]).stem, sel_dir, cfg.dropbox)
                     encs = encoder_files_for(Path(d["filename"]).stem, sel_dir, cfg.dropbox)
                     enc_names = [Path(f).stem for f in encs]
                 except Exception:
-                    pal_id, ed_id, enc_names = None, None, []
+                    pal_id, pal_src, ed_id, ed_src, enc_names = None, None, None, None, []
+                # effective palaeographer: selection, else the active default
+                eff_pal = pal_id or cfg.active_palaeographer
+                pal_src = pal_src or (
+                    "config default (vision.palaeographer)" if eff_pal != pal_id else None)
                 total = d["page_count"] or 0
                 done = counts.get(d["id"], 0)
                 items.append({
@@ -298,8 +303,10 @@ def make_server(cfg: Config) -> FastMCP:
                     "progress": {"pages_done": done, "pages_total": total,
                                  "fraction": round(done / total, 3) if total else None},
                     "config_recorded": rec,
-                    "config_resolved": {"palaeographer": pal_id,
+                    "config_resolved": {"palaeographer": eff_pal,
+                                        "palaeographer_source": pal_src,
                                         "editor": ed_id,
+                                        "editor_source": ed_src,
                                         "encoders": enc_names},
                     "stage": stage(d),
                 })

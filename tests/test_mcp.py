@@ -85,3 +85,25 @@ def test_collection_status_shape(tmp_path):
     # stage: transcribed + edited
     assert "transcribed" in doc["stage"]
     assert "edited" in doc["stage"]
+
+
+def test_collection_status_default_palaeographer(tmp_path):
+    """A doc with no selection file falls back to the effective default."""
+    cfg = _make_config(tmp_path)
+    _seed(cfg)
+    import asyncio
+    import personal_historical_archive.config as c
+    # set a known default so the fallback is deterministic
+    cfg.active_palaeographer = "qwen-local"
+    mcp = mcp_server.make_server(cfg)
+    status_fn = None
+    for t in asyncio.run(mcp.list_tools()):
+        if t.name == "pha_collection_status":
+            status_fn = t.fn
+    report = status_fn()
+    # the bare root doc has no selection file -> effective default
+    rootgroup = next((g for g in report if g["collection"] == "(root)"), None)
+    assert rootgroup is not None
+    doc = rootgroup["documents"][0]
+    assert doc["config_resolved"]["palaeographer"] == "qwen-local"
+    assert "default" in (doc["config_resolved"]["palaeographer_source"] or "")
