@@ -176,7 +176,7 @@ def _scan_lock_held_by_other(cfg: Config) -> bool:
     if not lock.exists():
         return False
     try:
-        pid = int(lock.read_text().strip() or "0")
+        pid = int(lock.read_text(encoding="utf-8").strip() or "0")
     except (ValueError, OSError):
         return False
     return pid != os.getpid() and _pid_alive(pid)
@@ -198,7 +198,7 @@ def _acquire_scan_lock(cfg: Config) -> bool:
                 lock.unlink()
             else:
                 try:
-                    pid = int(lock.read_text().strip() or "0")
+                    pid = int(lock.read_text(encoding="utf-8").strip() or "0")
                 except (ValueError, OSError):
                     pid = 0
                 if pid != os.getpid() and _pid_alive(pid):
@@ -213,7 +213,7 @@ def _acquire_scan_lock(cfg: Config) -> bool:
 def _release_scan_lock(cfg: Config) -> None:
     lock = _scan_lock_path(cfg)
     try:
-        if lock.exists() and lock.read_text().strip() == str(os.getpid()):
+        if lock.exists() and lock.read_text(encoding="utf-8").strip() == str(os.getpid()):
             lock.unlink()
     except OSError:
         pass
@@ -587,7 +587,7 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
             + body
             + "\n"
         )
-        (out_dir / f"page-{p['page_no']:03d}.md").write_text(text)
+        (out_dir / f"page-{p['page_no']:03d}.md").write_text(text, encoding="utf-8")
     return out_dir
 
 
@@ -642,7 +642,7 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
             + body
             + "\n"
         )
-        (out_dir / f"page-{p['page_no']:03d}.md").write_text(text)
+        (out_dir / f"page-{p['page_no']:03d}.md").write_text(text, encoding="utf-8")
     return out_dir
 
 
@@ -983,7 +983,7 @@ def write_records_file(cfg: Config, conn, doc_id: int, encoder_id: str) -> Path 
         "records": by_kind,
     }
     out = out_dir / f"records-{encoder_id}.json"
-    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return out
 
 

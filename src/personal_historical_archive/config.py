@@ -41,7 +41,7 @@ def _dotenv() -> dict[str, str]:
         _DOTENV = {}
         p = find_project_root() / ".env"
         if p.exists():
-            for line in p.read_text().splitlines():
+            for line in p.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
@@ -334,7 +334,7 @@ class Config:
         cfg_path = root / "config.yaml"
         raw: dict = {}
         if cfg_path.exists():
-            raw = yaml.safe_load(cfg_path.read_text()) or {}
+            raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
         paths = raw.get("paths", {})
         vis = raw.get("vision", {}) or {}
         emb = raw.get("embeddings", {}) or {}
@@ -358,7 +358,7 @@ class Config:
         if not dropbox_env:
             envp = root / ".env"
             if envp.exists():
-                for line in envp.read_text().splitlines():
+                for line in envp.read_text(encoding="utf-8").splitlines():
                     line = line.strip()
                     if line.startswith("PHA_DROPBOX="):
                         dropbox_env = line.split("=", 1)[1].strip().strip('"').strip("'")
@@ -462,7 +462,7 @@ def _parse_palaeographers(
     default_file = prompts_dir / "palaeographers" / "default.md"
     prompt_text = ""
     if default_file.exists():
-        prompt_text = default_file.read_text()
+        prompt_text = default_file.read_text(encoding="utf-8")
     pal = Palaeographer(
         id="default",
         description="legacy vision block",
@@ -504,7 +504,7 @@ def _parse_editors(raw: dict, prompts_dir: Path, root: Path, ed_dir: Path) -> di
                         p = alt
             if p.exists():
                 prompt_file = p
-                prompt_text = p.read_text()
+                prompt_text = p.read_text(encoding="utf-8")
         elif isinstance(entry.get("prompt"), str):
             prompt_text = entry["prompt"]
         editors[str(ed_id)] = Editor(
@@ -537,7 +537,7 @@ def _palaeographer_from_entry(
                     p = alt
         if p.exists():
             prompt_file = p
-            prompt_text = p.read_text()
+            prompt_text = p.read_text(encoding="utf-8")
     elif isinstance(entry.get("prompt"), str):
         prompt_text = entry["prompt"]
     return Palaeographer(
@@ -586,7 +586,7 @@ def _load_model_dir(directory: Path, kind: str, builder) -> dict:
         if f.suffix.lower() not in (".md", ".txt"):
             continue
         try:
-            model = builder(f.stem, f.read_text(), f)
+            model = builder(f.stem, f.read_text(encoding="utf-8"), f)
         except Exception as e:  # noqa: BLE001 - a bad file must not kill the load
             print(f"warning: invalid {kind} file {f}: {e}")
             continue
@@ -680,7 +680,7 @@ def _p(root: Path, s: str) -> Path:
 def _seed_sample(directory: Path, name: str, content: str) -> None:
     sample = directory / name
     if not sample.exists():
-        sample.write_text(content)
+        sample.write_text(content, encoding="utf-8")
 
 
 _PAL_SAMPLE = """---

@@ -202,7 +202,7 @@ def cmd_palaeographer(cfg: Config, args) -> None:
                 "*.palaeographer", "*.palaeographer.txt", "*.palaeographer.md"):
         pal_files.extend(cfg.dropbox.rglob(pat))
     for f in sorted(set(pal_files)):
-        pal_id = re.sub(r"^[#\-*\s]+", "", f.read_text().strip().splitlines()[0]).strip() if f.read_text().strip() else ""
+        pal_id = re.sub(r"^[#\-*\s]+", "", f.read_text(encoding="utf-8").strip().splitlines()[0]).strip() if f.read_text(encoding="utf-8").strip() else ""
         print(f"  {f}: {pal_id or '(empty)'}")
 
 
@@ -232,7 +232,7 @@ def cmd_editor(cfg: Config, args) -> None:
                 "*.editor", "*.editor.txt", "*.editor.md"):
         ed_files.extend(cfg.dropbox.rglob(pat))
     for f in sorted(set(ed_files)):
-        ed_id = re.sub(r"^[#\-*\s]+", "", f.read_text().strip().splitlines()[0]).strip() if f.read_text().strip() else ""
+        ed_id = re.sub(r"^[#\-*\s]+", "", f.read_text(encoding="utf-8").strip().splitlines()[0]).strip() if f.read_text(encoding="utf-8").strip() else ""
         print(f"  {f}: {ed_id or '(empty)'}")
 
 
@@ -273,16 +273,16 @@ def cmd_key(cfg: Config, args) -> None:
             print(f"stored {name} in the OS secret store (service pha)")
         else:
             envp = cfg.root / ".env"
-            lines = [l for l in envp.read_text().splitlines()
+            lines = [l for l in envp.read_text(encoding="utf-8").splitlines()
                      if l.strip() and not l.startswith(f"{name}=")] if envp.exists() else []
             lines.append(f"{name}={value}")
-            envp.write_text("\n".join(lines) + "\n")
+            envp.write_text("\n".join(lines) + "\n", encoding="utf-8")
             print(f"OS secret store unavailable; stored {name} in {envp} (gitignored)")
         return
     names = set()
     for d in (cfg.palaeographers_dir, cfg.editors_dir):
         for f in d.glob("*.md"):
-            for line in f.read_text().splitlines():
+            for line in f.read_text(encoding="utf-8").splitlines():
                 if line.strip().startswith("api_key:"):
                     m = re.search(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", line)
                     if m:
@@ -346,7 +346,7 @@ def cmd_set_dropbox(cfg: Config, args) -> None:
         if not os.path.isabs(expanded):
             expanded = str((cfg.root / expanded).resolve())
         envp = cfg.root / ".env"
-        lines = [l for l in envp.read_text().splitlines()
+        lines = [l for l in envp.read_text(encoding="utf-8").splitlines()
                  if l.strip() and not l.startswith("PHA_DROPBOX=")] if envp.exists() else []
         lines.append(f"PHA_DROPBOX={expanded}")
         envp.write_text("\n".join(lines) + "\n", encoding="utf-8")

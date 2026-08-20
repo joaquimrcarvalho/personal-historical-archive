@@ -168,11 +168,11 @@ def resolve_prompt(
     """
     for cand in prompt_candidates(stem, file_dir, dropbox, prompts_dir, explicit, kind):
         if cand.exists():
-            return cand.read_text(), str(cand)
+            return cand.read_text(encoding="utf-8"), str(cand)
     if kind == "prompt":
         default = prompts_dir / "default_prompt.md"
         if default.exists():
-            return default.read_text(), str(default)
+            return default.read_text(encoding="utf-8"), str(default)
         return DEFAULT_PROMPT, "builtin"
     return "", "none"
 
@@ -308,7 +308,7 @@ def resolve_palaeographer_id(
         return explicit, f"flag:{explicit}"
     for cand in palaeographer_candidates(stem, file_dir, dropbox):
         if cand.exists():
-            text = cand.read_text().strip()
+            text = cand.read_text(encoding="utf-8").strip()
             if text:
                 pal_id = re.sub(r"^[#\-*\s]+", "", text.splitlines()[0]).strip()
                 if pal_id:
@@ -342,7 +342,7 @@ def resolve_editor_id(
         return explicit, f"flag:{explicit}"
     for cand in editor_candidates(stem, file_dir, dropbox):
         if cand.exists():
-            text = cand.read_text().strip()
+            text = cand.read_text(encoding="utf-8").strip()
             if text:
                 ed_id = re.sub(r"^[#\-*\s]+", "", text.splitlines()[0]).strip()
                 if ed_id:
@@ -375,7 +375,7 @@ def resolve_encoder_id(
         return explicit, f"flag:{explicit}"
     for cand in encoder_candidates(stem, file_dir, dropbox):
         if cand.exists():
-            text = cand.read_text().strip()
+            text = cand.read_text(encoding="utf-8").strip()
             if text:
                 enc_id = re.sub(r"^[#\-*\s]+", "", text.splitlines()[0]).strip()
                 if enc_id:
