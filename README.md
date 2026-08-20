@@ -108,6 +108,51 @@ pha search "monastery donation charter" --mode semantic
 pha mcp
 ```
 
+### New machine setup
+
+To set this project up on a fresh machine (or another Mac), from scratch:
+
+```bash
+# 1. clone (defaults to the `main` branch — the base branch)
+git clone https://github.com/joaquimrcarvalho/personal-historical-archive.git
+cd personal-historical-archive
+
+# 2. environment (uv-managed Python)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -e .
+alias pha=".venv/bin/python -m personal_historical_archive"
+
+# 3. point at your documents folder (copy your dropbox/ contents there).
+#    Either edit config.yaml -> paths.dropbox to an ABSOLUTE path, or set:
+export PHA_DROPBOX=/path/to/your/documents   # takes precedence over config.yaml
+
+# 4. start LM Studio, load qwen/qwen3-vl-8b (or your palaeo model), and the
+#    embedding model; start the local server on port 1234
+pha key --set MINIMAX_API_KEY   # only if you use remote MiniMax editors
+
+# 5. extract + search
+pha scan
+pha search "your query"
+```
+
+Model notes for a new machine:
+
+- **Only ONE local model at a time.** LM Studio holds a single model in
+  memory; loading two local models (e.g. qwen vision + amalia editor)
+  concurrently causes swap/page-out that fills the disk and hangs the server.
+  `pha scan` and `pha edit` share a lock, so they refuse to run at the same
+  time. A palaeographer and editor that use the SAME local model (e.g. qwen
+  for both on Pfister) keep one slot loaded. **Quit LM Studio when you are not
+  ingesting** — its model page-out is the thing that eats disk space.
+- **Picking a palaeographer per collection**: put a `palaeographer` file (the
+  model id) next to a document/collection;
+  `dropbox/collections/COLX/palaeographer -> minimax-vl` for MiniMax, or
+  `-> qwen-local-19-20c-books` for a local 19th–20th c. printed-book model.
+- **Renders**: default `render_dpi: 72` is fast and adequate for printed
+  books (qwen reads fine at 72 dpi). Bump it in `config.yaml` if your source
+  needs more detail.
+
 ### MCP client setup
 
 Point any MCP-capable client at the stdio server. Example for
