@@ -11,7 +11,9 @@ from personal_historical_archive.config import Config
 
 def _to_abs(path: str) -> Path:
     if os.name == "nt":
-        return Path("C:") / path.replace("/", "\\")
+        # drive-ROOTED absolute path (C:\abs\path); Path("C:")/... would be
+        # drive-relative (C:abs\path) and NOT absolute on Windows.
+        return Path("C:/") / path
     return Path("/" + path.lstrip("/"))
 
 
