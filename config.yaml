@@ -2,12 +2,12 @@
 # All relative paths resolve against the project root (where this file lives).
 
 paths:
-  dropbox: ~/personal-historical-archive-documents/dropbox
-                          # drop PDFs/images here (+ optional <stem>.prompt.md sidecars)
-                          # use an ABSOLUTE path to point at a folder OUTSIDE the
-                          # project (e.g. a shared documents dir), or set the
-                          # PHA_DROPBOX env var (takes precedence). Both let you
-                          # keep documents on another machine/drive.
+  dropbox: dropbox        # drop PDFs/images here (+ optional <stem>.prompt.md sidecars)
+                          # keep this PORTABLE default in the repo. On a given
+                          # machine, point at an external documents folder with
+                          # the PHA_DROPBOX env var (takes precedence) or a
+                          # local absolute path here — do NOT commit a
+                          # machine-specific path.
                           # subdirectories are supported and become 'collections':
                           #   dropbox/documents/            individual documents
                           #   dropbox/collections/COLX/     a collection of sources
