@@ -3,6 +3,10 @@
 
 paths:
   dropbox: dropbox        # drop PDFs/images here (+ optional <stem>.prompt.md sidecars)
+                          # use an ABSOLUTE path to point at a folder OUTSIDE the
+                          # project (e.g. a shared documents dir), or set the
+                          # PHA_DROPBOX env var (takes precedence). Both let you
+                          # keep documents on another machine/drive.
                           # subdirectories are supported and become 'collections':
                           #   dropbox/documents/            individual documents
                           #   dropbox/collections/COLX/     a collection of sources

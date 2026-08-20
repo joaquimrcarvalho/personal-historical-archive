@@ -349,9 +349,16 @@ class Config:
         editors = _parse_editors(raw, prompts_dir, root, ed_dir)
         encoders = _parse_encoders(enc_dir)
 
+        # Dropbox may live outside the project tree (e.g. a shared documents
+        # folder on another machine). Precedence: PHA_DROPBOX env var > the
+        # paths.dropbox entry (which, like all paths, accepts an absolute path
+        # or a path relative to the project root).
+        dropbox_path = os.environ.get("PHA_DROPBOX") or paths.get("dropbox", "dropbox")
+        dropbox = _p(root, str(dropbox_path))
+
         return cls(
             root=root,
-            dropbox=_p(root, paths.get("dropbox", "dropbox")),
+            dropbox=dropbox,
             library=_p(root, paths.get("library", "library")),
             data=_p(root, paths.get("data", "data")),
             renders=_p(root, paths.get("renders", "data/renders")),
