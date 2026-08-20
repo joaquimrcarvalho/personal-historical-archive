@@ -90,7 +90,8 @@ structured records grounded to the page each one starts on.
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e .
-alias pha=".venv/bin/python -m personal_historical_archive"
+export PATH="$PWD/.venv/bin:$PATH"     # puts `pha` on PATH for this shell
+pha --help                             # sanity check
 
 # 2. start LM Studio, load qwen/qwen3-vl-8b (+ an embedding model),
 #    and start the local server (default port 1234). Check config.yaml.
@@ -122,11 +123,17 @@ cd personal-historical-archive
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e .
-alias pha=".venv/bin/python -m personal_historical_archive"
+
+# The `pha` console script lives INSIDE the venv — it is NOT on the system
+# PATH. In any shell / for any agent, call it via the venv (full path, so it
+# works even in a fresh or non-interactive shell):
+PHA=.venv/bin/pha            # set once; then use  $PHA ...  or  $PHA
+# Alternatively:  export PATH="$PWD/.venv/bin:$PATH"   then plain  pha  works.
+# Note: `alias pha=...` only lasts for the one interactive shell it's set in.
 
 # 3. point at your documents folder (copy your dropbox/ contents there).
 #    The friendly way — stores the path in a gitignored .env (not committed):
-pha set dropbox /path/to/your/documents
+$PHA set dropbox /path/to/your/documents
 #    (or interactively: run `pha set dropbox` and type the path when asked)
 #    Equivalent alternatives: set the PHA_DROPBOX env var (takes precedence),
 #    or put an absolute paths.dropbox in config.yaml (not recommended —
@@ -134,11 +141,11 @@ pha set dropbox /path/to/your/documents
 
 # 4. start LM Studio, load qwen/qwen3-vl-8b (or your palaeo model), and the
 #    embedding model; start the local server on port 1234
-pha key --set MINIMAX_API_KEY   # only if you use remote MiniMax editors
+$PHA key --set MINIMAX_API_KEY   # only if you use remote MiniMax editors
 
 # 5. extract + search
-pha scan
-pha search "your query"
+$PHA scan
+$PHA search "your query"
 ```
 
 Model notes for a new machine:
