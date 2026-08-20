@@ -16,7 +16,9 @@ def make_server(cfg: Config) -> FastMCP:
             "This server provides access to a local archive of historical documents (manuscripts, old books, maps, ...) "
             "that have been transcribed page-by-page by a vision model. Use `pha_search` to "
             "find relevant passages, `pha_get_document` to read full extracted text, "
-            "`pha_list_documents` to browse, `pha_scan_now` after new files are dropped into the "
+            "`pha_list_documents` to browse, `pha_upload` to add a document/collection file "
+            "into the dropbox (send its base64 bytes — the client and server may be on "
+            "different machines), `pha_scan_now` after new files are dropped into the "
             "dropbox, and `pha_extraction_status` to see ingestion progress."
         ),
     )
@@ -118,6 +120,43 @@ def make_server(cfg: Config) -> FastMCP:
             return db.summary(conn)
         finally:
             conn.close()
+
+    @mcp.tool()
+    def pha_upload(kind: str, name: str, content_b64: str, replace: bool = False,
+                   merge: bool = False) -> dict:
+        """Upload ONE document or collection file into this server's dropbox.
+
+        Call this when you have a file on YOUR (client) machine and want it in
+        the dropbox of the machine running this MCP server. Because the client
+        and server are different machines, you send the file's bytes as
+        base64 (content_b64) plus a destination name, instead of a path.
+
+        Args:
+            kind: 'document' (a single file, e.g. a PDF or image) or
+                  'collection' (a file that belongs to a collection directory).
+            name: the destination filename in the dropbox. For a collection,
+                  use a path like 'COLX/filename.pdf' to place it inside
+                  collections/COLX/. For a document, a bare filename goes to
+                  documents/.
+            content_b64: the file bytes, base64-encoded.
+            replace: overwrite the destination if it exists.
+            merge: copy into / update the existing destination instead of
+                   refusing.
+
+        Returns a report with the destination path in the dropbox.
+        """
+        import base64
+        from .upload import _resolve_dest_b64, save_upload
+
+        dest = _resolve_dest_b64(cfg, kind, name)
+        exists = dest.exists()
+        if exists and not (replace or merge):
+            raise FileExistsError(
+                f"already exists in the dropbox: {dest} (pass replace=True to "
+                f"overwrite, or merge=True to update)"
+            )
+        blob = base64.b64decode(content_b64)
+        return save_upload(cfg, kind, name, blob, dest, exists, replace, merge)
 
     return mcp
 

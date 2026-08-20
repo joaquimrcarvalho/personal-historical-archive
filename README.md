@@ -165,6 +165,28 @@ Model notes for a new machine:
   books (qwen reads fine at 72 dpi). Bump it in `config.yaml` if your source
   needs more detail.
 
+### Uploading documents & collections
+
+Copy a document (a file, or a folder of page images) or a whole collection
+directory into the dropbox's conventional location:
+
+```bash
+pha upload document /path/to/myfile.pdf        # -> dropbox/documents/myfile.pdf
+pha upload document /path/to/pages_folder      # image-dir document -> dropbox/documents/<name>/
+pha upload collection /path/to/COLX_dir        # -> dropbox/collections/<name>/
+pha upload document /path/f.pdf --name gone.md # custom destination name
+```
+
+By default it REFUSES if the destination already exists; pass `--replace` to
+overwrite it, or `--merge` to copy into an existing destination (updating the
+files).
+
+**From another machine (remote dropbox):** expose the archive through the
+MCP server on the machine that owns the dropbox (`pha mcp`), and use the
+`pha_upload` MCP tool. It takes the file's bytes as base64 plus a destination
+name, so a client on machine A can push a document into the dropbox that
+lives on machine B. Uploading then `pha_scan_now` ingests it.
+
 ### MCP client setup
 
 Point any MCP-capable client at the stdio server. Example for
@@ -470,6 +492,8 @@ pha encoder [file] [--new]
 pha encode [--reprocess]
 pha set dropbox [PATH]   # set the documents folder (stored in gitignored .env)
 pha dropbox              # alias for `pha set dropbox`
+pha upload document PATH [--name N] [--replace] [--merge]
+pha upload collection PATH [--name N] [--replace] [--merge]
 pha mcp [--transport stdio|sse] [--port 8000]
 ```
 

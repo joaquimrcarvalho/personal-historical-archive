@@ -295,6 +295,29 @@ def cmd_key(cfg: Config, args) -> None:
         print(f"  {name}: {src}")
 
 
+def cmd_upload(cfg: Config, args) -> None:
+    """`pha upload document|collection <PATH>` — copy a document/collection
+    into the dropbox at the conventional location."""
+    from .upload import upload as do_upload
+    kind = getattr(args, "kind", None)
+    src = args.path
+    try:
+        report = do_upload(
+            cfg, src, kind,
+            name=getattr(args, "name", None),
+            replace=getattr(args, "replace", False),
+            merge=getattr(args, "merge", False),
+        )
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return
+    except FileExistsError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return
+    print(f"uploaded {report['kind']}: {report['source']}")
+    print(f"  -> {report['destination']}  ({report['files_copied']} file(s))")
+
+
 def cmd_set_dropbox(cfg: Config, args) -> None:
     """`pha set dropbox` (or `pha dropbox`) — point at the documents folder.
 
@@ -474,6 +497,16 @@ def main(argv: list[str] | None = None) -> None:
     sdb.add_argument("path", nargs="?", help="path to the documents folder (or prompted)")
     sdb.set_defaults(fn=cmd_set_dropbox)
     sub.add_parser("dropbox", help="alias for `pha set dropbox`").set_defaults(fn=cmd_set_dropbox)
+
+    up = sub.add_parser("upload", help="copy a document or collection into the dropbox")
+    upsub = up.add_subparsers(dest="kind", required=True)
+    for k in ("document", "collection"):
+        ps = upsub.add_parser(k, help=f"upload a {k} into the dropbox")
+        ps.add_argument("path", help=f"path to the {k} (file , image-dir, or collection dir)")
+        ps.add_argument("--name", default=None, help="destination name in the dropbox (default: source name)")
+        ps.add_argument("--replace", action="store_true", help="replace an existing destination")
+        ps.add_argument("--merge", action="store_true", help="copy into an existing destination, updating files")
+        ps.set_defaults(fn=cmd_upload)
 
     args = parser.parse_args(argv)
     args.fn(cfg, args)
