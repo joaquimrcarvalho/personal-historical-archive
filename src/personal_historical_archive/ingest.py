@@ -734,7 +734,15 @@ def edit_document(
 
 
 def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> dict:
-    """Run the editor pass for every document that has an editor configured."""
+    """Run the editor pass for every document that has an editor configured.
+
+    Uses the SAME lock as scan_once: a scan and an edit must not run
+    concurrently, because they both load a local model and LM Studio only
+    holds ONE model in memory at a time (two local jobs -> swap -> disk fill).
+    If another job holds the lock, this pass reports it and exits."""
+    if not _acquire_scan_lock(cfg):
+        return {"results": [{"action": "skipped", "filename": "(edit)",
+                             "reason": "another scan/edit job is running (one local model at a time)"}]}
     cfg.ensure_dirs()
     conn = db.connect(cfg.db_path)
     try:
@@ -744,6 +752,7 @@ def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> dict
         return {"results": results}
     finally:
         conn.close()
+        _release_scan_lock(cfg)
 
 
 # --------------------------------------------------------------------------- encoders (structured records)

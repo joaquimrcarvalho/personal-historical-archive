@@ -50,9 +50,14 @@
   `pha encoder --new` is the non-technical wizard that creates encoder files
   (chat variant: `prompts/encoder-helper.md`). Never write a resolved API key
   into a generated encoder file — keep `${ENV}` placeholders.
-- **Extraction, the editor pass and the encoder use different models**; LM
-  Studio serves one model at a time, so do not run `pha scan` and `pha edit`
-  concurrently. Remote models (e.g. MiniMax) don't compete with LM Studio.
+- **Only ONE local-model job at a time.** LM Studio holds a single model in
+  memory — loading two local models (e.g. qwen vision + amalia editor)
+  simultaneously causes swap/page-out that fills the disk and wedges the
+  server. `pha scan` and `pha edit` now share the SAME lock, so they cannot
+  run concurrently; if one runs while the other holds the lock it reports
+  "another scan/edit job is running" and exits. Remote models (MiniMax)
+  don't compete with LM Studio. A palaeographer and editor may use the SAME
+  local model (e.g. qwen for both on Pfister) to keep one slot loaded.
 - Pipeline: dropbox → palaeographer per-page transcription → optional editor
   transform → optional encoder (concatenated whole-document text, page-grounded
   records) → SQLite (FTS5 + embeddings, indexing both raw and edited
