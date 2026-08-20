@@ -215,6 +215,36 @@ itself.
 
 ---
 
+### Using the archive from another machine (remote)
+
+You can also work with the archive **from a different computer** — add
+documents, or let an agent there search what is already transcribed — while
+the archive and models stay on this machine. You do this by making the
+archive available over the network (an "MCP server"). Ask your agent:
+
+```
+Make the archive available to another machine:
+  pha mcp --transport sse --host 0.0.0.0 --port 8000
+and tell me the address this computer's network uses (e.g. 192.168.1.20).
+(Optional: first run  pha set dropbox <folders>  if you want to move the
+documents folder.)
+```
+
+From the other machine, an agent can then connect and, among other things:
+
+- **Upload a document / collection**: send the file to
+  `http://<this-machine>:8000/sse` and use the `pha_upload` tool (e.g.
+  `pha_upload("document", "myfile.pdf", <base64>)`).
+- **See how documents are processed**: `pha_palaeographers`, `pha_editors`,
+  `pha_encoders`, `pha_collection_config`.
+- **Search**: `pha_search`, `pha_get_document`, `pha_list_documents`.
+
+Keep the network address internal (home/office network or a VPN). The archive
+is designed so the heavy AI models only ever run on **your** machine.
+See `MCP_CLIENTS.md` for the detailed setup.
+
+---
+
 ## Where the results are
 
 For each document, in the `library/` folder, mirroring the dropbox layout:

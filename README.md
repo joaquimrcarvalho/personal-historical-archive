@@ -185,12 +185,17 @@ files).
 MCP server on the machine that owns the dropbox (`pha mcp`), and use the
 `pha_upload` MCP tool. It takes the file's bytes as base64 plus a destination
 name, so a client on machine A can push a document into the dropbox that
-lives on machine B. Uploading then `pha_scan_now` ingests it.
+lives on machine B. Uploading then `pha_scan_now` ingests it. See
+[`MCP_CLIENTS.md`](MCP_CLIENTS.md) for the full **machine-to-machine** setup —
+connecting an agent to another machine's server, uploading documents, and
+setting palaeographers/editors/encoders remotely.
 
 ### MCP client setup
 
-Point any MCP-capable client at the stdio server. Example for
-**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+Point any MCP-capable client at the stdio server. **For remote / networked
+connections (another machine, SSE, security, SSH tunnels) see
+[`MCP_CLIENTS.md`](MCP_CLIENTS.md).** Example for **Claude Desktop**
+(`~/Library/Application Support/Claude/claude_desktop_config.json`):
 
 ```json
 {

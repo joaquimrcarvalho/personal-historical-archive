@@ -158,6 +158,68 @@ def make_server(cfg: Config) -> FastMCP:
         blob = base64.b64decode(content_b64)
         return save_upload(cfg, kind, name, blob, dest, exists, replace, merge)
 
+    @mcp.tool()
+    def pha_palaeographers() -> list[dict]:
+        """List the configured palaeographer (vision) models and the active default."""
+        out = []
+        for pid in sorted(cfg.palaeographers):
+            p = cfg.palaeographers[pid]
+            out.append({"id": pid, "description": p.description or "",
+                        "model": p.model, "base_url": p.base_url,
+                        "active": pid == cfg.active_palaeographer})
+        return out
+
+    @mcp.tool()
+    def pha_editors() -> list[dict]:
+        """List the configured editor (text) models."""
+        return [{"id": eid, "description": e.description or "", "model": e.model,
+                 "base_url": e.base_url}
+                for eid, e in sorted(cfg.editors.items())]
+
+    @mcp.tool()
+    def pha_encoders(document_relpath: str) -> list[dict]:
+        """List the encoders that apply to a document in the dropbox.
+
+        Args:
+            document_relpath: path of the document relative to the dropbox,
+                e.g. "collections/pfister-notices/...t1.pdf".
+        """
+        from .extract import encoder_files_for
+        from pathlib import Path
+        p = (cfg.dropbox / document_relpath).resolve()
+        stem = p.stem
+        parent = p.parent
+        return [{"file": str(f.relative_to(cfg.dropbox))} for f in
+                encoder_files_for(stem, parent, cfg.dropbox)]
+
+    @mcp.tool()
+    def pha_collection_config(document_relpath: str) -> dict:
+        """Resolved palaeographer, editor, and prompt for a document/collection.
+
+        Args:
+            document_relpath: path relative to the dropbox, e.g.
+                "collections/letters-from-missons" (a collection dir) or a
+                specific file inside it.
+        """
+        from .extract import (resolve_editor_id, resolve_palaeographer_id,
+                              resolve_prompt)
+        from pathlib import Path
+        p = (cfg.dropbox / document_relpath).resolve()
+        sel_path = p if p.is_dir() else p.parent
+        pal_id, pal_src = resolve_palaeographer_id(p.stem, sel_path, cfg.dropbox)
+        ed_id, ed_src = resolve_editor_id(p.stem, sel_path, cfg.dropbox)
+        prompt_txt, prompt_src = resolve_prompt(p.stem, sel_path, cfg.dropbox, cfg.prompts)
+        pal = cfg.get_palaeographer(pal_id) if pal_id else cfg.get_palaeographer()
+        ed = cfg.editors.get(ed_id) if ed_id else None
+        return {
+            "document": document_relpath,
+            "palaeographer": {"id": pal.id, "model": pal.model, "source": pal_src},
+            "editor": {"id": ed.id, "model": ed.model, "source": ed_src} if ed else
+                      {"id": None, "model": None, "source": ed_src},
+            "prompt_source": prompt_src,
+            "prompt": (prompt_txt or ""),
+        }
+
     return mcp
 
 
