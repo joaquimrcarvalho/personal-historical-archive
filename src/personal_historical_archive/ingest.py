@@ -252,18 +252,26 @@ def _is_document_dir(path: Path) -> bool:
     return True
 
 
-def discover(dropbox: Path, dir_documents: bool = True) -> list[Path]:
-    """List document units: individual files plus image-directory documents."""
+def discover(dropbox: Path, dir_documents: bool = True, root: Path | None = None) -> list[Path]:
+    """List document units: individual files plus image-directory documents.
+
+    By default walks the whole `dropbox` tree. Pass `root` to restrict
+    discovery to a single subpath (a collection, e.g. the directory of
+    dropbox/collections/pfister-notices) so a scan can target one collection
+    instead of the whole dropbox. `root` must be inside `dropbox`."""
+    base = dropbox if root is None else root
+    if not base.exists():
+        return []
     units: list[Path] = []
-    for p in sorted(dropbox.rglob("*")):
+    for p in sorted(base.rglob("*")):
         if not p.is_file() or not is_supported(p.name) or p.name.startswith("."):
             continue
-        if dir_documents and p.parent != dropbox and _is_document_dir(p.parent):
+        if dir_documents and p.parent != base and _is_document_dir(p.parent):
             continue  # this file is a page of a document-directory
         units.append(p)
     if dir_documents:
-        for d in sorted(dropbox.rglob("*")):
-            if d.is_dir() and d != dropbox and _is_document_dir(d):
+        for d in sorted(base.rglob("*")):
+            if d.is_dir() and d != base and _is_document_dir(d):
                 units.append(d)
     return sorted(units, key=lambda p: str(p))
 
@@ -1242,12 +1250,29 @@ def scan_once(
     explicit_prompt: str | None = None,
     reprocess: bool = False,
     verbose: bool = True,
+    path: str | None = None,
 ) -> dict:
     if not _acquire_scan_lock(cfg):
         return {"scanned": 0, "results": [{"action": "skipped", "filename": "(scan)",
                                            "reason": "another scan is running"}]}
     cfg.ensure_dirs()
     conn = db.connect(cfg.db_path)
+    # resolve the --path/--collection target to a discovery root under dropbox
+    scan_root = cfg.dropbox
+    if path:
+        root = Path(path)
+        if not root.is_absolute():
+            root = cfg.dropbox / root
+        root = root.resolve()
+        if cfg.dropbox.resolve() in root.parents or root == cfg.dropbox.resolve() or root.exists():
+            scan_root = root
+        else:
+            # path outside the dropbox: allow only if it exists (absolute target)
+            if root.exists():
+                scan_root = root
+            else:
+                print(f"  target path does not exist: {path}", flush=True)
+                scan_root = root  # discover() returns [] if missing
     # vision clients per palaeographer: the default is the passed client;
     # documents that resolve to another palaeographer get their own.
     clients: dict[str, tuple[ModelClient, Palaeographer]] = {
@@ -1255,7 +1280,7 @@ def scan_once(
     }
     try:
         db.backfill_dir_path(conn, cfg.dropbox)
-        files = discover(cfg.dropbox, cfg.dir_documents)
+        files = discover(cfg.dropbox, cfg.dir_documents, root=scan_root)
         results = []
         for i, f in enumerate(files, 1):
             if verbose:
@@ -1310,12 +1335,14 @@ class _WatchHandler(FileSystemEventHandler):
         palaeographer: Palaeographer,
         explicit_prompt: str | None,
         debounce_s: float,
+        path: str | None = None,
     ) -> None:
         self.cfg = cfg
         self.client = client
         self.palaeographer = palaeographer
         self.explicit_prompt = explicit_prompt
         self.debounce_s = debounce_s
+        self.path = path
         self._lock = threading.Lock()
         self._timer: threading.Timer | None = None
 
@@ -1350,7 +1377,8 @@ class _WatchHandler(FileSystemEventHandler):
 
     def _run(self) -> None:
         try:
-            scan_once(self.cfg, self.client, self.palaeographer, self.explicit_prompt)
+            scan_once(self.cfg, self.client, self.palaeographer, self.explicit_prompt,
+                      path=self.path)
         except Exception as e:  # keep the watcher alive
             print(f"scan failed: {e}")
 
@@ -1361,11 +1389,12 @@ def watch(
     palaeographer: Palaeographer,
     explicit_prompt: str | None = None,
     debounce_s: float = 8.0,
+    path: str | None = None,
 ) -> None:
     cfg.ensure_dirs()
     print(f"Initial scan of {cfg.dropbox} ...")
-    scan_once(cfg, client, palaeographer, explicit_prompt)
-    handler = _WatchHandler(cfg, client, palaeographer, explicit_prompt, debounce_s)
+    scan_once(cfg, client, palaeographer, explicit_prompt, path=path)
+    handler = _WatchHandler(cfg, client, palaeographer, explicit_prompt, debounce_s, path=path)
     observer = Observer()
     observer.schedule(handler, str(cfg.dropbox), recursive=True)
     observer.start()

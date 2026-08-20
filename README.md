@@ -96,8 +96,9 @@ alias pha=".venv/bin/python -m personal_historical_archive"
 #    and start the local server (default port 1234). Check config.yaml.
 
 # 3. drop manuscripts into dropbox/ and extract
-pha scan                 # one-shot
-pha scan --watch         # keep watching the dropbox
+pha scan                            # one-shot (whole dropbox)
+pha scan --path collections/COLX    # only a specific collection/subpath
+pha scan --watch                    # keep watching the dropbox
 
 # 4. search
 pha search "doação de Évora ao mosteiro"
@@ -444,7 +445,7 @@ printed i–xv but occupies PDF pages 1-15).
 ## CLI reference
 
 ```
-pha scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--reprocess]
+pha scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--path COLLECTION] [--reprocess]
 pha search QUERY [--mode hybrid|keyword|semantic] [--collection COLX] [--limit N] [--json]
 pha status
 pha export

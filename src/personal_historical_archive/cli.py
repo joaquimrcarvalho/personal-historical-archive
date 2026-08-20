@@ -38,11 +38,15 @@ def _fmt_ts(ts: float | None) -> str:
 def cmd_scan(cfg: Config, args) -> None:
     client, pal = make_vision_client(cfg, args.palaeographer)
     print(f"palaeographer: {pal.id} ({pal.description or pal.model})")
+    if getattr(args, "path", None):
+        print(f"target: {args.path}")
     try:
         if args.watch:
-            watch(cfg, client, pal, explicit_prompt=args.prompt, debounce_s=args.debounce)
+            watch(cfg, client, pal, explicit_prompt=args.prompt, debounce_s=args.debounce,
+                  path=getattr(args, "path", None))
             return
-        res = scan_once(cfg, client, pal, explicit_prompt=args.prompt, reprocess=args.reprocess)
+        res = scan_once(cfg, client, pal, explicit_prompt=args.prompt, reprocess=args.reprocess,
+                        path=getattr(args, "path", None))
     finally:
         client.close()
     summary = {"ingested": 0, "skipped": 0, "error": 0}
@@ -363,6 +367,9 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--debounce", type=int, default=8, help="watch debounce seconds")
     s.add_argument("--prompt", default=None, help="prompt file used for all files")
     s.add_argument("--palaeographer", default=None, help="palaeographer id from config (default: vision.palaeographer)")
+    s.add_argument("--path", "--collection", default=None,
+                   help="only process this subpath under the dropbox (e.g. "
+                        "collections/pfister-notices) instead of the whole dropbox")
     s.add_argument("--reprocess", action="store_true", help="re-extract everything")
     s.set_defaults(fn=cmd_scan)
 
