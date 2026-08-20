@@ -2,7 +2,8 @@
 # All relative paths resolve against the project root (where this file lives).
 
 paths:
-  dropbox: dropbox        # drop PDFs/images here (+ optional <stem>.prompt.md sidecars)
+  dropbox: ~/personal-historical-archive-documents/dropbox
+                          # drop PDFs/images here (+ optional <stem>.prompt.md sidecars)
                           # use an ABSOLUTE path to point at a folder OUTSIDE the
                           # project (e.g. a shared documents dir), or set the
                           # PHA_DROPBOX env var (takes precedence). Both let you

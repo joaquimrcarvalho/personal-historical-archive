@@ -313,7 +313,7 @@ def cmd_encoder(cfg: Config, args) -> None:
     # list all collection-local encoders
     found = sorted(cfg.dropbox.rglob("encoders/*.md"))
     found = [f for f in found if not f.name.startswith("_")
-             and not __import__("re").search(r"\.(prompt|langextract)\.md$", f.name)]
+             and not re.search(r"\.(prompt|langextract)\.md$", f.name)]
     if not found:
         print("no encoders configured (drop encoders/*.md files next to your documents)")
         return

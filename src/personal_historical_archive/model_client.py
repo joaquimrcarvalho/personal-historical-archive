@@ -44,44 +44,14 @@ def _prepare_image_b64(image_path: Path, max_side: int, jpeg_quality: int = 88) 
     anthropic-style path where the image travels as base64 TEXT (~2
     chars/token — a full-res render can cost ~190k input tokens).
 
-    - if the longest edge exceeds `max_side`, it is resized down;
-    - the JPEG is always re-encoded at `jpeg_quality`, so a user can keep
-      FULL resolution at a lower quality (q55 at 1800px ~= 150k tokens vs
-      q88 ~= 195k) instead of losing resolution to fit the context.
-
-    Uses `sips` on macOS (stdlib has no image resizing); falls back to the
-    original bytes if re-encoding is unavailable.
+    The JPEG is always resized to <=`max_side` and re-encoded at
+    `jpeg_quality` via `sips`, so a user can keep FULL resolution at a lower
+    quality (q55 at 1800px ~= 150k tokens vs q88 ~= 195k) instead of losing
+    resolution to fit the context. Falls back to the original bytes if sips
+    is unavailable.
     """
     mime = _MIME.get(image_path.suffix.lower(), "image/jpeg")
-    longest = _jpeg_longest_edge(image_path) if image_path.suffix.lower() == ".jpg" else max_side
-    if longest <= max_side:
-        return _reencode_b64(image_path, max_side, jpeg_quality, mime)
     return _reencode_b64(image_path, max_side, jpeg_quality, mime)
-
-
-def _jpeg_longest_edge(image_path: Path) -> int:
-    try:
-        import struct
-
-        with open(image_path, "rb") as f:
-            head = f.read(2)
-            if head != b"\xff\xd8":
-                return 0
-            f.seek(2)
-            while True:
-                marker = f.read(1)
-                while marker != b"\xff":
-                    marker = f.read(1)
-                while marker == b"\xff":
-                    marker = f.read(1)
-                if marker in (b"\xc0", b"\xc1", b"\xc2", b"\xc3"):
-                    f.read(3)
-                    h, w = struct.unpack(">HH", f.read(4))
-                    return max(w, h)
-                ln = struct.unpack(">H", f.read(2))[0]
-                f.seek(ln - 2, 1)
-    except (OSError, struct.error):
-        return 0
 
 
 def _reencode_b64(image_path: Path, max_side: int, jpeg_quality: int, mime: str) -> tuple[str, str]:

@@ -15,8 +15,7 @@
 
 - **personal-historical-archive (pha)** — local archive of historical
   documents; CLI `pha`, Python package `personal_historical_archive`
-  (`src/personal_historical_archive/`). The working branch is `rename-pha`
-  (to be merged into `main`).
+  (`src/personal_historical_archive/`). The working branch is `main`.
 - **Palaeographers (vision models), editors (text models) and encoders (text
   models) are one file each** in the top-level `palaeographers/`, `editors/`
   and `encoders/` directories: YAML front matter = model config (endpoint,

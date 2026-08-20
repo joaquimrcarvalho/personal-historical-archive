@@ -663,7 +663,7 @@ def _thinking(fm: dict) -> bool:
 
 
 def _p(root: Path, s: str) -> Path:
-    p = Path(s)
+    p = Path(s).expanduser()  # support '~/...' paths in config.yaml
     return p if p.is_absolute() else (root / p).resolve()
 
 
