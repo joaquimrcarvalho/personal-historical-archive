@@ -381,6 +381,12 @@ class Config:
         ed_dir = _p(archive_dir, paths.get("editors", "editors"))
         enc_dir = _p(archive_dir, paths.get("encoders", "encoders"))
 
+        # Seed the zero-config defaults BEFORE parsing, so a fresh archive has
+        # working default palaeographer/editor/encoder on the very first load.
+        _seed_default(pal_dir, _DEFAULT_PAL)
+        _seed_default(ed_dir, _DEFAULT_ED)
+        _seed_default(enc_dir, _DEFAULT_ENC)
+
         palaeographers, active = _parse_palaeographers(raw, vis, prompts_dir, root, pal_dir)
         editors = _parse_editors(raw, prompts_dir, root, ed_dir)
         encoders = _parse_encoders(enc_dir)
@@ -449,10 +455,14 @@ class Config:
         for d in (self.dropbox, self.library, self.data, self.renders, self.prompts,
                   self.palaeographers_dir, self.editors_dir, self.encoders_dir):
             d.mkdir(parents=True, exist_ok=True)
-        # seed sample configuration files on first run
-        _seed_sample(self.palaeographers_dir, "_sample.md", _PAL_SAMPLE)
-        _seed_sample(self.editors_dir, "_sample.md", _ED_SAMPLE)
-        _seed_sample(self.encoders_dir, "_sample.md", _ENC_SAMPLE)
+        # seed the _sample.md TEMPLATES into the PROJECT (code side): these
+        # are the starting point for creating new definitions.
+        for name, content in (("palaeographers", _PAL_SAMPLE),
+                              ("editors", _ED_SAMPLE),
+                              ("encoders", _ENC_SAMPLE)):
+            d = self.root / name
+            d.mkdir(parents=True, exist_ok=True)
+            _seed_sample(d, "_sample.md", content)
 
 
 def _parse_palaeographers(
@@ -701,6 +711,129 @@ def _seed_sample(directory: Path, name: str, content: str) -> None:
     sample = directory / name
     if not sample.exists():
         sample.write_text(content, encoding="utf-8")
+
+
+def _seed_default(directory: Path, content: str) -> None:
+    """Seed `default.md` in `directory` only when it has no real definition
+    yet (no non-underscore .md files). This gives a fresh archive a working
+    zero-config default (qwen) without ever overwriting a user's files."""
+    if not directory.exists():
+        directory.mkdir(parents=True, exist_ok=True)
+    has_def = any(
+        f.is_file() and f.suffix == ".md" and not f.name.startswith("_")
+        for f in directory.iterdir()
+    )
+    if not has_def:
+        target = directory / "default.md"
+        if not target.exists():
+            target.write_text(content, encoding="utf-8")
+
+
+# --- zero-config defaults (seeded into the archive as default.md) ----------
+# All three point at the same local model (qwen3-vl-8b via LM Studio) so a
+# fresh archive works with no configuration. qwen3-vl handles both vision
+# (palaeographer) and text (editor/encoder).
+
+_DEFAULT_PAL = """---
+description: default palaeographer — generic transcription (qwen3-vl-8b local)
+base_url: http://127.0.0.1:1234/v1
+model: qwen/qwen3-vl-8b
+api_key: ""
+temperature: 0.1
+max_tokens: 4096
+timeout_s: 900
+---
+
+You are an expert paleographer in historical documents. Analyse the attached
+file and provide:
+
+Transcription: Provide a verbatim transcription of the text, keeping the
+original line breaks.
+
+Visual Notes: Describe any difficult-to-read sections, annotations, or layout
+features (like marginalia).
+
+Uncertainties: Use brackets [?] for words you aren't 100% sure about based on
+the context.
+
+Do not add any comments other than those above.
+"""
+
+_DEFAULT_ED = """---
+description: default editor — expand abbreviations, extract named entities + notes (qwen3-vl-8b local)
+base_url: http://127.0.0.1:1234/v1
+model: qwen/qwen3-vl-8b
+api_key: ""
+temperature: 0.0
+max_tokens: 4096
+timeout_s: 300
+---
+
+You are a scholarly editor of transcribed historical texts.
+
+Work from the transcription provided. Two tasks:
+
+1. **Expansion and clean-up** — expand abbreviations into their full words
+   using the conventions of the period and language, WITHOUT needing an
+   exhaustive list: expand any contracted form you recognise. When an
+   expansion is uncertain, keep the abbreviation and add the hypothesis in
+   square brackets, e.g. "p[adre]". Do not modernize orthography beyond
+   expanding abbreviations. Keep line breaks and any footnotes.
+
+2. **Named entities and notes** — extract the named entities present in the
+   text and list them in a `## Notes` section at the end:
+
+   ## Notes
+
+   ### Named entities
+
+   - one entity per line, ALWAYS a bullet "- Name (role, place or context)"
+   - people (with role/occupation), places, and institutions
+   - NEVER join several entities on one line
+   - if there are none, write exactly: - none
+
+CRITICAL — preserve NON-LATIN characters exactly: any Greek, Hebrew, or
+Chinese characters must be reproduced unchanged, not romanized, translated,
+or dropped.
+
+Output the edited transcription followed by the ## Notes section, with no
+preamble or commentary.
+"""
+
+_DEFAULT_ENC = """---
+description: default encoder — JSON dump of document metadata + named entities + notes (qwen3-vl-8b local)
+base_url: http://127.0.0.1:1234/v1
+model: qwen/qwen3-vl-8b
+api_key: ""
+temperature: 0.0
+max_tokens: 4096
+timeout_s: 300
+api_style: openai
+batch_pages: 20
+context_tokens: 32768
+overlap_pages: 4
+extraction_passes: 1
+---
+
+You extract a structured JSON record from a transcription. The input is the
+document as ONE concatenated text with '--- page N ---' markers between
+pages. Return a single JSON object (NOT an array) that dumps the document's
+metadata, named entities and notes — i.e. everything the editor produced
+besides the transcription:
+
+{
+  "document": {"title": <exact text or null>, "type": <...>, "page": <...>},
+  "named_entities": [
+    {"text": "<exact text>", "type": "person|place|institution|other", "page": <int>}
+  ],
+  "notes": {"language": <...>, "script": <...>, "summary": <...>}
+}
+
+Use EXACT TEXT from the input for every value; do not paraphrase. Cite the
+page each entity appears on when the input gives page markers. If the
+transcription has no such content, return null/[] as appropriate. Output
+ONLY the JSON object, with no preamble or commentary.
+"""
 
 
 _PAL_SAMPLE = """---

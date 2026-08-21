@@ -39,7 +39,8 @@ paths:
 # Select per document/collection with a 'palaeographer' file next to it.
 
 vision:
-  palaeographer: qwen-local         # which palaeographer transcribes documents
+  palaeographer: default            # which palaeographer transcribes documents;
+                                    # 'default' is seeded into archive_dir/palaeographers/
 
 # Editors live as one file per model in the 'editors/' directory (same
 # convention: duplicate editors/_sample.md, rename, edit, save). Each editor

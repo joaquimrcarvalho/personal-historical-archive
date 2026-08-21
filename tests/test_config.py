@@ -134,6 +134,27 @@ def test_config_archive_dir_explicit_in_yaml(tmp_path):
     assert cfg.archive_dir == (tmp_path / "arc").resolve()
 
 
+def test_config_seeds_zero_config_defaults(tmp_path):
+    """A fresh archive seeds default.md palaeographer/editor/encoder (qwen)."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    # seeded on first load
+    assert list(cfg.palaeographers) == ["default"]
+    assert list(cfg.editors) == ["default"]
+    assert list(cfg.encoders) == ["default"]
+    # all point at the same local qwen model (zero config)
+    assert cfg.palaeographers["default"].model == "qwen/qwen3-vl-8b"
+    assert cfg.editors["default"].model == "qwen/qwen3-vl-8b"
+    assert cfg.encoders["default"].model == "qwen/qwen3-vl-8b"
+    # the files exist in the archive
+    arc = (tmp_path / "arc").resolve()
+    assert (arc / "palaeographers" / "default.md").exists()
+    assert (arc / "editors" / "default.md").exists()
+    assert (arc / "encoders" / "default.md").exists()
+
+
 def test_load_palaeographers(tmp_path):
     d = tmp_path / "palaeographers"
     d.mkdir()
