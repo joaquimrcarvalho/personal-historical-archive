@@ -16,6 +16,14 @@
 - **personal-historical-archive (pha)** — local archive of historical
   documents; CLI `pha`, Python package `personal_historical_archive`
   (`src/personal_historical_archive/`). The working branch is `main`.
+- **archive_dir is the self-contained data root.** Everything the archive
+  owns lives under it: `dropbox/` (documents), `palaeographers/`, `editors/`,
+  `encoders/` (model/prompt definitions), `library/`, `renders/`, `archive.db`
+  (generated). The project dir holds only code, `prompts/` and the
+  `_sample.md` templates. Precedence: `PHA_ARCHIVE_DIR` env > `PHA_ARCHIVE_DIR`
+  in `.env` (`pha set archive-dir`) > `paths.archive_dir` > default `.`.
+  A fresh archive is seeded with `default.md` for palaeographer/editor/encoder
+  (all qwen3-vl-8b) so it works with zero config.
 - **Palaeographers (vision models), editors (text models) and encoders (text
   models) are one file each** in the top-level `palaeographers/`, `editors/`
   and `encoders/` directories: YAML front matter = model config (endpoint,

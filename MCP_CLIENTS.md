@@ -15,7 +15,7 @@ processed (palaeographer / editor / encoder).
 | `pha_get_page(document_id, page_no, include_image)` | all versions of one page: transcribed, edited (per editor), encoded (per-page records), and the cached page image as base64 |
 | `pha_list_documents(status, limit, collection)` | browse the archive |
 | `pha_upload(kind, name, content_b64, replace, merge)` | put a file into the dropbox (send base64 bytes) |
-| `pha_get_dropbox()` | diagnostic: effective dropbox path + whether each registered doc's file exists on disk |
+| `pha_get_archive()` | diagnostic: effective archive_dir + its dropbox/library/renders/db paths, and whether each registered doc's file exists on disk |
 | `pha_palaeographers()` | list configured vision (palaeographer) models and the active default |
 | `pha_editors()` | list configured text (editor) models |
 | `pha_encoders(document_relpath)` | list the encoder files that apply to a document |
@@ -36,8 +36,8 @@ processed (palaeographer / editor / encoder).
   served — e.g. LM Studio `qwen/qwen3-vl-8b`.
 - Set `PHA_HOME` so the server finds `config.yaml` regardless of where the
   client launches it: `PHA_HOME=/path/to/personal-historical-archive`.
-- Set the dropbox path for this machine first:
-  `pha set dropbox /path/to/documents` (stored in the gitignored `.env`).
+- Set the archive data root for this machine first:
+  `pha set archive-dir /path/to/archive` (stored in the gitignored `.env`).
 
 ---
 
@@ -102,7 +102,7 @@ Bind to a reachable interface (not just `127.0.0.1`) and choose a port:
 
 ```bash
 cd /path/to/personal-historical-archive
-pha set dropbox /path/to/documents            # one-time; B's own dropbox
+pha set archive-dir /path/to/archive          # one-time; B's own archive dir
 pha mcp --transport sse --host 0.0.0.0 --port 8000
 ```
 

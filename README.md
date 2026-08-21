@@ -131,13 +131,16 @@ PHA=.venv/bin/pha            # set once; then use  $PHA ...  or  $PHA
 # Alternatively:  export PATH="$PWD/.venv/bin:$PATH"   then plain  pha  works.
 # Note: `alias pha=...` only lasts for the one interactive shell it's set in.
 
-# 3. point at your documents folder (copy your dropbox/ contents there).
-#    The friendly way — stores the path in a gitignored .env (not committed):
-$PHA set dropbox /path/to/your/documents
-#    (or interactively: run `pha set dropbox` and type the path when asked)
-#    Equivalent alternatives: set the PHA_DROPBOX env var (takes precedence),
-#    or put an absolute paths.dropbox in config.yaml (not recommended —
-#    machine-specific).
+# 3. point at your ARCHIVE directory (a single self-contained data root:
+#    documents + model definitions + generated output). The friendly way
+#    stores the path in a gitignored .env (not committed):
+$PHA set archive-dir /path/to/your/archive
+#    (or interactively: run `pha set archive-dir` and type the path when asked)
+#    Equivalent: set the PHA_ARCHIVE_DIR env var (takes precedence), or put
+#    paths.archive_dir in config.yaml (not recommended — machine-specific).
+#    Defaults to the project dir, so a fresh clone works with zero config:
+#    palaeographers/, editors/ and encoders/ are seeded with a default that
+#    uses qwen/qwen3-vl-8b on LM Studio.
 
 # 4. start LM Studio, load qwen/qwen3-vl-8b (or your palaeo model), and the
 #    embedding model; start the local server on port 1234
@@ -495,8 +498,9 @@ pha palaeographer [file]
 pha editor [file]
 pha encoder [file] [--new]
 pha encode [--reprocess]
-pha set dropbox [PATH]   # set the documents folder (stored in gitignored .env)
-pha dropbox              # alias for `pha set dropbox`
+pha set archive-dir [PATH]   # set the archive data root (stored in gitignored .env)
+pha archive-dir              # alias for `pha set archive-dir`
+pha set dropbox [PATH]       # DEPRECATED: set only the documents folder
 pha upload document PATH [--name N] [--replace] [--merge]
 pha upload collection PATH [--name N] [--replace] [--merge]
 pha mcp [--transport stdio|sse] [--port 8000]
@@ -504,6 +508,10 @@ pha mcp [--transport stdio|sse] [--port 8000]
 
 ## Configuration (`config.yaml`)
 
+- `paths.archive_dir` — the single self-contained **data root** (see Data
+  layout). Default `.` (the project dir). Set it per machine via
+  `pha set archive-dir` or the `PHA_ARCHIVE_DIR` env var — never commit a
+  machine-specific path.
 - `vision.*` — model server + vision model for extraction
 - `embeddings.*` — model server + embedding model
 - `extraction.*` — render dpi, image cap, chunk size/overlap, concurrency
@@ -524,20 +532,32 @@ After switching the embedding model run `pha reindex`.
 
 ## Data layout
 
+Everything the archive owns lives under ONE `archive_dir` (default: the
+project dir), so the archive is self-contained and copyable as a unit:
+
 ```
-dropbox/documents/        ← individual documents (+ .prompt.md sidecars)
-dropbox/collections/COLX/ ← collections of sources (+ prompt.md for the collection)
-library/
-  collections/letters-from-missons/   ← mirrors the dropbox directory structure
-    <doc-slug>/                       ← one folder per document
-      transcription-qwen-local/       ← one folder per palaeographer
-        page-001.md                   ← one file per page, YAML front matter repeated
-        page-002.md                     (source filename, collection, page, palaeographer,
-        …                               prompt, status) + the transcription body
-data/renders/<sha>/       ← cached page JPEGs fed to the VLM
-data/archive.db           ← documents / pages / chunks + FTS5 + embeddings
-prompts/default_prompt.md ← shipped default prompt
+archive_dir/
+  dropbox/documents/        ← individual documents (+ .prompt.md sidecars)
+  dropbox/collections/COLX/ ← collections of sources (+ prompt.md)
+  palaeographers/           ← model definitions (default.md seeded with qwen)
+  editors/                  ← model definitions (default.md seeded with qwen)
+  encoders/                 ← default encoder (default.md) + _sample.md template
+  library/                  ← generated per-page markdown (mirrors dropbox)
+    collections/letters-from-missons/
+      <doc-slug>/
+        transcription-qwen-local/   ← one folder per palaeographer
+          page-001.md               ← YAML front matter + transcription body
+  renders/<sha>/            ← cached page JPEGs fed to the VLM
+  archive.db                ← documents / pages / chunks + FTS5 + embeddings
 ```
+
+The PROJECT dir (code, versioned) holds only `src/`, `config.yaml`,
+`prompts/default_prompt.md`, `prompts/encoder-helper.md`, and the
+`palaeographers/_sample.md`, `editors/_sample.md`, `encoders/_sample.md`
+templates. A fresh archive is seeded with `default.md` palaeographer/editor/
+encoder pointing at `qwen/qwen3-vl-8b` (LM Studio), so it works with zero
+configuration; refine by adding sidecar definitions next to documents or
+collections.
 
 Per-page files are written **incrementally** while a document is being
 extracted, so output is visible immediately (no need to wait for completion).

@@ -294,13 +294,13 @@ def make_server(cfg: Config) -> FastMCP:
         }
 
     @mcp.tool()
-    def pha_get_dropbox() -> dict:
-        """Diagnostic: the server's effective dropbox path and whether the
-        documents registered in the DB still exist on disk at that location.
+    def pha_get_archive() -> dict:
+        """Diagnostic: the server's effective archive_dir and the data paths it
+        owns (dropbox, library, renders, db), plus whether the documents
+        registered in the DB still exist on disk.
 
-        Returns the dropbox root, the data/db path, and per-document file
-        existence. Use this to debug a scan that is finding 0 documents (e.g.
-        a dropbox path mismatch, or files that were moved/removed)."""
+        Use this to debug a scan that is finding 0 documents (e.g. an
+        archive_dir / dropbox path mismatch, or files that were moved/removed)."""
         import os
         conn = db.connect(cfg.db_path)
         try:
@@ -308,9 +308,12 @@ def make_server(cfg: Config) -> FastMCP:
         finally:
             conn.close()
         return {
+            "archive_dir": str(cfg.archive_dir),
             "dropbox": str(cfg.dropbox),
-            "dropbox_index": list(cfg.dropbox.rglob("*.pdf"))[:10] if cfg.dropbox.exists() else [],
+            "library": str(cfg.library),
+            "renders": str(cfg.renders),
             "db": str(cfg.db_path),
+            "dropbox_index": list(cfg.dropbox.rglob("*.pdf"))[:10] if cfg.dropbox.exists() else [],
             "documents": [
                 {"id": d["id"], "filename": d["filename"],
                  "recorded_path": d["path"],
@@ -318,6 +321,11 @@ def make_server(cfg: Config) -> FastMCP:
                 for d in docs
             ],
         }
+
+    @mcp.tool()
+    def pha_get_dropbox() -> dict:
+        """DEPRECATED alias for pha_get_archive (kept for existing clients)."""
+        return pha_get_archive()
 
     @mcp.tool()
     def pha_collection_status(collection: str | None = None) -> list[dict]:
