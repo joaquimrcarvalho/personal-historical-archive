@@ -83,6 +83,57 @@ def test_config_load_dotenv_dropbox(monkeypatch, tmp_path):
     assert cfg.dropbox == Path.home() / "external-docs"
 
 
+def test_config_archive_dir_default(tmp_path):
+    """archive_dir defaults to the project root; data paths derive from it."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text("paths:\n  archive_dir: .\n")
+    cfg = Config.load(root)
+    assert cfg.archive_dir == root.resolve()
+    assert cfg.dropbox == (root / "dropbox").resolve()
+    assert cfg.library == (root / "library").resolve()
+    assert cfg.renders == (root / "renders").resolve()
+    assert cfg.db_path == (root / "archive.db").resolve()
+    assert cfg.palaeographers_dir == (root / "palaeographers").resolve()
+
+
+def test_config_archive_dir_env_wins(monkeypatch, tmp_path):
+    """PHA_ARCHIVE_DIR env var overrides everything."""
+    monkeypatch.delenv("PHA_HOME", raising=False)
+    monkeypatch.setenv("PHA_ARCHIVE_DIR", str(tmp_path / "arc"))
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text("paths:\n  archive_dir: .\n")
+    cfg = Config.load(root)
+    arc = (tmp_path / "arc").resolve()
+    assert cfg.archive_dir == arc
+    assert cfg.dropbox == (arc / "dropbox").resolve()
+    assert cfg.db_path == (arc / "archive.db").resolve()
+
+
+def test_config_archive_dir_dotenv(monkeypatch, tmp_path):
+    """PHA_ARCHIVE_DIR in the root .env (via pha set archive-dir) is honoured."""
+    monkeypatch.delenv("PHA_HOME", raising=False)
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text("paths:\n  archive_dir: .\n")
+    (root / ".env").write_text(f"PHA_ARCHIVE_DIR={tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    arc = (tmp_path / "arc").resolve()
+    assert cfg.archive_dir == arc
+    assert cfg.dropbox == (arc / "dropbox").resolve()
+
+
+def test_config_archive_dir_explicit_in_yaml(tmp_path):
+    """paths.archive_dir in config.yaml is used when env/.env are absent."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    assert cfg.archive_dir == (tmp_path / "arc").resolve()
+
+
 def test_load_palaeographers(tmp_path):
     d = tmp_path / "palaeographers"
     d.mkdir()

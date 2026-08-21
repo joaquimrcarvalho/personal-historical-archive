@@ -294,6 +294,11 @@ class Encoder:
 @dataclass
 class Config:
     root: Path
+    # archive_dir is the single self-contained data root: documents, the model
+    # definitions (palaeographers/editors/encoders) and everything the pipeline
+    # generates (library, renders, db) live under it. The project dir holds only
+    # code, engine-level prompts and the _sample.md templates.
+    archive_dir: Path
     # paths
     dropbox: Path
     library: Path
@@ -340,43 +345,58 @@ class Config:
         emb = raw.get("embeddings", {}) or {}
         ext = raw.get("extraction", {}) or {}
         sea = raw.get("search", {}) or {}
+
+        def _env_setting(name: str) -> str | None:
+            """Read a setting from the real environment, then a line NAME=... in
+            the gitignored .env AT THIS ROOT (so tests with a tmp root are
+            isolated). Returns None if unset."""
+            v = os.environ.get(name)
+            if v:
+                return v
+            envp = root / ".env"
+            if envp.exists():
+                for line in envp.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line.startswith(name + "="):
+                        return line.split("=", 1)[1].strip().strip('"').strip("'")
+            return None
+
+        # archive_dir is the single self-contained data root. Everything the
+        # archive owns — documents, model definitions, generated output —
+        # lives under it. The project dir holds only code, engine-level
+        # prompts and the _sample.md templates.
+        # Precedence: PHA_ARCHIVE_DIR env > PHA_ARCHIVE_DIR in .env >
+        # paths.archive_dir > default "." (the project root, backward
+        # compatible).
+        archive_dir = _p(root, str(_env_setting("PHA_ARCHIVE_DIR") or paths.get("archive_dir", ".")))
+
+        # engine-level prompts stay in the PROJECT (not the archive).
         prompts_dir = _p(root, paths.get("prompts", "prompts"))
-        pal_dir = _p(root, paths.get("palaeographers", "palaeographers"))
-        ed_dir = _p(root, paths.get("editors", "editors"))
-        enc_dir = _p(root, paths.get("encoders", "encoders"))
+
+        # Data + model definitions derive from archive_dir. Individual
+        # paths.* entries are relative to archive_dir (absolute still wins).
+        # PHA_DROPBOX is kept as a DEPRECATED alias that sets just the dropbox.
+        dropbox = _p(archive_dir, str(_env_setting("PHA_DROPBOX") or paths.get("dropbox", "dropbox")))
+        pal_dir = _p(archive_dir, paths.get("palaeographers", "palaeographers"))
+        ed_dir = _p(archive_dir, paths.get("editors", "editors"))
+        enc_dir = _p(archive_dir, paths.get("encoders", "encoders"))
 
         palaeographers, active = _parse_palaeographers(raw, vis, prompts_dir, root, pal_dir)
         editors = _parse_editors(raw, prompts_dir, root, ed_dir)
         encoders = _parse_encoders(enc_dir)
 
-        # Dropbox may live outside the project tree (e.g. a shared documents
-        # folder on another machine). Precedence: the PHA_DROPBOX env var, then
-        # a PHA_DROPBOX line in the gitignored .env AT THIS ROOT (set via
-        # `pha set dropbox`), then the paths.dropbox entry (absolute path or
-        # relative to the project root).
-        dropbox_env = os.environ.get("PHA_DROPBOX")
-        if not dropbox_env:
-            envp = root / ".env"
-            if envp.exists():
-                for line in envp.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if line.startswith("PHA_DROPBOX="):
-                        dropbox_env = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        break
-        dropbox_path = dropbox_env or paths.get("dropbox", "dropbox")
-        dropbox = _p(root, str(dropbox_path))
-
         return cls(
             root=root,
+            archive_dir=archive_dir,
             dropbox=dropbox,
-            library=_p(root, paths.get("library", "library")),
-            data=_p(root, paths.get("data", "data")),
-            renders=_p(root, paths.get("renders", "data/renders")),
+            library=_p(archive_dir, paths.get("library", "library")),
+            data=archive_dir,  # runtime state (e.g. the scan lock) lives at the root of the archive
+            renders=_p(archive_dir, paths.get("renders", "renders")),
             prompts=prompts_dir,
             palaeographers_dir=pal_dir,
             editors_dir=ed_dir,
             encoders_dir=enc_dir,
-            db_path=_p(root, paths.get("db", "data/archive.db")),
+            db_path=_p(archive_dir, paths.get("db", "archive.db")),
             palaeographers=palaeographers,
             active_palaeographer=active,
             editors=editors,

@@ -1,25 +1,35 @@
 # personal-historical-archive (pha) configuration
-# All relative paths resolve against the project root (where this file lives).
+#
+# archive_dir is the single SELF-CONTAINED data root. Everything the archive
+# owns lives under it: the input documents, the model/prompt definitions
+# (palaeographers / editors / encoders) and everything the pipeline generates
+# (library, renders, db). The project dir holds only code, engine-level
+# prompts (prompts/) and the _sample.md templates.
+#
+# archive_dir precedence: PHA_ARCHIVE_DIR env var > PHA_ARCHIVE_DIR in the
+# gitignored .env (set via `pha set archive-dir`) > paths.archive_dir >
+# default "." (the project root — fully backward compatible).
+#
+# paths below that hold DATA are relative to archive_dir. paths that hold
+# CODE/CONFIG (prompts) are relative to the project root.
 
 paths:
-  dropbox: dropbox        # drop PDFs/images here (+ optional <stem>.prompt.md sidecars)
-                          # keep this PORTABLE default in the repo. On a given
-                          # machine, point at an external documents folder with
-                          # the PHA_DROPBOX env var (takes precedence) or a
-                          # local absolute path here — do NOT commit a
-                          # machine-specific path.
-                          # subdirectories are supported and become 'collections':
-                          #   dropbox/documents/            individual documents
-                          #   dropbox/collections/COLX/     a collection of sources
-                          #   dropbox/collections/COLX/prompt.md  -> prompt for the whole collection
-  library: library        # human-readable extracted markdown per document
-  data: data              # sqlite db + page renders
-  renders: data/renders   # cached page images fed to the vision model
+  archive_dir: .          # data root (default: this project dir)
+  dropbox: dropbox        # input documents (+ optional <stem>.prompt.md sidecars)
+                          #   subdirectories become 'collections':
+                          #     dropbox/documents/            individual documents
+                          #     dropbox/collections/COLX/     a collection of sources
+                          #     dropbox/collections/COLX/prompt.md  -> prompt for the collection
+  library: library        # generated: human-readable extracted markdown per document
+  renders: renders        # generated: cached page images fed to the vision model
+  palaeographers: palaeographers   # model definitions (one file per palaeographer)
+  editors: editors        # model definitions (one file per editor)
+  encoders: encoders      # the DEFAULT encoder + its template (per-collection
+                          #   encoders live next to their sources in dropbox/)
+  db: archive.db          # generated: SQLite database
+
+  # engine-level (PROJECT-relative, not archive-relative):
   prompts: prompts        # default + per-file prompt files
-  palaeographers: palaeographers   # one file per palaeographer (front matter = config, body = base prompt)
-  editors: editors        # one file per editor (front matter = config, body = editing prompt)
-  encoders: encoders      # one file per encoder (front matter = config, body = encoding prompt)
-  db: data/archive.db
 
 # Palaeographers live as one file per model in the 'palaeographers/' directory.
 # To add one: duplicate palaeographers/_sample.md, rename, edit, save.
