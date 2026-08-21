@@ -387,6 +387,11 @@ class Config:
         _seed_default(ed_dir, _DEFAULT_ED)
         _seed_default(enc_dir, _DEFAULT_ENC)
 
+        # Migrate legacy definitions that live in the project dir (before the
+        # archive_dir split) into the archive dir, preserving their ids.
+        _migrate_legacy_defs(root / "palaeographers", pal_dir)
+        _migrate_legacy_defs(root / "editors", ed_dir)
+
         palaeographers, active = _parse_palaeographers(raw, vis, prompts_dir, root, pal_dir)
         editors = _parse_editors(raw, prompts_dir, root, ed_dir)
         encoders = _parse_encoders(enc_dir)
@@ -727,6 +732,25 @@ def _seed_default(directory: Path, content: str) -> None:
         target = directory / "default.md"
         if not target.exists():
             target.write_text(content, encoding="utf-8")
+
+
+def _migrate_legacy_defs(project_dir: Path, archive_dir: Path) -> None:
+    """Copy real (non-underscore) definition files from the project dir into
+    the archive dir when they are missing there, id-preserving. This lets a
+    relocated archive keep its existing palaeographer/editor definitions that
+    previously lived in the project, while a default (archive_dir = project
+    root) archive is a no-op (the dirs are the same). Never overwrites."""
+    if not project_dir.is_dir():
+        return
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    for f in sorted(project_dir.iterdir()):
+        if not f.is_file() or f.name.startswith(("_", ".")):
+            continue
+        if f.suffix.lower() not in (".md", ".txt"):
+            continue
+        dest = archive_dir / f.name
+        if not dest.exists():
+            dest.write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 # --- zero-config defaults (seeded into the archive as default.md) ----------

@@ -155,6 +155,30 @@ def test_config_seeds_zero_config_defaults(tmp_path):
     assert (arc / "encoders" / "default.md").exists()
 
 
+def test_config_migrates_legacy_defs(tmp_path):
+    """Legacy project definitions migrate into a relocated archive (id-preserving)."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    # a legacy palaeographer + editor in the PROJECT dir
+    (root / "palaeographers").mkdir(parents=True)
+    (root / "palaeographers" / "my-hand.md").write_text(
+        "---\ndescription: x\nbase_url: http://x/v1\nmodel: m\n---\nbody\n"
+    )
+    (root / "editors").mkdir(parents=True)
+    (root / "editors" / "modern-pt.md").write_text(
+        "---\ndescription: y\nbase_url: http://x/v1\nmodel: m\n---\nbody\n"
+    )
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    arc = (tmp_path / "arc").resolve()
+    # migrated + default seeded
+    assert "my-hand" in cfg.palaeographers
+    assert "modern-pt" in cfg.editors
+    assert "default" in cfg.palaeographers
+    assert (arc / "palaeographers" / "my-hand.md").exists()
+    assert (arc / "editors" / "modern-pt.md").exists()
+
+
 def test_load_palaeographers(tmp_path):
     d = tmp_path / "palaeographers"
     d.mkdir()
