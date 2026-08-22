@@ -460,6 +460,10 @@ class Config:
         for d in (self.dropbox, self.library, self.data, self.renders, self.prompts,
                   self.palaeographers_dir, self.editors_dir, self.encoders_dir):
             d.mkdir(parents=True, exist_ok=True)
+        # pre-create the dropbox sub-layout so a fresh archive is ready to use:
+        # documents/ for individual documents, collections/COLX/ for collections.
+        for sub in ("documents", "collections"):
+            (self.dropbox / sub).mkdir(parents=True, exist_ok=True)
         # seed the _sample.md TEMPLATES into the PROJECT (code side): these
         # are the starting point for creating new definitions.
         for name, content in (("palaeographers", _PAL_SAMPLE),

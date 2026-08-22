@@ -491,6 +491,7 @@ pha search QUERY [--mode hybrid|keyword|semantic] [--collection COLX] [--limit N
 pha status
 pha export
 pha reindex
+pha review [--doc N]      # import human corrections from library .md files into the DB
 pha edit [--reprocess]
 pha rm ID|NAME
 pha prompts [file]
@@ -544,9 +545,10 @@ archive_dir/
   encoders/                 ← default encoder (default.md) + _sample.md template
   library/                  ← generated per-page markdown (mirrors dropbox)
     collections/letters-from-missons/
-      <doc-slug>/
+      <doc>_<YYYY-MM-DD>/            ← readable folder per document version
         transcription-qwen-local/   ← one folder per palaeographer
-          page-001.md               ← YAML front matter + transcription body
+          502V.md                   ← one file per page, named after the source
+                                    ←   scan (dir-of-images) or page-NNN.md (PDF)
   renders/<sha>/            ← cached page JPEGs fed to the VLM
   archive.db                ← documents / pages / chunks + FTS5 + embeddings
 ```
@@ -565,6 +567,30 @@ extracted, so output is visible immediately (no need to wait for completion).
 re-extracting. Running a different palaeographer over the same document adds
 a sibling `transcription-<palaeographer>/` folder for side-by-side
 comparison.
+
+**Library folder naming**: each document version lives in a folder named
+`<stem>_<YYYY-MM-DD>` (e.g. `1567-Coimbra_2026-08-22`) — the readable
+creation date of that version. When a document's content changes, pha creates
+a NEW document row (with a new date), so versions never collide and the old
+folder stays on disk. Pages of a directory-of-images document are named after
+their source scan (`502V.md`); PDF pages use `page-NNN.md`.
+
+### Reviewing and correcting transcriptions
+
+The library files are meant to be READ and CORRECTED by a historian:
+
+1. Edit a page file: `library/.../transcription-<pal>/502V.md` or
+   `library/.../edited-<editor>/502V.md` (keep the YAML front matter; change
+   the body).
+2. `pha status` shows how many pages have un-imported corrections
+   (timestamp-based: a file whose mtime is newer than when pha last wrote it
+   is pending).
+3. `pha review [--doc N]` imports those corrections back into the database
+   and stamps the pages **reviewed** — later `pha scan` / `pha edit` passes
+   never overwrite a reviewed page, even with `--reprocess`.
+4. `pha reindex` so search uses the corrected text.
+
+Reviewed pages show `reviewed: true` in their front matter.
 
 ## Notes on quality & performance
 

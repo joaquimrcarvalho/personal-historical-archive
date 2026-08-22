@@ -67,8 +67,8 @@ embeddings:
   timeout_s: 120
 
 extraction:
-  render_dpi: 72          # render resolution for PDF pages (72 works for qwen; ~4x faster than 200)
-  max_image_px: 1800      # cap the long edge of page images (VLM input size)
+  render_dpi: 200         # render resolution for pages (200 for handwritten manuscripts)
+  max_image_px: 3000      # cap the long edge (native 3000px scans are NOT downsampled)
   jpeg_quality: 88
   chunk_chars: 2000       # index chunk size
   chunk_overlap: 200

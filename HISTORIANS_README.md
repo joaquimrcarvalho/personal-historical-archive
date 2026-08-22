@@ -247,15 +247,37 @@ See `MCP_CLIENTS.md` for the detailed setup.
 
 ## Where the results are
 
-For each document, in the `library/` folder, mirroring the dropbox layout:
+For each document, in the `library/` folder, mirroring the dropbox layout.
+Each document version has a readable folder named after it and its date
+(e.g. `1567-Coimbra_2026-08-22`); pages are named after their source scan
+(for a folder of images) or `page-NNN` (for a PDF):
 
 ```
-library/<collection>/<document>/transcription-qwen-local/page-001.md   ← faithful transcription
-library/<collection>/<document>/edited-modern-portuguese/page-001.md   ← modernized / translated
+library/<collection>/<document>_<date>/transcription-<palaeographer>/502V.md   ← faithful transcription
+library/<collection>/<document>_<date>/edited-<editor>/502V.md                 ← modernized / edited
 ```
 
 Each page file starts with a small header (source file, page number,
 palaeographer, editor, status) followed by the text.
+
+---
+
+## Reviewing and correcting the transcriptions
+
+You can read the library files and correct them. pha will **import your
+corrections** and never overwrite them afterwards:
+
+1. **Edit a page file** — open e.g.
+   `library/.../transcription-<palaeographer>/502V.md` and correct the text
+   under the header (keep the header as it is).
+2. **Check pending work** — run `pha status`; it will tell you how many pages
+   have corrections that are not imported yet (✏️ message).
+3. **Import your corrections** — run `pha review`. The database is updated
+   and those pages are marked as *reviewed*: future scans and edits will not
+   change them, even if you re-run with `--reprocess`.
+4. **Make search use the corrections** — run `pha reindex`.
+
+Reviewed pages show `reviewed: true` in their header.
 
 ---
 
