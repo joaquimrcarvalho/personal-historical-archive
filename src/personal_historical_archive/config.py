@@ -368,15 +368,23 @@ class Config:
         # Precedence: PHA_ARCHIVE_DIR env > PHA_ARCHIVE_DIR in .env >
         # paths.archive_dir > default "." (the project root, backward
         # compatible).
-        archive_dir = _p(root, str(_env_setting("PHA_ARCHIVE_DIR") or paths.get("archive_dir", ".")))
+        archive_env = _env_setting("PHA_ARCHIVE_DIR")
+        archive_dir = _p(root, str(archive_env or paths.get("archive_dir", ".")))
 
         # engine-level prompts stay in the PROJECT (not the archive).
         prompts_dir = _p(root, paths.get("prompts", "prompts"))
 
         # Data + model definitions derive from archive_dir. Individual
         # paths.* entries are relative to archive_dir (absolute still wins).
-        # PHA_DROPBOX is kept as a DEPRECATED alias that sets just the dropbox.
-        dropbox = _p(archive_dir, str(_env_setting("PHA_DROPBOX") or paths.get("dropbox", "dropbox")))
+        # PHA_DROPBOX is a DEPRECATED legacy alias: it is honored ONLY when
+        # archive_dir was NOT explicitly set (i.e. we are in the old single-
+        # dropbox layout). Once archive_dir is configured, the dropbox is
+        # always archive_dir/dropbox — a stale PHA_DROPBOX in .env must not
+        # hijack it.
+        if archive_env:
+            dropbox = _p(archive_dir, paths.get("dropbox", "dropbox"))
+        else:
+            dropbox = _p(archive_dir, str(_env_setting("PHA_DROPBOX") or paths.get("dropbox", "dropbox")))
         pal_dir = _p(archive_dir, paths.get("palaeographers", "palaeographers"))
         ed_dir = _p(archive_dir, paths.get("editors", "editors"))
         enc_dir = _p(archive_dir, paths.get("encoders", "encoders"))
