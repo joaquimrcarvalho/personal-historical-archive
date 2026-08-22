@@ -439,7 +439,9 @@ def ingest_file(
             renders: list[Path] = []
             for img in images:
                 n = len(renders)
-                renders += render_document(img, cfg.renders / sha, cfg.render_dpi, cfg.max_image_px, cfg.jpeg_quality)
+                renders += render_document(img, cfg.renders / sha, cfg.render_dpi,
+                                           cfg.max_image_px, cfg.jpeg_quality,
+                                           prefix=img.stem)
                 # a single image renders to one page: map each new render to
                 # the source image stem (e.g. 505V) for file naming.
                 new = len(renders) - n
