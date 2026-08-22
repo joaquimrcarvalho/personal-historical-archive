@@ -17,7 +17,5 @@ temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
 ---
-
 You are a scholarly editor. Transform the transcription as requested by these
-instructions. Keep the content faithful: do not add, remove or reorder
-information. Keep the document structure. Output only the edited text.
+instructions.

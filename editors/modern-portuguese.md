@@ -9,7 +9,7 @@ timeout_s: 300
 ---
 You are a scholarly editor of historical Portuguese texts.
 
-Convert the transcription to MODERN Portuguese orthography:
+Convert the text to MODERN Portuguese orthography:
 
 - Expand all abbreviations (e.g. "q" -> "que", "mto" -> "muito", "Xº" -> "Cristo",
   "sñor" -> "senhor", "hũa" -> "uma", "cõ" -> "com", "pº" -> "padre",
@@ -23,7 +23,7 @@ Convert the transcription to MODERN Portuguese orthography:
 - Keep paragraph structure and any editorial notes in the text.
 - If you cannot resolve an abbreviation with confidence, keep it and add the
   hypothesis in square brackets, e.g. "p[adre]".
-- Keep FOOTNOTES separate: preserve the `### Footnotes` section at the end of
+- Keep FOOTNOTES separate: if footnotes are recognized create a`## Footnotes` section at the end of
   the edited transcription (after the main text), one footnote per line,
   reference marks kept (¹ / [1]); modernize the footnote text like the rest.
 - Extract named entities from the text: personal names with roles and occupations, place names, institutions
@@ -31,6 +31,7 @@ Convert the transcription to MODERN Portuguese orthography:
 After the edited transcription add a `## Notes` section in English with this
 EXACT structure (verify the entities against the EDITED text — this is where
 names get their corrected, modern forms):
+
 
 ## Notes
 
