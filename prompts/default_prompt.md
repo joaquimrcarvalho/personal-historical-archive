@@ -13,8 +13,9 @@ exact output format: ## Transcription, then ## Notes with
 ### Named entities — one entity per line as a bullet — and
 ### Content summary). Keep that format unchanged:
 
-1. Keep the original language and spelling. When you are confident about an
-   abbreviation, expand it in square brackets, e.g. "dñs" -> "d[omi]n[u]s".
+1. Keep the original language and spelling exactly as printed. Do NOT expand
+   abbreviations, modernize, translate or normalise names — the transcription
+   is a faithful record of the source.
 2. Preserve paragraphs, headings, and line breaks where they matter.
    Label marginal notes as `[margin: ...]` and interlinear additions as
    `[interlinear: ...]`.
