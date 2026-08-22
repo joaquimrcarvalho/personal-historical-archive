@@ -603,12 +603,18 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
         # name the file after the source image stem when it is a directory-of-
         # images document (e.g. 505V.md); otherwise page-NNN.md.
         name = f"{p['source_name']}.md" if p["source_name"] else f"page-{p['page_no']:03d}.md"
-        (out_dir / name).write_text(text, encoding="utf-8")
+        f = out_dir / name
+        f.write_text(text, encoding="utf-8")
+        # record when we wrote this file so `pha status` can detect later
+        # human edits via the file's mtime (timestamp, not content, compare).
+        conn.execute("UPDATE pages SET exported_at = ? WHERE id = ?",
+                     (f.stat().st_mtime, p["id"]))
     # drop stale page-NNN.md files left by the pre-source-stem naming scheme,
     # but only when this document actually uses source stems.
     if any(p["source_name"] for p in pages):
         for stale in out_dir.glob("page-*.md"):
             stale.unlink(missing_ok=True)
+    conn.commit()
     return out_dir
 
 
@@ -668,7 +674,11 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
             + "\n"
         )
         name = f"{p['source_name']}.md" if p["source_name"] else f"page-{p['page_no']:03d}.md"
-        (out_dir / name).write_text(text, encoding="utf-8")
+        f = out_dir / name
+        f.write_text(text, encoding="utf-8")
+        # record the write time so later human edits are detected by mtime
+        conn.execute("UPDATE page_edits SET exported_at = ? WHERE id = ?",
+                     (f.stat().st_mtime, e["id"]))
     # drop stale page-NNN.md left by the pre-source-stem scheme when the doc
     # uses source stems.
     if conn.execute(
@@ -676,17 +686,19 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
         (doc_id,)).fetchone()["n"]:
         for stale in out_dir.glob("page-*.md"):
             stale.unlink(missing_ok=True)
+    conn.commit()
     return out_dir
 
 
 # --------------------------------------------------------------------------- review round-trip
 
 def pending_review_files(cfg: Config, conn) -> list[dict]:
-    """Find library page files whose body differs from what is in the DB.
+    """Find library page files a human edited since pha last wrote/imported them.
 
-    A difference means the historian edited the file and the correction has
-    not been imported yet (`pha review`). Returns a list of
-    {path, document_id, page_no, variant, editor}.
+    Timestamp-based: a file is pending if its filesystem mtime is NEWER than
+    the page/edit's `exported_at` (when pha last wrote that file). For legacy
+    rows with exported_at NULL we fall back to comparing the file body to the
+    DB text. Returns {path, document_id, page_no, variant, editor}.
     """
     pending: list[dict] = []
     for p in sorted(cfg.library.rglob("*.md")):
@@ -707,22 +719,34 @@ def pending_review_files(cfg: Config, conn) -> list[dict]:
         if not doc:
             continue
         page = conn.execute(
-            "SELECT id, raw_text FROM pages WHERE document_id = ? AND page_no = ?",
+            "SELECT id, raw_text, exported_at FROM pages WHERE document_id = ? AND page_no = ?",
             (int(d_id), int(page_no))).fetchone()
         if not page:
             continue
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
         if variant.startswith("transcription-"):
-            # mirror write_document_pages: strip + format_notes (or *waiting*)
-            raw = (page["raw_text"] or "").strip()
-            current = format_notes(raw) if raw else "*waiting*"
-            if body.strip() != current.strip():
+            if page["exported_at"] is not None:
+                edited = mtime > page["exported_at"]
+            else:
+                # legacy row: compare content, mirroring write_document_pages
+                raw = (page["raw_text"] or "").strip()
+                current = format_notes(raw) if raw else "*waiting*"
+                edited = body.strip() != current.strip()
+            if edited:
                 pending.append({"path": str(p), "document_id": int(d_id),
                                 "page_no": int(page_no), "variant": variant})
         else:
             editor = variant[len("edited-"):]
             edit = db.get_page_edit(conn, page["id"], editor)
-            current = ((edit["text"] if edit else "") or "*waiting*").strip()
-            if body.strip() != current:
+            if edit is not None and edit["exported_at"] is not None:
+                edited = mtime > edit["exported_at"]
+            else:
+                current = ((edit["text"] if edit else "") or "*waiting*").strip()
+                edited = body.strip() != current
+            if edited:
                 pending.append({"path": str(p), "document_id": int(d_id),
                                 "page_no": int(page_no), "variant": variant,
                                 "editor": editor})

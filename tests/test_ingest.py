@@ -221,7 +221,9 @@ def test_pending_review_files_detects_correction(tmp_path):
     # no pending yet
     assert pending_review_files(cfg, conn) == []
 
-    # edit the file -> pending
+    # edit the file -> pending (mtime newer than exported_at)
+    import time as _t
+    _t.sleep(0.05)
     lib_file = out / "page-001.md"
     lib_file.write_text(lib_file.read_text(encoding="utf-8").replace("SOME TEXT", "SOME CORRECTED TEXT"), encoding="utf-8")
     pend = pending_review_files(cfg, conn)

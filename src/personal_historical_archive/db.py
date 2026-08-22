@@ -130,9 +130,16 @@ def migrate(conn: sqlite3.Connection) -> None:
     # silently overwrite it. reviewed_at is the import time.
     if "reviewed_at" not in pcols:
         conn.execute("ALTER TABLE pages ADD COLUMN reviewed_at REAL")
+    # exported_at: when pha last wrote (or imported) this page's library file.
+    # A file whose mtime is NEWER than exported_at was edited by a human and
+    # is pending `pha review`. NULL on legacy rows (content-compare fallback).
+    if "exported_at" not in pcols:
+        conn.execute("ALTER TABLE pages ADD COLUMN exported_at REAL")
     ecols = [r[1] for r in conn.execute("PRAGMA table_info(page_edits)")]
     if "reviewed_at" not in ecols:
         conn.execute("ALTER TABLE page_edits ADD COLUMN reviewed_at REAL")
+    if "exported_at" not in ecols:
+        conn.execute("ALTER TABLE page_edits ADD COLUMN exported_at REAL")
     # page status vocabulary: failed pages are 'waiting' (retried on next scan).
     # Only writes when rows need converting, so normal connections stay read-only.
     if conn.execute("SELECT COUNT(*) AS n FROM pages WHERE status = 'error'").fetchone()["n"]:
@@ -311,8 +318,8 @@ def mark_page_reviewed(conn: sqlite3.Connection, page_id: int, raw_text: str) ->
     reviewed so later re-scans do not silently overwrite it."""
     _write(
         conn,
-        "UPDATE pages SET raw_text = ?, status = 'done', reviewed_at = ? WHERE id = ?",
-        (raw_text, _now(), page_id),
+        "UPDATE pages SET raw_text = ?, status = 'done', reviewed_at = ?, exported_at = ? WHERE id = ?",
+        (raw_text, _now(), _now(), page_id),
     )
 
 
@@ -321,9 +328,9 @@ def mark_edit_reviewed(conn: sqlite3.Connection, page_id: int, editor: str, text
     reviewed so later edit passes do not silently overwrite it."""
     _write(
         conn,
-        "UPDATE page_edits SET text = ?, status = 'done', reviewed_at = ?, updated_at = ? "
+        "UPDATE page_edits SET text = ?, status = 'done', reviewed_at = ?, exported_at = ?, updated_at = ? "
         "WHERE page_id = ? AND editor = ?",
-        (text, _now(), _now(), page_id, editor),
+        (text, _now(), _now(), _now(), page_id, editor),
     )
 
 
