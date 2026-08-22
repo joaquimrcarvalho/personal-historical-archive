@@ -598,6 +598,11 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
         # images document (e.g. 505V.md); otherwise page-NNN.md.
         name = f"{p['source_name']}.md" if p["source_name"] else f"page-{p['page_no']:03d}.md"
         (out_dir / name).write_text(text, encoding="utf-8")
+    # drop stale page-NNN.md files left by the pre-source-stem naming scheme,
+    # but only when this document actually uses source stems.
+    if any(p["source_name"] for p in pages):
+        for stale in out_dir.glob("page-*.md"):
+            stale.unlink(missing_ok=True)
     return out_dir
 
 
@@ -654,6 +659,13 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
         )
         name = f"{p['source_name']}.md" if p["source_name"] else f"page-{p['page_no']:03d}.md"
         (out_dir / name).write_text(text, encoding="utf-8")
+    # drop stale page-NNN.md left by the pre-source-stem scheme when the doc
+    # uses source stems.
+    if conn.execute(
+        "SELECT COUNT(*) n FROM pages WHERE document_id=? AND source_name IS NOT NULL",
+        (doc_id,)).fetchone()["n"]:
+        for stale in out_dir.glob("page-*.md"):
+            stale.unlink(missing_ok=True)
     return out_dir
 
 
