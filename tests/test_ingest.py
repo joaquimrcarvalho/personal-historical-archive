@@ -230,3 +230,14 @@ def test_pending_review_files_detects_correction(tmp_path):
     assert len(pend) == 1
     assert pend[0]["page_no"] == 1
     conn.close()
+
+
+def test_doc_slug_readable_date():
+    """Library folder names use a readable date, not an opaque hash."""
+    from personal_historical_archive.ingest import _doc_slug
+    doc = {"path": "/x/collections/testcol/1576", "created_at": 1787360000.0,
+           "sha256": "a84d7b42abc"}
+    slug = _doc_slug(doc)
+    assert slug.startswith("1576_20")  # 1576_YYYY-MM-DD
+    assert "__" not in slug
+    assert "sha" not in slug.lower() and len(slug) < 25

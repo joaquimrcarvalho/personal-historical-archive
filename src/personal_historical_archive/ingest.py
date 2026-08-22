@@ -325,11 +325,29 @@ def _prompt_newer_than(
     return False
 
 
+def _doc_slug(doc) -> str:
+    """Readable, version-safe library folder name for a document:
+    `<stem>_<YYYY-MM-DD>` (its creation date).
+
+    A content-changed document is a NEW row with a NEW created_at (see
+    ingest_file: the old row is deleted), so each version gets its own dated
+    folder and the old one is left untouched on disk. Same-day re-scans of a
+    changed file can share a date, but that is harmless: the previous row is
+    already gone, so its folder just holds the latest output."""
+    import datetime
+    stem = Path(doc["path"]).stem
+    try:
+        date = datetime.datetime.fromtimestamp(doc["created_at"]).strftime("%Y-%m-%d")
+    except (TypeError, ValueError, OSError):
+        date = "unknown"
+    return f"{stem}_{date}"
+
+
 def remove_library_artifact(cfg: Config, doc) -> None:
     """Delete the document's library folder (all palaeographer transcriptions)."""
     if not doc:
         return
-    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    slug = _doc_slug(doc)
     rel = Path(doc["dir_path"] or "")
     d = cfg.library / rel / slug
     if d.exists():
@@ -572,7 +590,7 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
     if not doc:
         return None
     pal = doc["palaeographer"] or "default"
-    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    slug = _doc_slug(doc)
     rel_dir = Path(doc["dir_path"] or "")
     out_dir = cfg.library / rel_dir / slug / f"transcription-{pal}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -644,7 +662,7 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
     doc = db.get_document(conn, doc_id)
     if not doc:
         return None
-    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    slug = _doc_slug(doc)
     rel_dir = Path(doc["dir_path"] or "")
     out_dir = cfg.library / rel_dir / slug / f"edited-{editor_id}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1142,7 +1160,7 @@ def write_concatenated_file(cfg: Config, conn, doc_id: int, texts: list,
     doc = db.get_document(conn, doc_id)
     if not doc:
         return None
-    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    slug = _doc_slug(doc)
     rel_dir = Path(doc["dir_path"] or "")
     out_dir = cfg.library / rel_dir / slug
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1156,7 +1174,7 @@ def write_records_file(cfg: Config, conn, doc_id: int, encoder_id: str) -> Path 
     doc = db.get_document(conn, doc_id)
     if not doc:
         return None
-    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    slug = _doc_slug(doc)
     rel_dir = Path(doc["dir_path"] or "")
     out_dir = cfg.library / rel_dir / slug
     out_dir.mkdir(parents=True, exist_ok=True)
