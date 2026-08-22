@@ -126,6 +126,13 @@ def migrate(conn: sqlite3.Connection) -> None:
     pcols = [r[1] for r in conn.execute("PRAGMA table_info(pages)")]
     if "source_name" not in pcols:
         conn.execute("ALTER TABLE pages ADD COLUMN source_name TEXT")
+    # reviewed: a human has corrected this page; later re-scans must not
+    # silently overwrite it. reviewed_at is the import time.
+    if "reviewed_at" not in pcols:
+        conn.execute("ALTER TABLE pages ADD COLUMN reviewed_at REAL")
+    ecols = [r[1] for r in conn.execute("PRAGMA table_info(page_edits)")]
+    if "reviewed_at" not in ecols:
+        conn.execute("ALTER TABLE page_edits ADD COLUMN reviewed_at REAL")
     # page status vocabulary: failed pages are 'waiting' (retried on next scan).
     # Only writes when rows need converting, so normal connections stay read-only.
     if conn.execute("SELECT COUNT(*) AS n FROM pages WHERE status = 'error'").fetchone()["n"]:
@@ -297,6 +304,27 @@ def set_page_result(
         _write(conn, "UPDATE pages SET error = ?, status = 'waiting' WHERE id = ?", (error, page_id))
     else:
         _write(conn, "UPDATE pages SET raw_text = ?, error = NULL, status = 'done' WHERE id = ?", (raw_text, page_id))
+
+
+def mark_page_reviewed(conn: sqlite3.Connection, page_id: int, raw_text: str) -> None:
+    """A human corrected this page's transcription; store it and stamp it as
+    reviewed so later re-scans do not silently overwrite it."""
+    _write(
+        conn,
+        "UPDATE pages SET raw_text = ?, status = 'done', reviewed_at = ? WHERE id = ?",
+        (raw_text, _now(), page_id),
+    )
+
+
+def mark_edit_reviewed(conn: sqlite3.Connection, page_id: int, editor: str, text: str) -> None:
+    """A human corrected this page's edited text; store it and stamp it as
+    reviewed so later edit passes do not silently overwrite it."""
+    _write(
+        conn,
+        "UPDATE page_edits SET text = ?, status = 'done', reviewed_at = ?, updated_at = ? "
+        "WHERE page_id = ? AND editor = ?",
+        (text, _now(), _now(), page_id, editor),
+    )
 
 
 def get_pages(conn: sqlite3.Connection, doc_id: int) -> list[sqlite3.Row]:

@@ -101,3 +101,89 @@ def test_regex_candidates():
     )
     texts = [(1, "plain text"), (2, "xii\nD. João ao Padre"), (3, "more text")]
     assert _regex_candidates(texts, enc) == [2]
+
+
+def test_review_import_updates_db(tmp_path):
+    """pha review imports corrections from library .md files into the DB and
+    stamps them reviewed."""
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import review_import, write_document_pages
+    import yaml
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        "paths:\n  dropbox: dropbox\n  library: library\n  renders: renders\n"
+        "  palaeographers: palaeographers\n  editors: editors\n  encoders: encoders\n"
+        "  prompts: prompts\n  db: archive.db\n"
+    )
+    cfg = Config.load(root)
+    drop = cfg.dropbox
+    col = drop / "collections" / "testcol"
+    col.mkdir(parents=True)
+    src = col / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/testcol", now="2026-01-01")
+    pid = _db.add_page(conn, doc_id, 1)
+    _db.set_page_result(conn, pid, raw_text="ORIGINAL MACHINE TEXT")
+    _db.set_document_status(conn, doc_id, "done")
+    conn.commit()
+
+    # write a library transcription file the historian "corrected"
+    out = write_document_pages(cfg, conn, doc_id)
+    lib_file = out / "page-001.md"
+    corrected = lib_file.read_text(encoding="utf-8").replace("ORIGINAL MACHINE TEXT", "HUMAN CORRECTED TEXT")
+    lib_file.write_text(corrected, encoding="utf-8")
+
+    res = review_import(cfg, conn, doc_id=doc_id, verbose=False)
+    assert res["pages"] == 1
+    row = conn.execute("SELECT raw_text, reviewed_at FROM pages WHERE id=?", (pid,)).fetchone()
+    assert row["raw_text"] == "HUMAN CORRECTED TEXT"
+    assert row["reviewed_at"] is not None
+    conn.close()
+
+
+def test_review_protects_from_reprocess(tmp_path):
+    """A reviewed page must survive a --reprocess scan (never overwritten)."""
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import review_import, _edit_needed, write_document_pages
+    from types import SimpleNamespace
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        "paths:\n  dropbox: dropbox\n  library: library\n  renders: renders\n"
+        "  palaeographers: palaeographers\n  editors: editors\n  encoders: encoders\n"
+        "  prompts: prompts\n  db: archive.db\n"
+    )
+    cfg = Config.load(root)
+    drop = cfg.dropbox
+    col = drop / "collections" / "testcol"
+    col.mkdir(parents=True)
+    src = col / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/testcol", now="2026-01-01")
+    pid = _db.add_page(conn, doc_id, 1)
+    _db.set_page_result(conn, pid, raw_text="ORIGINAL")
+    _db.set_document_status(conn, doc_id, "done")
+    conn.commit()
+    write_document_pages(cfg, conn, doc_id)
+
+    # mark the page reviewed (as pha review would)
+    _db.mark_page_reviewed(conn, pid, "HUMAN CORRECTED")
+    conn.commit()
+
+    # _edit_needed must refuse to re-edit a reviewed edit
+    edit_row = {"reviewed_at": 123, "status": "done", "text": "x", "raw_sha": "x", "updated_at": 1}
+    page = SimpleNamespace(id=pid, raw_text="HUMAN CORRECTED")
+    editor = SimpleNamespace(prompt_file=None)
+    assert _edit_needed(page, edit_row, editor, reprocess=True) is False
+    conn.close()

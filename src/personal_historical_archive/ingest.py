@@ -461,6 +461,8 @@ def ingest_file(
     for i, img in enumerate(renders, start=1):
         page_id = db.add_page(conn, doc_id, i, source_name=source_names[i - 1] if i - 1 < len(source_names) else None)
         page = conn.execute("SELECT * FROM pages WHERE id = ?", (page_id,)).fetchone()
+        if page["reviewed_at"]:
+            continue  # a human corrected this page; never re-extract over it
         if page["status"] == "done" and not force:
             continue  # resume: keep already-extracted pages
         prompt_txt = build_page_prompt(prompt, path.name, i, total)
@@ -587,6 +589,8 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
         fm = dict(base)
         fm["page"] = p["page_no"]
         fm["status"] = "done" if p["status"] == "done" else "waiting"
+        if p["reviewed_at"]:
+            fm["reviewed"] = True
         body = (p["raw_text"] or "").strip()
         body = format_notes(body) if body else "*waiting*"
         text = (
@@ -612,6 +616,8 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
 
 def _edit_needed(page, edit_row, editor: Editor, reprocess: bool) -> bool:
     """Does this page need (re-)editing?"""
+    if edit_row is not None and edit_row["reviewed_at"]:
+        return False  # a human corrected this edit; never re-edit over it
     if reprocess:
         return True
     if edit_row is None or edit_row["status"] != "done" or not edit_row["text"]:
@@ -645,12 +651,14 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
         "editor": editor_id,
     }
     for e in db.edits_for_document(conn, doc_id, editor_id):
-        p = conn.execute("SELECT page_no, source_name FROM pages WHERE id = ?", (e["page_id"],)).fetchone()
+        p = conn.execute("SELECT page_no, source_name, reviewed_at FROM pages WHERE id = ?", (e["page_id"],)).fetchone()
         if not p:
             continue
         fm = dict(base)
         fm["page"] = p["page_no"]
         fm["status"] = "done" if e["status"] == "done" else "waiting"
+        if e["reviewed_at"]:
+            fm["reviewed"] = True
         body = (e["text"] or "*waiting*").strip()
         text = (
             "---\n"
@@ -669,6 +677,90 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
         for stale in out_dir.glob("page-*.md"):
             stale.unlink(missing_ok=True)
     return out_dir
+
+
+# --------------------------------------------------------------------------- review round-trip
+
+def _parse_library_file(path: Path) -> tuple[dict, str] | None:
+    """Parse a library page file: returns (front_matter, body) or None."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not text.startswith("---"):
+        return None
+    end = text.find("\n---", 4)
+    if end == -1:
+        return None
+    fm_text = text[3:end].strip()
+    body = text[end + 4:].strip()
+    try:
+        fm = yaml.safe_load(fm_text) or {}
+    except yaml.YAMLError:
+        return None
+    return (fm, body)
+
+
+def page_row_raw(conn, page_id: int) -> str:
+    row = conn.execute("SELECT raw_text FROM pages WHERE id = ?", (page_id,)).fetchone()
+    return row["raw_text"] or ""
+
+
+def review_import(cfg: Config, conn, doc_id: int | None = None, verbose: bool = True) -> dict:
+    """Import human corrections from the library markdown files back into the DB.
+
+    The historian edits `library/.../transcription-<pal>/<stem>.md` or
+    `library/.../edited-<editor>/<stem>.md`; this reads them back, updates
+    pages.raw_text / page_edits.text, and stamps them reviewed so later
+    scan/edit passes skip them. Returns counts.
+    """
+    updated_pages = 0
+    updated_edits = 0
+    skipped = 0
+    for p in sorted(cfg.library.rglob("*.md")):
+        rel_parts = p.relative_to(cfg.library).parts
+        # library/<rel_dir>/<slug>/transcription-<pal>/<file>.md
+        # library/<rel_dir>/<slug>/edited-<editor>/<file>.md
+        if len(rel_parts) < 3:
+            continue
+        variant = rel_parts[-2]  # transcription-xxx or edited-xxx
+        parsed = _parse_library_file(p)
+        if not parsed:
+            skipped += 1
+            continue
+        fm, body = parsed
+        d_id = fm.get("document_id")
+        page_no = fm.get("page")
+        if d_id is None or page_no is None:
+            skipped += 1
+            continue
+        if doc_id is not None and int(d_id) != doc_id:
+            continue
+        doc = db.get_document(conn, int(d_id))
+        if not doc:
+            skipped += 1
+            continue
+        page = conn.execute(
+            "SELECT id FROM pages WHERE document_id = ? AND page_no = ?",
+            (int(d_id), int(page_no))).fetchone()
+        if not page:
+            skipped += 1
+            continue
+        if variant.startswith("transcription-"):
+            db.mark_page_reviewed(conn, page["id"], body)
+            updated_pages += 1
+            if verbose:
+                print(f"  reviewed transcription: doc {d_id} page {page_no} ({p.name})")
+        elif variant.startswith("edited-"):
+            editor = variant[len("edited-"):]
+            db.set_page_edit(conn, page["id"], editor, text=body,
+                             raw_sha=_raw_sha(page_row_raw(conn, page["id"])))
+            db.mark_edit_reviewed(conn, page["id"], editor, body)
+            updated_edits += 1
+            if verbose:
+                print(f"  reviewed edit: doc {d_id} page {page_no} ({p.name}, editor {editor})")
+    conn.commit()
+    return {"pages": updated_pages, "edits": updated_edits, "skipped": skipped}
 
 
 def _edit_null(cfg: Config, conn, doc_id: int, resolved: str,

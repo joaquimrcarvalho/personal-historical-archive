@@ -125,6 +125,25 @@ def cmd_reindex(cfg: Config, args) -> None:
     print(f"reindexed {res['reindexed']} document(s)")
 
 
+def cmd_review(cfg: Config, args) -> None:
+    """Import human corrections from the library markdown files into the DB.
+
+    The historian edits library/.../transcription-<pal>/<stem>.md or
+    edited-<editor>/<stem>.md; `pha review` reads those files back, updates
+    pages.raw_text / page_edits.text, and stamps them reviewed so later
+    scan/edit passes never overwrite the corrections. Run `pha reindex`
+    afterwards so search uses the corrected text.
+    """
+    from .ingest import review_import
+    conn = db.connect(cfg.db_path)
+    try:
+        res = review_import(cfg, conn, doc_id=args.doc, verbose=True)
+    finally:
+        conn.close()
+    print(f"reviewed: {res['pages']} transcription page(s), {res['edits']} edit(s) "
+          f"(skipped {res['skipped']} unparsed files)")
+
+
 def cmd_export(cfg: Config, args) -> None:
     """Regenerate per-page transcription files from the DB (no re-extraction)."""
     conn = db.connect(cfg.db_path)
@@ -473,6 +492,10 @@ def main(argv: list[str] | None = None) -> None:
 
     e = sub.add_parser("export", help="regenerate per-page transcription files from the DB")
     e.set_defaults(fn=cmd_export)
+
+    rv = sub.add_parser("review", help="import corrections from library .md files into the DB")
+    rv.add_argument("--doc", type=int, default=None, help="only review this document id")
+    rv.set_defaults(fn=cmd_review)
 
     rm = sub.add_parser("rm", help="remove document(s) from the index (by id or filename substring)")
     rm.add_argument("target")
