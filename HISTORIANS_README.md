@@ -126,9 +126,12 @@ Two kinds of "helpers" read and improve your documents:
 
 - **Palaeographer** — a vision model that *reads* a page image and transcribes
   it. Different palaeographers can be specialised for different hands or
-  languages (e.g. 17th-century Portuguese secretary hand).
-- **Editor** — a text model that *transforms* the transcription: convert to
-  modern Portuguese, translate to English, normalize names, …
+  languages (e.g. 17th-century Portuguese secretary hand). A palaeographer
+  **only transcribes faithfully** — it does not expand abbreviations,
+  modernize or translate; that is the editor's job.
+- **Editor** — a text model that *transforms* the transcription: expand
+  abbreviations, convert to modern Portuguese, translate to English,
+  normalize names, …
 
 Each is a single text file in the `palaeographers/` or `editors/` folder.
 **To add one, you duplicate the `_sample.md` file, rename it, and edit it** —

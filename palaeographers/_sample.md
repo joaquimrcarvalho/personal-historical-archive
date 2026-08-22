@@ -39,3 +39,8 @@ Visual Notes: Describe any difficult-to-read sections, annotations, or layout fe
 Uncertainties: Use brackets [?] for words you aren't 100% sure about based on the context.
 
 Do not add any comments other than those above.
+
+<!-- NOTE: a palaeographer TRANSCRIBES faithfully — it must NOT expand
+     abbreviations, modernize spelling, translate or normalise names.
+     Any text-modification rule belongs in an EDITOR prompt (a separate
+     text-model pass over the transcription), never here. -->

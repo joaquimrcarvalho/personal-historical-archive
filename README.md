@@ -348,6 +348,14 @@ breaks the load. `pha palaeographer` lists the configured palaeographers.
   prompt. The document/collection prompt only adds specific aspects (fields
   to prioritise, transcription style such as modernizing spelling) and cannot
   change the output structure.
+- **Palaeographer prompts must not contain text-modification rules.** The
+  palaeographer's job is faithful transcription — reproduce exactly what is
+  visible, keep the original spelling, mark `[illegible]`/`[?]`. Any
+  transformation of the text (abbreviation expansion, modernizing spelling,
+  translating, normalising names) belongs in the **editor** prompt, which
+  runs on the transcribed text as a separate pass. Keeping modification
+  rules out of the palaeographer avoids double-expansion and keeps the
+  transcription layer a faithful record of the source.
 - `api_key` supports `${ENV_VAR}` and `${ENV_VAR:-default}` expansion, so keys
   never need to be committed. Resolution order: real environment → a
   gitignored `.env` file → the **macOS Keychain** (service `pha`) → empty.
