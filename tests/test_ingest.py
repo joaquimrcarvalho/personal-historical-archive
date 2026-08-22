@@ -187,3 +187,44 @@ def test_review_protects_from_reprocess(tmp_path):
     editor = SimpleNamespace(prompt_file=None)
     assert _edit_needed(page, edit_row, editor, reprocess=True) is False
     conn.close()
+
+
+def test_pending_review_files_detects_correction(tmp_path):
+    """pha status detects a library file whose body differs from the DB."""
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import review_import, write_document_pages, pending_review_files
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        "paths:\n  dropbox: dropbox\n  library: library\n  renders: renders\n"
+        "  palaeographers: palaeographers\n  editors: editors\n  encoders: encoders\n"
+        "  prompts: prompts\n  db: archive.db\n"
+    )
+    cfg = Config.load(root)
+    drop = cfg.dropbox
+    col = drop / "collections" / "testcol"
+    col.mkdir(parents=True)
+    src = col / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/testcol", now="2026-01-01")
+    pid = _db.add_page(conn, doc_id, 1)
+    _db.set_page_result(conn, pid, raw_text="SOME TEXT\n\n## Notes\n\n### Named entities\n- x")
+    _db.set_document_status(conn, doc_id, "done")
+    conn.commit()
+    out = write_document_pages(cfg, conn, doc_id)
+
+    # no pending yet
+    assert pending_review_files(cfg, conn) == []
+
+    # edit the file -> pending
+    lib_file = out / "page-001.md"
+    lib_file.write_text(lib_file.read_text(encoding="utf-8").replace("SOME TEXT", "SOME CORRECTED TEXT"), encoding="utf-8")
+    pend = pending_review_files(cfg, conn)
+    assert len(pend) == 1
+    assert pend[0]["page_no"] == 1
+    conn.close()

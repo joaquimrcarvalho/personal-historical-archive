@@ -112,6 +112,16 @@ def cmd_status(cfg: Config, args) -> None:
                 col = d["dir_path"] or "(root)"
                 pal = d["palaeographer"] or "default"
                 print(f"  #{d['id']:3d} {d['status']:10s} [{col}] {d['filename']}  ({d['kind']}, {d['page_count'] or 0} pages, {pal})  updated {_fmt_ts(d['updated_at'])}{err}")
+        # pending review: corrected library files not yet imported
+        from .ingest import pending_review_files
+        try:
+            pending = pending_review_files(cfg, conn)
+        except Exception:
+            pending = []
+        if pending:
+            n_pages = len({(x['document_id'], x['page_no']) for x in pending})
+            print(f"\n  ✏️  {n_pages} page(s) have corrections in the library files that are not imported yet.")
+            print(f"     Run:  pha review   (imports your corrections, then pha reindex)")
     finally:
         conn.close()
 

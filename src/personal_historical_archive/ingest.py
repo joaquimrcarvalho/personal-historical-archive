@@ -681,6 +681,54 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
 
 # --------------------------------------------------------------------------- review round-trip
 
+def pending_review_files(cfg: Config, conn) -> list[dict]:
+    """Find library page files whose body differs from what is in the DB.
+
+    A difference means the historian edited the file and the correction has
+    not been imported yet (`pha review`). Returns a list of
+    {path, document_id, page_no, variant, editor}.
+    """
+    pending: list[dict] = []
+    for p in sorted(cfg.library.rglob("*.md")):
+        rel_parts = p.relative_to(cfg.library).parts
+        if len(rel_parts) < 3:
+            continue
+        variant = rel_parts[-2]
+        if not (variant.startswith("transcription-") or variant.startswith("edited-")):
+            continue
+        parsed = _parse_library_file(p)
+        if not parsed:
+            continue
+        fm, body = parsed
+        d_id, page_no = fm.get("document_id"), fm.get("page")
+        if d_id is None or page_no is None:
+            continue
+        doc = db.get_document(conn, int(d_id))
+        if not doc:
+            continue
+        page = conn.execute(
+            "SELECT id, raw_text FROM pages WHERE document_id = ? AND page_no = ?",
+            (int(d_id), int(page_no))).fetchone()
+        if not page:
+            continue
+        if variant.startswith("transcription-"):
+            # mirror write_document_pages: strip + format_notes (or *waiting*)
+            raw = (page["raw_text"] or "").strip()
+            current = format_notes(raw) if raw else "*waiting*"
+            if body.strip() != current.strip():
+                pending.append({"path": str(p), "document_id": int(d_id),
+                                "page_no": int(page_no), "variant": variant})
+        else:
+            editor = variant[len("edited-"):]
+            edit = db.get_page_edit(conn, page["id"], editor)
+            current = ((edit["text"] if edit else "") or "*waiting*").strip()
+            if body.strip() != current:
+                pending.append({"path": str(p), "document_id": int(d_id),
+                                "page_no": int(page_no), "variant": variant,
+                                "editor": editor})
+    return pending
+
+
 def _parse_library_file(path: Path) -> tuple[dict, str] | None:
     """Parse a library page file: returns (front_matter, body) or None."""
     try:
