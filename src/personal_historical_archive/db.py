@@ -121,6 +121,11 @@ def migrate(conn: sqlite3.Connection) -> None:
                 if attempt >= 14:
                     raise
                 time.sleep(3)
+    # pages may carry the source image stem (for directory-of-images documents)
+    # so transcription/edited files can be named after the source file.
+    pcols = [r[1] for r in conn.execute("PRAGMA table_info(pages)")]
+    if "source_name" not in pcols:
+        conn.execute("ALTER TABLE pages ADD COLUMN source_name TEXT")
     # page status vocabulary: failed pages are 'waiting' (retried on next scan).
     # Only writes when rows need converting, so normal connections stay read-only.
     if conn.execute("SELECT COUNT(*) AS n FROM pages WHERE status = 'error'").fetchone()["n"]:
@@ -265,7 +270,7 @@ def summary(conn: sqlite3.Connection) -> dict:
 
 # --------------------------------------------------------------------------- pages
 
-def add_page(conn: sqlite3.Connection, doc_id: int, page_no: int) -> int:
+def add_page(conn: sqlite3.Connection, doc_id: int, page_no: int, source_name: str | None = None) -> int:
     _write(
         conn,
         "INSERT OR IGNORE INTO pages (document_id, page_no) VALUES (?, ?)",
@@ -278,6 +283,8 @@ def add_page(conn: sqlite3.Connection, doc_id: int, page_no: int) -> int:
     ).fetchone()
     if row is None:
         raise RuntimeError(f"failed to create/read page {page_no} of document {doc_id}")
+    if source_name is not None:
+        _write(conn, "UPDATE pages SET source_name = ? WHERE id = ?", (source_name, row["id"]))
     return int(row["id"])
 
 

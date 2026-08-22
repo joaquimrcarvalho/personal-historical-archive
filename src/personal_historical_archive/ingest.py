@@ -431,16 +431,23 @@ def ingest_file(
     write_document_pages(cfg, conn, doc_id)  # visible output even while processing
 
     try:
+        source_names: list[str | None] = []
         if path.is_dir():
             images = [f for f in sorted(path.iterdir())
                       if f.is_file() and is_supported(f.name) and not f.name.startswith(".")]
             total = len(images)
             renders: list[Path] = []
             for img in images:
+                n = len(renders)
                 renders += render_document(img, cfg.renders / sha, cfg.render_dpi, cfg.max_image_px, cfg.jpeg_quality)
+                # a single image renders to one page: map each new render to
+                # the source image stem (e.g. 505V) for file naming.
+                new = len(renders) - n
+                source_names += [img.stem] * new
         else:
             total = page_count(path)
             renders = render_document(path, cfg.renders / sha, cfg.render_dpi, cfg.max_image_px, cfg.jpeg_quality)
+            source_names = [None] * len(renders)
     except Exception as e:
         db.set_document_status(conn, doc_id, "error", error=f"render failed: {e}")
         conn.commit()
@@ -450,7 +457,7 @@ def ingest_file(
     page_errors: list[tuple[int, str]] = []
     consecutive_failures = 0
     for i, img in enumerate(renders, start=1):
-        page_id = db.add_page(conn, doc_id, i)
+        page_id = db.add_page(conn, doc_id, i, source_name=source_names[i - 1] if i - 1 < len(source_names) else None)
         page = conn.execute("SELECT * FROM pages WHERE id = ?", (page_id,)).fetchone()
         if page["status"] == "done" and not force:
             continue  # resume: keep already-extracted pages
@@ -587,7 +594,10 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
             + body
             + "\n"
         )
-        (out_dir / f"page-{p['page_no']:03d}.md").write_text(text, encoding="utf-8")
+        # name the file after the source image stem when it is a directory-of-
+        # images document (e.g. 505V.md); otherwise page-NNN.md.
+        name = f"{p['source_name']}.md" if p["source_name"] else f"page-{p['page_no']:03d}.md"
+        (out_dir / name).write_text(text, encoding="utf-8")
     return out_dir
 
 
@@ -628,7 +638,7 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
         "editor": editor_id,
     }
     for e in db.edits_for_document(conn, doc_id, editor_id):
-        p = conn.execute("SELECT page_no FROM pages WHERE id = ?", (e["page_id"],)).fetchone()
+        p = conn.execute("SELECT page_no, source_name FROM pages WHERE id = ?", (e["page_id"],)).fetchone()
         if not p:
             continue
         fm = dict(base)
@@ -642,7 +652,8 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
             + body
             + "\n"
         )
-        (out_dir / f"page-{p['page_no']:03d}.md").write_text(text, encoding="utf-8")
+        name = f"{p['source_name']}.md" if p["source_name"] else f"page-{p['page_no']:03d}.md"
+        (out_dir / name).write_text(text, encoding="utf-8")
     return out_dir
 
 
