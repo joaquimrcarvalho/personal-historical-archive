@@ -294,6 +294,11 @@ class Encoder:
 @dataclass
 class Config:
     root: Path
+    # archive_dir is the single self-contained data root: documents, the model
+    # definitions (palaeographers/editors/encoders) and everything the pipeline
+    # generates (library, renders, db) live under it. The project dir holds only
+    # code, engine-level prompts and the _sample.md templates.
+    archive_dir: Path
     # paths
     dropbox: Path
     library: Path
@@ -340,43 +345,69 @@ class Config:
         emb = raw.get("embeddings", {}) or {}
         ext = raw.get("extraction", {}) or {}
         sea = raw.get("search", {}) or {}
+
+        def _env_setting(name: str) -> str | None:
+            """Read a setting from the real environment, then a line NAME=... in
+            the gitignored .env AT THIS ROOT (so tests with a tmp root are
+            isolated). Returns None if unset."""
+            v = os.environ.get(name)
+            if v:
+                return v
+            envp = root / ".env"
+            if envp.exists():
+                for line in envp.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line.startswith(name + "="):
+                        return line.split("=", 1)[1].strip().strip('"').strip("'")
+            return None
+
+        # archive_dir is the single self-contained data root. Everything the
+        # archive owns — documents, model definitions, generated output —
+        # lives under it. The project dir holds only code, engine-level
+        # prompts and the _sample.md templates.
+        # Precedence: PHA_ARCHIVE_DIR env > PHA_ARCHIVE_DIR in .env >
+        # paths.archive_dir > default "." (the project root, backward
+        # compatible).
+        archive_dir = _p(root, str(_env_setting("PHA_ARCHIVE_DIR") or paths.get("archive_dir", ".")))
+
+        # engine-level prompts stay in the PROJECT (not the archive).
         prompts_dir = _p(root, paths.get("prompts", "prompts"))
-        pal_dir = _p(root, paths.get("palaeographers", "palaeographers"))
-        ed_dir = _p(root, paths.get("editors", "editors"))
-        enc_dir = _p(root, paths.get("encoders", "encoders"))
+
+        # Data + model definitions derive from archive_dir. Individual
+        # paths.* entries are relative to archive_dir (absolute still wins).
+        # PHA_DROPBOX is kept as a DEPRECATED alias that sets just the dropbox.
+        dropbox = _p(archive_dir, str(_env_setting("PHA_DROPBOX") or paths.get("dropbox", "dropbox")))
+        pal_dir = _p(archive_dir, paths.get("palaeographers", "palaeographers"))
+        ed_dir = _p(archive_dir, paths.get("editors", "editors"))
+        enc_dir = _p(archive_dir, paths.get("encoders", "encoders"))
+
+        # Seed the zero-config defaults BEFORE parsing, so a fresh archive has
+        # working default palaeographer/editor/encoder on the very first load.
+        _seed_default(pal_dir, _DEFAULT_PAL)
+        _seed_default(ed_dir, _DEFAULT_ED)
+        _seed_default(enc_dir, _DEFAULT_ENC)
+
+        # Migrate legacy definitions that live in the project dir (before the
+        # archive_dir split) into the archive dir, preserving their ids.
+        _migrate_legacy_defs(root / "palaeographers", pal_dir)
+        _migrate_legacy_defs(root / "editors", ed_dir)
 
         palaeographers, active = _parse_palaeographers(raw, vis, prompts_dir, root, pal_dir)
         editors = _parse_editors(raw, prompts_dir, root, ed_dir)
         encoders = _parse_encoders(enc_dir)
 
-        # Dropbox may live outside the project tree (e.g. a shared documents
-        # folder on another machine). Precedence: the PHA_DROPBOX env var, then
-        # a PHA_DROPBOX line in the gitignored .env AT THIS ROOT (set via
-        # `pha set dropbox`), then the paths.dropbox entry (absolute path or
-        # relative to the project root).
-        dropbox_env = os.environ.get("PHA_DROPBOX")
-        if not dropbox_env:
-            envp = root / ".env"
-            if envp.exists():
-                for line in envp.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if line.startswith("PHA_DROPBOX="):
-                        dropbox_env = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        break
-        dropbox_path = dropbox_env or paths.get("dropbox", "dropbox")
-        dropbox = _p(root, str(dropbox_path))
-
         return cls(
             root=root,
+            archive_dir=archive_dir,
             dropbox=dropbox,
-            library=_p(root, paths.get("library", "library")),
-            data=_p(root, paths.get("data", "data")),
-            renders=_p(root, paths.get("renders", "data/renders")),
+            library=_p(archive_dir, paths.get("library", "library")),
+            data=archive_dir,  # runtime state (e.g. the scan lock) lives at the root of the archive
+            renders=_p(archive_dir, paths.get("renders", "renders")),
             prompts=prompts_dir,
             palaeographers_dir=pal_dir,
             editors_dir=ed_dir,
             encoders_dir=enc_dir,
-            db_path=_p(root, paths.get("db", "data/archive.db")),
+            db_path=_p(archive_dir, paths.get("db", "archive.db")),
             palaeographers=palaeographers,
             active_palaeographer=active,
             editors=editors,
@@ -429,10 +460,18 @@ class Config:
         for d in (self.dropbox, self.library, self.data, self.renders, self.prompts,
                   self.palaeographers_dir, self.editors_dir, self.encoders_dir):
             d.mkdir(parents=True, exist_ok=True)
-        # seed sample configuration files on first run
-        _seed_sample(self.palaeographers_dir, "_sample.md", _PAL_SAMPLE)
-        _seed_sample(self.editors_dir, "_sample.md", _ED_SAMPLE)
-        _seed_sample(self.encoders_dir, "_sample.md", _ENC_SAMPLE)
+        # pre-create the dropbox sub-layout so a fresh archive is ready to use:
+        # documents/ for individual documents, collections/COLX/ for collections.
+        for sub in ("documents", "collections"):
+            (self.dropbox / sub).mkdir(parents=True, exist_ok=True)
+        # seed the _sample.md TEMPLATES into the PROJECT (code side): these
+        # are the starting point for creating new definitions.
+        for name, content in (("palaeographers", _PAL_SAMPLE),
+                              ("editors", _ED_SAMPLE),
+                              ("encoders", _ENC_SAMPLE)):
+            d = self.root / name
+            d.mkdir(parents=True, exist_ok=True)
+            _seed_sample(d, "_sample.md", content)
 
 
 def _parse_palaeographers(
@@ -681,6 +720,148 @@ def _seed_sample(directory: Path, name: str, content: str) -> None:
     sample = directory / name
     if not sample.exists():
         sample.write_text(content, encoding="utf-8")
+
+
+def _seed_default(directory: Path, content: str) -> None:
+    """Seed `default.md` in `directory` only when it has no real definition
+    yet (no non-underscore .md files). This gives a fresh archive a working
+    zero-config default (qwen) without ever overwriting a user's files."""
+    if not directory.exists():
+        directory.mkdir(parents=True, exist_ok=True)
+    has_def = any(
+        f.is_file() and f.suffix == ".md" and not f.name.startswith("_")
+        for f in directory.iterdir()
+    )
+    if not has_def:
+        target = directory / "default.md"
+        if not target.exists():
+            target.write_text(content, encoding="utf-8")
+
+
+def _migrate_legacy_defs(project_dir: Path, archive_dir: Path) -> None:
+    """Copy real (non-underscore) definition files from the project dir into
+    the archive dir when they are missing there, id-preserving. This lets a
+    relocated archive keep its existing palaeographer/editor definitions that
+    previously lived in the project, while a default (archive_dir = project
+    root) archive is a no-op (the dirs are the same). Never overwrites."""
+    if not project_dir.is_dir():
+        return
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    for f in sorted(project_dir.iterdir()):
+        if not f.is_file() or f.name.startswith(("_", ".")):
+            continue
+        if f.suffix.lower() not in (".md", ".txt"):
+            continue
+        dest = archive_dir / f.name
+        if not dest.exists():
+            dest.write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+
+
+# --- zero-config defaults (seeded into the archive as default.md) ----------
+# All three point at the same local model (qwen3-vl-8b via LM Studio) so a
+# fresh archive works with no configuration. qwen3-vl handles both vision
+# (palaeographer) and text (editor/encoder).
+
+_DEFAULT_PAL = """---
+description: default palaeographer — generic transcription (qwen3-vl-8b local)
+base_url: http://127.0.0.1:1234/v1
+model: qwen/qwen3-vl-8b
+api_key: ""
+temperature: 0.1
+max_tokens: 4096
+timeout_s: 900
+---
+
+You are an expert paleographer in historical documents. Analyse the attached
+file and provide:
+
+Transcription: Provide a verbatim transcription of the text, keeping the
+original line breaks.
+
+Visual Notes: Describe any difficult-to-read sections, annotations, or layout
+features (like marginalia).
+
+Uncertainties: Use brackets [?] for words you aren't 100% sure about based on
+the context.
+
+Do not add any comments other than those above.
+"""
+
+_DEFAULT_ED = """---
+description: default editor — expand abbreviations, extract named entities + notes (qwen3-vl-8b local)
+base_url: http://127.0.0.1:1234/v1
+model: qwen/qwen3-vl-8b
+api_key: ""
+temperature: 0.0
+max_tokens: 4096
+timeout_s: 300
+---
+
+You are a scholarly editor of transcribed historical texts.
+
+Work from the transcription provided. Two tasks:
+
+1. **Expansion and clean-up** — expand abbreviations into their full words
+   using the conventions of the period and language, WITHOUT needing an
+   exhaustive list: expand any contracted form you recognise. When an
+   expansion is uncertain, keep the abbreviation and add the hypothesis in
+   square brackets, e.g. "p[adre]". Do not modernize orthography beyond
+   expanding abbreviations. Keep line breaks and any footnotes.
+
+2. **Named entities and notes** — extract the named entities present in the
+   text and list them in a `## Notes` section at the end:
+
+   ## Notes
+
+   ### Named entities
+
+   - one entity per line, ALWAYS a bullet "- Name (role, place or context)"
+   - people (with role/occupation), places, and institutions
+   - NEVER join several entities on one line
+   - if there are none, write exactly: - none
+
+CRITICAL — preserve NON-LATIN characters exactly: any Greek, Hebrew, or
+Chinese characters must be reproduced unchanged, not romanized, translated,
+or dropped.
+
+Output the edited transcription followed by the ## Notes section, with no
+preamble or commentary.
+"""
+
+_DEFAULT_ENC = """---
+description: default encoder — JSON dump of document metadata + named entities + notes (qwen3-vl-8b local)
+base_url: http://127.0.0.1:1234/v1
+model: qwen/qwen3-vl-8b
+api_key: ""
+temperature: 0.0
+max_tokens: 4096
+timeout_s: 300
+api_style: openai
+batch_pages: 20
+context_tokens: 32768
+overlap_pages: 4
+extraction_passes: 1
+---
+
+You extract a structured JSON record from a transcription. The input is the
+document as ONE concatenated text with '--- page N ---' markers between
+pages. Return a single JSON object (NOT an array) that dumps the document's
+metadata, named entities and notes — i.e. everything the editor produced
+besides the transcription:
+
+{
+  "document": {"title": <exact text or null>, "type": <...>, "page": <...>},
+  "named_entities": [
+    {"text": "<exact text>", "type": "person|place|institution|other", "page": <int>}
+  ],
+  "notes": {"language": <...>, "script": <...>, "summary": <...>}
+}
+
+Use EXACT TEXT from the input for every value; do not paraphrase. Cite the
+page each entity appears on when the input gives page markers. If the
+transcription has no such content, return null/[] as appropriate. Output
+ONLY the JSON object, with no preamble or commentary.
+"""
 
 
 _PAL_SAMPLE = """---

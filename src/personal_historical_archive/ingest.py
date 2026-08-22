@@ -325,11 +325,29 @@ def _prompt_newer_than(
     return False
 
 
+def _doc_slug(doc) -> str:
+    """Readable, version-safe library folder name for a document:
+    `<stem>_<YYYY-MM-DD>` (its creation date).
+
+    A content-changed document is a NEW row with a NEW created_at (see
+    ingest_file: the old row is deleted), so each version gets its own dated
+    folder and the old one is left untouched on disk. Same-day re-scans of a
+    changed file can share a date, but that is harmless: the previous row is
+    already gone, so its folder just holds the latest output."""
+    import datetime
+    stem = Path(doc["path"]).stem
+    try:
+        date = datetime.datetime.fromtimestamp(doc["created_at"]).strftime("%Y-%m-%d")
+    except (TypeError, ValueError, OSError):
+        date = "unknown"
+    return f"{stem}_{date}"
+
+
 def remove_library_artifact(cfg: Config, doc) -> None:
     """Delete the document's library folder (all palaeographer transcriptions)."""
     if not doc:
         return
-    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    slug = _doc_slug(doc)
     rel = Path(doc["dir_path"] or "")
     d = cfg.library / rel / slug
     if d.exists():
@@ -431,16 +449,25 @@ def ingest_file(
     write_document_pages(cfg, conn, doc_id)  # visible output even while processing
 
     try:
+        source_names: list[str | None] = []
         if path.is_dir():
             images = [f for f in sorted(path.iterdir())
                       if f.is_file() and is_supported(f.name) and not f.name.startswith(".")]
             total = len(images)
             renders: list[Path] = []
             for img in images:
-                renders += render_document(img, cfg.renders / sha, cfg.render_dpi, cfg.max_image_px, cfg.jpeg_quality)
+                n = len(renders)
+                renders += render_document(img, cfg.renders / sha, cfg.render_dpi,
+                                           cfg.max_image_px, cfg.jpeg_quality,
+                                           prefix=img.stem)
+                # a single image renders to one page: map each new render to
+                # the source image stem (e.g. 505V) for file naming.
+                new = len(renders) - n
+                source_names += [img.stem] * new
         else:
             total = page_count(path)
             renders = render_document(path, cfg.renders / sha, cfg.render_dpi, cfg.max_image_px, cfg.jpeg_quality)
+            source_names = [None] * len(renders)
     except Exception as e:
         db.set_document_status(conn, doc_id, "error", error=f"render failed: {e}")
         conn.commit()
@@ -450,8 +477,10 @@ def ingest_file(
     page_errors: list[tuple[int, str]] = []
     consecutive_failures = 0
     for i, img in enumerate(renders, start=1):
-        page_id = db.add_page(conn, doc_id, i)
+        page_id = db.add_page(conn, doc_id, i, source_name=source_names[i - 1] if i - 1 < len(source_names) else None)
         page = conn.execute("SELECT * FROM pages WHERE id = ?", (page_id,)).fetchone()
+        if page["reviewed_at"]:
+            continue  # a human corrected this page; never re-extract over it
         if page["status"] == "done" and not force:
             continue  # resume: keep already-extracted pages
         prompt_txt = build_page_prompt(prompt, path.name, i, total)
@@ -561,7 +590,7 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
     if not doc:
         return None
     pal = doc["palaeographer"] or "default"
-    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    slug = _doc_slug(doc)
     rel_dir = Path(doc["dir_path"] or "")
     out_dir = cfg.library / rel_dir / slug / f"transcription-{pal}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -578,6 +607,8 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
         fm = dict(base)
         fm["page"] = p["page_no"]
         fm["status"] = "done" if p["status"] == "done" else "waiting"
+        if p["reviewed_at"]:
+            fm["reviewed"] = True
         body = (p["raw_text"] or "").strip()
         body = format_notes(body) if body else "*waiting*"
         text = (
@@ -587,7 +618,21 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
             + body
             + "\n"
         )
-        (out_dir / f"page-{p['page_no']:03d}.md").write_text(text, encoding="utf-8")
+        # name the file after the source image stem when it is a directory-of-
+        # images document (e.g. 505V.md); otherwise page-NNN.md.
+        name = f"{p['source_name']}.md" if p["source_name"] else f"page-{p['page_no']:03d}.md"
+        f = out_dir / name
+        f.write_text(text, encoding="utf-8")
+        # record when we wrote this file so `pha status` can detect later
+        # human edits via the file's mtime (timestamp, not content, compare).
+        conn.execute("UPDATE pages SET exported_at = ? WHERE id = ?",
+                     (f.stat().st_mtime, p["id"]))
+    # drop stale page-NNN.md files left by the pre-source-stem naming scheme,
+    # but only when this document actually uses source stems.
+    if any(p["source_name"] for p in pages):
+        for stale in out_dir.glob("page-*.md"):
+            stale.unlink(missing_ok=True)
+    conn.commit()
     return out_dir
 
 
@@ -595,6 +640,8 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
 
 def _edit_needed(page, edit_row, editor: Editor, reprocess: bool) -> bool:
     """Does this page need (re-)editing?"""
+    if edit_row is not None and edit_row["reviewed_at"]:
+        return False  # a human corrected this edit; never re-edit over it
     if reprocess:
         return True
     if edit_row is None or edit_row["status"] != "done" or not edit_row["text"]:
@@ -615,7 +662,7 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
     doc = db.get_document(conn, doc_id)
     if not doc:
         return None
-    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    slug = _doc_slug(doc)
     rel_dir = Path(doc["dir_path"] or "")
     out_dir = cfg.library / rel_dir / slug / f"edited-{editor_id}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -628,12 +675,14 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
         "editor": editor_id,
     }
     for e in db.edits_for_document(conn, doc_id, editor_id):
-        p = conn.execute("SELECT page_no FROM pages WHERE id = ?", (e["page_id"],)).fetchone()
+        p = conn.execute("SELECT page_no, source_name, reviewed_at FROM pages WHERE id = ?", (e["page_id"],)).fetchone()
         if not p:
             continue
         fm = dict(base)
         fm["page"] = p["page_no"]
         fm["status"] = "done" if e["status"] == "done" else "waiting"
+        if e["reviewed_at"]:
+            fm["reviewed"] = True
         body = (e["text"] or "*waiting*").strip()
         text = (
             "---\n"
@@ -642,8 +691,166 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
             + body
             + "\n"
         )
-        (out_dir / f"page-{p['page_no']:03d}.md").write_text(text, encoding="utf-8")
+        name = f"{p['source_name']}.md" if p["source_name"] else f"page-{p['page_no']:03d}.md"
+        f = out_dir / name
+        f.write_text(text, encoding="utf-8")
+        # record the write time so later human edits are detected by mtime
+        conn.execute("UPDATE page_edits SET exported_at = ? WHERE id = ?",
+                     (f.stat().st_mtime, e["id"]))
+    # drop stale page-NNN.md left by the pre-source-stem scheme when the doc
+    # uses source stems.
+    if conn.execute(
+        "SELECT COUNT(*) n FROM pages WHERE document_id=? AND source_name IS NOT NULL",
+        (doc_id,)).fetchone()["n"]:
+        for stale in out_dir.glob("page-*.md"):
+            stale.unlink(missing_ok=True)
+    conn.commit()
     return out_dir
+
+
+# --------------------------------------------------------------------------- review round-trip
+
+def pending_review_files(cfg: Config, conn) -> list[dict]:
+    """Find library page files a human edited since pha last wrote/imported them.
+
+    Timestamp-based: a file is pending if its filesystem mtime is NEWER than
+    the page/edit's `exported_at` (when pha last wrote that file). For legacy
+    rows with exported_at NULL we fall back to comparing the file body to the
+    DB text. Returns {path, document_id, page_no, variant, editor}.
+    """
+    pending: list[dict] = []
+    for p in sorted(cfg.library.rglob("*.md")):
+        rel_parts = p.relative_to(cfg.library).parts
+        if len(rel_parts) < 3:
+            continue
+        variant = rel_parts[-2]
+        if not (variant.startswith("transcription-") or variant.startswith("edited-")):
+            continue
+        parsed = _parse_library_file(p)
+        if not parsed:
+            continue
+        fm, body = parsed
+        d_id, page_no = fm.get("document_id"), fm.get("page")
+        if d_id is None or page_no is None:
+            continue
+        doc = db.get_document(conn, int(d_id))
+        if not doc:
+            continue
+        page = conn.execute(
+            "SELECT id, raw_text, exported_at FROM pages WHERE document_id = ? AND page_no = ?",
+            (int(d_id), int(page_no))).fetchone()
+        if not page:
+            continue
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        if variant.startswith("transcription-"):
+            if page["exported_at"] is not None:
+                edited = mtime > page["exported_at"]
+            else:
+                # legacy row: compare content, mirroring write_document_pages
+                raw = (page["raw_text"] or "").strip()
+                current = format_notes(raw) if raw else "*waiting*"
+                edited = body.strip() != current.strip()
+            if edited:
+                pending.append({"path": str(p), "document_id": int(d_id),
+                                "page_no": int(page_no), "variant": variant})
+        else:
+            editor = variant[len("edited-"):]
+            edit = db.get_page_edit(conn, page["id"], editor)
+            if edit is not None and edit["exported_at"] is not None:
+                edited = mtime > edit["exported_at"]
+            else:
+                current = ((edit["text"] if edit else "") or "*waiting*").strip()
+                edited = body.strip() != current
+            if edited:
+                pending.append({"path": str(p), "document_id": int(d_id),
+                                "page_no": int(page_no), "variant": variant,
+                                "editor": editor})
+    return pending
+
+
+def _parse_library_file(path: Path) -> tuple[dict, str] | None:
+    """Parse a library page file: returns (front_matter, body) or None."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not text.startswith("---"):
+        return None
+    end = text.find("\n---", 4)
+    if end == -1:
+        return None
+    fm_text = text[3:end].strip()
+    body = text[end + 4:].strip()
+    try:
+        fm = yaml.safe_load(fm_text) or {}
+    except yaml.YAMLError:
+        return None
+    return (fm, body)
+
+
+def page_row_raw(conn, page_id: int) -> str:
+    row = conn.execute("SELECT raw_text FROM pages WHERE id = ?", (page_id,)).fetchone()
+    return row["raw_text"] or ""
+
+
+def review_import(cfg: Config, conn, doc_id: int | None = None, verbose: bool = True) -> dict:
+    """Import human corrections from the library markdown files back into the DB.
+
+    The historian edits `library/.../transcription-<pal>/<stem>.md` or
+    `library/.../edited-<editor>/<stem>.md`; this reads them back, updates
+    pages.raw_text / page_edits.text, and stamps them reviewed so later
+    scan/edit passes skip them. Returns counts.
+    """
+    updated_pages = 0
+    updated_edits = 0
+    skipped = 0
+    for p in sorted(cfg.library.rglob("*.md")):
+        rel_parts = p.relative_to(cfg.library).parts
+        # library/<rel_dir>/<slug>/transcription-<pal>/<file>.md
+        # library/<rel_dir>/<slug>/edited-<editor>/<file>.md
+        if len(rel_parts) < 3:
+            continue
+        variant = rel_parts[-2]  # transcription-xxx or edited-xxx
+        parsed = _parse_library_file(p)
+        if not parsed:
+            skipped += 1
+            continue
+        fm, body = parsed
+        d_id = fm.get("document_id")
+        page_no = fm.get("page")
+        if d_id is None or page_no is None:
+            skipped += 1
+            continue
+        if doc_id is not None and int(d_id) != doc_id:
+            continue
+        doc = db.get_document(conn, int(d_id))
+        if not doc:
+            skipped += 1
+            continue
+        page = conn.execute(
+            "SELECT id FROM pages WHERE document_id = ? AND page_no = ?",
+            (int(d_id), int(page_no))).fetchone()
+        if not page:
+            skipped += 1
+            continue
+        if variant.startswith("transcription-"):
+            db.mark_page_reviewed(conn, page["id"], body)
+            updated_pages += 1
+            if verbose:
+                print(f"  reviewed transcription: doc {d_id} page {page_no} ({p.name})")
+        elif variant.startswith("edited-"):
+            editor = variant[len("edited-"):]
+            db.set_page_edit(conn, page["id"], editor, text=body,
+                             raw_sha=_raw_sha(page_row_raw(conn, page["id"])))
+            db.mark_edit_reviewed(conn, page["id"], editor, body)
+            updated_edits += 1
+            if verbose:
+                print(f"  reviewed edit: doc {d_id} page {page_no} ({p.name}, editor {editor})")
+    conn.commit()
+    return {"pages": updated_pages, "edits": updated_edits, "skipped": skipped}
 
 
 def _edit_null(cfg: Config, conn, doc_id: int, resolved: str,
@@ -953,7 +1160,7 @@ def write_concatenated_file(cfg: Config, conn, doc_id: int, texts: list,
     doc = db.get_document(conn, doc_id)
     if not doc:
         return None
-    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    slug = _doc_slug(doc)
     rel_dir = Path(doc["dir_path"] or "")
     out_dir = cfg.library / rel_dir / slug
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -967,7 +1174,7 @@ def write_records_file(cfg: Config, conn, doc_id: int, encoder_id: str) -> Path 
     doc = db.get_document(conn, doc_id)
     if not doc:
         return None
-    slug = f"{Path(doc['path']).stem}__{doc['sha256'][:8]}"
+    slug = _doc_slug(doc)
     rel_dir = Path(doc["dir_path"] or "")
     out_dir = cfg.library / rel_dir / slug
     out_dir.mkdir(parents=True, exist_ok=True)

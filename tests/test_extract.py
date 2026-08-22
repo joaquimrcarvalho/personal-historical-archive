@@ -6,11 +6,31 @@ from personal_historical_archive.extract import (
     _split_entities,
     compose_prompts,
     format_notes,
+    render_document,
     resolve_editor_id,
     resolve_encoder_id,
     resolve_palaeographer_id,
     resolve_prompt,
 )
+
+
+def test_render_document_prefix_distinct_files(tmp_path):
+    """A single image rendered with a prefix does NOT overwrite p001.jpg —
+    regression for directory-of-images documents where every image was
+    previously rendered to the same p001.jpg (all pages = the last image)."""
+    import fitz
+    out = tmp_path / "renders"
+    a = tmp_path / "a.png"
+    b = tmp_path / "b.png"
+    for path, color in ((a, (1, 0, 0)), (b, (0, 0, 1))):
+        pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 10, 10), False)
+        pix.set_rect(fitz.IRect(0, 0, 10, 10), color)
+        pix.save(str(path))
+    ra = render_document(a, out, 72, 1800, 88, prefix="a")
+    rb = render_document(b, out, 72, 1800, 88, prefix="b")
+    names = sorted(p.name for p in out.iterdir())
+    assert names == ["a.jpg", "b.jpg"], names
+    assert ra != rb
 
 
 def test_split_entities_keeps_parens():

@@ -16,6 +16,14 @@
 - **personal-historical-archive (pha)** — local archive of historical
   documents; CLI `pha`, Python package `personal_historical_archive`
   (`src/personal_historical_archive/`). The working branch is `main`.
+- **archive_dir is the self-contained data root.** Everything the archive
+  owns lives under it: `dropbox/` (documents), `palaeographers/`, `editors/`,
+  `encoders/` (model/prompt definitions), `library/`, `renders/`, `archive.db`
+  (generated). The project dir holds only code, `prompts/` and the
+  `_sample.md` templates. Precedence: `PHA_ARCHIVE_DIR` env > `PHA_ARCHIVE_DIR`
+  in `.env` (`pha set archive-dir`) > `paths.archive_dir` > default `.`.
+  A fresh archive is seeded with `default.md` for palaeographer/editor/encoder
+  (all qwen3-vl-8b) so it works with zero config.
 - **Palaeographers (vision models), editors (text models) and encoders (text
   models) are one file each** in the top-level `palaeographers/`, `editors/`
   and `encoders/` directories: YAML front matter = model config (endpoint,
@@ -61,6 +69,18 @@
   transform → optional encoder (concatenated whole-document text, page-grounded
   records) → SQLite (FTS5 + embeddings, indexing both raw and edited
   variants) → hybrid search + FastMCP (`pha_*` tools).
+- **Library folders are readable + version-safe**: each document version lives
+  in `library/<dir>/<stem>_<YYYY-MM-DD>/` (creation date; a content change
+  creates a new row/date, so old folders stay). Pages of a directory-of-images
+  document are named after the source scan (`502V.md`); PDF pages use
+  `page-NNN.md`.
+- **Review round-trip (historians correct the files)**: the library `.md`
+  files are the human review surface. A historian edits a page body; `pha
+  status` reports un-imported corrections (timestamp-based: file mtime newer
+  than the page's `exported_at`); `pha review [--doc N]` imports them into the
+  DB and stamps the page `reviewed` (`reviewed_at`), so later `pha scan` /
+  `pha edit` (even `--reprocess`) never overwrite a reviewed page. Then
+  `pha reindex`. Reviewed pages show `reviewed: true` in front matter.
 - Full usage: README.md; planned web UI: WEB_INTERFACE_PLAN.md.
 
 ## Usage — how agents operate the archive (not just develop it)

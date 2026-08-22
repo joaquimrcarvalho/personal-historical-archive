@@ -23,6 +23,23 @@ _MIME = {
 }
 
 
+def _clean_html_entities(text: str) -> str:
+    """Decode common HTML entities that some models emit instead of plain
+    characters (e.g. &nbsp; &amp; &lt; &gt; &quot; &#39;). Returns the text
+    with those entities replaced by their characters and stray &nbsp; by a
+    single space."""
+    if not text:
+        return text
+    return (text
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", '"')
+            .replace("&#39;", "'")
+            .replace("&#34;", '"'))
+
+
 def _strip_think(text: str) -> str:
     """Remove a leading reasoning block (<think>...</think>) that some
     reasoning models (e.g. MiniMax-M3) emit before the actual answer.
@@ -33,10 +50,10 @@ def _strip_think(text: str) -> str:
     if t.startswith("<think>"):
         end = t.find("</think>")
         if end != -1:
-            return t[end + len("</think>"):].strip()
+            return _clean_html_entities(t[end + len("</think>"):].strip())
         # truncated reasoning: drop the opening tag, keep the rest
-        return t[len("<think>"):].strip()
-    return t
+        return _clean_html_entities(t[len("<think>"):].strip())
+    return _clean_html_entities(t)
 
 
 def _prepare_image_b64(image_path: Path, max_side: int, jpeg_quality: int = 88) -> tuple[str, str]:

@@ -36,9 +36,14 @@ def is_supported(name: str) -> bool:
 
 
 def render_document(
-    path: Path, out_dir: Path, dpi: int = 200, max_px: int = 1800, jpeg_quality: int = 88
+    path: Path, out_dir: Path, dpi: int = 200, max_px: int = 1800, jpeg_quality: int = 88,
+    prefix: str | None = None,
 ) -> list[Path]:
-    """Render every page of a PDF (or a single image) to JPEG files, returning their paths."""
+    """Render every page of a PDF (or a single image) to JPEG files, returning their paths.
+
+    `prefix`, when given, replaces the `pNNN` page-index base name — used to
+    give each image of a directory-of-images document a distinct file (its
+    source stem) instead of overwriting p001.jpg."""
     out_dir.mkdir(parents=True, exist_ok=True)
     images: list[Path] = []
     with fitz.open(str(path)) as doc:
@@ -48,7 +53,8 @@ def render_document(
             if max_px and max(rect.width, rect.height) * zoom > max_px:
                 zoom = max_px / max(rect.width, rect.height)
             pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-            out = out_dir / f"p{i + 1:03d}.jpg"
+            name = f"{prefix}.jpg" if prefix else f"p{i + 1:03d}.jpg"
+            out = out_dir / name
             out.write_bytes(pix.tobytes("jpeg", jpg_quality=jpeg_quality))
             images.append(out)
     return images

@@ -83,6 +83,102 @@ def test_config_load_dotenv_dropbox(monkeypatch, tmp_path):
     assert cfg.dropbox == Path.home() / "external-docs"
 
 
+def test_config_archive_dir_default(tmp_path):
+    """archive_dir defaults to the project root; data paths derive from it."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text("paths:\n  archive_dir: .\n")
+    cfg = Config.load(root)
+    assert cfg.archive_dir == root.resolve()
+    assert cfg.dropbox == (root / "dropbox").resolve()
+    assert cfg.library == (root / "library").resolve()
+    assert cfg.renders == (root / "renders").resolve()
+    assert cfg.db_path == (root / "archive.db").resolve()
+    assert cfg.palaeographers_dir == (root / "palaeographers").resolve()
+
+
+def test_config_archive_dir_env_wins(monkeypatch, tmp_path):
+    """PHA_ARCHIVE_DIR env var overrides everything."""
+    monkeypatch.delenv("PHA_HOME", raising=False)
+    monkeypatch.setenv("PHA_ARCHIVE_DIR", str(tmp_path / "arc"))
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text("paths:\n  archive_dir: .\n")
+    cfg = Config.load(root)
+    arc = (tmp_path / "arc").resolve()
+    assert cfg.archive_dir == arc
+    assert cfg.dropbox == (arc / "dropbox").resolve()
+    assert cfg.db_path == (arc / "archive.db").resolve()
+
+
+def test_config_archive_dir_dotenv(monkeypatch, tmp_path):
+    """PHA_ARCHIVE_DIR in the root .env (via pha set archive-dir) is honoured."""
+    monkeypatch.delenv("PHA_HOME", raising=False)
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text("paths:\n  archive_dir: .\n")
+    (root / ".env").write_text(f"PHA_ARCHIVE_DIR={tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    arc = (tmp_path / "arc").resolve()
+    assert cfg.archive_dir == arc
+    assert cfg.dropbox == (arc / "dropbox").resolve()
+
+
+def test_config_archive_dir_explicit_in_yaml(tmp_path):
+    """paths.archive_dir in config.yaml is used when env/.env are absent."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    assert cfg.archive_dir == (tmp_path / "arc").resolve()
+
+
+def test_config_seeds_zero_config_defaults(tmp_path):
+    """A fresh archive seeds default.md palaeographer/editor/encoder (qwen)."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    # seeded on first load
+    assert list(cfg.palaeographers) == ["default"]
+    assert list(cfg.editors) == ["default"]
+    assert list(cfg.encoders) == ["default"]
+    # all point at the same local qwen model (zero config)
+    assert cfg.palaeographers["default"].model == "qwen/qwen3-vl-8b"
+    assert cfg.editors["default"].model == "qwen/qwen3-vl-8b"
+    assert cfg.encoders["default"].model == "qwen/qwen3-vl-8b"
+    # the files exist in the archive
+    arc = (tmp_path / "arc").resolve()
+    assert (arc / "palaeographers" / "default.md").exists()
+    assert (arc / "editors" / "default.md").exists()
+    assert (arc / "encoders" / "default.md").exists()
+
+
+def test_config_migrates_legacy_defs(tmp_path):
+    """Legacy project definitions migrate into a relocated archive (id-preserving)."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    # a legacy palaeographer + editor in the PROJECT dir
+    (root / "palaeographers").mkdir(parents=True)
+    (root / "palaeographers" / "my-hand.md").write_text(
+        "---\ndescription: x\nbase_url: http://x/v1\nmodel: m\n---\nbody\n"
+    )
+    (root / "editors").mkdir(parents=True)
+    (root / "editors" / "modern-pt.md").write_text(
+        "---\ndescription: y\nbase_url: http://x/v1\nmodel: m\n---\nbody\n"
+    )
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    arc = (tmp_path / "arc").resolve()
+    # migrated + default seeded
+    assert "my-hand" in cfg.palaeographers
+    assert "modern-pt" in cfg.editors
+    assert "default" in cfg.palaeographers
+    assert (arc / "palaeographers" / "my-hand.md").exists()
+    assert (arc / "editors" / "modern-pt.md").exists()
+
+
 def test_load_palaeographers(tmp_path):
     d = tmp_path / "palaeographers"
     d.mkdir()

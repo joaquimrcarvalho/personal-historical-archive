@@ -112,6 +112,16 @@ def cmd_status(cfg: Config, args) -> None:
                 col = d["dir_path"] or "(root)"
                 pal = d["palaeographer"] or "default"
                 print(f"  #{d['id']:3d} {d['status']:10s} [{col}] {d['filename']}  ({d['kind']}, {d['page_count'] or 0} pages, {pal})  updated {_fmt_ts(d['updated_at'])}{err}")
+        # pending review: corrected library files not yet imported
+        from .ingest import pending_review_files
+        try:
+            pending = pending_review_files(cfg, conn)
+        except Exception:
+            pending = []
+        if pending:
+            n_pages = len({(x['document_id'], x['page_no']) for x in pending})
+            print(f"\n  ✏️  {n_pages} page(s) have corrections in the library files that are not imported yet.")
+            print(f"     Run:  pha review   (imports your corrections, then pha reindex)")
     finally:
         conn.close()
 
@@ -123,6 +133,25 @@ def cmd_reindex(cfg: Config, args) -> None:
     finally:
         client.close()
     print(f"reindexed {res['reindexed']} document(s)")
+
+
+def cmd_review(cfg: Config, args) -> None:
+    """Import human corrections from the library markdown files into the DB.
+
+    The historian edits library/.../transcription-<pal>/<stem>.md or
+    edited-<editor>/<stem>.md; `pha review` reads those files back, updates
+    pages.raw_text / page_edits.text, and stamps them reviewed so later
+    scan/edit passes never overwrite the corrections. Run `pha reindex`
+    afterwards so search uses the corrected text.
+    """
+    from .ingest import review_import
+    conn = db.connect(cfg.db_path)
+    try:
+        res = review_import(cfg, conn, doc_id=args.doc, verbose=True)
+    finally:
+        conn.close()
+    print(f"reviewed: {res['pages']} transcription page(s), {res['edits']} edit(s) "
+          f"(skipped {res['skipped']} unparsed files)")
 
 
 def cmd_export(cfg: Config, args) -> None:
@@ -318,15 +347,11 @@ def cmd_upload(cfg: Config, args) -> None:
     print(f"  -> {report['destination']}  ({report['files_copied']} file(s))")
 
 
-def cmd_set_dropbox(cfg: Config, args) -> None:
-    """`pha set dropbox` (or `pha dropbox`) — point at the documents folder.
-
-    Asks for a path (absolute, or ~ shorthand), stores it as PHA_DROPBOX in
-    the gitignored project .env, and confirms the resolved location. This is
-    the friendly way for a historian to set the dropbox without editing
-    config.yaml or exporting an env var. The value is read back automatically
-    on the next `pha` run (it is not committed)."""
-    path = getattr(args, "path", None) or (getattr(args, "dropbox", None) or None)
+def _set_env_in_dotenv(cfg: Config, env_name: str, display: str, current: str,
+                       path: str | None = None) -> None:
+    """Prompt for (or accept) a path and store it as env_name in the
+    gitignored project .env. Shared by `pha set archive-dir` and the
+    deprecated `pha set dropbox`."""
     if not path:
         try:
             if not sys.stdin.isatty():
@@ -334,9 +359,8 @@ def cmd_set_dropbox(cfg: Config, args) -> None:
         except Exception:
             path = None
     if not path:
-        cur = getattr(cfg, "dropbox", None)
-        print("Dropbox (documents) folder:")
-        print(f"  current: {cur}")
+        print(f"{display}:")
+        print(f"  current: {current}")
         try:
             path = input("Path (Enter to keep current): ").strip()
         except (EOFError, KeyboardInterrupt):
@@ -347,12 +371,34 @@ def cmd_set_dropbox(cfg: Config, args) -> None:
             expanded = str((cfg.root / expanded).resolve())
         envp = cfg.root / ".env"
         lines = [l for l in envp.read_text(encoding="utf-8").splitlines()
-                 if l.strip() and not l.startswith("PHA_DROPBOX=")] if envp.exists() else []
-        lines.append(f"PHA_DROPBOX={expanded}")
+                 if l.strip() and not l.startswith(f"{env_name}=")] if envp.exists() else []
+        lines.append(f"{env_name}={expanded}")
         envp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        print(f"stored dropbox -> {expanded}  (in {envp}, gitignored)")
+        print(f"stored {env_name} -> {expanded}  (in {envp}, gitignored)")
     else:
-        print(f"dropbox unchanged: {cur}")
+        print(f"{env_name} unchanged: {current}")
+
+
+def cmd_set_archive_dir(cfg: Config, args) -> None:
+    """`pha set archive-dir` (or `pha archive-dir`) — set the archive data root.
+
+    Stores PHA_ARCHIVE_DIR in the gitignored project .env. All data —
+    documents (dropbox), model definitions (palaeographers/editors/encoders)
+    and generated output (library, renders, db) — lives under this directory.
+    Read back automatically on the next `pha` run (never committed)."""
+    path = getattr(args, "path", None)
+    _set_env_in_dotenv(cfg, "PHA_ARCHIVE_DIR", "Archive directory",
+                       str(getattr(cfg, "archive_dir", "")), path)
+
+
+def cmd_set_dropbox(cfg: Config, args) -> None:
+    """DEPRECATED alias for setting just the dropbox (documents) folder.
+
+    Use `pha set archive-dir` instead; this only relocates the documents
+    folder, not the rest of the archive."""
+    path = getattr(args, "path", None) or (getattr(args, "dropbox", None) or None)
+    _set_env_in_dotenv(cfg, "PHA_DROPBOX", "Dropbox (documents) folder",
+                       str(getattr(cfg, "dropbox", "")), path)
 
 
 def cmd_encoder(cfg: Config, args) -> None:
@@ -457,6 +503,10 @@ def main(argv: list[str] | None = None) -> None:
     e = sub.add_parser("export", help="regenerate per-page transcription files from the DB")
     e.set_defaults(fn=cmd_export)
 
+    rv = sub.add_parser("review", help="import corrections from library .md files into the DB")
+    rv.add_argument("--doc", type=int, default=None, help="only review this document id")
+    rv.set_defaults(fn=cmd_review)
+
     rm = sub.add_parser("rm", help="remove document(s) from the index (by id or filename substring)")
     rm.add_argument("target")
     rm.set_defaults(fn=cmd_rm)
@@ -493,10 +543,14 @@ def main(argv: list[str] | None = None) -> None:
 
     sset = sub.add_parser("set", help="set a project setting (stored in gitignored .env)")
     ssub = sset.add_subparsers(dest="setting", required=True)
-    sdb = ssub.add_parser("dropbox", help="set the dropbox documents folder path")
+    sad = ssub.add_parser("archive-dir", help="set the archive data root (documents + definitions + generated output)")
+    sad.add_argument("path", nargs="?", help="path to the archive directory (or prompted)")
+    sad.set_defaults(fn=cmd_set_archive_dir)
+    sdb = ssub.add_parser("dropbox", help="DEPRECATED: set only the dropbox documents folder")
     sdb.add_argument("path", nargs="?", help="path to the documents folder (or prompted)")
     sdb.set_defaults(fn=cmd_set_dropbox)
-    sub.add_parser("dropbox", help="alias for `pha set dropbox`").set_defaults(fn=cmd_set_dropbox)
+    sub.add_parser("archive-dir", help="alias for `pha set archive-dir`").set_defaults(fn=cmd_set_archive_dir)
+    sub.add_parser("dropbox", help="DEPRECATED alias for `pha set dropbox`").set_defaults(fn=cmd_set_dropbox)
 
     up = sub.add_parser("upload", help="copy a document or collection into the dropbox")
     upsub = up.add_subparsers(dest="kind", required=True)
