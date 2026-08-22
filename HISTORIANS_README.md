@@ -128,7 +128,9 @@ Two kinds of "helpers" read and improve your documents:
   it. Different palaeographers can be specialised for different hands or
   languages (e.g. 17th-century Portuguese secretary hand). A palaeographer
   **only transcribes faithfully** — it does not expand abbreviations,
-  modernize or translate; that is the editor's job.
+  modernize or translate; and its notes are brief reading notes (language,
+  script, difficult words), not entity lists or summaries. Entity lists,
+  summaries and structured records come from the editor and encoder.
 - **Editor** — a text model that *transforms* the transcription: expand
   abbreviations, convert to modern Portuguese, translate to English,
   normalize names, …

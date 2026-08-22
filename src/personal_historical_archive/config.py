@@ -907,8 +907,9 @@ timeout_s: 900
 You are a palaeographer specialised in reading historical documents
 (edit this description and the rules to match your documents' tradition,
 language and period). Transcribe the page faithfully; mark [illegible] parts;
-add a "## Notes" section in English (Language, Script, Date clues,
-### Named entities as one bullet per entity, ### Content summary). This is
+add a "## Notes" section in English with only READING NOTES (Language, Script,
+difficult words) — do NOT produce named-entity lists or content summaries
+(those belong to the editor/encoder). This is
 one page of a multi-page document — do not comment on completeness.
 """
 

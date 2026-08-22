@@ -9,9 +9,10 @@ visible on this page, exactly as it appears.
 
 This prompt adds the following scholarly transcription rules to the
 palaeographer's base prompt that precedes it (the base prompt defines the
-exact output format: ## Transcription, then ## Notes with
-### Named entities — one entity per line as a bullet — and
-### Content summary). Keep that format unchanged:
+exact output format: ## Transcription, then ## Notes with only brief READING
+NOTES — Language, Script, and difficult words. Do NOT produce named-entity
+lists or content summaries: those belong to the editor/encoder passes).
+Keep that format unchanged:
 
 1. Keep the original language and spelling exactly as printed. Do NOT expand
    abbreviations, modernize, translate or normalise names — the transcription
@@ -22,3 +23,5 @@ exact output format: ## Transcription, then ## Notes with
 3. Mark anything you cannot read: `[illegible]` for a few characters,
    `[illegible: N words]` for larger passages, `[damaged]`, `[hole]`, `[seal]`.
 4. Never invent text you cannot see. If the page is blank, write `[blank page]`.
+5. In ## Notes, give only READING NOTES: the language, the script/hand, and
+   any difficult words you had to work out. No entity lists, no summaries.

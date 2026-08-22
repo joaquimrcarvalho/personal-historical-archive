@@ -43,4 +43,7 @@ Do not add any comments other than those above.
 <!-- NOTE: a palaeographer TRANSCRIBES faithfully — it must NOT expand
      abbreviations, modernize spelling, translate or normalise names.
      Any text-modification rule belongs in an EDITOR prompt (a separate
-     text-model pass over the transcription), never here. -->
+     text-model pass over the transcription), never here.
+     Its ## Notes are READING NOTES only (language, script, difficult
+     words) — never named-entity lists or content summaries; those come
+     from the editor/encoder. -->

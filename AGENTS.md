@@ -49,6 +49,10 @@
   editor prompt (a separate text-model pass over the transcription). Keeping
   modification rules out of the palaeographer avoids double-expansion and
   keeps the raw transcription a faithful record of the source.
+- **Palaeographer Notes are READING NOTES only** (Language, Script, difficult
+  words). The palaeographer never outputs named-entity lists or content
+  summaries — entities/notes come from the editor, structured records from
+  the encoder.
 - **Encoders live next to their sources**: dropbox/collections/COLX/encoders/
   has one file per structure type (table.md, biographies.md, letters.md);
   `pages:` in the front matter scopes an encoder to a page range and

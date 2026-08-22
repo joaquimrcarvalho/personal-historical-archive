@@ -356,6 +356,10 @@ breaks the load. `pha palaeographer` lists the configured palaeographers.
   runs on the transcribed text as a separate pass. Keeping modification
   rules out of the palaeographer avoids double-expansion and keeps the
   transcription layer a faithful record of the source.
+- **Palaeographer Notes are READING NOTES only** — Language, Script, and
+  difficult words. The palaeographer does NOT produce named-entity lists or
+  content summaries; those belong to the editor (entities/notes) and encoder
+  (structured records) passes.
 - `api_key` supports `${ENV_VAR}` and `${ENV_VAR:-default}` expansion, so keys
   never need to be committed. Resolution order: real environment → a
   gitignored `.env` file → the **macOS Keychain** (service `pha`) → empty.
