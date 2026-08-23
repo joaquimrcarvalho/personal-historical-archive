@@ -132,10 +132,13 @@ PHA=.venv/bin/pha            # set once; then use  $PHA ...  or  $PHA
 # Note: `alias pha=...` only lasts for the one interactive shell it's set in.
 
 # 3. point at your ARCHIVE directory (a single self-contained data root:
-#    documents + model definitions + generated output). The friendly way
-#    stores the path in a gitignored .env (not committed):
-$PHA set archive-dir /path/to/your/archive
-#    (or interactively: run `pha set archive-dir` and type the path when asked)
+#    documents + model definitions + generated output). Two ways:
+#    - create a NEW archive from scratch (default structure + AGENTS.md +
+#      .gitignore + zero-config defaults):
+#      $PHA init-archive /path/to/new-archive
+#    - or point at an existing archive (stores the path in a gitignored .env):
+#      $PHA set archive-dir /path/to/your/archive
+#      (or interactively: run `pha set archive-dir` and type the path when asked)
 #    Equivalent: set the PHA_ARCHIVE_DIR env var (takes precedence), or put
 #    paths.archive_dir in config.yaml (not recommended — machine-specific).
 #    Defaults to the project dir, so a fresh clone works with zero config:
@@ -511,6 +514,7 @@ pha palaeographer [file]
 pha editor [file]
 pha encoder [file] [--new]
 pha encode [--reprocess]
+pha init-archive [PATH]      # create a new self-contained archive directory
 pha set archive-dir [PATH]   # set the archive data root (stored in gitignored .env)
 pha archive-dir              # alias for `pha set archive-dir`
 pha set dropbox [PATH]       # DEPRECATED: set only the documents folder

@@ -391,6 +391,27 @@ def cmd_set_archive_dir(cfg: Config, args) -> None:
                        str(getattr(cfg, "archive_dir", "")), path)
 
 
+def cmd_init_archive(cfg: Config, args) -> None:
+    """`pha init-archive <PATH>` — create a new self-contained pha archive.
+
+    Creates the default structure (dropbox/documents, dropbox/collections,
+    library, renders, palaeographers/editors/encoders with zero-config
+    defaults) plus an AGENTS.md and a .gitignore. If PATH does not exist it
+    is created; if it exists it must be empty (never touches an existing
+    archive)."""
+    from .archive_init import init_archive
+    try:
+        p = init_archive(args.path)
+    except (FileExistsError, NotADirectoryError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return
+    print(f"created archive at {p}")
+    print("  dropbox/documents/  dropbox/collections/   (drop your sources here)")
+    print("  library/  renders/  palaeographers/  editors/  encoders/")
+    print("  AGENTS.md + .gitignore written")
+    print("point pha at it with:  pha set archive-dir " + str(p))
+
+
 def cmd_set_dropbox(cfg: Config, args) -> None:
     """DEPRECATED alias for setting just the dropbox (documents) folder.
 
@@ -551,6 +572,10 @@ def main(argv: list[str] | None = None) -> None:
     sdb.set_defaults(fn=cmd_set_dropbox)
     sub.add_parser("archive-dir", help="alias for `pha set archive-dir`").set_defaults(fn=cmd_set_archive_dir)
     sub.add_parser("dropbox", help="DEPRECATED alias for `pha set dropbox`").set_defaults(fn=cmd_set_dropbox)
+
+    ia = sub.add_parser("init-archive", help="create a new self-contained pha archive directory")
+    ia.add_argument("path", help="path for the new archive (created if missing; must be empty if it exists)")
+    ia.set_defaults(fn=cmd_init_archive)
 
     up = sub.add_parser("upload", help="copy a document or collection into the dropbox")
     upsub = up.add_subparsers(dest="kind", required=True)
