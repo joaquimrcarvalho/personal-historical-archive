@@ -282,6 +282,35 @@ def summary(conn: sqlite3.Connection) -> dict:
     }
 
 
+def schema(conn: sqlite3.Connection) -> dict:
+    """Introspect the archive tables: columns + foreign keys + indexes.
+
+    Returned as a dict so an agent (or the `pha_schema` MCP tool) can read the
+    REAL column names instead of guessing them (e.g. pages has `document_id`,
+    NOT `doc_id`; `path`/`sha256` live on documents, not pages).
+    """
+    # skip sqlite internals and the FTS5 shadow tables (chunks_fts*);
+    # list `chunks_fts` itself separately as a note, not a column layout.
+    tables = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'chunks_fts_%'"
+    ).fetchall()]
+    out: dict = {"tables": {}, "relations": []}
+    for t in tables:
+        cols = [
+            {"name": r[1], "type": r[2], "notnull": bool(r[3]),
+             "pk": bool(r[5]), "default": r[4]}
+            for r in conn.execute(f"PRAGMA table_info({t})").fetchall()
+        ]
+        out["tables"][t] = {"columns": cols}
+    # foreign keys -> the joins an agent needs to pull related data
+    for t in tables:
+        for r in conn.execute(f"PRAGMA foreign_key_list({t})").fetchall():
+            out["relations"].append(
+                f"{t}.{r['from']} -> {r['table']}.{r['to']}"
+            )
+    return out
+
+
 # --------------------------------------------------------------------------- pages
 
 def add_page(conn: sqlite3.Connection, doc_id: int, page_no: int, source_name: str | None = None) -> int:

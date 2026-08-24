@@ -80,6 +80,11 @@
   transform → optional encoder (concatenated whole-document text, page-grounded
   records) → SQLite (FTS5 + embeddings, indexing both raw and edited
   variants) → hybrid search + FastMCP (`pha_*` tools).
+- **SQLite schema — do not guess column names.** The `pages` table links to a
+  document via **`document_id`** (not `doc_id`) and has no `path`/`sha256`;
+  those columns live on **`documents`**. `page_edits` keys on `(page_id,
+  editor)`. Introspect with `pha_schema()` / `db.schema(conn)` (columns +
+  FK joins) before writing raw SQL against `archive.db`.
 - **Library folders are readable + version-safe**: each document version lives
   in `library/<dir>/<stem>_<YYYY-MM-DD>/` (creation date; a content change
   creates a new row/date, so old folders stay). Pages of a directory-of-images
@@ -100,6 +105,10 @@ These conventions cover everyday *use* of pha, the same way the sections above
 cover code. The archive is meant to be driven by an AI agent: browse, set
 how a collection is processed (palaeographer / editor / encoder), add
 documents, scan, edit, encode, and search.
+
+Run `pha help` (or `pha help <readme|mcp|historians|agents>`) for an
+orientation that points at this file, README.md, MCP_CLIENTS.md and
+HISTORIANS_README.md — it always works, even before an archive is configured.
 
 ### How to check how a collection/document is configured
 
@@ -167,5 +176,15 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   dropbox. Start on the archive machine with
   `pha mcp --transport sse --host <LAN-IP> --port 8000` (no auth — use a
   private LAN/VPN/SSH tunnel). See MCP_CLIENTS.md for the full wiring.
+- **`pha` not on PATH?** It is often installed in a venv that isn't activated.
+  Don't guess a path. Run `command -v pha`; if empty, call it by its venv's
+  full path (e.g. `personal-historical-archive/.venv/bin/pha status`) or
+  install it globally once with `uv tool install --editable .` so plain `pha`
+  works in every shell.
+- **`pha` reports "No pha archive is configured or found"** — this is a fresh
+  install with no archive_dir set. Don't guess. Either point it at the real
+  archive (`pha set archive-dir <path>`) or create one
+  (`pha init-archive ~/pha-home && pha set archive-dir ~/pha-home`). It stops
+  rather than silently running against an empty default DB.
 - Upload documents from another machine via `pha_upload(kind, name, content_b64)`
   (files travel as base64; single files per call), then `pha_scan_now()`.

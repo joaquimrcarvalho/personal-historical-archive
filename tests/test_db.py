@@ -35,6 +35,25 @@ def test_db_roundtrip_and_search(tmp_path):
     conn.close()
 
 
+def test_schema_reports_real_columns_and_fk(tmp_path):
+    conn = db.connect(tmp_path / "archive.db")
+    s = db.schema(conn)
+    page_cols = [c["name"] for c in s["tables"]["pages"]["columns"]]
+    # pages links via document_id and carries no path/sha256
+    assert "document_id" in page_cols
+    assert "doc_id" not in page_cols
+    assert "path" not in page_cols
+    assert "sha256" not in page_cols
+    # path/sha256 belong to documents
+    doc_cols = [c["name"] for c in s["tables"]["documents"]["columns"]]
+    assert "path" in doc_cols and "sha256" in doc_cols
+    # the FK joins an agent needs are listed
+    rels = "\n".join(s["relations"])
+    assert "pages.document_id -> documents.id" in rels
+    assert "page_edits.page_id -> pages.id" in rels
+    conn.close()
+
+
 def test_collection_filter(tmp_path):
     conn = db.connect(tmp_path / "archive.db")
     now = time.time()

@@ -23,6 +23,7 @@ processed (palaeographer / editor / encoder).
 | `pha_collection_status(collection)` | per-collection status report: documents with recorded vs resolved pal/editor/encoders, progress (pages done/total), pipeline stage (transcribed / edited / encoded), and render phase (rendering / transcribing / complete) |
 | `pha_scan_now()` | ingest files that were dropped / uploaded into the dropbox |
 | `pha_extraction_status()` | ingestion summary |
+| `pha_schema()` | real SQLite schema: columns per table + the foreign-key joins (read this before writing your own SQL) |
 
 ## Requirements
 
@@ -251,8 +252,54 @@ pha_upload(kind="collection", name="collections/COLX/encoders/letters.md",
 
 ---
 
+## SQL schema (before writing your own queries)
+
+The archive is SQLite. If you bypass the `pha_*` tools and query
+`data/archive.db` directly, call `pha_schema()` (or
+`SELECT * FROM sqlite_master`) to get the REAL column names — do not guess
+them. Common gotchas:
+
+- **`pages` links to a document via `document_id`** (NOT `doc_id`). It holds
+  `id`, `document_id`, `page_no`, `raw_text`, `status`, `error`,
+  `source_name`, `reviewed_at`, `exported_at`. It has **no `path` and no
+  `sha256`**.
+- **`path` and `sha256` live on `documents`** (`id`, `filename`, `path`,
+  `sha256`, `size_bytes`, `mtime`, `kind`, `page_count`, `status`,
+  `prompt_source`, `dir_path`, `palaeographer`, `editor`, `encoder`,
+  `created_at`, `updated_at`).
+- **`page_edits`** keys on `(page_id, editor)` and holds the edited `text`
+  and `raw_sha`, plus `status`, `error`, `updated_at`, `reviewed_at`,
+  `exported_at`.
+- The foreign-key joins you will need:
+  - `pages.document_id -> documents.id` (page → its document)
+  - `page_edits.page_id -> pages.id` (edited text → the page)
+  - `chunks.document_id -> documents.id` and `chunks.page_id -> pages.id`
+  - `records.document_id -> documents.id` (encoded structured records)
+
+Example — pages with their document's path/sha256:
+
+```sql
+SELECT p.id, d.filename, d.path, d.sha256, p.page_no, p.status
+FROM pages p JOIN documents d ON d.id = p.document_id
+LIMIT 10;
+```
+
+---
+
 ## Notes
 
+- **`pha` is not on PATH?** On a shared/archive machine `pha` is often installed
+  inside a virtualenv that isn't activated, so a bare `pha` fails with
+  "command not found". Do NOT guess a path. Run `command -v pha`; if empty,
+  call it by its venv's full path (e.g. `personal-historical-archive/.venv/bin/pha status`,
+  `.../.venv/bin/pha reindex`) or install it globally with
+  `uv tool install --editable .` so plain `pha` works in every shell.
+  See README.md → "Troubleshooting: `pha` not on PATH".
+- **`pha` reports "No pha archive is configured or found"** — fresh install,
+  no `archive_dir` set. Don't guess; point it at the real archive with
+  `pha set archive-dir <path>` (or create one:
+  `pha init-archive ~/pha-home && pha set archive-dir ~/pha-home`). It stops rather
+  than running against an empty default DB.
 - **One local model at a time.** On machine B LM Studio holds a single model;
   `pha scan` and `pha edit` share a lock and never run concurrently. The
   remote agent should not start `pha_scan_now` while a `pha edit` job is

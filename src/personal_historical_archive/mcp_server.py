@@ -195,6 +195,26 @@ def make_server(cfg: Config) -> FastMCP:
             conn.close()
 
     @mcp.tool()
+    def pha_schema() -> dict:
+        """Return the real SQLite schema of the archive: columns per table plus
+        the foreign-key joins between them.
+
+        Read this BEFORE writing your own SQL against the archive. Note in
+        particular that:
+          - `pages` links to a document via `document_id` (NOT `doc_id`), and
+            holds `page_no`, `raw_text`, `status`, `error` — but NO `path` or
+            `sha256`.
+          - `path` and `sha256` live on `documents`.
+          - `page_edits` links to `pages` via `page_id` and keys on
+            (page_id, editor); it holds the edited `text` and `raw_sha`.
+        """
+        conn = db.connect(cfg.db_path)
+        try:
+            return db.schema(conn)
+        finally:
+            conn.close()
+
+    @mcp.tool()
     def pha_upload(kind: str, name: str, content_b64: str, replace: bool = False,
                    merge: bool = False) -> dict:
         """Upload ONE document or collection file into this server's dropbox.

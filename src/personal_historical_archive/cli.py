@@ -477,17 +477,170 @@ def cmd_mcp(cfg: Config, args) -> None:
     mcp_server.main(args.transport, args.host, args.port)
 
 
+def cmd_help(cfg: Config, args) -> None:
+    """`pha help [topic]` — orientation and pointers to the instruction files.
+
+    Works for both humans and agents; runs even when no archive is configured.
+    """
+    root = cfg.root
+    docs = {
+        "readme": ("README.md", "main manual: pipeline, commands, configuration, quickstart"),
+        "mcp": ("MCP_CLIENTS.md", "connecting an AI agent to the archive (MCP `pha_*` tools)"),
+        "historians": ("HISTORIANS_README.md", "step-by-step, non-technical guide for historians"),
+        "agents": ("AGENTS.md", "conventions for AI agents operating this archive"),
+    }
+    topic = getattr(args, "topic", None)
+    if topic:
+        topic = topic.strip().lower().replace("-", "")
+        match = next((k for k in docs if k.replace("-", "") == topic), None)
+        if not match:
+            print(f"unknown help topic: {args.topic}", file=sys.stderr)
+            print(f"known topics: {', '.join(sorted(docs))}", file=sys.stderr)
+            return
+        name, what = docs[match]
+        path = root / name
+        print(f"pha — {name} ({what})")
+        print(f"  path: {path}")
+        print("  open this file for the full instructions.")
+        return
+
+    print("pha — Personal Historical Archive (local archive of historical documents)")
+    print()
+    print("USAGE")
+    print("  pha <command> [options]       # `pha --help` lists every command")
+    print()
+    print("COMMON COMMANDS")
+    print("  pha status                    summary: what is ingested, pending corrections")
+    print("  pha scan                      extract + index new/changed files in dropbox")
+    print('  pha search "query"            search the extracted text')
+    print("  pha set archive-dir <path>    point pha at an archive")
+    print("  pha init-archive <path>       create a new archive")
+    print("  pha mcp                       run the MCP server (stdio)")
+    print("  pha help <topic>              details on readme|mcp|historians|agents")
+    print()
+    print("FIRST-TIME SETUP")
+    print("  If no archive is configured, pha asks where it is: point at an")
+    print("  existing archive or create a new one under ~/pha-home")
+    print("  (Windows: %USERPROFILE%\\pha-home).")
+    print()
+    print("DOCUMENTATION — read these for full instructions")
+    for key in ("readme", "mcp", "historians", "agents"):
+        name, what = docs[key]
+        print(f"  {name:<22} {what}")
+    print()
+    print("  The files above live in the pha project directory.")
+    print("  For agents: an archive created with `pha init-archive` also has its")
+    print("  own AGENTS.md inside it describing that archive.")
+
+
+# --------------------------------------------------------------------------- fresh-install handling
+#
+# When `pha` is freshly installed (e.g. a global `uv tool install`) no archive
+# is configured yet. Without a guard the CLI silently operates on the empty
+# default archive (the project root's ./archive.db) and agents see "documents:
+# none" and then guess. Instead, detect that state and ask the user/agent to
+# point at an existing archive or create a new one under $HOME/pha-home.
+
+def _archive_explicitly_set(cfg: Config) -> bool:
+    """True if PHA_ARCHIVE_DIR was set explicitly (env / .env / config.yaml),
+    as opposed to falling back to the default project-root archive."""
+    if os.environ.get("PHA_ARCHIVE_DIR"):
+        return True
+    envp = cfg.root / ".env"
+    if envp.exists() and any(
+        l.strip().startswith("PHA_ARCHIVE_DIR=")
+        for l in envp.read_text(encoding="utf-8").splitlines()
+    ):
+        return True
+    cfg_path = cfg.root / "config.yaml"
+    if cfg_path.exists():
+        import yaml
+        try:
+            raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return False
+        val = (raw.get("paths", {}) or {}).get("archive_dir")
+        # "." is the backward-compatible DEFAULT (archive == project root),
+        # so it does not count as an explicit real archive.
+        if val and str(val).strip() not in ("", "."):
+            return True
+    return False
+
+
+def _archive_unconfigured(cfg: Config) -> bool:
+    """A real archive is absent: no explicit archive_dir and the default
+    archive holds no documents (DB missing or empty)."""
+    if _archive_explicitly_set(cfg):
+        return False
+    dbp = cfg.db_path
+    if not dbp.exists():
+        return True
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
+        n = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        conn.close()
+        return n == 0
+    except Exception:
+        return True
+
+
+def _create_and_set(cfg: Config, path: Path) -> None:
+    """Create a new archive at `path` and point pha at it (persist PHA_ARCHIVE_DIR)."""
+    from .archive_init import init_archive
+    try:
+        p = init_archive(str(path))
+    except (FileExistsError, NotADirectoryError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return
+    _set_env_in_dotenv(cfg, "PHA_ARCHIVE_DIR", "Archive directory",
+                       str(cfg.archive_dir), str(p))
+    print(f"created and pointed pha at {p}")
+
+
+def _prompt_archive_setup(cfg: Config) -> bool:
+    """Handle a fresh install. Returns True if the archive was configured and
+    the caller must reload Config; returns False if the user declined / we are
+    non-interactive and should stop."""
+    from pathlib import Path
+    home_pha = Path(os.path.expanduser("~")) / "pha-home"
+    print("No pha archive is configured or found.", file=sys.stderr)
+    print("pha keeps everything (documents, model definitions, generated", file=sys.stderr)
+    print("output) in one 'archive directory'. You can:", file=sys.stderr)
+    print(f"  1. point pha at an EXISTING archive:  pha set archive-dir <path>", file=sys.stderr)
+    print(f"  2. create a NEW archive here:        {home_pha}", file=sys.stderr)
+    if sys.stdin.isatty():
+        try:
+            ans = input("\n[1] existing, [2] create new (default), [q] quit: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = ""
+        if ans == "1":
+            _set_env_in_dotenv(cfg, "PHA_ARCHIVE_DIR", "Archive directory",
+                               str(cfg.archive_dir), None)
+            return True
+        if ans in ("", "2"):
+            _create_and_set(cfg, home_pha)
+            return True
+        return False  # quit
+    # non-interactive (an agent / cron): don't block on stdin; instruct + stop.
+    print(file=sys.stderr)
+    print("Set one of these, then re-run your command:", file=sys.stderr)
+    print(f"  pha set archive-dir <path>                                       # existing archive", file=sys.stderr)
+    print(f"  pha init-archive ~/pha-home && pha set archive-dir ~/pha-home     # new archive", file=sys.stderr)
+    return False
+
+
 # --------------------------------------------------------------------------- main
 
 def main(argv: list[str] | None = None) -> None:
     cfg = Config.load()
-    cfg.ensure_dirs()
 
     parser = argparse.ArgumentParser(
         prog="pha",
         description="Personal Historical Archive (pha): drop folder -> VLM extraction -> index -> MCP search.",
     )
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub = parser.add_subparsers(dest="cmd")
+    # `cmd` is optional so a bare `pha` prints help instead of a terse error.
 
     s = sub.add_parser("scan", help="extract + index new/changed files in the dropbox")
     s.add_argument("--watch", action="store_true", help="keep watching the dropbox")
@@ -517,6 +670,10 @@ def main(argv: list[str] | None = None) -> None:
     m.add_argument("--host", default="127.0.0.1")
     m.add_argument("--port", type=int, default=8000)
     m.set_defaults(fn=cmd_mcp)
+
+    h = sub.add_parser("help", help="orientation and pointers to the instruction files")
+    h.add_argument("topic", nargs="?", help="readme | mcp | historians | agents")
+    h.set_defaults(fn=cmd_help)
 
     r = sub.add_parser("reindex", help="re-embed all chunks")
     r.set_defaults(fn=cmd_reindex)
@@ -588,6 +745,26 @@ def main(argv: list[str] | None = None) -> None:
         ps.set_defaults(fn=cmd_upload)
 
     args = parser.parse_args(argv)
+
+    # Bare `pha` (no subcommand) shows help rather than a terse argparse error.
+    if args.cmd is None:
+        from types import SimpleNamespace
+        cmd_help(cfg, SimpleNamespace(topic=None))
+        return
+
+    # Fresh-install guard: if no archive is configured and the default one is
+    # empty, ask the user/agent where the archive is before running a command
+    # that needs it. Setup commands (`set archive-dir`, `init-archive`,
+    # `dropbox`, `key`) and `help` must always run so the guard can be
+    # resolved and orientation is always available.
+    if args.cmd not in ("set", "archive-dir", "dropbox", "init-archive", "key", "help") \
+            and _archive_unconfigured(cfg):
+        if _prompt_archive_setup(cfg):
+            cfg = Config.load()  # reload now that archive_dir may have changed
+        else:
+            sys.exit(1)
+
+    cfg.ensure_dirs()
     args.fn(cfg, args)
 
 

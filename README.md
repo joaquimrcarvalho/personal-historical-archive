@@ -86,12 +86,17 @@ structured records grounded to the page each one starts on.
 ## Quickstart
 
 ```bash
-# 1. environment
+# 1. environment — recommended: install `pha` as a GLOBAL tool so it is
+#    available in every shell / for every agent (no venv activation needed).
+#    `uv` puts the `pha` command in ~/.local/bin, which is already on PATH.
 curl -LsSf https://astral.sh/uv/install.sh | sh
-uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -e .
-export PATH="$PWD/.venv/bin:$PATH"     # puts `pha` on PATH for this shell
-pha --help                             # sanity check
+cd personal-historical-archive
+uv tool install --editable .        # symlinks `pha` into ~/.local/bin
+pha --help                          # sanity check (plain `pha` works everywhere)
+
+#    (Development only: to also run the test suite use a dev venv instead —
+#    `uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .`
+#    — and keep the global tool only if you want it everywhere too.)
 
 # 2. start LM Studio, load qwen/qwen3-vl-8b (+ an embedding model),
 #    and start the local server (default port 1234). Check config.yaml.
@@ -110,6 +115,18 @@ pha search "monastery donation charter" --mode semantic
 pha mcp
 ```
 
+> **`pha` is not on PATH?** Don't guess a path. Run `command -v pha`. If it's
+> empty, either install it globally (`uv tool install --editable .`) or call it
+> by its venv's full path, e.g. `.venv/bin/pha status`. See
+> [Troubleshooting: `pha` not on PATH](#troubleshooting-pha-not-on-path) below.
+>
+> **First run / no archive yet?** On a fresh install pha detects that no
+> archive is configured and asks where your archive is: point at an existing
+> one (`pha set archive-dir <path>`) or create a new one under `~/pha-home`
+> (Windows: `%USERPROFILE%\pha-home`). It will NOT silently run against an empty
+> default database. This only triggers when no archive is configured *and* the
+> default holds no documents — existing archives are never disturbed.
+
 ### New machine setup
 
 To set this project up on a fresh machine (or another Mac), from scratch:
@@ -121,38 +138,65 @@ cd personal-historical-archive
 
 # 2. environment (uv-managed Python)
 curl -LsSf https://astral.sh/uv/install.sh | sh
-uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -e .
-
-# The `pha` console script lives INSIDE the venv — it is NOT on the system
-# PATH. In any shell / for any agent, call it via the venv (full path, so it
-# works even in a fresh or non-interactive shell):
-PHA=.venv/bin/pha            # set once; then use  $PHA ...  or  $PHA
-# Alternatively:  export PATH="$PWD/.venv/bin:$PATH"   then plain  pha  works.
-# Note: `alias pha=...` only lasts for the one interactive shell it's set in.
+# Recommended: install `pha` as a global tool -> available in every shell /
+# agent via ~/.local/bin (already on PATH). No venv activation, ever.
+uv tool install --editable .
+pha --help
+# Alternative (dev venv, for running the test suite): keep `.venv` and call
+# `pha` through it instead:
+#   uv venv --python 3.12 .venv
+#   uv pip install --python .venv/bin/python -e .
+#   PHA=.venv/bin/pha      # full path so it works in fresh / non-interactive shells
+#   # or: export PATH="$PWD/.venv/bin:$PATH"  (only lasts for the one shell)
 
 # 3. point at your ARCHIVE directory (a single self-contained data root:
 #    documents + model definitions + generated output). Two ways:
 #    - create a NEW archive from scratch (default structure + AGENTS.md +
 #      .gitignore + zero-config defaults):
-#      $PHA init-archive /path/to/new-archive
+#      pha init-archive /path/to/new-archive
 #    - or point at an existing archive (stores the path in a gitignored .env):
-#      $PHA set archive-dir /path/to/your/archive
+#      pha set archive-dir /path/to/your/archive
 #      (or interactively: run `pha set archive-dir` and type the path when asked)
 #    Equivalent: set the PHA_ARCHIVE_DIR env var (takes precedence), or put
 #    paths.archive_dir in config.yaml (not recommended — machine-specific).
 #    Defaults to the project dir, so a fresh clone works with zero config:
 #    palaeographers/, editors/ and encoders/ are seeded with a default that
 #    uses qwen/qwen3-vl-8b on LM Studio.
+#    (If you chose the dev-venv fallback above, replace `pha` with `$PHA`.)
 
 # 4. start LM Studio, load qwen/qwen3-vl-8b (or your palaeo model), and the
 #    embedding model; start the local server on port 1234
-$PHA key --set MINIMAX_API_KEY   # only if you use remote MiniMax editors
+pha key --set MINIMAX_API_KEY   # only if you use remote MiniMax editors
 
 # 5. extract + search
-$PHA scan
-$PHA search "your query"
+pha scan
+pha search "your query"
 ```
+
+### Troubleshooting: `pha` not on PATH
+
+`pha` is not on PATH when it was installed inside a virtualenv but that venv
+is not activated and its `bin` dir is not exported into PATH (a very common
+setup on a shared/archive machine). Do NOT guess or invent a path.
+
+1. Confirm it is actually missing: `command -v pha` → if it prints nothing,
+   `pha` is not on PATH.
+2. Find the real executable instead of guessing. It will be the `pha` file
+   inside whichever Python venv it was installed into, e.g.:
+   - project-local dev venv: `personal-historical-archive/.venv/bin/pha`
+   - pipx/uv global tool: `~/.local/bin/pha` (or `~/.local/pipx/venvs/.../bin/pha`)
+3. Then either:
+   - **Recommended (permanent fix):** make it available everywhere:
+     ```bash
+     cd /path/to/personal-historical-archive
+     uv tool install --editable .     # symlinks `pha` into ~/.local/bin
+     pha status
+     ```
+     Now plain `pha` works in every shell and for every agent — no venv
+     activation or PATH export needed.
+   - Or, for the one command / one shell only: call it by its full path,
+     e.g. `.venv/bin/pha status`, `.venv/bin/pha reindex`, etc. Never rely on
+     `alias` (lasts one interactive shell only).
 
 Model notes for a new machine:
 
@@ -501,6 +545,7 @@ printed i–xv but occupies PDF pages 1-15).
 ## CLI reference
 
 ```
+pha help [topic]              # orientation + pointers to README/MCP_CLIENTS/HISTORIANS/AGENTS
 pha scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--path COLLECTION] [--reprocess]
 pha search QUERY [--mode hybrid|keyword|semantic] [--collection COLX] [--limit N] [--json]
 pha status
