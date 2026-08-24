@@ -4,6 +4,7 @@ import argparse
 import os
 import json
 import re
+import subprocess
 import sys
 from datetime import datetime
 
@@ -503,6 +504,52 @@ def cmd_mcp(cfg: Config, args) -> None:
     mcp_server.main(args.transport, args.host, args.port)
 
 
+def cmd_update(cfg: Config, args) -> None:
+    """`pha update` — check GitHub for a newer pha and install it.
+
+    `pha update --check` only compares versions and reports; `pha update` (or
+    `--yes`) applies the update. Editable-from-git installs are fast-forwarded
+    in place; wheel installs are reinstalled from the repository.
+    """
+    from .update import UpdateError, check, current_version, install_update
+
+    try:
+        info = check(cfg.root, cfg.update_repo, cfg.update_branch, timeout=cfg.update_timeout)
+    except Exception as e:  # noqa: BLE001 - report a network/parse failure cleanly
+        print(f"could not check for updates: {e}", file=sys.stderr)
+        print(f"  current version: {current_version()}", file=sys.stderr)
+        sys.exit(2)
+
+    print(f"current version: {info['current']}")
+    print(f"latest version : {info['latest']}  ({info['remote_source']})")
+    if not info["update_available"]:
+        print("pha is up to date.")
+        return
+    print(f"a newer version of pha is available ({info['current']} -> {info['latest']}).")
+    if args.check:
+        print("not installing (--check only).")
+        return
+    if not args.yes:
+        try:
+            ans = input("install now? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = ""
+        if ans not in ("y", "yes"):
+            print("not installing.")
+            return
+    try:
+        msg = install_update(cfg.update_repo, cfg.update_branch)
+    except UpdateError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(2)
+    except subprocess.CalledProcessError as e:
+        print("error: update command failed", file=sys.stderr)
+        print(e.stderr or e.stdout or e, file=sys.stderr)
+        sys.exit(2)
+    print(msg)
+    print("restart pha to use the new version.")
+
+
 def cmd_help(cfg: Config, args) -> None:
     """`pha help [topic]` — orientation and pointers to the instruction files.
 
@@ -542,6 +589,7 @@ def cmd_help(cfg: Config, args) -> None:
     print("  pha set archive-dir <path>    point pha at an archive")
     print("  pha init-archive <path>       create a new archive")
     print("  pha mcp                       run the MCP server (stdio)")
+    print("  pha update                    check GitHub for a newer pha and install it")
     print("  pha help <topic>              details on readme|mcp|historians|agents")
     print()
     print("FIRST-TIME SETUP")
@@ -697,6 +745,13 @@ def main(argv: list[str] | None = None) -> None:
     m.add_argument("--port", type=int, default=8000)
     m.set_defaults(fn=cmd_mcp)
 
+    up = sub.add_parser("update", help="check GitHub for a newer pha and install it")
+    up.add_argument("--check", action="store_true",
+                    help="only compare versions and report; do not install")
+    up.add_argument("--yes", "-y", action="store_true",
+                    help="install without asking for confirmation")
+    up.set_defaults(fn=cmd_update)
+
     h = sub.add_parser("help", help="orientation and pointers to the instruction files")
     h.add_argument("topic", nargs="?", help="readme | mcp | historians | agents")
     h.set_defaults(fn=cmd_help)
@@ -783,7 +838,7 @@ def main(argv: list[str] | None = None) -> None:
     # that needs it. Setup commands (`set archive-dir`, `init-archive`,
     # `dropbox`, `key`) and `help` must always run so the guard can be
     # resolved and orientation is always available.
-    if args.cmd not in ("set", "archive-dir", "dropbox", "init-archive", "key", "help") \
+    if args.cmd not in ("set", "archive-dir", "dropbox", "init-archive", "key", "help", "update") \
             and _archive_unconfigured(cfg):
         if _prompt_archive_setup(cfg):
             cfg = Config.load()  # reload now that archive_dir may have changed
@@ -791,6 +846,17 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(1)
 
     cfg.ensure_dirs()
+
+    # Daily self-update notice: at most once per day, best-effort, and only
+    # outside the `update` command itself (which does its own reporting).
+    if args.cmd != "update":
+        try:
+            from .update import maybe_notify_update
+
+            maybe_notify_update(cfg)
+        except Exception:  # noqa: BLE001 - the notice must never break a command
+            pass
+
     args.fn(cfg, args)
 
 

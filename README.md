@@ -566,7 +566,36 @@ pha set dropbox [PATH]       # DEPRECATED: set only the documents folder
 pha upload document PATH [--name N] [--replace] [--merge]
 pha upload collection PATH [--name N] [--replace] [--merge]
 pha mcp [--transport stdio|sse] [--port 8000]
+pha update [--check] [--yes]  # check GitHub for a newer pha and install it
 ```
+
+### Self-update
+
+`pha update` compares the installed version against the GitHub default branch
+(`joaquimrcarvalho/personal-historical-archive@main`) and, if a newer version
+is available, offers to install it:
+
+- `pha update --check` only compares and reports (no install).
+- `pha update` (or `--yes`) applies the update. If pha was installed as an
+  **editable install from a git checkout** (the recommended `uv tool install
+  --editable .` layout) the checkout is fast-forwarded with `git pull
+  --ff-only` and the new version is active immediately; otherwise it is
+  reinstalled from the repository.
+
+The **first `pha` run of each day** also performs a lightweight, best-effort
+check and prints a one-line notice when an update is pending. This never
+blocks or fails a command and can be turned off in `config.yaml`:
+
+```yaml
+update:
+  enabled: false      # disable the daily startup check
+  interval_h: 24      # how often it runs
+  timeout: 5          # seconds allowed for the GitHub check
+  repo: joaquimrcarvalho/personal-historical-archive
+  branch: main
+```
+
+or per-invocation with the `PHA_NO_UPDATE_CHECK=1` environment variable.
 
 ## Configuration (`config.yaml`)
 
@@ -578,6 +607,7 @@ pha mcp [--transport stdio|sse] [--port 8000]
 - `embeddings.*` — model server + embedding model
 - `extraction.*` — render dpi, image cap, chunk size/overlap, concurrency
 - `search.*` — default mode and result count
+- `update.*` — self-update behaviour (see *Self-update* above)
 
 **Switching backends** (e.g. Ollama instead of LM Studio) is a config change:
 

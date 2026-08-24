@@ -79,3 +79,13 @@ extraction:
 search:
   default_mode: hybrid    # hybrid | keyword | semantic
   top_k: 10
+
+# Self-update: `pha update` checks the GitHub repo for a newer pha, and the
+# first `pha` run of each day prints a one-line notice when one is available.
+#   enabled: false        # disable the daily startup check entirely
+#   interval_h: 24        # how often the startup check runs
+#   timeout: 5            # seconds allowed for the GitHub check
+#   repo: joaquimrcarvalho/personal-historical-archive
+#   branch: main
+# update:
+#   enabled: true

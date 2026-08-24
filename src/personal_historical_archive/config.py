@@ -332,6 +332,12 @@ class Config:
     # search
     default_mode: str
     top_k: int
+    # self-update: daily startup check + `pha update`
+    update_enabled: bool
+    update_interval_h: int
+    update_timeout: int
+    update_repo: str
+    update_branch: str
 
     @classmethod
     def load(cls, root: Path | None = None) -> "Config":
@@ -345,6 +351,7 @@ class Config:
         emb = raw.get("embeddings", {}) or {}
         ext = raw.get("extraction", {}) or {}
         sea = raw.get("search", {}) or {}
+        upd = raw.get("update", {}) or {}
 
         def _env_setting(name: str) -> str | None:
             """Read a setting from the real environment, then a line NAME=... in
@@ -433,6 +440,11 @@ class Config:
             dir_documents=bool(ext.get("dir_documents", True)),
             default_mode=str(sea.get("default_mode", "hybrid")),
             top_k=int(sea.get("top_k", 10)),
+            update_enabled=bool(upd.get("enabled", True)),
+            update_interval_h=int(upd.get("interval_h", 24)),
+            update_timeout=int(upd.get("timeout", 5)),
+            update_repo=str(upd.get("repo", "joaquimrcarvalho/personal-historical-archive")),
+            update_branch=str(upd.get("branch", "main")),
         )
 
     def get_palaeographer(self, pal_id: str | None = None) -> Palaeographer:
