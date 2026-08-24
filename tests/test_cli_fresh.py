@@ -144,3 +144,36 @@ def test_help_unknown_topic_stderr(tmp_path, capsys, monkeypatch):
     err = capsys.readouterr().err
     assert "unknown help topic: bogus" in err
     assert "known topics" in err
+
+
+def _fake_doc(d_id):
+    return {"filename": f"doc{d_id}.pdf", "dir_path": f"collections/cat"}
+
+
+def test_pending_summary_empty():
+    assert cli._pending_summary_lines([], _fake_doc) == []
+
+
+def test_pending_summary_groups_by_document():
+    pending = [
+        {"document_id": 4, "page_no": 1, "variant": "transcription-"},
+        {"document_id": 4, "page_no": 2, "variant": "edited-x"},
+        {"document_id": 7, "page_no": 5, "variant": "transcription-"},
+    ]
+    lines = cli._pending_summary_lines(pending, _fake_doc)
+    joined = "\n".join(lines)
+    # total + doc count (3 unique page/doc pairs across 2 documents)
+    assert "3 page(s)" in lines[0]
+    assert "2 document(s)" in lines[1]
+    # which documents and pages
+    assert "#4   [collections/cat] doc4.pdf  — pages 1, 2" in joined
+    assert "#7   [collections/cat] doc7.pdf  — pages 5" in joined
+    # instruction line
+    assert "pha review" in lines[-1]
+
+
+def test_pending_summary_missing_doc():
+    pending = [{"document_id": 9, "page_no": 3, "variant": "transcription-"}]
+    lines = cli._pending_summary_lines(pending, lambda d: None)
+    assert "doc#9" in lines[2]
+    assert "(root)" in lines[2]

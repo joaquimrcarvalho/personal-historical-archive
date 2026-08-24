@@ -89,6 +89,33 @@ def cmd_search(cfg: Config, args) -> None:
     print(f"\n{len(res['results'])} result(s) in mode '{res['mode']}'")
 
 
+def _pending_summary_lines(pending: list[dict], get_doc) -> list[str]:
+    """Build the 'corrections not yet imported' section of `pha status`.
+
+    Groups pending corrections (from `pending_review_files`) by document so the
+    user sees WHICH documents (and which pages) need review, not just a count.
+    `get_doc(document_id)` returns a row-like with filename/dir_path or None.
+    """
+    if not pending:
+        return []
+    total_pages = len({(x['document_id'], x['page_no']) for x in pending})
+    by_doc: dict[int, dict] = {}
+    for x in pending:
+        by_doc.setdefault(x['document_id'], set()).add(x['page_no'])
+    lines = [
+        f"  ✏️  {total_pages} page(s) with corrections in the library files not yet imported",
+        f"     (across {len(by_doc)} document(s)):",
+    ]
+    for d_id in sorted(by_doc):
+        doc = get_doc(d_id)
+        name = doc["filename"] if doc else f"doc#{d_id}"
+        col = doc["dir_path"] if doc and doc["dir_path"] else "(root)"
+        pages = ", ".join(str(p) for p in sorted(by_doc[d_id]))
+        lines.append(f"       #{d_id:<3d} [{col}] {name}  — pages {pages}")
+    lines.append("     Run:  pha review   (imports your corrections, then pha reindex)")
+    return lines
+
+
 def cmd_status(cfg: Config, args) -> None:
     conn = db.connect(cfg.db_path)
     try:
@@ -119,9 +146,8 @@ def cmd_status(cfg: Config, args) -> None:
         except Exception:
             pending = []
         if pending:
-            n_pages = len({(x['document_id'], x['page_no']) for x in pending})
-            print(f"\n  ✏️  {n_pages} page(s) have corrections in the library files that are not imported yet.")
-            print(f"     Run:  pha review   (imports your corrections, then pha reindex)")
+            for line in _pending_summary_lines(pending, lambda d_id: db.get_document(conn, d_id)):
+                print(line)
     finally:
         conn.close()
 
