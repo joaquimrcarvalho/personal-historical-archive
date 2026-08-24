@@ -258,11 +258,21 @@ def discover(dropbox: Path, dir_documents: bool = True, root: Path | None = None
     By default walks the whole `dropbox` tree. Pass `root` to restrict
     discovery to a single subpath (a collection, e.g. the directory of
     dropbox/collections/pfister-notices) so a scan can target one collection
-    instead of the whole dropbox. `root` must be inside `dropbox`."""
+    instead of the whole dropbox. `root` must be inside `dropbox`.
+
+    If `root` itself is a directory-of-images, it is treated as ONE document
+    (the folder is the document, its images are pages) — the same rule that
+    applies to image-directories below a collection root. This makes
+    `--path` to a leaf image-folder behave consistently with `--path` to the
+    collection root."""
     base = dropbox if root is None else root
     if not base.exists():
         return []
     units: list[Path] = []
+    # When scanning a specific root that is itself a document-directory, the
+    # whole folder is the document — do not enumerate its images separately.
+    if root is not None and dir_documents and base.is_dir() and _is_document_dir(base):
+        return [base]
     for p in sorted(base.rglob("*")):
         if not p.is_file() or not is_supported(p.name) or p.name.startswith("."):
             continue

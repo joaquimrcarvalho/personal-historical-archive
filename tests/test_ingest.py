@@ -10,7 +10,41 @@ from personal_historical_archive.ingest import (
     _record_similar,
     _regex_candidates,
     chunk_text,
+    discover,
 )
+
+
+def test_discover_leaf_imagedir_is_one_document(tmp_path):
+    """--path to a leaf image-folder treats the folder as ONE document, not
+    each image as a separate file (regression for the rescan-granularity bug)."""
+    drop = tmp_path / "dropbox"
+    leaf = drop / "collections" / "COLX" / "ms123"
+    leaf.mkdir(parents=True)
+    for name in ("a.jpg", "b.jpg", "c.jpg"):
+        (leaf / name).write_bytes(b"x")
+    # whole dropbox: leaf is a document-dir -> 1 unit
+    units = discover(drop, True)
+    assert [u.name for u in units] == ["ms123"]
+    # --path at the collection root: same (ms123 is the doc-dir)
+    units = discover(drop, True, root=drop / "collections" / "COLX")
+    assert [u.name for u in units] == ["ms123"]
+    # --path at the LEAF folder itself: must still be 1 unit (the folder),
+    # not 3 individual images
+    units = discover(drop, True, root=leaf)
+    assert [u.name for u in units] == ["ms123"]
+
+
+def test_discover_leaf_mixed_dir_enumerates_files(tmp_path):
+    """A leaf dir that is NOT an image-dir (has a PDF/subdir) still yields its
+    individual files under --path."""
+    drop = tmp_path / "dropbox"
+    leaf = drop / "docs"
+    leaf.mkdir(parents=True)
+    (leaf / "a.pdf").write_bytes(b"x")
+    (leaf / "note.txt").write_bytes(b"x")
+    units = discover(drop, True, root=leaf)
+    assert "a.pdf" in [u.name for u in units]
+    assert "note.txt" not in [u.name for u in units]  # .txt not supported
 
 
 def test_chunk_text_small():
