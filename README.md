@@ -566,6 +566,9 @@ pha set dropbox [PATH]       # DEPRECATED: set only the documents folder
 pha upload document PATH [--name N] [--replace] [--merge]
 pha upload collection PATH [--name N] [--replace] [--merge]
 pha mcp [--transport stdio|sse] [--port 8000]
+pha bundle TARGET... [--out DIR] [--force] [--move]  # export collections/docs as a portable bundle
+                                                     #   (--move: delete them from THIS archive too)
+pha unbundle BUNDLE [--force]                # import a bundle into THIS archive (no re-scan/edit)
 pha update [--check] [--yes]  # check GitHub for a newer pha and install it
 ```
 
@@ -682,6 +685,67 @@ The library files are meant to be READ and CORRECTED by a historian:
 4. `pha reindex` so search uses the corrected text.
 
 Reviewed pages show `reviewed: true` in their front matter.
+
+### Moving / sharing collections between archives (`pha bundle` / `pha unbundle`)
+
+Scanned-and-edited collections can move to ANOTHER archive (a second archive
+on the same machine, or a colleague's machine) **without re-running the
+palaeographer or editor**. Export from the source archive, import into the
+target:
+
+```bash
+# on the source archive (A):
+pha bundle pfister-letters -o ~/pfister-letters.pha-bundle   # a collection
+pha bundle collections/COLX documents/foo.pdf                # or any mix of paths
+# transfer the bundle directory (rsync / zip / USB)
+
+# on the target archive (B):
+pha unbundle ~/pfister-letters.pha-bundle
+```
+
+**Move instead of copy**: add `--move` to `pha bundle` to delete the bundled
+documents from the source archive once the bundle is fully written (DB rows,
+library folders and the copied dropbox files — the bundle is your backup):
+
+```bash
+pha bundle pfister-letters --move -o ~/pfister-letters.pha-bundle
+pha unbundle ~/pfister-letters.pha-bundle      # on B
+```
+
+Files without an archive record are never deleted by `--move` (they were not
+bundled); when moving a single document, shared collection files (the
+collection's `palaeographer`/`editor` selection files, `encoders/`) are left
+in place for sibling documents.
+
+What `pha bundle` packs: the source documents (+ selection files and
+collection-local encoders), the finished `library/` transcriptions/edits/
+records, the page renders, and the palaeographer/editor/encoder definition
+files the collection used. What `pha unbundle` does in B:
+
+- copies the files into B's `dropbox/` (never overwriting existing files
+  unless `--force`),
+- creates new database rows with **new ids** — B's existing documents are
+  untouched (no id collisions, safe to import into a populated archive),
+- imports pages, editor outputs, encoder records and the **reviewed** stamps,
+  so `pha scan` / `pha edit` / `pha encode` skip these documents instead of
+  re-running them,
+- installs the model definitions B is missing (B's own definitions are never
+  overwritten) and pins the recorded palaeographer/editor via selection
+  files, so B resolves the same models as A,
+- indexes the text for search (embeddings are best-effort: without an
+  embedding endpoint it degrades to keyword search, like `pha reindex`).
+
+Caveats:
+
+- Only documents that were already scanned in A are bundled (`pha scan`
+  first if a file has no archive record).
+- A document already present in B (same path) is skipped unless `--force`
+  (which replaces it). A file whose content differs from the bundle is never
+  clobbered without `--force`.
+- Re-importing the same bundle is idempotent (already-present documents are
+  skipped).
+- The `library/` files in B are regenerated from the imported rows, so their
+  front matter carries B's `document_id`s and paths.
 
 ## Notes on quality & performance
 

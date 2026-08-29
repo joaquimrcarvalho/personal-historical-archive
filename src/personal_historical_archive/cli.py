@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from . import db
 from .config import Config
@@ -179,6 +180,66 @@ def cmd_review(cfg: Config, args) -> None:
         conn.close()
     print(f"reviewed: {res['pages']} transcription page(s), {res['edits']} edit(s) "
           f"(skipped {res['skipped']} unparsed files)")
+
+
+def cmd_bundle(cfg: Config, args) -> None:
+    """Export collections/documents into a portable bundle (for another
+    archive). Carries the finished scan+edit output — no re-extraction on
+    the receiving side. With --move, deletes the bundled documents from THIS
+    archive after the bundle is written (a true move)."""
+    from .bundle import export_bundle
+    if args.out:
+        out = Path(args.out)
+    else:
+        import datetime
+        date = datetime.date.today().isoformat()
+        out = Path.cwd() / f"{Path(args.targets[0]).name}_{date}.pha-bundle"
+    try:
+        res = export_bundle(cfg, args.targets, out, force=args.force, move=args.move, verbose=True)
+    except FileExistsError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return
+    print(f"bundled {res['documents']} document(s) into {res['out']}")
+    if res["skipped"]:
+        print(f"  skipped (no archive record yet): {', '.join(res['skipped'])}")
+    for kind, names in res["defs"].items():
+        if names:
+            print(f"  defs: {kind}: {' '.join(names)}")
+    if res.get("moved"):
+        m = res["moved"]
+        print(f"moved {m['documents']} document(s) OUT of {cfg.archive_dir} "
+              f"({m['dropbox_paths']} dropbox path(s) removed)")
+        print(f"  the bundle at {res['out']} is your backup — verify the target "
+              f"archive before deleting it")
+
+
+def cmd_unbundle(cfg: Config, args) -> None:
+    """Import a pha bundle into this archive: new DB rows (new ids), pages/
+    edits/records and reviewed stamps carried over, then indexed for search.
+    Does not re-run the palaeographer or editor."""
+    from .bundle import import_bundle
+    res = import_bundle(cfg, args.bundle, force=args.force, verbose=True)
+    if res["action"] == "skipped":
+        print(f"unbundle: {res['reason']}")
+        return
+    print(f"imported {len(res['imported'])} document(s) into {cfg.archive_dir}")
+    if res["imported"]:
+        for d in res["imported"]:
+            extra = ""
+            if d["editors"]:
+                extra += f", editors: {' '.join(d['editors'])}"
+            if d["encoders"]:
+                extra += f", encoders: {' '.join(d['encoders'])}"
+            print(f"  + #{d['id']:3d} {d['relpath']}  ({d['status']}, {d['pages']} pages, {d['chunks']} chunks){extra}")
+    if res["skipped_documents"]:
+        print(f"  skipped (already in this archive): {', '.join(res['skipped_documents'])}")
+    if res["files_skipped"]:
+        print(f"  {len(res['files_skipped'])} dropbox file(s) already present, not overwritten "
+              f"(--force to overwrite)")
+    for kind, names in res["defs_installed"].items():
+        if names:
+            print(f"  installed defs: {kind}: {' '.join(names)}")
+    print("  search index updated; run `pha reindex` only if embeddings failed above")
 
 
 def cmd_export(cfg: Config, args) -> None:
@@ -589,6 +650,8 @@ def cmd_help(cfg: Config, args) -> None:
     print("  pha set archive-dir <path>    point pha at an archive")
     print("  pha init-archive <path>       create a new archive")
     print("  pha mcp                       run the MCP server (stdio)")
+    print("  pha bundle <collections...>   export collections for another archive (no re-scan there)")
+    print("  pha unbundle <bundle>         import a bundle into THIS archive (no re-scan/edit)")
     print("  pha update                    check GitHub for a newer pha and install it")
     print("  pha help <topic>              details on readme|mcp|historians|agents")
     print()
@@ -824,6 +887,23 @@ def main(argv: list[str] | None = None) -> None:
         ps.add_argument("--replace", action="store_true", help="replace an existing destination")
         ps.add_argument("--merge", action="store_true", help="copy into an existing destination, updating files")
         ps.set_defaults(fn=cmd_upload)
+
+    bnd = sub.add_parser("bundle", help="export collections/documents into a portable bundle for another archive")
+    bnd.add_argument("targets", nargs="+",
+                     help="collection or document path(s) under the dropbox (e.g. collections/COLX or COLX)")
+    bnd.add_argument("--out", "-o", default=None,
+                     help="bundle directory (default: <target>_<date>.pha-bundle in the current directory)")
+    bnd.add_argument("--force", action="store_true", help="overwrite an existing bundle directory")
+    bnd.add_argument("--move", action="store_true",
+                     help="MOVE, not copy: delete the bundled documents from THIS archive "
+                          "after the bundle is written (the bundle is the backup)")
+    bnd.set_defaults(fn=cmd_bundle)
+
+    ub = sub.add_parser("unbundle", help="import a pha bundle into this archive (no re-scan/re-edit)")
+    ub.add_argument("bundle", help="path to the bundle directory created by `pha bundle`")
+    ub.add_argument("--force", action="store_true",
+                    help="replace documents/files that already exist in this archive")
+    ub.set_defaults(fn=cmd_unbundle)
 
     args = parser.parse_args(argv)
 

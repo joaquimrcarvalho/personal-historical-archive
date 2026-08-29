@@ -275,3 +275,42 @@ def test_doc_slug_readable_date():
     assert slug.startswith("1576_20")  # 1576_YYYY-MM-DD
     assert "__" not in slug
     assert "sha" not in slug.lower() and len(slug) < 25
+
+
+def test_encode_needed_records_without_pages_updated_at(tmp_path):
+    """A document that already has records must not crash `pha encode` on the
+    legacy schema (pages has no updated_at column). Regression for the
+    post-unbundle workflow."""
+    import time as _t
+    from types import SimpleNamespace
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import _encode_needed
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        "paths:\n  dropbox: dropbox\n  library: library\n  renders: renders\n"
+        "  palaeographers: palaeographers\n  editors: editors\n  encoders: encoders\n"
+        "  prompts: prompts\n  db: archive.db\n"
+    )
+    cfg = Config.load(root)
+    drop = cfg.dropbox
+    col = drop / "collections" / "testcol"
+    col.mkdir(parents=True)
+    src = col / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/testcol", now=_t.time())
+    pid = _db.add_page(conn, doc_id, 1)
+    _db.set_page_result(conn, pid, raw_text="TEXT")
+    _db.set_document_status(conn, doc_id, "done")
+    _db.add_record(conn, doc_id, "enc1", "letter", '{"text": "x"}')
+    conn.commit()
+    encoder = SimpleNamespace(prompt_file=None)
+    cfg_lite = SimpleNamespace(dropbox=cfg.dropbox, prompts=cfg.prompts, encoders={})
+    # must not raise; records present + nothing newer -> no re-encode
+    assert _encode_needed(cfg_lite, conn, doc_id, encoder, "enc1", src, False, None) is False
+    conn.close()

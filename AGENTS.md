@@ -171,6 +171,16 @@ came from (a dropbox `editor` file, a config default, or nowhere).
 
 ### Remote / machine-to-machine
 
+- **Moving collections between archives without redoing scan/edit**: `pha
+  bundle <collection-or-doc...>` packs documents + finished library
+  transcriptions/edits/records + renders + the model definitions used into a
+  portable directory; `pha unbundle <bundle>` (run on the target archive)
+  imports it with NEW ids into a populated archive, pins the recorded
+  palaeographer/editor via selection files (so `pha scan`/`pha edit` skip the
+  imported docs instead of re-running them), and indexes it for search.
+  `pha bundle --move` additionally DELETES the bundled documents from the
+  source archive once the bundle is written (the bundle is the backup). See
+  the README section "Moving / sharing collections between archives".
 - The MCP server runs on the machine that owns the dropbox and models. A
   client on another machine needs only an MCP connection — no local models or
   dropbox. Start on the archive machine with

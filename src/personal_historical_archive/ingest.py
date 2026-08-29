@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -1089,10 +1090,16 @@ def _encode_needed(cfg: Config, conn, doc_id: int, encoder: Encoder, resolved: s
     ).fetchone()["m"]
     if t and t > latest:
         return True
-    t2 = conn.execute(
-        "SELECT MAX(updated_at) AS m FROM pages WHERE document_id = ? AND status = 'done'",
-        (doc_id,),
-    ).fetchone()["m"]
+    t2 = None
+    try:
+        t2 = conn.execute(
+            "SELECT MAX(updated_at) AS m FROM pages WHERE document_id = ? AND status = 'done'",
+            (doc_id,),
+        ).fetchone()["m"]
+    except sqlite3.OperationalError:
+        # legacy schema: pages has no updated_at column — skip this input-
+        # changed check rather than failing `pha encode` on every record-bearing doc.
+        pass
     if t2 and t2 > latest:
         return True
     return False
