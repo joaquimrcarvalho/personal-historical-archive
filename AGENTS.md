@@ -9,6 +9,18 @@
   commit message).
 - Commits made by the human do NOT carry the trailer — it is manual only
   (there is no hook).
+- **Version bumps are manual and user-driven.** The version lives in two
+  places that must stay in sync: `pyproject.toml` (`version = ...`) and
+  `src/personal_historical_archive/__init__.py` (`__version__ = ...`). It is
+  NOT bumped automatically per commit/push. When the human says **"push"**
+  they mean push without a bump; **"push and update version"** (or "bump the
+  version") means bump first (semver: patch for fixes, minor for features),
+  then commit + push. When asked to just "push", advise whether a bump seems
+  warranted (e.g. a user-visible feature landed since the last bump) and let
+  the human decide. The self-update check compares the installed
+  `__version__` against the one on the GitHub default branch, so a push only
+  reaches the installed base as an "update available" notice when the version
+  was actually bumped.
 - Verify with `git log -1 --format='%B'`.
 
 ## Project essentials
