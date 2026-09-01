@@ -18,3 +18,4 @@ test-1577-archive/
 
 # OS
 .DS_Store
+tests/test_archive_init.py
