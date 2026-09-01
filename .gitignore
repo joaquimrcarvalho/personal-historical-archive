@@ -13,6 +13,7 @@ data/
 library/
 dropbox/*
 !dropbox/.gitkeep
+benchmarks/
 
 # OS
 .DS_Store
