@@ -576,6 +576,7 @@ def index_document(
         vecs = embed_client.embed(
             cfg.embed_model,
             [prefixed(cfg.embed_model, t, "doc") for _, _, t, _v in items],
+            batch_size=cfg.embed_batch_size,
         )
     except ModelError as e:
         vecs = [None] * len(items)

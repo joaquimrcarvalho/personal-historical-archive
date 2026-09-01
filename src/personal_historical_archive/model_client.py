@@ -301,9 +301,25 @@ class ModelClient:
         payload["stream"] = False
         return self._openai_chat(payload)
 
-    def embed(self, model: str, texts: Sequence[str]) -> list[list[float]]:
-        data = self._post("/embeddings", {"model": model, "input": list(texts)})
-        try:
-            return [d["embedding"] for d in data["data"]]
-        except (KeyError, TypeError) as e:
-            raise ModelError(f"Unexpected embeddings response: {data!r}") from e
+    def embed(
+        self, model: str, texts: Sequence[str], batch_size: int | None = None
+    ) -> list[list[float]]:
+        """Embed `texts`, returning one vector per input text in order.
+
+        `batch_size` caps how many texts go in each `/embeddings` request.
+        Some endpoints reject a request whose `input` array exceeds a fixed
+        maximum (e.g. 200 vectors), so a large index (pha reindex can produce
+        thousands of chunks) is split into `batch_size`-sized requests instead
+        of one giant one. Batches are sent sequentially and concatenated in
+        input order. `batch_size <= 0`/None sends everything in one request."""
+        if not batch_size or batch_size <= 0:
+            batch_size = max(1, len(texts))
+        embeddings: list[list[float]] = []
+        for i in range(0, len(texts), batch_size):
+            batch = list(texts[i : i + batch_size])
+            data = self._post("/embeddings", {"model": model, "input": batch})
+            try:
+                embeddings.extend(d["embedding"] for d in data["data"])
+            except (KeyError, TypeError) as e:
+                raise ModelError(f"Unexpected embeddings response: {data!r}") from e
+        return embeddings

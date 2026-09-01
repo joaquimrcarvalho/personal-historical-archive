@@ -65,6 +65,7 @@ embeddings:
   base_url: http://127.0.0.1:1234/v1
   model: text-embedding-nomic-embed-text-v1.5@q4_k_m
   timeout_s: 120
+  batch_size: 100        # embed at most this many chunks per request (endpoint limit)
 
 extraction:
   render_dpi: 200         # render resolution for pages (200 for handwritten manuscripts)

@@ -607,7 +607,9 @@ or per-invocation with the `PHA_NO_UPDATE_CHECK=1` environment variable.
   `pha set archive-dir` or the `PHA_ARCHIVE_DIR` env var — never commit a
   machine-specific path.
 - `vision.*` — model server + vision model for extraction
-- `embeddings.*` — model server + embedding model
+- `embeddings.*` — model server + embedding model; `batch_size` caps how many
+  chunks go in each `/embeddings` request (some endpoints reject an input over
+  a fixed max, e.g. 200 vectors)
 - `extraction.*` — render dpi, image cap, chunk size/overlap, concurrency
 - `search.*` — default mode and result count
 - `update.*` — self-update behaviour (see *Self-update* above)

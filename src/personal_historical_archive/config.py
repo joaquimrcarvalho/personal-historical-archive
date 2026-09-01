@@ -321,6 +321,7 @@ class Config:
     embed_base_url: str
     embed_model: str
     embed_timeout_s: int
+    embed_batch_size: int
     # extraction
     render_dpi: int
     max_image_px: int
@@ -431,6 +432,7 @@ class Config:
             embed_base_url=str(emb.get("base_url", "http://127.0.0.1:1234/v1")),
             embed_model=str(emb.get("model", "text-embedding-nomic-embed-text-v1.5@q4_k_m")),
             embed_timeout_s=int(emb.get("timeout_s", 120)),
+            embed_batch_size=int(emb.get("batch_size", 100)),
             render_dpi=int(ext.get("render_dpi", 200)),
             max_image_px=int(ext.get("max_image_px", 1800)),
             jpeg_quality=int(ext.get("jpeg_quality", 88)),
