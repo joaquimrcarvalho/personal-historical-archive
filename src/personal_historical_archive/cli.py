@@ -159,6 +159,29 @@ def cmd_status(cfg: Config, args) -> None:
         if pending:
             for line in _pending_summary_lines(pending, lambda d_id: db.get_document(conn, d_id)):
                 print(line)
+        # new in dropbox: files present on disk but with no archive record yet
+        # (dropped in but `pha scan` never ran) — so status shows what a scan
+        # WOULD pick up, before it runs.
+        from .ingest import discover
+        known = {r["path"] for r in conn.execute("SELECT path FROM documents").fetchall()}
+        try:
+            units = discover(cfg.dropbox, cfg.dir_documents)
+        except Exception:
+            units = []
+        new_units = [u for u in units if str(u) not in known]
+        if new_units:
+            from collections import OrderedDict
+            by_dir: "OrderedDict[str, list[str]]" = OrderedDict()
+            for u in new_units:
+                rel = u.relative_to(cfg.dropbox)
+                key = str(rel.parent) if str(rel.parent) != "." else "(root)"
+                by_dir.setdefault(key, []).append(rel.name)
+            print("\nnew in dropbox (not yet scanned — run `pha scan`):")
+            for key, names in by_dir.items():
+                shown = ", ".join(sorted(names)[:5])
+                if len(names) > 5:
+                    shown += ", …"
+                print(f"  {key}: {len(names)} file(s)  ({shown})")
     finally:
         conn.close()
 
