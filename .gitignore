@@ -14,6 +14,7 @@ library/
 dropbox/*
 !dropbox/.gitkeep
 benchmarks/
+test-1577-archive/
 
 # OS
 .DS_Store
