@@ -48,6 +48,11 @@ def _seed(cfg: Config) -> dict:
         for p in (1, 2):
             pid = db.add_page(conn, doc1, p)
             db.set_page_result(conn, pid, raw_text="text")
+        # one text-only chunk -> keyword-only index for doc1
+        p1 = conn.execute(
+            "SELECT id FROM pages WHERE document_id=? AND page_no=1", (doc1,)
+        ).fetchone()["id"]
+        db.add_chunk(conn, doc1, p1, 0, "text chunk", None)
         db.update_document(conn, doc1, palaeographer="qwen-local", editor="generic")
         conn.commit()
     finally:
@@ -85,6 +90,35 @@ def test_collection_status_shape(tmp_path):
     # stage: transcribed + edited
     assert "transcribed" in doc["stage"]
     assert "edited" in doc["stage"]
+    # per-document index stats: text-only chunk -> no embeddings yet
+    assert doc["index"]["chunks"] == 1
+    assert doc["index"]["embedded"] == 0
+    assert "embedded" not in doc["stage"]
+
+
+def test_collection_status_embedded_stage(tmp_path):
+    """A document whose chunks all carry vectors reports the embedded stage."""
+    cfg = _make_config(tmp_path)
+    seed = _seed(cfg)
+    conn = db.connect(cfg.db_path)
+    try:
+        conn.execute("UPDATE chunks SET embedding = x'01' WHERE document_id = ?",
+                     (seed["doc1"],))
+        conn.commit()
+    finally:
+        conn.close()
+    import asyncio
+    mcp = mcp_server.make_server(cfg)
+    status_fn = None
+    for t in asyncio.run(mcp.list_tools()):
+        if t.name == "pha_collection_status":
+            status_fn = t.fn
+    report = status_fn()
+    colgroup = next((g for g in report if g["collection"] == "collections/testcol"), None)
+    doc = colgroup["documents"][0]
+    assert doc["index"]["chunks"] == 1
+    assert doc["index"]["embedded"] == 1
+    assert "embedded" in doc["stage"]
 
 
 def test_collection_status_default_palaeographer(tmp_path):

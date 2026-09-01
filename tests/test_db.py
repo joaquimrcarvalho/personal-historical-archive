@@ -54,6 +54,33 @@ def test_schema_reports_real_columns_and_fk(tmp_path):
     conn.close()
 
 
+def test_chunk_stats_per_document(tmp_path):
+    """chunk_stats reports per-document chunks vs embedded chunks, so a
+    keyword-only document (embeddings missing) is visible at doc level."""
+    conn = db.connect(tmp_path / "archive.db")
+    now = time.time()
+    d1 = db.add_document(conn, filename="a.pdf", path=str(tmp_path / "a.pdf"),
+                         sha256="a", size_bytes=1, mtime=now, kind="pdf",
+                         now=now, dir_path="documents")
+    d2 = db.add_document(conn, filename="b.pdf", path=str(tmp_path / "b.pdf"),
+                         sha256="b", size_bytes=1, mtime=now, kind="pdf",
+                         now=now, dir_path="documents")
+    p1 = db.add_page(conn, d1, 1)
+    p2 = db.add_page(conn, d2, 1)
+    # d1: one text-only chunk + one embedded chunk; d2: none
+    db.add_chunk(conn, d1, p1, 0, "text only", None)
+    db.add_chunk(conn, d1, p1, 1, "embedded", b"\x00\x01vec")
+    db.add_chunk(conn, d2, p2, 0, "no embedding", None)
+    conn.commit()
+
+    stats = db.chunk_stats(conn)
+    assert stats[d1] == {"chunks": 2, "embedded": 1}
+    assert stats[d2] == {"chunks": 1, "embedded": 0}
+    assert db.chunk_stats(conn, doc_id=d1) == {d1: {"chunks": 2, "embedded": 1}}
+    assert db.chunk_stats(conn, doc_id=999) == {}
+    conn.close()
+
+
 def test_collection_filter(tmp_path):
     conn = db.connect(tmp_path / "archive.db")
     now = time.time()

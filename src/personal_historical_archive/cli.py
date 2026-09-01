@@ -136,11 +136,20 @@ def cmd_status(cfg: Config, args) -> None:
         docs = db.list_documents(conn, limit=100)
         if docs:
             print("\ndocuments:")
+            stats = db.chunk_stats(conn)
             for d in docs:
                 err = f"  ERROR: {(d['error'] or '')[:60]}" if d["status"] == "error" else ""
                 col = d["dir_path"] or "(root)"
                 pal = d["palaeographer"] or "default"
-                print(f"  #{d['id']:3d} {d['status']:10s} [{col}] {d['filename']}  ({d['kind']}, {d['page_count'] or 0} pages, {pal})  updated {_fmt_ts(d['updated_at'])}{err}")
+                cs = stats.get(d["id"])
+                chunks = ""
+                if cs:
+                    chunks = f", {cs['chunks']} chunks ({cs['embedded']} embedded)"
+                kw = "  [keyword-only: embeddings missing — run pha reindex]" \
+                    if cs and cs["chunks"] and not cs["embedded"] else ""
+                print(f"  #{d['id']:3d} {d['status']:10s} [{col}] {d['filename']}  "
+                      f"({d['kind']}, {d['page_count'] or 0} pages, {pal}{chunks})  "
+                      f"updated {_fmt_ts(d['updated_at'])}{err}{kw}")
         # pending review: corrected library files not yet imported
         from .ingest import pending_review_files
         try:

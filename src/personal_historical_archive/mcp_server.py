@@ -373,6 +373,7 @@ def make_server(cfg: Config) -> FastMCP:
                 "SELECT document_id, COUNT(*) n FROM pages WHERE status='done' GROUP BY document_id"
             ).fetchall():
                 counts[row["document_id"]] = row["n"]
+            stats = db.chunk_stats(conn)  # per-doc chunks / embedded chunks
         finally:
             conn.close()
         from collections import OrderedDict
@@ -388,6 +389,9 @@ def make_server(cfg: Config) -> FastMCP:
                 s.append("edited")
             if doc["encoder"]:
                 s.append("encoded")
+            cs = stats.get(doc["id"], {"chunks": 0, "embedded": 0})
+            if cs["chunks"] and cs["embedded"] == cs["chunks"]:
+                s.append("embedded")
             return s
 
         groups: "OrderedDict[str, list]" = OrderedDict()
@@ -449,6 +453,8 @@ def make_server(cfg: Config) -> FastMCP:
                     "render": {"pages_rendered": rendered, "pages_transcribed": done,
                                "phase": phase,
                                "render_dir": str(render_dir)},
+                    "index": {"chunks": stats.get(d["id"], {}).get("chunks", 0),
+                              "embedded": stats.get(d["id"], {}).get("embedded", 0)},
                     "config_recorded": rec,
                     "config_resolved": {"palaeographer": eff_pal,
                                         "palaeographer_source": pal_src,

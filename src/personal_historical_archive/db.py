@@ -460,6 +460,25 @@ def add_chunk(
     _write(conn, "INSERT INTO chunks_fts (rowid, text) VALUES (?, ?)", (cur.lastrowid, text))
 
 
+def chunk_stats(conn: sqlite3.Connection, doc_id: int | None = None) -> dict:
+    """Per-document chunk counts: {document_id: {"chunks": n, "embedded": m}}.
+
+    `embedded` counts chunks with a stored vector (`embedding IS NOT NULL`).
+    A document whose `embedded` < `chunks` is indexed text-only (the embed
+    endpoint was unreachable when it was indexed) and needs `pha reindex` to
+    gain semantic search. With `doc_id` given, only that document is included.
+    """
+    if doc_id is not None:
+        rows = conn.execute(
+            "SELECT document_id, COUNT(*) n, SUM(embedding IS NOT NULL) e "
+            "FROM chunks WHERE document_id = ? GROUP BY document_id", (doc_id,)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT document_id, COUNT(*) n, SUM(embedding IS NOT NULL) e "
+            "FROM chunks GROUP BY document_id").fetchall()
+    return {r["document_id"]: {"chunks": r["n"], "embedded": r["e"] or 0} for r in rows}
+
+
 def all_embeddings(
     conn: sqlite3.Connection, collection: str | None = None
 ) -> list[tuple[int, bytes]]:
