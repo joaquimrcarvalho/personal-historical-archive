@@ -389,6 +389,22 @@ def resolve_encoder_id(
     return None, None
 
 
+def encoder_file_named(name: str, file_dir: Path, dropbox: Path) -> Path | None:
+    """Find a single collection-local encoder file by name
+    (encoders/<name>.md|.txt), walking up the directory chain like
+    encoder_files_for. Used by the pha.yaml `encoders:` list."""
+    d = file_dir
+    while True:
+        for ext in (".md", ".txt"):
+            f = d / "encoders" / f"{name}{ext}"
+            if f.is_file():
+                return f
+        if d == dropbox or dropbox not in d.parents:
+            break
+        d = d.parent
+    return None
+
+
 def encoder_files_for(stem: str, file_dir: Path, dropbox: Path) -> list[Path]:
     """Encoder definition files for a document, in resolution order.
 

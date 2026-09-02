@@ -66,22 +66,29 @@ structured records grounded to the page each one starts on.
 - Runs locally by default; **remote OpenAI-compatible models** (e.g. MiniMax)
   are supported for palaeographers and editors via an API key
   (`pha key --set` stores it in the OS secret store).
-- **Model endpoints & contexts are per-model config**: every palaeographer /
-  editor / encoder file can declare
+- **Model interface, content rules, and per-collection selection are three
+  separate layers.** A `models/<id>.md` file holds the pure model interface
+  (`base_url`, `model`, `api_key`, `api_style`, `thinking`, `max_vision_px`,
+  `vision_jpeg_quality`, `context_tokens`); a `palaeographers/`, `editors/` or
+  `encoders/<id>.md` file holds content rules and references a model via
+  `model: <id>`; a `pha.yaml` sidecar selects which rules + model each
+  document/collection uses. Run `pha migrate-config` to split legacy files
+  that still inline their interface.
   - `api_style: openai` (default — `/chat/completions`, works with LM Studio,
     Ollama, vLLM, OpenAI, OpenRouter, ...) **or** `anthropic`
     (`/anthropic/v1/messages`; needed for MiniMax, whose OpenAI-compatible
     endpoint silently drops `image_url` blocks — the image goes as a
     plain-text data URI);
-  - `max_vision_px` + `vision_jpeg_quality` (palaeographer): in the
-    anthropic form the base64 travels as TEXT (~2 chars/token, a full render
-    ~= 190k tokens), so MiniMax keeps full 1800px resolution at q55 (~150k
-    tokens) instead of downsizing — see `palaeographers/minimax-vl.md`. Local
-    openai-style images are sent as rendered, untouched;
-  - `context_tokens` (encoder) — the model's input window; the
-    single-pass/chunked decision is derived from it (~4 chars/token,
-    override with `max_input_chars`). MiniMax M2.5 = 200000; a local 7B
-    might be 32768. See the samples.
+  - `max_vision_px` + `vision_jpeg_quality` (model) are now applied on EVERY
+    vision call regardless of wire format: the page image is resized to
+    ≤`max_vision_px` and re-encoded at `vision_jpeg_quality` before it is
+    sent. Lower `vision_jpeg_quality` (e.g. 55) keeps full resolution at a
+    fraction of the token cost;
+  - `context_tokens` (model) — the model's input window; the encoder's
+    single-pass/chunked decision derives from it (~4 chars/token, override
+    with `max_input_chars`). MiniMax M2.5 = 200000; a local 7B might be 32768;
+  - `timeout_s` is per-stage (on the palaeographer/editor/encoder file), not
+    on the model — vision defaults to 900s, text to 300s.
 
 ## Quickstart
 
@@ -342,18 +349,18 @@ Editing a prompt file (sidecar, collection `prompt.md`, or the default)
 
 ## Palaeographers (vision models)
 
-A **palaeographer** is a named vision model that transcribes the documents.
-Each palaeographer is **one file** in the `palaeographers/` directory (the
-file name, without extension, is the id): YAML front matter holds the model
-settings, the body is the base prompt:
+A **palaeographer** is a named set of transcription rules (content only). Each
+palaeographer is **one file** in the `palaeographers/` directory (the file
+name, without extension, is the id): YAML front matter declares the `model:` it
+uses (a `models/<id>.md` id) plus `temperature`/`max_tokens`/`timeout_s`; the
+body is the base prompt. The endpoint/model/api-key/resolution limits live in
+the model file:
 
 ```markdown
-# palaeographers/qwen-local.md
+# palaeographers/qwen-local.md   (content rules)
 ---
 description: qwen3-vl-8b via LM Studio (local, default)
-base_url: http://127.0.0.1:1234/v1        # local or remote OpenAI-compatible endpoint
-model: qwen/qwen3-vl-8b
-api_key: ""                                # remote APIs: "${MY_API_KEY}" (env expansion)
+model: default                  # references models/default.md
 temperature: 0.1
 max_tokens: 4096
 timeout_s: 900
@@ -362,31 +369,45 @@ timeout_s: 900
 You are a palaeographer specialised in Western European manuscripts …
 ```
 
+```markdown
+# models/default.md   (model interface)
+---
+description: qwen3-vl-8b via LM Studio (local)
+base_url: http://127.0.0.1:1234/v1   # local or remote OpenAI-compatible endpoint
+model: qwen/qwen3-vl-8b
+api_key: ""                           # remote APIs: "${MY_API_KEY}" (env expansion)
+api_style: openai
+max_vision_px: 1800
+vision_jpeg_quality: 88
+context_tokens: 32768
+---
+```
+
 **To add a palaeographer**: duplicate `palaeographers/_sample.md`, rename
-(the name becomes the id), edit the settings, replace the body with your
-expertise, save. Invalid files are skipped with a warning — a typo never
-breaks the load. `pha palaeographer` lists the configured palaeographers.
+(the name becomes the id), set `model:`, replace the body with your expertise,
+save. To add a **model**, duplicate `models/_sample.md`. Invalid files are
+skipped with a warning — a typo never breaks the load. `pha palaeographer`
+lists the configured palaeographers.
 
 - `vision.palaeographer` in `config.yaml` selects the active one; `pha scan
   --palaeographer ID` overrides it for one run; the MCP `pha_scan_now` uses
   the configured default.
-- **Per-document / per-collection selection**: place a file named
-  `palaeographer` (with an optional `.txt` or `.md` extension so it is easy
-  to edit on a desktop) containing the palaeographer id — either next to a
-  document (`<stem>.palaeographer`, `<stem>.palaeographer.md`, …) or in a
-  directory/collection (`dropbox/collections/COLX/palaeographer.txt`). It is
-  resolved with the same nearest-wins chain as prompts (file sidecar, then
-  walking up to the dropbox root), and overrides the config default for
-  everything under it:
+- **Per-document / per-collection selection**: a **`pha.yaml` sidecar** next to
+  the document or at a collection root (nearest-wins per key up the directory
+  chain) selects the rules and optionally overrides the model:
 
-  ```
-  dropbox/collections/COLX/palaeographer.md   → "portuguese-secretary"
+  ```yaml
+  # dropbox/collections/COLX/pha.yaml
+  palaeographer:
+    rules: portuguese-secretary
+    model: minimax-m3       # optional: swap the vision model per collection
   ```
 
-  Changing a `palaeographer` file re-extracts the affected document(s) with
-  the new palaeographer; output goes to a sibling
-  `transcription-<palaeographer>/` folder. `pha palaeographer [file]` shows
-  how a document resolves.
+  The legacy plain-text `palaeographer` file (`.txt`/`.md` variants, one id)
+  still works as a fallback. Changing a `palaeographer`/`pha.yaml` re-extracts
+  the affected document(s) with the new palaeographer; output goes to a
+  sibling `transcription-<palaeographer>/` folder. `pha palaeographer [file]`
+  shows how a document resolves.
 - The body of the file is the palaeographer's **base prompt**, and it is the
   **format authority**: it defines the output structure — `## Transcription`,
   then `## Notes` with `### Named entities` (one bullet per entity) and
@@ -427,15 +448,14 @@ spelling, translate, normalize names, … The faithful transcription is never
 destroyed — the edited version is a derivative.
 
 Each editor is **one file** in the `editors/` directory (same convention as
-palaeographers: front matter = settings, body = editing prompt). To add one,
+palaeographers: content-only rules + `model:` reference). To add one,
 duplicate `editors/_sample.md`, rename, edit, save:
 
 ```markdown
-# editors/modern-portuguese.md
+# editors/modern-portuguese.md   (content rules)
 ---
 description: Convert to modern Portuguese orthography, expand abbreviations
-base_url: http://127.0.0.1:1234/v1
-model: amalia-9b-0626-dpo            # a text LLM, not the vision model
+model: amalia-text              # references models/amalia-text.md
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
@@ -445,12 +465,17 @@ You are a scholarly editor of historical Portuguese texts. Convert the
 transcription to MODERN Portuguese orthography …
 ```
 
-Select an editor per document/collection with an **`editor` file** (same
-nearest-wins chain and `.txt`/`.md` variants as palaeographers):
+Select an editor per document/collection with a **`pha.yaml` sidecar** (same
+nearest-wins chain as palaeographers):
 
+```yaml
+# dropbox/collections/letters-from-missons/pha.yaml
+editor:
+  rules: modern-portuguese
+  # model: ...   # optional text-model override
 ```
-dropbox/collections/letters-from-missons/editor   →  "modern-portuguese"
-```
+
+The legacy `editor` file (one id) still works as a fallback.
 
 - `pha edit` runs the editor pass over every document that has an editor and
   re-indexes; `pha editor [file]` shows resolution.
@@ -485,10 +510,10 @@ pages (a letter header on one page, its body on the next) is seen whole:
   records file.
 
 Encoders live **next to their sources** so they travel with the documents:
-one file per *structure type* in the document's `encoders/` folder (model
-config + framing in the front matter/body; add `batch_pages`, `context_tokens`,
+one file per *structure type* in the document's `encoders/` folder (content
+rules + `model:` reference in the front matter/body; add `batch_pages`,
 `extraction_passes`, and `pages` — the page range this encoder handles — in
-the front matter):
+the front matter; `context_tokens` now lives on the model):
 
 ```
 dropbox/collections/pfister-notices/encoders/
@@ -635,9 +660,10 @@ project dir), so the archive is self-contained and copyable as a unit:
 ```
 archive_dir/
   dropbox/documents/        ← individual documents (+ .prompt.md sidecars)
-  dropbox/collections/COLX/ ← collections of sources (+ prompt.md)
-  palaeographers/           ← model definitions (default.md seeded with qwen)
-  editors/                  ← model definitions (default.md seeded with qwen)
+  dropbox/collections/COLX/ ← collections of sources (+ prompt.md, pha.yaml)
+  models/                   ← model-interface definitions (default.md seeded with qwen)
+  palaeographers/           ← transcription rules (default.md, reference a model)
+  editors/                  ← editing rules (default.md, reference a model)
   encoders/                 ← default encoder (default.md) + _sample.md template
   library/                  ← generated per-page markdown (mirrors dropbox)
     collections/letters-from-missons/
@@ -650,12 +676,13 @@ archive_dir/
 ```
 
 The PROJECT dir (code, versioned) holds only `src/`, `config.yaml`,
-`prompts/default_prompt.md`, `prompts/encoder-helper.md`, and the
-`palaeographers/_sample.md`, `editors/_sample.md`, `encoders/_sample.md`
-templates. A fresh archive is seeded with `default.md` palaeographer/editor/
-encoder pointing at `qwen/qwen3-vl-8b` (LM Studio), so it works with zero
-configuration; refine by adding sidecar definitions next to documents or
-collections.
+`prompts/default_prompt.md`, `prompts/encoder-helper.md`, `schema/`, and the
+`models/_sample.md`, `palaeographers/_sample.md`, `editors/_sample.md`,
+`encoders/_sample.md` templates. A fresh archive is seeded with `default.md`
+model/palaeographer/editor/encoder pointing at `qwen/qwen3-vl-8b` (LM Studio),
+so it works with zero configuration; refine by adding sidecar `pha.yaml` files
+next to documents or collections. Existing installs with the old bundled
+layout keep working and can be migrated with `pha migrate-config`.
 
 Per-page files are written **incrementally** while a document is being
 extracted, so output is visible immediately (no need to wait for completion).

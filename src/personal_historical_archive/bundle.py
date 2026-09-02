@@ -91,6 +91,16 @@ def _copy_tree(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst)
 
 
+def _copy_stage_model(cfg, stage, bmodels: Path, used: list) -> None:
+    """Copy the models/<id>.md referenced by a stage into the bundle."""
+    mid = getattr(stage, "model_ref", "") or ""
+    if mid and mid in cfg.models:
+        mf = cfg.models[mid].prompt_file
+        if mf and mf.exists() and mf.name not in used:
+            _copy2(mf, bmodels / mf.name)
+            used.append(mf.name)
+
+
 def _resolve_target(cfg, target: str) -> Path | None:
     """Resolve a CLI target to a path under the dropbox.
 
@@ -155,6 +165,7 @@ def export_bundle(
     blib = out / "library"
     brend = out / "renders"
     bdefs = {
+        "models": out / "defs" / "models",
         "palaeographers": out / "defs" / "palaeographers",
         "editors": out / "defs" / "editors",
         "encoders": out / "defs" / "encoders",
@@ -180,8 +191,8 @@ def export_bundle(
             print(f"  ! target not found in the dropbox: {', '.join(missing_targets)}")
 
         copied: set[Path] = set()
-        defs_used: dict[str, list[str]] = {"palaeographers": [], "editors": [],
-                                           "encoders": [], "prompts": []}
+        defs_used: dict[str, list[str]] = {"models": [], "palaeographers": [],
+                                           "editors": [], "encoders": [], "prompts": []}
         manifest_docs: list[dict] = []
         bundled: list[tuple] = []
         skipped: list[str] = []
@@ -252,15 +263,21 @@ def export_bundle(
                 if pf and pf.exists() and pf.name not in defs_used["palaeographers"]:
                     _copy2(pf, bdefs["palaeographers"] / pf.name)
                     defs_used["palaeographers"].append(pf.name)
+                _copy_stage_model(cfg, cfg.palaeographers[pal], bdefs["models"], defs_used["models"])
             ed = row["editor"]
             if ed and ed in cfg.editors:
                 ef = cfg.editors[ed].prompt_file
                 if ef and ef.exists() and ef.name not in defs_used["editors"]:
                     _copy2(ef, bdefs["editors"] / ef.name)
                     defs_used["editors"].append(ef.name)
+                _copy_stage_model(cfg, cfg.editors[ed], bdefs["models"], defs_used["models"])
             enc_ids: set[str] = set()
             for enc in enc_files:
                 enc_ids.add(enc.stem)
+                # collection-local encoder: also bundle the model it references
+                coll_enc = cfg.encoder_from_file(enc)
+                if coll_enc is not None:
+                    _copy_stage_model(cfg, coll_enc, bdefs["models"], defs_used["models"])
             sel_enc, _esrc = resolve_encoder_id(stem, fdir, cfg.dropbox)
             if sel_enc:
                 enc_ids.add(sel_enc)
@@ -271,6 +288,7 @@ def export_bundle(
                             and encf.name not in defs_used["encoders"]):
                         _copy2(encf, bdefs["encoders"] / encf.name)
                         defs_used["encoders"].append(encf.name)
+                    _copy_stage_model(cfg, cfg.encoders[eid], bdefs["models"], defs_used["models"])
             if prompt_src and not prompt_src.startswith("builtin"):
                 pp = Path(prompt_src)
                 if pp.is_relative_to(cfg.prompts) and pp.exists() \
@@ -396,6 +414,7 @@ def _install_defs(cfg, bundle_dir: Path, verbose: bool = True) -> dict:
     Never overwrites an existing definition in B."""
     installed: dict[str, list[str]] = {}
     targets = {
+        "models": cfg.models_dir,
         "palaeographers": cfg.palaeographers_dir,
         "editors": cfg.editors_dir,
         "encoders": cfg.encoders_dir,

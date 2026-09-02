@@ -135,9 +135,10 @@ Two kinds of "helpers" read and improve your documents:
   abbreviations, convert to modern Portuguese, translate to English,
   normalize names, …
 
-Each is a single text file in the `palaeographers/` or `editors/` folder.
-**To add one, you duplicate the `_sample.md` file, rename it, and edit it** —
-your agent can do this for you from a plain-language description.
+Each is a single text file in the `palaeographers/` or `editors/` folder
+(content rules only — it references a model via `model: <id>`). **To add one,
+you duplicate the `_sample.md` file, rename it, and edit it** — your agent can
+do this for you from a plain-language description.
 
 Tell your agent:
 
@@ -151,12 +152,15 @@ and pha editor). Then, for my documents, I want:
 - an editor that converts the transcriptions to modern Portuguese
 
 Create the corresponding files by copying palaeographers/_sample.md and
-editors/_sample.md, giving them good names, filling in the settings
-(endpoint, model — use the models we chose in step 1b — temperature) and
-writing the instructions in the body.
-Then SELECT them for my collections: create a file named "palaeographer"
-containing the palaeographer id inside each collection folder, and an
-"editor" file with the editor id. Show me the result of:
+editors/_sample.md, giving them good names, setting `model:` (the model we
+chose in step 1b) and temperature, and writing the instructions in the body.
+Then SELECT them for my collections: write a pha.yaml sidecar in each
+collection folder, e.g.
+  palaeographer:
+    rules: portuguese-secretary
+  editor:
+    rules: modern-portuguese
+Show me the result of:
   pha palaeographer
   pha editor
 ```
@@ -164,8 +168,8 @@ containing the palaeographer id inside each collection folder, and an
 Notes:
 
 - The **file name** (without extension) is the id used for selection — e.g. a
-  file `palaeographers/portuguese-secretary.md` is selected by writing
-  `portuguese-secretary` in a `palaeographer` file.
+  file `palaeographers/portuguese-secretary.md` is selected with
+  `palaeographer: {rules: portuguese-secretary}` in `pha.yaml`.
 - You can use a different palaeographer/editor per **collection** — that is
   how a historian's editorial choice is expressed.
 - The base prompt in a palaeographer file defines the output format; the

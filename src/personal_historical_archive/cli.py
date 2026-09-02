@@ -693,6 +693,17 @@ def cmd_encoder_new(cfg: Config, args) -> None:
     raise SystemExit(run(cfg))
 
 
+def cmd_migrate_config(cfg: Config, args) -> None:
+    """`pha migrate-config` — one-shot migration to the models/ registry +
+    pha.yaml sidecar layout. Idempotent: already-migrated files are skipped."""
+    from .migrate import migrate_config, print_report
+
+    report = migrate_config(cfg, dry_run=args.dry_run, remove_selection_files=args.remove)
+    if args.dry_run:
+        print("dry-run — no files changed")
+    print_report(report)
+
+
 def cmd_mcp(cfg: Config, args) -> None:
     from . import mcp_server
 
@@ -1007,6 +1018,11 @@ def main(argv: list[str] | None = None) -> None:
     sdb.set_defaults(fn=cmd_set_dropbox)
     sub.add_parser("archive-dir", help="alias for `pha set archive-dir`").set_defaults(fn=cmd_set_archive_dir)
     sub.add_parser("dropbox", help="DEPRECATED alias for `pha set dropbox`").set_defaults(fn=cmd_set_dropbox)
+
+    mg = sub.add_parser("migrate-config", help="migrate legacy config to the models/ registry + pha.yaml sidecar layout")
+    mg.add_argument("--dry-run", action="store_true", help="report what would change without writing")
+    mg.add_argument("--remove", action="store_true", help="remove converted palaeographer/editor selection files")
+    mg.set_defaults(fn=cmd_migrate_config)
 
     ia = sub.add_parser("init-archive", help="create a new self-contained pha archive directory")
     ia.add_argument("path", help="path for the new archive (created if missing; must be empty if it exists)")

@@ -22,8 +22,9 @@ paths:
                           #     dropbox/collections/COLX/prompt.md  -> prompt for the collection
   library: library        # generated: human-readable extracted markdown per document
   renders: renders        # generated: cached page images fed to the vision model
-  palaeographers: palaeographers   # model definitions (one file per palaeographer)
-  editors: editors        # model definitions (one file per editor)
+  models: models          # model-interface definitions (endpoint/api key/limits)
+  palaeographers: palaeographers   # content-only transcription rules (reference a model)
+  editors: editors        # content-only editing rules (reference a model)
   encoders: encoders      # the DEFAULT encoder + its template (per-collection
                           #   encoders live next to their sources in dropbox/)
   db: archive.db          # generated: SQLite database

@@ -1,12 +1,10 @@
 ---
-# HOW TO CREATE A NEW ENCODER
+# HOW TO CREATE A NEW ENCODER (structured-extraction rules)
 #   1. Create a folder next to your documents: dropbox/collections/COLX/encoders/
 #      and add one file per STRUCTURE TYPE in the document (e.g. table.md for
 #      the chronological table, biographies.md for the person notices). The
 #      encoder files travel with the source PDFs.
-#   2. Edit the settings below. The encoder is a TEXT model; it reads the
-#      transcription and returns STRUCTURED RECORDS (e.g. person metadata) as
-#      LangExtract-flat JSON items, one per class.
+#   2. Set `model:` to the text model to use (models/<id>.md).
 #   3. `pages: "1-15"` limits this encoder to those PDF page numbers (the
 #      number in the PDF, NOT the number printed on the page — e.g. Pfister's
 #      chronological table is printed as i–xv but occupies PDF pages 1-15).
@@ -27,23 +25,20 @@
 # Output items use the flat form {class: text, class_attributes: {...}} and
 # may mix several classes (e.g. person + letter) in one array; each item is
 # stored as one record with kind = class.
-# Model-dependent settings:
-#   api_style: "openai" (default) or "anthropic" — wire format for text calls
-#     (MiniMax text works via openai-compatible; some services need anthropic).
-#   context_tokens: the model's input window in tokens (MiniMax M2.5 = 200000;
-#     a local 7B might be 32768). The single-pass/chunked threshold is derived
-#     from it (~4 chars/token); set max_input_chars to override explicitly.
+# The model's context window (single-pass/chunked threshold) lives in the
+# model file (context_tokens); set max_input_chars here to override it.
+# Optional front matter:
+#   temperature: sampling temperature (default 0.0).
+#   max_tokens: completion token cap (default 4096).
+#   timeout_s: HTTP timeout in seconds (default 300 for text).
+#   batch_pages / overlap_pages / extraction_passes: chunking + recall knobs.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example encoder — edit me
-base_url: http://127.0.0.1:1234/v1
-model: amalia-9b-0626-dpo
-api_key: ""
+model: default
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
-api_style: openai
 batch_pages: 20
-context_tokens: 32768
 overlap_pages: 4
 extraction_passes: 1
 ---

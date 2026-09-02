@@ -78,9 +78,16 @@ def _text_models(cfg: Config) -> list[dict]:
     for m in list(cfg.encoders.values()) + list(cfg.editors.values()):
         key = (m.base_url, m.model)
         raw_key = m.api_key
-        if m.prompt_file and m.prompt_file.exists():
+        # The raw ${ENV} placeholder now lives in the model file (models/<id>.md)
+        # for registry-backed stages, and in the stage file for legacy inline ones.
+        src = None
+        if m.model_ref and m.model_ref in cfg.models:
+            src = cfg.models[m.model_ref].prompt_file
+        if src is None:
+            src = m.prompt_file
+        if src and src.exists():
             try:
-                text = m.prompt_file.read_text(encoding="utf-8")
+                text = src.read_text(encoding="utf-8")
                 fm = text.split("---", 2)[1] if text.startswith("---") else ""
                 parsed = yaml.safe_load(fm) or {}
                 raw_key = str(parsed.get("api_key", raw_key))

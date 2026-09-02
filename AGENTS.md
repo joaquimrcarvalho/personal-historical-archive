@@ -29,20 +29,24 @@
   documents; CLI `pha`, Python package `personal_historical_archive`
   (`src/personal_historical_archive/`). The working branch is `main`.
 - **archive_dir is the self-contained data root.** Everything the archive
-  owns lives under it: `dropbox/` (documents), `palaeographers/`, `editors/`,
-  `encoders/` (model/prompt definitions), `library/`, `renders/`, `archive.db`
-  (generated). The project dir holds only code, `prompts/` and the
-  `_sample.md` templates. Precedence: `PHA_ARCHIVE_DIR` env > `PHA_ARCHIVE_DIR`
-  in `.env` (`pha set archive-dir`) > `paths.archive_dir` > default `.`.
-  A fresh archive is seeded with `default.md` for palaeographer/editor/encoder
-  (all qwen3-vl-8b) so it works with zero config.
-- **Palaeographers (vision models), editors (text models) and encoders (text
-  models) are one file each** in the top-level `palaeographers/`, `editors/`
-  and `encoders/` directories: YAML front matter = model config (endpoint,
-  model, api key, temperature, `api_style: openai|anthropic`, and for
-  encoders `context_tokens` — the model's input window that drives the
-  single-pass/chunked decision), body = the prompt. To add one: duplicate
-  `_sample.md`, rename, edit, save. The file stem is the id.
+  owns lives under it: `dropbox/` (documents), `models/` (model-interface
+  definitions), `palaeographers/`, `editors/`, `encoders/` (content rules),
+  `library/`, `renders/`, `archive.db` (generated). The project dir holds only
+  code, `prompts/`, `schema/` and the `_sample.md` templates. Precedence:
+  `PHA_ARCHIVE_DIR` env > `PHA_ARCHIVE_DIR` in `.env` (`pha set archive-dir`)
+  > `paths.archive_dir` > default `.`. A fresh archive is seeded with
+  `default.md` for model/palaeographer/editor/encoder (all qwen3-vl-8b) so it
+  works with zero config.
+- **Three config layers.** (1) `models/<id>.md` — pure model interface
+  (endpoint, api key, server model name, `api_style`, `max_vision_px`,
+  `vision_jpeg_quality`, `context_tokens`); (2) `palaeographers/`, `editors/`,
+  `encoders/<id>.md` — CONTENT ONLY (prompt/rules + `model: <id>` +
+  `temperature`/`max_tokens` + encoder params); (3) `pha.yaml` sidecars that
+  select which rules + model each document/collection uses (per-stage `rules`
+  + `model` overrides, per-collection `render` settings). To add one:
+  duplicate `_sample.md`, rename, edit, save. The file stem is the id. Legacy
+  files that still inline their interface keep working (treated as an inline
+  model); run `pha migrate-config` to split them.
 - **Staleness by mtime**: editing a palaeographer / editor / encoder / prompt
   file triggers re-extraction / re-editing / re-encoding of affected documents
   on the next scan/run. A document also re-extracts when the resolved
@@ -151,12 +155,19 @@ came from (a dropbox `editor` file, a config default, or nowhere).
 
 ### Setting the palaeographer / editor / encoders for a collection
 
-- A collection selects its models with **plain-text selection files** next to
-  the documents: a file named `palaeographer` (or `editor`) containing the id
-  (nearest-wins chain). Encoders are files in `collections/COLX/encoders/`.
-- **Locally**: write the file directly, e.g.
-  `echo qwen-generic > dropbox/collections/COLX/editor` (or create the
-  `encoders/<name>.md` + companions). Then re-process so the change takes
+- A collection selects its models with a **`pha.yaml` sidecar** next to the
+  documents (nearest-wins per key up the directory chain), e.g.:
+  ```yaml
+  palaeographer:
+    rules: jesuit-cat1
+    model: minimax-m3        # optional per-stage model override
+  editor: null
+  encoders: [table, biographies]
+  render: {max_image_px: 3000, jpeg_quality: 88}
+  ```
+  The legacy plain-text selection files (`palaeographer`, `editor`) still work
+  as a fallback. Encoders are files in `collections/COLX/encoders/`.
+- **Locally**: write `pha.yaml` directly, then re-process so the change takes
   effect (`pha scan` re-extracts when the resolved palaeographer changes;
   `pha edit` re-edits; `pha encode` runs encoders).
 - **Remotely via MCP**: push the selection/encoder file content with

@@ -169,6 +169,31 @@ def find_project_root(start: Path | None = None) -> Path:
 
 
 @dataclass
+class Model:
+    """A named model interface: how to reach and talk to a model, plus its
+    capacity/limits. Content rules live separately in
+    palaeographers/editors/encoders and reference a Model by id.
+
+    Fields are the transport + capacity + vision limits that used to be
+    inlined in every palaeographer/editor/encoder file. Sampling settings
+    (temperature, max_tokens) and extraction params stay on the stage files,
+    because each stage has different sensible defaults.
+    """
+
+    id: str
+    description: str = ""
+    base_url: str = "http://127.0.0.1:1234/v1"
+    api_key: str = ""
+    model: str = ""            # server-side model name (e.g. qwen/qwen3-vl-8b)
+    api_style: str = "openai"
+    thinking: bool = True
+    max_vision_px: int = 1800
+    vision_jpeg_quality: int = 88
+    context_tokens: int = 200_000
+    prompt_file: Path | None = None
+
+
+@dataclass
 class Palaeographer:
     """A named vision model that transcribes documents.
 
@@ -206,6 +231,7 @@ class Palaeographer:
     # vs q88 ~= 195k. Only affects re-encoding for anthropic-style models;
     # openai-style images (LM Studio, qwen) are sent as rendered, untouched.
     vision_jpeg_quality: int = 88
+    model_ref: str = ""  # models/<id>.md this palaeographer uses ("" = legacy inline)
 
     @property
     def prompt_source(self) -> str:
@@ -233,6 +259,7 @@ class Editor:
     prompt_file: Path | None = None
     thinking: bool = True
     api_style: str = "openai"
+    model_ref: str = ""  # models/<id>.md this editor uses ("" = legacy inline)
 
 
 @dataclass
@@ -280,6 +307,7 @@ class Encoder:
     # i–xv but occupies PDF pages 1-15). Empty = the whole document. Multiple
     # encoders in one collection run in page order.
     pages: str = ""
+    model_ref: str = ""  # models/<id>.md this encoder uses ("" = legacy inline)
 
     @property
     def effective_max_input_chars(self) -> int:
@@ -308,7 +336,11 @@ class Config:
     palaeographers_dir: Path
     editors_dir: Path
     encoders_dir: Path
+    models_dir: Path
     db_path: Path
+    # model interface registry (models/<id>.md) — palaeographers/editors/encoders
+    # reference these by id; interface fields are resolved onto the stage objects.
+    models: dict[str, Model]
     # palaeographers (vision models)
     palaeographers: dict[str, Palaeographer]
     active_palaeographer: str
@@ -396,9 +428,11 @@ class Config:
         pal_dir = _p(archive_dir, paths.get("palaeographers", "palaeographers"))
         ed_dir = _p(archive_dir, paths.get("editors", "editors"))
         enc_dir = _p(archive_dir, paths.get("encoders", "encoders"))
+        models_dir = _p(archive_dir, paths.get("models", "models"))
 
         # Seed the zero-config defaults BEFORE parsing, so a fresh archive has
-        # working default palaeographer/editor/encoder on the very first load.
+        # working default model/palaeographer/editor/encoder on first load.
+        _seed_default_model(models_dir, _DEFAULT_MODEL)
         _seed_default(pal_dir, _DEFAULT_PAL)
         _seed_default(ed_dir, _DEFAULT_ED)
         _seed_default(enc_dir, _DEFAULT_ENC)
@@ -408,9 +442,10 @@ class Config:
         _migrate_legacy_defs(root / "palaeographers", pal_dir)
         _migrate_legacy_defs(root / "editors", ed_dir)
 
-        palaeographers, active = _parse_palaeographers(raw, vis, prompts_dir, root, pal_dir)
-        editors = _parse_editors(raw, prompts_dir, root, ed_dir)
-        encoders = _parse_encoders(enc_dir)
+        models = _parse_models(models_dir)
+        palaeographers, active = _parse_palaeographers(raw, vis, prompts_dir, root, pal_dir, models)
+        editors = _parse_editors(raw, prompts_dir, root, ed_dir, models)
+        encoders = _parse_encoders(enc_dir, models)
 
         return cls(
             root=root,
@@ -423,7 +458,9 @@ class Config:
             palaeographers_dir=pal_dir,
             editors_dir=ed_dir,
             encoders_dir=enc_dir,
+            models_dir=models_dir,
             db_path=_p(archive_dir, paths.get("db", "archive.db")),
+            models=models,
             palaeographers=palaeographers,
             active_palaeographer=active,
             editors=editors,
@@ -467,20 +504,45 @@ class Config:
             raise KeyError(f"unknown encoder {encoder_id!r}; configured: {sorted(self.encoders)}")
         return self.encoders[encoder_id]
 
+    def get_model(self, model_id: str) -> Model:
+        if model_id not in self.models:
+            raise KeyError(f"unknown model {model_id!r}; configured: {sorted(self.models)}")
+        return self.models[model_id]
+
+    def with_model(self, stage, model_id: str | None):
+        """Return a copy of a palaeographer/editor/encoder with its interface
+        fields overridden by the given model (models/<id>.md). A falsy model_id
+        returns the stage unchanged."""
+        if not model_id:
+            return stage
+        import dataclasses
+
+        m = self.get_model(model_id)
+        common = dict(
+            base_url=m.base_url, api_key=m.api_key, model=m.model,
+            api_style=m.api_style, thinking=m.thinking, model_ref=m.id,
+        )
+        if isinstance(stage, Encoder):
+            common["context_tokens"] = m.context_tokens
+        if isinstance(stage, Palaeographer):
+            common["max_vision_px"] = m.max_vision_px
+            common["vision_jpeg_quality"] = m.vision_jpeg_quality
+        return dataclasses.replace(stage, **common)
+
     def encoder_from_file(self, path: Path) -> Encoder | None:
         """Load a single encoder definition file (collection-local:
         dropbox/collections/COLX/encoders/<name>.md). None on failure."""
         if not path.exists():
             return None
         try:
-            return _encoder_from_frontmatter(path.stem, path.read_text(encoding="utf-8"), path)
+            return _encoder_from_frontmatter(path.stem, path.read_text(encoding="utf-8"), path, self.models)
         except Exception as e:  # noqa: BLE001 - a bad file must not break the load
             print(f"warning: invalid encoder file {path}: {e}")
             return None
 
     def ensure_dirs(self) -> None:
         for d in (self.dropbox, self.library, self.data, self.renders, self.prompts,
-                  self.palaeographers_dir, self.editors_dir, self.encoders_dir):
+                  self.palaeographers_dir, self.editors_dir, self.encoders_dir, self.models_dir):
             d.mkdir(parents=True, exist_ok=True)
         # pre-create the dropbox sub-layout so a fresh archive is ready to use:
         # documents/ for individual documents, collections/COLX/ for collections.
@@ -488,7 +550,8 @@ class Config:
             (self.dropbox / sub).mkdir(parents=True, exist_ok=True)
         # seed the _sample.md TEMPLATES into the PROJECT (code side): these
         # are the starting point for creating new definitions.
-        for name, content in (("palaeographers", _PAL_SAMPLE),
+        for name, content in (("models", _MODEL_SAMPLE),
+                              ("palaeographers", _PAL_SAMPLE),
                               ("editors", _ED_SAMPLE),
                               ("encoders", _ENC_SAMPLE)):
             d = self.root / name
@@ -497,12 +560,12 @@ class Config:
 
 
 def _parse_palaeographers(
-    raw: dict, vis: dict, prompts_dir: Path, root: Path, pal_dir: Path
+    raw: dict, vis: dict, prompts_dir: Path, root: Path, pal_dir: Path, models: dict | None = None
 ) -> tuple[dict[str, Palaeographer], str]:
     """Palaeographers are one file per palaeographer in `palaeographers/`
-    (YAML front matter = model config, body = the base prompt). Falls back to
-    the legacy `palaeographers:` config map / `vision:` block."""
-    pals = _load_model_dir(pal_dir, "palaeographer", _palaeographer_from_frontmatter)
+    (YAML front matter = model reference, body = the base prompt). Falls back
+    to the legacy `palaeographers:` config map / `vision:` block."""
+    pals = _load_model_dir(pal_dir, "palaeographer", _palaeographer_from_frontmatter, models=models or {})
     if pals:
         active = str(vis.get("palaeographer", "")) or (next(iter(pals), ""))
         return pals, active
@@ -538,11 +601,11 @@ def _parse_palaeographers(
     return {"default": pal}, "default"
 
 
-def _parse_editors(raw: dict, prompts_dir: Path, root: Path, ed_dir: Path) -> dict[str, Editor]:
+def _parse_editors(raw: dict, prompts_dir: Path, root: Path, ed_dir: Path, models: dict | None = None) -> dict[str, Editor]:
     """Editors are one file per editor in `editors/` (front matter = model
-    config, body = the editing prompt). Falls back to the legacy `editors:`
+    reference, body = the editing prompt). Falls back to the legacy `editors:`
     config map."""
-    eds = _load_model_dir(ed_dir, "editor", _editor_from_frontmatter)
+    eds = _load_model_dir(ed_dir, "editor", _editor_from_frontmatter, models=models or {})
     if eds:
         return eds
     raw_eds = raw.get("editors")
@@ -634,7 +697,7 @@ def _split_frontmatter(text: str) -> tuple[dict, str]:
     return fm, body
 
 
-def _load_model_dir(directory: Path, kind: str, builder) -> dict:
+def _load_model_dir(directory: Path, kind: str, builder, **kwargs) -> dict:
     """Load one config per file from a directory. File stem = id; files whose
     name starts with '_' or '.' (samples, hidden) are ignored; malformed files
     are skipped with a warning so a typo never breaks the whole load."""
@@ -647,7 +710,7 @@ def _load_model_dir(directory: Path, kind: str, builder) -> dict:
         if f.suffix.lower() not in (".md", ".txt"):
             continue
         try:
-            model = builder(f.stem, f.read_text(encoding="utf-8"), f)
+            model = builder(f.stem, f.read_text(encoding="utf-8"), f, **kwargs)
         except Exception as e:  # noqa: BLE001 - a bad file must not kill the load
             print(f"warning: invalid {kind} file {f}: {e}")
             continue
@@ -656,67 +719,127 @@ def _load_model_dir(directory: Path, kind: str, builder) -> dict:
     return models
 
 
-def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path) -> Palaeographer | None:
+def _parse_models(models_dir: Path) -> dict[str, Model]:
+    """Models are one file per model interface in `models/` (front matter
+    only; the body, if any, is ignored)."""
+    return _load_model_dir(models_dir, "model", _model_from_frontmatter)
+
+
+def _model_from_frontmatter(model_id: str, text: str, file: Path) -> Model | None:
+    fm, _ = _split_frontmatter(text)
+    return Model(
+        id=model_id,
+        description=str(fm.get("description", "")),
+        base_url=_expand(str(fm.get("base_url", "http://127.0.0.1:1234/v1"))),
+        api_key=_expand(str(fm.get("api_key", ""))),
+        model=str(fm.get("model", "")),
+        api_style=str(fm.get("api_style", "openai")).strip().lower() or "openai",
+        thinking=_thinking(fm),
+        max_vision_px=int(fm.get("max_vision_px", 1800)),
+        vision_jpeg_quality=int(fm.get("vision_jpeg_quality", 88)),
+        context_tokens=int(fm.get("context_tokens", 200_000)),
+        prompt_file=file,
+    )
+
+
+def _resolve_model(fm: dict, models: dict) -> tuple[Model, str]:
+    """Resolve a stage file's model interface.
+
+    New content-only stage files declare `model: <id>` referencing models/.
+    Legacy files inline their interface (`base_url`/`api_key`/`api_style`/...)
+    and are synthesised into an anonymous Model (model_ref = "").
+    """
+    if "base_url" in fm or "api_key" in fm or "api_style" in fm:
+        # legacy inline interface (pre-registry)
+        m = Model(
+            id="",
+            description=str(fm.get("description", "")),
+            base_url=_expand(str(fm.get("base_url", "http://127.0.0.1:1234/v1"))),
+            api_key=_expand(str(fm.get("api_key", ""))),
+            model=str(fm.get("model", "")),
+            api_style=str(fm.get("api_style", "openai")).strip().lower() or "openai",
+            thinking=_thinking(fm),
+            max_vision_px=int(fm.get("max_vision_px", 1800)),
+            vision_jpeg_quality=int(fm.get("vision_jpeg_quality", 88)),
+            context_tokens=int(fm.get("context_tokens", 200_000)),
+        )
+        return m, ""
+    model_ref = str(fm.get("model", "") or "").strip()
+    if model_ref and model_ref in models:
+        return models[model_ref], model_ref
+    if "default" in models:
+        return models["default"], "default"
+    # no registry model and no inline interface: blank inline model
+    return Model(id=""), ""
+
+
+def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path, models: dict | None = None) -> Palaeographer | None:
     fm, body = _split_frontmatter(text)
+    m, model_ref = _resolve_model(fm, models or {})
     return Palaeographer(
         id=pal_id,
         description=str(fm.get("description", "")),
-        base_url=_expand(str(fm.get("base_url", "http://127.0.0.1:1234/v1"))),
-        api_key=_expand(str(fm.get("api_key", ""))),
-        model=str(fm.get("model", "")),
+        model_ref=model_ref,
+        base_url=m.base_url,
+        api_key=m.api_key,
+        model=m.model,
+        api_style=m.api_style,
+        timeout_s=int(fm.get("timeout_s", 900)),
+        thinking=m.thinking,
+        max_vision_px=m.max_vision_px,
+        vision_jpeg_quality=m.vision_jpeg_quality,
         temperature=float(fm.get("temperature", 0.1)),
         max_tokens=int(fm.get("max_tokens", 4096)),
-        timeout_s=int(fm.get("timeout_s", 900)),
-        thinking=_thinking(fm),
         prompt_text=body,
         prompt_file=file,
-        api_style=str(fm.get("api_style", "openai")).strip().lower() or "openai",
-        max_vision_px=int(fm.get("max_vision_px", 1800)),
-        vision_jpeg_quality=int(fm.get("vision_jpeg_quality", 88)),
     )
 
 
-def _editor_from_frontmatter(ed_id: str, text: str, file: Path) -> Editor | None:
+def _editor_from_frontmatter(ed_id: str, text: str, file: Path, models: dict | None = None) -> Editor | None:
     fm, body = _split_frontmatter(text)
+    m, model_ref = _resolve_model(fm, models or {})
     return Editor(
         id=ed_id,
         description=str(fm.get("description", "")),
-        base_url=_expand(str(fm.get("base_url", "http://127.0.0.1:1234/v1"))),
-        api_key=_expand(str(fm.get("api_key", ""))),
-        model=str(fm.get("model", "")),
+        model_ref=model_ref,
+        base_url=m.base_url,
+        api_key=m.api_key,
+        model=m.model,
+        api_style=m.api_style,
+        timeout_s=int(fm.get("timeout_s", 300)),
+        thinking=m.thinking,
         temperature=float(fm.get("temperature", 0.1)),
         max_tokens=int(fm.get("max_tokens", 4096)),
-        timeout_s=int(fm.get("timeout_s", 300)),
-        thinking=_thinking(fm),
         prompt_text=body,
         prompt_file=file,
-        api_style=str(fm.get("api_style", "openai")).strip().lower() or "openai",
     )
 
 
-def _parse_encoders(enc_dir: Path) -> dict[str, Encoder]:
+def _parse_encoders(enc_dir: Path, models: dict | None = None) -> dict[str, Encoder]:
     """Encoders are one file per encoder in `encoders/` (front matter = model
-    config, body = the base encoding prompt)."""
-    return _load_model_dir(enc_dir, "encoder", _encoder_from_frontmatter)
+    reference, body = the base encoding prompt)."""
+    return _load_model_dir(enc_dir, "encoder", _encoder_from_frontmatter, models=models or {})
 
 
-def _encoder_from_frontmatter(enc_id: str, text: str, file: Path) -> Encoder | None:
+def _encoder_from_frontmatter(enc_id: str, text: str, file: Path, models: dict | None = None) -> Encoder | None:
     fm, body = _split_frontmatter(text)
+    m, model_ref = _resolve_model(fm, models or {})
     return Encoder(
         id=enc_id,
         description=str(fm.get("description", "")),
-        base_url=_expand(str(fm.get("base_url", "http://127.0.0.1:1234/v1"))),
-        api_key=_expand(str(fm.get("api_key", ""))),
-        model=str(fm.get("model", "")),
+        model_ref=model_ref,
+        base_url=m.base_url,
+        api_key=m.api_key,
+        model=m.model,
+        api_style=m.api_style,
+        timeout_s=int(fm.get("timeout_s", 300)),
+        thinking=m.thinking,
+        context_tokens=m.context_tokens,
         temperature=float(fm.get("temperature", 0.0)),
         max_tokens=int(fm.get("max_tokens", 4096)),
-        timeout_s=int(fm.get("timeout_s", 300)),
-        thinking=_thinking(fm),
         prompt_text=body,
         prompt_file=file,
-        api_style=str(fm.get("api_style", "openai")).strip().lower() or "openai",
         batch_pages=int(fm.get("batch_pages", 20)),
-        context_tokens=int(fm.get("context_tokens", 200_000)),
         max_input_chars=(int(fm["max_input_chars"]) if fm.get("max_input_chars") else None),
         overlap_pages=int(fm.get("overlap_pages", 4)),
         extraction_passes=int(fm.get("extraction_passes", 1)),
@@ -760,6 +883,24 @@ def _seed_default(directory: Path, content: str) -> None:
             target.write_text(content, encoding="utf-8")
 
 
+def _seed_default_model(directory: Path, content: str) -> None:
+    """Ensure a `default` model exists (seeded stage files reference
+    `model: default`), without overwriting a user's model. Unlike
+    `_seed_default`, this seeds even when OTHER models exist — `default` is a
+    well-known referenced id, not just a fallback."""
+    if not directory.exists():
+        directory.mkdir(parents=True, exist_ok=True)
+    has_default = any(
+        f.is_file() and f.stem == "default" and f.suffix.lower() in (".md", ".txt")
+        and not f.name.startswith(("_", "."))
+        for f in directory.iterdir()
+    )
+    if not has_default:
+        target = directory / "default.md"
+        if not target.exists():
+            target.write_text(content, encoding="utf-8")
+
+
 def _migrate_legacy_defs(project_dir: Path, archive_dir: Path) -> None:
     """Copy real (non-underscore) definition files from the project dir into
     the archive dir when they are missing there, id-preserving. This lets a
@@ -780,15 +921,27 @@ def _migrate_legacy_defs(project_dir: Path, archive_dir: Path) -> None:
 
 
 # --- zero-config defaults (seeded into the archive as default.md) ----------
-# All three point at the same local model (qwen3-vl-8b via LM Studio) so a
-# fresh archive works with no configuration. qwen3-vl handles both vision
-# (palaeographer) and text (editor/encoder).
+# All three stages point at the same local model (qwen3-vl-8b via LM Studio)
+# so a fresh archive works with no configuration. qwen3-vl handles both vision
+# (palaeographer) and text (editor/encoder). The model interface lives in
+# models/default.md; the stage files below are content-only and reference it.
 
-_DEFAULT_PAL = """---
-description: default palaeographer — generic transcription (qwen3-vl-8b local)
+_DEFAULT_MODEL = """---
+description: default model — qwen3-vl-8b via LM Studio (local)
 base_url: http://127.0.0.1:1234/v1
 model: qwen/qwen3-vl-8b
 api_key: ""
+api_style: openai
+max_vision_px: 1800
+vision_jpeg_quality: 88
+context_tokens: 32768
+---
+
+"""
+
+_DEFAULT_PAL = """---
+description: default palaeographer — generic transcription (qwen3-vl-8b local)
+model: default
 temperature: 0.1
 max_tokens: 4096
 timeout_s: 900
@@ -811,9 +964,7 @@ Do not add any comments other than those above.
 
 _DEFAULT_ED = """---
 description: default editor — expand abbreviations, extract named entities + notes (qwen3-vl-8b local)
-base_url: http://127.0.0.1:1234/v1
-model: qwen/qwen3-vl-8b
-api_key: ""
+model: default
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
@@ -852,15 +1003,11 @@ preamble or commentary.
 
 _DEFAULT_ENC = """---
 description: default encoder — JSON dump of document metadata + named entities + notes (qwen3-vl-8b local)
-base_url: http://127.0.0.1:1234/v1
-model: qwen/qwen3-vl-8b
-api_key: ""
+model: default
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
-api_style: openai
 batch_pages: 20
-context_tokens: 32768
 overlap_pages: 4
 extraction_passes: 1
 ---
@@ -886,33 +1033,56 @@ ONLY the JSON object, with no preamble or commentary.
 """
 
 
-_PAL_SAMPLE = """---
-# HOW TO CREATE A NEW PALAEOGRAPHER
+_MODEL_SAMPLE = """---
+# HOW TO CREATE A NEW MODEL (interface)
 #   1. Duplicate this file and give it a new name (the file name, without the
-#      extension, becomes the palaeographer's id, e.g. "my-hand.md").
-#   2. Edit the settings below: endpoint, model, api key, temperature.
-#   3. Replace this body with the instructions you want the vision model to
-#      follow when transcribing (your palaeographic expertise).
-#   4. Save — the palaeographer is ready. Select it per document/collection
-#      with a 'palaeographer' file next to the document.
-# Optional front matter:
-#   api_style: "openai" (default) or "anthropic" — the wire format for all
-#     calls. MiniMax models need "anthropic" (/anthropic/v1/messages with the
-#     image as a plain-text data URI; their OpenAI-compatible endpoint
-#     silently drops image_url blocks).
-#   max_vision_px: longest image edge (default 1800 = our render cap, so
-#     local models are sent full-size untouched). Only models that need it
-#     (e.g. MiniMax M2.7) set a lower value.
-#   vision_jpeg_quality: JPEG quality when re-encoding for the anthropic
-#     path (the image travels as base64 TEXT, ~2 chars/token — a full render
-#     is ~190k tokens). Lower quality keeps full resolution at a smaller
-#     token cost: q55 @ 1800px ~= 150k tokens. Openai-style images are sent
-#     as rendered, untouched.
+#      extension, becomes the model id, e.g. "minimax-m3.md").
+#   2. Edit the settings below: endpoint (base_url), server model name, api
+#      key, wire format (api_style), and the limits (max_vision_px,
+#      vision_jpeg_quality, context_tokens).
+#   3. Reference it from a palaeographer/editor/encoder file with `model: <id>`,
+#      or override it per document/collection in pha.yaml.
+#   4. Save — the model is ready.
+# Fields (all optional except base_url/model):
+#   base_url: the API root (LM Studio/Ollama/vLLM/OpenAI/MiniMax/...).
+#   model: the server-side model name (e.g. qwen/qwen3-vl-8b).
+#   api_key: the API key, as ${ENV} or a literal (secrets stay in .env/keychain).
+#   api_style: "openai" (default) or "anthropic" — wire format for ALL calls.
+#   thinking: true/false — allow (or disable) reasoning-block models.
+#   max_vision_px: longest image edge sent to a vision model (default 1800).
+#   vision_jpeg_quality: JPEG quality when re-encoding for the vision path.
+#   context_tokens: the model's input window in tokens (drives encoder chunking).
 # Files starting with '_' are ignored (this sample is never loaded).
-description: example palaeographer — edit me
+description: example model — edit me
 base_url: http://127.0.0.1:1234/v1
 model: qwen/qwen3-vl-8b
 api_key: ""
+api_style: openai
+max_vision_px: 1800
+vision_jpeg_quality: 88
+context_tokens: 32768
+---
+
+"""
+
+
+_PAL_SAMPLE = """---
+# HOW TO CREATE A NEW PALAEOGRAPHER (transcription rules)
+#   1. Duplicate this file and give it a new name (the file name, without the
+#      extension, becomes the palaeographer's id, e.g. "my-hand.md").
+#   2. Set `model:` to the model interface to use (models/<id>.md).
+#   3. Replace this body with the instructions the vision model should follow
+#      when transcribing (your palaeographic expertise). This file is CONTENT
+#      ONLY — endpoint/api key/resolution live in the model file.
+#   4. Save — the palaeographer is ready. Select it per document/collection in
+#      pha.yaml (palaeographer.rules) or a 'palaeographer' file.
+# Optional front matter:
+#   temperature: sampling temperature (default 0.1).
+#   max_tokens: completion token cap (default 4096).
+#   timeout_s: HTTP timeout in seconds (default 900 for vision).
+# Files starting with '_' are ignored (this sample is never loaded).
+description: example palaeographer — edit me
+model: default
 temperature: 0.1
 max_tokens: 4096
 timeout_s: 900
@@ -928,20 +1098,21 @@ one page of a multi-page document — do not comment on completeness.
 """
 
 _ED_SAMPLE = """---
-# HOW TO CREATE A NEW EDITOR
+# HOW TO CREATE A NEW EDITOR (transform rules)
 #   1. Duplicate this file and give it a new name (the file name, without the
 #      extension, becomes the editor's id, e.g. "translate-english.md").
-#   2. Edit the settings below. The editor is usually a TEXT model — it can be
-#      a completely different model/server than the palaeographer.
+#   2. Set `model:` to the text model to use (models/<id>.md).
 #   3. Replace this body with your editing instructions (e.g. convert to
-#      modern Portuguese, translate to English, normalize names).
-#   4. Save — the editor is ready. Select it per document/collection with an
-#      'editor' file next to the document.
+#      modern Portuguese, translate to English, normalize names). CONTENT ONLY.
+#   4. Save — the editor is ready. Select it per document/collection in
+#      pha.yaml (editor.rules) or an 'editor' file.
+# Optional front matter:
+#   temperature: sampling temperature (default 0.1).
+#   max_tokens: completion token cap (default 4096).
+#   timeout_s: HTTP timeout in seconds (default 300 for text).
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example editor — edit me
-base_url: http://127.0.0.1:1234/v1
-model: amalia-9b-0626-dpo
-api_key: ""
+model: default
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
@@ -954,14 +1125,12 @@ information. Keep the document structure. Output only the edited text.
 
 
 _ENC_SAMPLE = """---
-# HOW TO CREATE A NEW ENCODER
+# HOW TO CREATE A NEW ENCODER (structured-extraction rules)
 #   1. Create a folder next to your documents: dropbox/collections/COLX/encoders/
 #      and add one file per STRUCTURE TYPE in the document (e.g. table.md for
 #      the chronological table, biographies.md for the person notices). The
 #      encoder files travel with the source PDFs.
-#   2. Edit the settings below. The encoder is a TEXT model; it reads the
-#      transcription and returns STRUCTURED RECORDS (e.g. person metadata) as
-#      LangExtract-flat JSON items, one per class.
+#   2. Set `model:` to the text model to use (models/<id>.md).
 #   3. `pages: "1-15"` limits this encoder to those PDF page numbers (the
 #      number in the PDF, NOT the number printed on the page — e.g. Pfister's
 #      chronological table is printed as i–xv but occupies PDF pages 1-15).
@@ -982,23 +1151,20 @@ _ENC_SAMPLE = """---
 # Output items use the flat form {class: text, class_attributes: {...}} and
 # may mix several classes (e.g. person + letter) in one array; each item is
 # stored as one record with kind = class.
-# Model-dependent settings:
-#   api_style: "openai" (default) or "anthropic" — wire format for text calls
-#     (MiniMax text works via openai-compatible; some services need anthropic).
-#   context_tokens: the model's input window in tokens (MiniMax M2.5 = 200000;
-#     a local 7B might be 32768). The single-pass/chunked threshold is derived
-#     from it (~4 chars/token); set max_input_chars to override explicitly.
+# The model's context window (single-pass/chunked threshold) lives in the
+# model file (context_tokens); set max_input_chars here to override it.
+# Optional front matter:
+#   temperature: sampling temperature (default 0.0).
+#   max_tokens: completion token cap (default 4096).
+#   timeout_s: HTTP timeout in seconds (default 300 for text).
+#   batch_pages / overlap_pages / extraction_passes: chunking + recall knobs.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example encoder — edit me
-base_url: http://127.0.0.1:1234/v1
-model: amalia-9b-0626-dpo
-api_key: ""
+model: default
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
-api_style: openai
 batch_pages: 20
-context_tokens: 32768
 overlap_pages: 4
 extraction_passes: 1
 ---

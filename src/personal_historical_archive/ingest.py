@@ -35,6 +35,7 @@ from .extract import (
     resolve_prompt,
 )
 from .model_client import ModelClient, ModelError
+from .sidecar import Sidecar, effective_render, resolve_sidecar
 
 
 def make_vision_client(
@@ -52,6 +53,21 @@ def make_editor_client(cfg: Config, editor_id: str) -> tuple[ModelClient, Editor
     editor = cfg.get_editor(editor_id)
     return ModelClient(editor.base_url, timeout_s=editor.timeout_s, api_key=editor.api_key,
                        api_style=editor.api_style), editor
+
+
+def _vision_client(pal: Palaeographer) -> ModelClient:
+    """Build a ModelClient for an (already resolved/overridden) palaeographer."""
+    return ModelClient(pal.base_url, timeout_s=pal.timeout_s, api_key=pal.api_key,
+                       api_style=pal.api_style)
+
+
+def _client_key(pal: Palaeographer) -> tuple:
+    return (pal.id, pal.model_ref or "")
+
+
+def _doc_sidecar(cfg: Config, path: Path) -> Sidecar:
+    """Resolve the merged pha.yaml sidecar for a document path."""
+    return resolve_sidecar(cfg.dropbox, path if path.is_dir() else path.parent)
 
 
 def _raw_sha(text: str) -> str:
@@ -374,8 +390,11 @@ def ingest_file(
     explicit_prompt: str | None = None,
     reprocess: bool = False,
     verbose: bool = True,
+    sidecar: Sidecar | None = None,
 ) -> dict:
     path = Path(path)
+    if sidecar is None:
+        sidecar = _doc_sidecar(cfg, path)
     if path.is_dir():
         sha = sha256_of_dir(path)
         kind = "dir"
@@ -435,9 +454,12 @@ def ingest_file(
         rel_dir = ""
     if rel_dir == ".":
         rel_dir = ""
-    ed_id, _edsrc = resolve_editor_id(
-        path.stem, path if path.is_dir() else path.parent, cfg.dropbox
-    )
+    if sidecar.editor_set:
+        ed_id = sidecar.editor.rules if sidecar.editor else None
+    else:
+        ed_id, _edsrc = resolve_editor_id(
+            path.stem, path if path.is_dir() else path.parent, cfg.dropbox
+        )
     doc_id = existing["id"] if reuse else db.add_document(
         conn, filename=path.name, path=str(path), sha256=sha,
         size_bytes=size, mtime=mtime, kind=kind, now=now, dir_path=rel_dir,
@@ -459,6 +481,7 @@ def ingest_file(
     conn.commit()
     write_document_pages(cfg, conn, doc_id)  # visible output even while processing
 
+    render_dpi, max_image_px, jpeg_quality = effective_render(cfg, sidecar)
     try:
         source_names: list[str | None] = []
         if path.is_dir():
@@ -468,8 +491,8 @@ def ingest_file(
             renders: list[Path] = []
             for img in images:
                 n = len(renders)
-                renders += render_document(img, cfg.renders / sha, cfg.render_dpi,
-                                           cfg.max_image_px, cfg.jpeg_quality,
+                renders += render_document(img, cfg.renders / sha, render_dpi,
+                                           max_image_px, jpeg_quality,
                                            prefix=img.stem)
                 # a single image renders to one page: map each new render to
                 # the source image stem (e.g. 505V) for file naming.
@@ -477,7 +500,7 @@ def ingest_file(
                 source_names += [img.stem] * new
         else:
             total = page_count(path)
-            renders = render_document(path, cfg.renders / sha, cfg.render_dpi, cfg.max_image_px, cfg.jpeg_quality)
+            renders = render_document(path, cfg.renders / sha, render_dpi, max_image_px, jpeg_quality)
             source_names = [None] * len(renders)
     except Exception as e:
         db.set_document_status(conn, doc_id, "error", error=f"render failed: {e}")
@@ -911,21 +934,33 @@ def edit_document(
     doc = db.get_document(conn, doc_id)
     if not doc:
         return {"action": "skipped", "filename": "?", "reason": "no document"}
+    editor_model = None
     if editor_id:
         resolved = editor_id
     else:
         path = Path(doc["path"])
-        ed_id, _src = resolve_editor_id(
-            path.stem, path if path.is_dir() else path.parent, cfg.dropbox
-        )
-        resolved = ed_id or (doc["editor"] if doc["editor"] in cfg.editors else None)
+        sc = _doc_sidecar(cfg, path)
+        if sc.editor_set:
+            if sc.editor is None:
+                resolved = None
+            else:
+                resolved = sc.editor.rules
+                editor_model = sc.editor.model
+        else:
+            ed_id, _src = resolve_editor_id(
+                path.stem, path if path.is_dir() else path.parent, cfg.dropbox
+            )
+            resolved = ed_id or (doc["editor"] if doc["editor"] in cfg.editors else None)
     if not resolved:
         return {"action": "skipped", "filename": doc["filename"], "reason": "no editor configured"}
     if resolved in ("null", "passthrough"):
         return _edit_null(cfg, conn, doc_id, resolved, reprocess, verbose)
     editor = cfg.get_editor(resolved)
+    if editor_model:
+        editor = cfg.with_model(editor, editor_model)
     pages = db.get_pages(conn, doc_id)
-    client, _ = make_editor_client(cfg, resolved)
+    client = ModelClient(editor.base_url, timeout_s=editor.timeout_s, api_key=editor.api_key,
+                         api_style=editor.api_style)
     edited = 0
     try:
         for p in pages:
@@ -1244,6 +1279,7 @@ def encode_document(
     enc_file: Path | None = None,
     reprocess: bool = False,
     verbose: bool = True,
+    model_override: str | None = None,
 ) -> dict:
     """Run the encoder over a document's transcription (edited text when the
     document has an editor, else raw), producing structured records.
@@ -1278,6 +1314,8 @@ def encode_document(
             return {"action": "skipped", "filename": doc["filename"], "reason": "no encoder configured"}
         encoder = cfg.get_encoder(resolved)
 
+    if model_override:
+        encoder = cfg.with_model(encoder, model_override)
     pages = db.get_pages(conn, doc_id)
     edits: dict[int, str] = {}
     if doc["editor"]:
@@ -1436,7 +1474,7 @@ def encode_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> di
     run in succession, ordered by their `pages` front matter (e.g. the
     chronological table on pages 1-15 first, then the person notices on the
     rest)."""
-    from .extract import encoder_files_for
+    from .extract import encoder_file_named, encoder_files_for
 
     cfg.ensure_dirs()
     conn = db.connect(cfg.db_path)
@@ -1444,15 +1482,27 @@ def encode_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> di
         results = []
         for d in db.list_documents(conn, limit=10000):
             doc_path = Path(d["path"])
-            enc_files = encoder_files_for(
-                doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent, cfg.dropbox
-            )
-            if not enc_files:
+            fdir = doc_path if doc_path.is_dir() else doc_path.parent
+            sc = _doc_sidecar(cfg, doc_path)
+            if sc.encoders is not None:
+                # pha.yaml lists encoders explicitly (by name), in page order
+                specs: list[tuple[Path, str | None]] = []
+                for spec in sc.encoders:
+                    f = encoder_file_named(spec.rules, fdir, cfg.dropbox)
+                    if f is None:
+                        print(f"  warning: unknown encoder {spec.rules!r} for {doc_path.name}", flush=True)
+                        continue
+                    specs.append((f, spec.model))
+            else:
+                enc_files = encoder_files_for(doc_path.stem, fdir, cfg.dropbox)
+                specs = [(f, None) for f in enc_files]
+            if not specs:
                 # legacy: single global encoder via the 'encoder' selection file
                 results.append(encode_document(cfg, conn, d["id"], reprocess=reprocess, verbose=verbose))
                 continue
             # order by page range start (empty pages => whole document => last)
-            def _page_start(f: Path) -> int:
+            def _page_start(item: tuple[Path, str | None]) -> int:
+                f, _m = item
                 e = cfg.encoder_from_file(f)
                 if e and e.pages and "-" in e.pages:
                     try:
@@ -1460,9 +1510,10 @@ def encode_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> di
                     except ValueError:
                         return 10**9
                 return 10**9  # whole-document encoders run after section ones
-            for f in sorted(enc_files, key=_page_start):
+            for f, model_override in sorted(specs, key=_page_start):
                 results.append(encode_document(cfg, conn, d["id"], enc_file=f,
-                                               reprocess=reprocess, verbose=verbose))
+                                               reprocess=reprocess, verbose=verbose,
+                                               model_override=model_override))
         return {"results": results}
     finally:
         conn.close()
@@ -1498,10 +1549,10 @@ def scan_once(
             else:
                 print(f"  target path does not exist: {path}", flush=True)
                 scan_root = root  # discover() returns [] if missing
-    # vision clients per palaeographer: the default is the passed client;
-    # documents that resolve to another palaeographer get their own.
-    clients: dict[str, tuple[ModelClient, Palaeographer]] = {
-        palaeographer.id: (client, palaeographer)
+    # vision clients per effective palaeographer (rules + model override): the
+    # default is the passed client; other palaeographers get their own.
+    clients: dict[tuple, tuple[ModelClient, Palaeographer]] = {
+        _client_key(palaeographer): (client, palaeographer)
     }
     try:
         db.backfill_dir_path(conn, cfg.dropbox)
@@ -1510,9 +1561,13 @@ def scan_once(
         for i, f in enumerate(files, 1):
             if verbose:
                 print(f"[{i}/{len(files)}] {f.name}", flush=True)
+            sc = _doc_sidecar(cfg, f)
             pal_id, pal_src = resolve_palaeographer_id(
                 f.stem, f if f.is_dir() else f.parent, cfg.dropbox
             )
+            if sc.palaeographer:
+                pal_id = sc.palaeographer.rules
+                pal_src = str(sc.source)
             if pal_id:
                 try:
                     pal = cfg.get_palaeographer(pal_id)
@@ -1522,13 +1577,21 @@ def scan_once(
                     pal = palaeographer
             else:
                 pal = palaeographer
-            if pal.id not in clients:
-                clients[pal.id] = make_vision_client(cfg, pal.id)
+            # per-document model override (pha.yaml palaeographer.model)
+            if sc.palaeographer and sc.palaeographer.model:
+                try:
+                    pal = cfg.with_model(pal, sc.palaeographer.model)
+                except KeyError:
+                    print(f"  warning: unknown model {sc.palaeographer.model!r}; keeping {pal.id}'s model",
+                          flush=True)
+            key = _client_key(pal)
+            if key not in clients:
+                clients[key] = (_vision_client(pal), pal)
                 if verbose:
                     print(f"  palaeographer: {pal.id} ({pal.description or pal.model})", flush=True)
             results.append(
-                ingest_file(cfg, conn, clients[pal.id][0], f, clients[pal.id][1],
-                            explicit_prompt, reprocess, verbose)
+                ingest_file(cfg, conn, clients[key][0], f, clients[key][1],
+                            explicit_prompt, reprocess, verbose, sidecar=sc)
             )
         return {"scanned": len(files), "results": results}
     finally:

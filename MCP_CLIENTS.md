@@ -177,41 +177,47 @@ After uploading, run `pha_scan_now()` to ingest the new files.
 
 ## Setting palaeographers, editors and encoders from another machine
 
-Palaeographers / editors / encoders are **one file per model** in the
-`palaeographers/`, `editors/`, `encoders/` directories (id = file stem, YAML
-front matter = config, body = prompt), and per-document/collection **selection
-files** live next to the documents in the dropbox (a plain text file named
-`palaeographer` / `editor`, or an `encoders/<name>.md` folder). A remote agent
-configures them on B with the config helpers + `pha_upload`.
+Configuration is three layers: **model-interface** files (`models/*.md`),
+**content-rule** files (`palaeographers/`, `editors/`, `encoders/` — id = file
+stem, front matter = `model:` ref + stage params, body = prompt), and a
+per-document/collection **`pha.yaml` sidecar** (or the legacy plain
+`palaeographer` / `editor` selection files) next to the documents. A remote
+agent configures these on B with the config helpers + `pha_upload`.
 
 ### Inspect current configuration (read)
 
 ```python
-pha_palaeographers()                  # list models + active default
-pha_editors()                         # list editor models
+pha_palaeographers()                  # list palaeographers + active default
+pha_editors()                         # list editors
 pha_encoders("collections/COLX/doc.pdf")  # encoder files that apply
 pha_collection_config("collections/COLX")# resolved pal/editor/prompt for a collection
 ```
 
 ### Select a palaeographer / editor for a collection
 
-Create (or update) a selection file in B's dropbox with `pha_upload`:
+Write a **`pha.yaml` sidecar** in B's dropbox with `pha_upload`:
 
 ```python
 # for the collection collections/COLX:
-pha_upload(kind="document", name="collections/COLX/palaeographer",
-           content_b64=base64("portuguese-secretary"))
-pha_upload(kind="document", name="collections/COLX/editor",
-           content_b64=base64("generic"))
+sidecar = """palaeographer:
+  rules: portuguese-secretary
+  model: minimax-m3          # optional vision-model override
+editor:
+  rules: generic
+"""
+pha_upload(kind="document", name="collections/COLX/pha.yaml",
+           content_b64=base64(sidecar))
 ```
-After that, `pha_collection_config("collections/COLX")` shows the new
+The legacy plain `palaeographer` / `editor` files (one id each) still work as a
+fallback. After that, `pha_collection_config("collections/COLX")` shows the new
 resolved palaeographer/editor. Run `pha_scan_now()` to (re)extract with the
 new settings.
 
 ### Add a new palaeographer / editor / encoder definition
 
-The model-definition files (`palaeographers/*.md`, `editors/*.md`) live at the
-**project root**, outside the dropbox, so `pha_upload` cannot write them
+The model-interface files (`models/*.md`) and content-rule files
+(`palaeographers/*.md`, `editors/*.md`) live at the **project root** (or the
+archive root), outside the dropbox, so `pha_upload` cannot write them
 directly (it is scoped to the dropbox for safety). Two ways a remote agent
 adds one:
 

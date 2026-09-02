@@ -56,24 +56,9 @@ def _strip_think(text: str) -> str:
     return _clean_html_entities(t)
 
 
-def _prepare_image_b64(image_path: Path, max_side: int, jpeg_quality: int = 88) -> tuple[str, str]:
-    """Return (base64, mime) for a page image, re-encoded for the
-    anthropic-style path where the image travels as base64 TEXT (~2
-    chars/token — a full-res render can cost ~190k input tokens).
-
-    The JPEG is always resized to <=`max_side` and re-encoded at
-    `jpeg_quality` via `sips`, so a user can keep FULL resolution at a lower
-    quality (q55 at 1800px ~= 150k tokens vs q88 ~= 195k) instead of losing
-    resolution to fit the context. Falls back to the original bytes if sips
-    is unavailable.
-    """
-    mime = _MIME.get(image_path.suffix.lower(), "image/jpeg")
-    return _reencode_b64(image_path, max_side, jpeg_quality, mime)
-
-
-def _reencode_b64(image_path: Path, max_side: int, jpeg_quality: int, mime: str) -> tuple[str, str]:
-    """Re-encode via sips (resize to <=max_side, JPEG at jpeg_quality) and
-    base64 it. Falls back to the original bytes if sips is unavailable."""
+def _resize_jpeg_bytes(image_path: Path, max_side: int, jpeg_quality: int) -> bytes:
+    """Return the image resized to <=max_side (longest edge) and encoded as
+    JPEG at `jpeg_quality`. Tries sips (macOS), then PyMuPDF (cross-platform)."""
     out = image_path.with_name(f"{image_path.stem}__enc.jpg")
     try:
         import subprocess
@@ -83,14 +68,55 @@ def _reencode_b64(image_path: Path, max_side: int, jpeg_quality: int, mime: str)
              "-s", "formatOptions", str(jpeg_quality), str(image_path), "--out", str(out)],
             capture_output=True, check=True, timeout=60,
         )
-        return base64.b64encode(out.read_bytes()).decode(), "image/jpeg"
-    except Exception:  # noqa: BLE001 - re-encode failed; send original
-        return base64.b64encode(image_path.read_bytes()).decode(), mime
+        return out.read_bytes()
+    except Exception:  # noqa: BLE001 - sips unavailable/failed; try PyMuPDF
+        pass
     finally:
         try:
             out.unlink(missing_ok=True)
         except (NameError, OSError):
             pass
+
+    # Cross-platform fallback: re-render via PyMuPDF at the target pixel size.
+    import pymupdf as fitz
+
+    pm = fitz.Pixmap(str(image_path))  # intrinsic pixel dims (ignores dpi metadata)
+    scale = 1.0
+    if max_side and max(pm.width, pm.height) > max_side:
+        scale = max_side / max(pm.width, pm.height)
+    doc = fitz.open(str(image_path))
+    try:
+        page = doc[0]
+        # page.rect is in points at the image's embedded dpi, while the file's
+        # true pixels are pm.width/pm.height. Compensate so the rendered pixel
+        # dims equal scale * intrinsic (not scale * points).
+        zoom = scale * (pm.width / page.rect.width) if page.rect.width > 0 else scale
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        return pix.tobytes("jpeg", jpg_quality=jpeg_quality)
+    finally:
+        doc.close()
+
+
+def _prepare_image_b64(image_path: Path, max_side: int, jpeg_quality: int = 88) -> tuple[str, str]:
+    """Return (base64, mime) for a page image, resized to <=`max_side` and
+    re-encoded as JPEG at `jpeg_quality`.
+
+    Applied to EVERY vision call (openai and anthropic) so the per-model
+    `max_vision_px`/`vision_jpeg_quality` limits hold regardless of wire
+    format. Falls back to the original bytes if re-encoding is unavailable.
+    """
+    mime = _MIME.get(image_path.suffix.lower(), "image/jpeg")
+    return _reencode_b64(image_path, max_side, jpeg_quality, mime)
+
+
+def _reencode_b64(image_path: Path, max_side: int, jpeg_quality: int, mime: str) -> tuple[str, str]:
+    """Resize/re-encode to JPEG and base64 it. Falls back to the original
+    bytes if resizing is unavailable."""
+    try:
+        data = _resize_jpeg_bytes(image_path, max_side, jpeg_quality)
+        return base64.b64encode(data).decode(), "image/jpeg"
+    except Exception:  # noqa: BLE001 - re-encode failed; send original
+        return base64.b64encode(image_path.read_bytes()).decode(), mime
 
 
 class ModelClient:
@@ -237,14 +263,15 @@ class ModelClient:
         - "anthropic": /anthropic/v1/messages with the image embedded as a
           PLAIN-TEXT data URI in content (MiniMax's OpenAI-compatible
           endpoint silently drops image_url blocks, so their vision requires
-          this form). The image is re-encoded via `_prepare_image_b64`
-          (resized to max_vision_px and re-compressed at jpeg_quality) because
-          in this form the base64 travels as TEXT (~2 chars/token) and a full
-          render can exceed the model's context window.
+          this form).
+
+        On BOTH paths the image is resized to <=max_vision_px and re-encoded
+        at jpeg_quality before base64, so the model's resolution limits are
+        honoured regardless of wire format.
         """
         image_path = Path(image_path)
+        b64, mime = _prepare_image_b64(image_path, max_vision_px, jpeg_quality)
         if self.api_style == "anthropic":
-            b64, mime = _prepare_image_b64(image_path, max_vision_px, jpeg_quality)
             payload = {
                 "model": model,
                 "max_tokens": max_tokens,
@@ -256,8 +283,6 @@ class ModelClient:
                 payload["thinking"] = {"type": "disabled"}
             return self._anthropic_chat(payload)
 
-        b64 = base64.b64encode(image_path.read_bytes()).decode()
-        mime = _MIME.get(image_path.suffix.lower(), "image/jpeg")
         payload = {
             "model": model,
             "messages": [
