@@ -71,7 +71,10 @@ def load_sidecar(path: Path) -> dict:
     """Read and validate a single pha.yaml, returning its dict. Raises
     ValueError with a readable message on YAML/schema errors."""
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        # Tolerate stray `---` document markers (a once-migrated file might
+        # carry them); take the first non-empty document.
+        docs = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
+        data = next((d for d in docs if d is not None), {}) or {}
     except yaml.YAMLError as e:
         raise ValueError(f"invalid YAML in {path}: {e}") from e
     if not isinstance(data, dict):
