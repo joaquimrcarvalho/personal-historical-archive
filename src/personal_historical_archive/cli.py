@@ -248,7 +248,8 @@ def cmd_status(cfg: Config, args) -> None:
             print()
             print("collections")
             for key in keys:
-                print(_fit(f"  {key}", width))
+                display = key[len("collections/"):] if key.startswith("collections/") else key
+                print(_fit(f"  {display}", width))
                 sts = archived.get(key, {})
                 n_docs = sum(sts.values())
                 if n_docs:

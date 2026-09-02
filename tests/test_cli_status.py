@@ -51,7 +51,8 @@ def test_status_shows_unscanned_dropbox_files(tmp_path, capsys):
     cli.cmd_status(cfg, SimpleNamespace())
     out = capsys.readouterr().out
     assert "scanned.pdf" in out                 # the archived doc is listed
-    assert "collections/COLX" in out            # collection node present
+    assert "  COLX" in out                      # collection node (prefix stripped)
+    assert "1 document (done)" in out
     assert "~ 1 new  (fresh.pdf)" in out        # the unscanned collection file
     assert "~ 1 new  (rootdoc.pdf)" in out      # the unscanned root file
     assert "2 file(s) not yet scanned" in out   # overview tally
@@ -77,7 +78,7 @@ def test_status_shows_archived_status_and_new_count(tmp_path, capsys):
 
     cli.cmd_status(cfg, SimpleNamespace())
     out = capsys.readouterr().out
-    assert "collections/CAT" in out
+    assert "  CAT" in out
     assert "1 document (processing)" in out
     assert "#  1  processing  a.pdf" in out
     assert "~ 1 new  (b.pdf)" in out
