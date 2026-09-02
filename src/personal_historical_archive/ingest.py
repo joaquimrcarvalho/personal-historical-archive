@@ -346,6 +346,16 @@ def _prompt_newer_than(
                 return True
         except OSError:
             pass
+    # The model file (models/<id>.md) now holds resolution limits
+    # (max_vision_px/vision_jpeg_quality); editing it re-extracts too.
+    if palaeographer and getattr(palaeographer, "model_ref", "") and palaeographer.model_ref in cfg.models:
+        mf = cfg.models[palaeographer.model_ref].prompt_file
+        if mf:
+            try:
+                if mf.stat().st_mtime > ts:
+                    return True
+            except OSError:
+                pass
     for cand in palaeographer_candidates(path.stem, file_dir, cfg.dropbox):
         if cand.exists() and cand.stat().st_mtime > ts:
             return True

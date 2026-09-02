@@ -16,6 +16,7 @@ reused by id when their interface matches.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -153,7 +154,14 @@ def _migrate_stage_files(cfg: Config, stage_dirs: list[tuple[Path, str]], report
         else:
             if not model_path.exists():
                 model_path.write_text(_model_content(model_id, iface), encoding="utf-8")
-            f.write_text(new_stage, encoding="utf-8")
+            # Preserve the stage file's mtime: the prompt body is unchanged, so
+            # migrating must NOT trigger a spurious re-extraction on next scan.
+            try:
+                st = f.stat()
+                f.write_text(new_stage, encoding="utf-8")
+                os.utime(f, (st.st_atime, st.st_mtime))
+            except OSError:
+                pass
         report.stages_rewritten.append(str(f))
     for mid in sorted(created):
         report.models_created.append(mid)
