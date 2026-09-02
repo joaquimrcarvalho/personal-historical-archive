@@ -516,9 +516,9 @@ def cmd_init_archive(cfg: Config, args) -> None:
 
     Creates the default structure (dropbox/documents, dropbox/collections,
     library, renders, palaeographers/editors/encoders with zero-config
-    defaults) plus an AGENTS.md and a .gitignore. If PATH does not exist it
-    is created; if it exists it must be empty (never touches an existing
-    archive)."""
+    defaults) plus a README.md, AGENTS.md and a .gitignore. If PATH does not
+    exist it is created; if it exists it must be empty (never touches an
+    existing archive)."""
     from .archive_init import init_archive
     try:
         p = init_archive(args.path)
@@ -528,7 +528,7 @@ def cmd_init_archive(cfg: Config, args) -> None:
     print(f"created archive at {p}")
     print("  dropbox/documents/  dropbox/collections/   (drop your sources here)")
     print("  library/  renders/  palaeographers/  editors/  encoders/")
-    print("  AGENTS.md + .gitignore written")
+    print("  README.md + AGENTS.md + .gitignore written")
     print("point pha at it with:  pha set archive-dir " + str(p))
 
 
@@ -699,7 +699,7 @@ def cmd_help(cfg: Config, args) -> None:
     print()
     print("  The files above live in the pha project directory.")
     print("  For agents: an archive created with `pha init-archive` also has its")
-    print("  own AGENTS.md inside it describing that archive.")
+    print("  own README.md + AGENTS.md inside it describing that archive.")
 
 
 # --------------------------------------------------------------------------- fresh-install handling

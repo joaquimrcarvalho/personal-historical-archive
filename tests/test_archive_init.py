@@ -21,6 +21,13 @@ def test_init_archive_creates_structure(tmp_path):
     # agent guidance + gitignore
     agents = (p / "AGENTS.md").read_text(encoding="utf-8")
     assert "pha" in agents and "github.com" in agents
+    readme = (p / "README.md").read_text(encoding="utf-8")
+    assert "pha" in readme and "github.com" in readme
+    # both first-read files must tell an agent how to install pha and point
+    # it at THIS archive
+    for text in (agents, readme):
+        assert "uv tool install --editable" in text
+        assert "pha set archive-dir" in text
     gitignore = (p / ".gitignore").read_text(encoding="utf-8")
     assert "archive.db" in gitignore
     assert "renders/" in gitignore
