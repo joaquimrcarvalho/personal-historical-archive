@@ -118,70 +118,171 @@ def _pending_summary_lines(pending: list[dict], get_doc) -> list[str]:
     return lines
 
 
+_STATUS_ORDER = ("done", "processing", "error", "pending")
+
+
+def _status_summary(statuses: dict) -> str:
+    """Compact `n status` list, e.g. '5 done · 2 processing'."""
+    return " · ".join(f"{statuses[st]} {st}" for st in _STATUS_ORDER if statuses.get(st))
+
+
+def _collection_status_line(statuses: dict, total: int) -> str:
+    """Human status summary for one collection's archived documents."""
+    if total <= 0:
+        return "no documents in archive"
+    noun = "document" if total == 1 else "documents"
+    present = [st for st in _STATUS_ORDER if statuses.get(st)]
+    if len(present) == 1:
+        st = present[0]
+        if statuses[st] == total:
+            return f"{total} {noun} ({st})"
+        return f"{total} {noun} ({statuses[st]} {st})"
+    return f"{total} {noun} ({_status_summary(statuses)})"
+
+
+def _term_width(default: int = 100) -> int:
+    """Terminal width in columns for output that must never wrap.
+
+    Uses the real terminal width when stdout is a tty (so long lines are
+    actually trimmed to fit), otherwise a generous default (piped/redirected
+    output needn't wrap)."""
+    import shutil
+    try:
+        w = shutil.get_terminal_size(fallback=(default, 24)).columns
+    except Exception:
+        w = default
+    return max(w, 40)
+
+
+def _fit(line: str, width: int) -> str:
+    """Truncate `line` to `width` columns so it never wraps."""
+    if len(line) <= width:
+        return line
+    return line[: width - 1] + "…"
+
+
+def _snip(names: list[str], width: int, max_names: int = 3, name_len: int = 32) -> str:
+    """Short, width-bounded listing of file names for the 'new' leaves.
+
+    Shows as many names as fit within `width` columns and always keeps the
+    trailing '+N more' count so the total is never lost to truncation."""
+    names = sorted(names)
+    if not names:
+        return ""
+    shown: list[str] = []
+    for name in names:
+        if len(shown) >= max_names:
+            break
+        disp = name if len(name) <= name_len else name[: name_len - 1] + "…"
+        cand = ", ".join(shown + [disp])
+        more = len(names) - len(shown) - 1
+        if len(cand) + (len(f", … +{more}") if more else 0) > width:
+            break
+        shown.append(disp)
+    more = len(names) - len(shown)
+    text = ", ".join(shown)
+    if more > 0:
+        text += f", … +{more}"
+    return text
+
+
 def cmd_status(cfg: Config, args) -> None:
     conn = db.connect(cfg.db_path)
     try:
+        width = _term_width()
+
+        # ---- gather everything up front so rendering stays simple --------
         s = db.summary(conn)
-        print(f"archive: {cfg.db_path}")
-        print(f"  documents: {s['documents'] or 'none'}")
-        print(f"  pages extracted: {s['pages_done']}")
-        print(f"  chunks indexed: {s['chunks']} (embedded: {s['chunks_embedded']})")
-        groups = conn.execute(
-            "SELECT COALESCE(NULLIF(dir_path, ''), '(root)') AS col, COUNT(*) n FROM documents GROUP BY col ORDER BY col"
-        ).fetchall()
-        if groups:
-            print("  collections:")
-            for g in groups:
-                print(f"    {g['col']}: {g['n']}")
-        docs = db.list_documents(conn, limit=100)
-        if docs:
-            print("\ndocuments:")
-            stats = db.chunk_stats(conn)
-            for d in docs:
-                err = f"  ERROR: {(d['error'] or '')[:60]}" if d["status"] == "error" else ""
-                col = d["dir_path"] or "(root)"
-                pal = d["palaeographer"] or "default"
-                cs = stats.get(d["id"])
-                chunks = ""
-                if cs:
-                    chunks = f", {cs['chunks']} chunks ({cs['embedded']} embedded)"
-                kw = "  [keyword-only: embeddings missing — run pha reindex]" \
-                    if cs and cs["chunks"] and not cs["embedded"] else ""
-                print(f"  #{d['id']:3d} {d['status']:10s} [{col}] {d['filename']}  "
-                      f"({d['kind']}, {d['page_count'] or 0} pages, {pal}{chunks})  "
-                      f"updated {_fmt_ts(d['updated_at'])}{err}{kw}")
-        # pending review: corrected library files not yet imported
-        from .ingest import pending_review_files
-        try:
-            pending = pending_review_files(cfg, conn)
-        except Exception:
-            pending = []
-        if pending:
-            for line in _pending_summary_lines(pending, lambda d_id: db.get_document(conn, d_id)):
-                print(line)
-        # new in dropbox: files present on disk but with no archive record yet
-        # (dropped in but `pha scan` never ran) — so status shows what a scan
-        # WOULD pick up, before it runs.
-        from .ingest import discover
+        docs_status = s["documents"] or {}
+        total_docs = sum(docs_status.values())
+
+        archived: dict[str, dict[str, int]] = {}
+        for r in conn.execute(
+            "SELECT COALESCE(NULLIF(dir_path, ''), '(root)') AS col, status, COUNT(*) n "
+            "FROM documents GROUP BY col, status"
+        ):
+            archived.setdefault(r["col"], {})[r["status"]] = r["n"]
+
+        from .ingest import discover, pending_review_files
+
         known = {r["path"] for r in conn.execute("SELECT path FROM documents").fetchall()}
         try:
             units = discover(cfg.dropbox, cfg.dir_documents)
         except Exception:
             units = []
-        new_units = [u for u in units if str(u) not in known]
-        if new_units:
-            from collections import OrderedDict
-            by_dir: "OrderedDict[str, list[str]]" = OrderedDict()
-            for u in new_units:
-                rel = u.relative_to(cfg.dropbox)
-                key = str(rel.parent) if str(rel.parent) != "." else "(root)"
-                by_dir.setdefault(key, []).append(rel.name)
-            print("\nnew in dropbox (not yet scanned — run `pha scan`):")
-            for key, names in by_dir.items():
-                shown = ", ".join(sorted(names)[:5])
-                if len(names) > 5:
-                    shown += ", …"
-                print(f"  {key}: {len(names)} file(s)  ({shown})")
+        unscanned: dict[str, list[str]] = {}
+        for u in (u for u in units if str(u) not in known):
+            rel = u.relative_to(cfg.dropbox)
+            key = str(rel.parent) if str(rel.parent) != "." else "(root)"
+            unscanned.setdefault(key, []).append(rel.name)
+        total_new = sum(len(v) for v in unscanned.values())
+
+        docs = db.list_documents(conn, limit=10000)
+        stats = db.chunk_stats(conn)
+        stat_w = max((len(str(d["status"])) for d in docs), default=0)
+        stat_w = max(stat_w, len("processing"))
+        docs_by_key: dict[str, list] = {}
+        for d in docs:
+            docs_by_key.setdefault(d["dir_path"] or "(root)", []).append(d)
+
+        try:
+            pending = pending_review_files(cfg, conn)
+        except Exception:
+            pending = []
+
+        # ---- render ------------------------------------------------------
+        print(f"archive: {cfg.db_path}")
+        print()
+        print("overview")
+        if total_docs:
+            print(f"  documents: {total_docs}   ({_status_summary(docs_status)})")
+        else:
+            print("  documents: none")
+        print(f"  pages:     {s['pages_done']} extracted")
+        print(f"  chunks:    {s['chunks']} indexed   ({s['chunks_embedded']} embedded)")
+        if total_new:
+            print(f"  new:       {total_new} file(s) not yet scanned")
+
+        keys = sorted(set(archived) | set(unscanned), key=lambda k: (k == "(root)", k))
+        if keys:
+            print()
+            print("collections")
+            for key in keys:
+                print(_fit(f"  {key}", width))
+                sts = archived.get(key, {})
+                n_docs = sum(sts.values())
+                if n_docs:
+                    print(_fit(f"    {_collection_status_line(sts, n_docs)}", width))
+                for d in sorted(docs_by_key.get(key, []), key=lambda d: d["id"]):
+                    print(_fit(f"    #{d['id']:>3d}  {d['status']:<{stat_w}}  {d['filename']}", width))
+                    meta = [d["kind"], f"{d['page_count'] or 0} pages"]
+                    if d["palaeographer"]:
+                        meta.append(d["palaeographer"])
+                    cs = stats.get(d["id"])
+                    kw = False
+                    if cs and cs["chunks"]:
+                        if cs["embedded"] == cs["chunks"]:
+                            meta.append(f"{cs['chunks']} chunks")
+                        else:
+                            meta.append(f"{cs['chunks']} chunks ({cs['embedded']} embedded)")
+                            kw = True
+                    if d["status"] == "error" and d["error"]:
+                        meta.append(f"error: {d['error'][:40]}")
+                    meta.append(f"updated {_fmt_ts(d['updated_at'])}")
+                    line = f"      {' · '.join(meta)}"
+                    if kw:
+                        line += "   [keyword-only — run pha reindex]"
+                    print(_fit(line, width))
+                if unscanned.get(key):
+                    names = unscanned[key]
+                    prefix = f"    ~ {len(names)} new  ("
+                    listing = _snip(names, width - len(prefix) - 1)
+                    print(_fit(prefix + listing + ")", width))
+
+        if pending:
+            print()
+            for line in _pending_summary_lines(pending, lambda d_id: db.get_document(conn, d_id)):
+                print(line)
     finally:
         conn.close()
 
@@ -676,7 +777,7 @@ def cmd_help(cfg: Config, args) -> None:
     print("  pha <command> [options]       # `pha --help` lists every command")
     print()
     print("COMMON COMMANDS")
-    print("  pha status                    summary: what is ingested, pending corrections")
+    print("  pha status                    per-collection tree of what is ingested, new, pending")
     print("  pha scan                      extract + index new/changed files in dropbox")
     print('  pha search "query"            search the extracted text')
     print("  pha set archive-dir <path>    point pha at an archive")

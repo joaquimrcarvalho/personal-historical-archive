@@ -23,7 +23,8 @@ def _make_cfg(tmp_path) -> Config:
 
 def test_status_shows_unscanned_dropbox_files(tmp_path, capsys):
     """pha status reports files that are in the dropbox but not yet in the
-    archive (never scanned), before `pha scan` runs."""
+    archive (never scanned), before `pha scan` runs — shown as 'new' leaves
+    under their collection in the status tree."""
     cfg = _make_cfg(tmp_path)
     cfg.ensure_dirs()
 
@@ -49,12 +50,37 @@ def test_status_shows_unscanned_dropbox_files(tmp_path, capsys):
 
     cli.cmd_status(cfg, SimpleNamespace())
     out = capsys.readouterr().out
-    assert "scanned.pdf" in out            # the archived doc is listed
-    assert "new in dropbox (not yet scanned — run `pha scan`)" in out
-    assert "collections/COLX: 1 file(s)" in out
-    assert "fresh.pdf" in out
-    assert "documents: 1 file(s)" in out
-    assert "rootdoc.pdf" in out
+    assert "scanned.pdf" in out                 # the archived doc is listed
+    assert "collections/COLX" in out            # collection node present
+    assert "~ 1 new  (fresh.pdf)" in out        # the unscanned collection file
+    assert "~ 1 new  (rootdoc.pdf)" in out      # the unscanned root file
+    assert "2 file(s) not yet scanned" in out   # overview tally
+
+
+def test_status_shows_archived_status_and_new_count(tmp_path, capsys):
+    """A collection with both an archived doc and unscanned files shows the
+    doc's status and the new count together, so it is not ambiguous."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    col = cfg.dropbox / "collections" / "CAT"
+    col.mkdir(parents=True)
+    a = col / "a.pdf"
+    a.write_bytes(b"%PDF a")
+    conn = _db.connect(cfg.db_path)
+    _db.add_document(conn, filename="a.pdf", path=str(a), sha256=sha256_of(a),
+                     size_bytes=1, mtime=1, kind="pdf", now=time.time(),
+                     dir_path="collections/CAT")
+    _db.set_document_status(conn, _db.get_document_by_path(conn, str(a))["id"], "processing")
+    conn.commit()
+    conn.close()
+    (col / "b.pdf").write_bytes(b"%PDF b")
+
+    cli.cmd_status(cfg, SimpleNamespace())
+    out = capsys.readouterr().out
+    assert "collections/CAT" in out
+    assert "1 document (processing)" in out
+    assert "#  1  processing  a.pdf" in out
+    assert "~ 1 new  (b.pdf)" in out
 
 
 def test_status_no_new_section_when_everything_scanned(tmp_path, capsys):
