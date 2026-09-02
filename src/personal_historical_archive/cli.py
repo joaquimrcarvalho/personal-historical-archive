@@ -430,6 +430,30 @@ def cmd_rm(cfg: Config, args) -> None:
         conn.close()
 
 
+def _sidecar_summary(path: Path) -> str:
+    """One-line summary of a pha.yaml's own palaeographer/editor keys."""
+    import yaml
+
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return "(unreadable)"
+    parts = []
+    for key in ("palaeographer", "editor"):
+        if key not in data:
+            continue
+        v = data[key]
+        if v is None:
+            parts.append(f"{key}: none")
+        elif isinstance(v, str):
+            parts.append(f"{key}: {v}")
+        elif isinstance(v, dict):
+            r = v.get("rules", "")
+            m = v.get("model")
+            parts.append(f"{key}: {r}" + (f" (model {m})" if m else ""))
+    return ", ".join(parts) or "(empty)"
+
+
 def cmd_palaeographer(cfg: Config, args) -> None:
     if args.file:
         p = cfg.dropbox / args.file if not (cfg.root / args.file).exists() else cfg.root / args.file
@@ -464,6 +488,9 @@ def cmd_palaeographer(cfg: Config, args) -> None:
     for f in sorted(set(pal_files)):
         pal_id = re.sub(r"^[#\-*\s]+", "", f.read_text(encoding="utf-8").strip().splitlines()[0]).strip() if f.read_text(encoding="utf-8").strip() else ""
         print(f"  {f}: {pal_id or '(empty)'}")
+    print("pha.yaml sidecars in the dropbox:")
+    for f in sorted(set(cfg.dropbox.rglob("pha.yaml"))):
+        print(f"  {f}: {_sidecar_summary(f)}")
 
 
 def cmd_editor(cfg: Config, args) -> None:
@@ -502,6 +529,9 @@ def cmd_editor(cfg: Config, args) -> None:
     for f in sorted(set(ed_files)):
         ed_id = re.sub(r"^[#\-*\s]+", "", f.read_text(encoding="utf-8").strip().splitlines()[0]).strip() if f.read_text(encoding="utf-8").strip() else ""
         print(f"  {f}: {ed_id or '(empty)'}")
+    print("pha.yaml sidecars in the dropbox:")
+    for f in sorted(set(cfg.dropbox.rglob("pha.yaml"))):
+        print(f"  {f}: {_sidecar_summary(f)}")
 
 
 def cmd_edit(cfg: Config, args) -> None:
