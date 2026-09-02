@@ -296,14 +296,37 @@ def make_server(cfg: Config) -> FastMCP:
         """
         from .extract import (resolve_editor_id, resolve_palaeographer_id,
                               resolve_prompt)
+        from .sidecar import resolve_sidecar
         from pathlib import Path
         p = (cfg.dropbox / document_relpath).resolve()
         sel_path = p if p.is_dir() else p.parent
-        pal_id, pal_src = resolve_palaeographer_id(p.stem, sel_path, cfg.dropbox)
-        ed_id, ed_src = resolve_editor_id(p.stem, sel_path, cfg.dropbox)
+        sc = resolve_sidecar(cfg.dropbox, sel_path)
+        pal_override = None
+        if sc.palaeographer:
+            pal_id, pal_src = sc.palaeographer.rules, f"{sc.source} (pha.yaml)"
+            pal_override = sc.palaeographer.model
+        else:
+            pal_id, pal_src = resolve_palaeographer_id(p.stem, sel_path, cfg.dropbox)
+        ed_override = None
+        if sc.editor_set:
+            ed_id = sc.editor.rules if sc.editor else None
+            ed_src = str(sc.source) if sc.source else None
+            ed_override = sc.editor.model if sc.editor else None
+        else:
+            ed_id, ed_src = resolve_editor_id(p.stem, sel_path, cfg.dropbox)
         prompt_txt, prompt_src = resolve_prompt(p.stem, sel_path, cfg.dropbox, cfg.prompts)
         pal = cfg.get_palaeographer(pal_id) if pal_id else cfg.get_palaeographer()
+        if pal_override:
+            try:
+                pal = cfg.with_model(pal, pal_override)
+            except KeyError:
+                pass
         ed = cfg.editors.get(ed_id) if ed_id else None
+        if ed and ed_override:
+            try:
+                ed = cfg.with_model(ed, ed_override)
+            except KeyError:
+                pass
         return {
             "document": document_relpath,
             "palaeographer": {"id": pal.id, "model": pal.model, "source": pal_src},

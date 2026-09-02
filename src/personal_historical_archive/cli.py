@@ -23,6 +23,7 @@ from .ingest import (
     write_document_pages,
 )
 from .model_client import ModelClient, ModelError
+from .sidecar import resolve_sidecar
 
 
 def _client(cfg: Config, base_url: str, timeout_s: int) -> ModelClient:
@@ -435,11 +436,19 @@ def cmd_palaeographer(cfg: Config, args) -> None:
         if not p.exists():
             print(f"not found: {args.file}")
             return
-        pal_id, source = resolve_palaeographer_id(
-            p.stem, p if p.is_dir() else p.parent, cfg.dropbox
-        )
+        file_dir = p if p.is_dir() else p.parent
+        sc = resolve_sidecar(cfg.dropbox, file_dir)
+        model_override = None
+        if sc.palaeographer:
+            pal_id = sc.palaeographer.rules
+            source = f"{sc.source} (pha.yaml)"
+            model_override = sc.palaeographer.model
+        else:
+            pal_id, source = resolve_palaeographer_id(p.stem, file_dir, cfg.dropbox)
         pal = cfg.get_palaeographer(pal_id) if pal_id else cfg.get_palaeographer()
         print(f"palaeographer: {pal.id} ({pal.description or pal.model})")
+        if model_override:
+            print(f"model override: {model_override}")
         print(f"source: {source or 'config default (vision.palaeographer)'}")
         return
     print(f"default (vision.palaeographer): {cfg.active_palaeographer}")
@@ -463,14 +472,22 @@ def cmd_editor(cfg: Config, args) -> None:
         if not p.exists():
             print(f"not found: {args.file}")
             return
-        ed_id, source = resolve_editor_id(
-            p.stem, p if p.is_dir() else p.parent, cfg.dropbox
-        )
+        file_dir = p if p.is_dir() else p.parent
+        sc = resolve_sidecar(cfg.dropbox, file_dir)
+        model_override = None
+        if sc.editor_set:
+            ed_id = sc.editor.rules if sc.editor else None
+            source = str(sc.source) if sc.source else None
+            model_override = sc.editor.model if sc.editor else None
+        else:
+            ed_id, source = resolve_editor_id(p.stem, file_dir, cfg.dropbox)
         if ed_id and ed_id in cfg.editors:
             ed = cfg.editors[ed_id]
             print(f"editor: {ed.id} ({ed.description or ed.model})")
         else:
             print(f"editor: {ed_id or 'none (no editing)'}")
+        if model_override:
+            print(f"model override: {model_override}")
         print(f"source: {source or '(none — no editor configured)'}")
         return
     print(f"configured editors ({cfg.editors_dir}):")
