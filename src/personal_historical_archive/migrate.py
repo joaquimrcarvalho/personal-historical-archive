@@ -36,6 +36,14 @@ _STAGE_KEEP_KEYS = (
 )
 _SELECTION_STEMS = ("palaeographer", "editor")
 
+# Prepended to every generated pha.yaml so editors bind it to the project's
+# JSON Schema (instead of a schemastore auto-match, e.g. "CrowdSec Collection").
+_SCHEMA_MODELINE = (
+    "# yaml-language-server: $schema="
+    "https://raw.githubusercontent.com/joaquimrcarvalho/personal-historical-archive/"
+    "main/schema/pha-sidecar.schema.json"
+)
+
 
 def _slug(name: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9]+", "-", name or "").strip("-").lower()
@@ -206,11 +214,10 @@ def _migrate_selection_files(cfg: Config, report: _Report, dry_run: bool, remove
             print(f"[dry-run] would write {sidecar}")
         else:
             # pha.yaml is plain YAML (no `---` front-matter delimiters — those
-            # belong only to the .md definition files).
-            sidecar.write_text(
-                yaml.safe_dump(merged, sort_keys=False, default_flow_style=False, allow_unicode=True),
-                encoding="utf-8",
-            )
+            # belong only to the .md definition files). The leading comment
+            # binds it to the pha-sidecar JSON Schema in editors.
+            body = yaml.safe_dump(merged, sort_keys=False, default_flow_style=False, allow_unicode=True)
+            sidecar.write_text(_SCHEMA_MODELINE + "\n" + body, encoding="utf-8")
         report.sidecars_written.append(str(sidecar))
         if remove:
             for p in to_remove:
