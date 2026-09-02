@@ -205,7 +205,12 @@ def _migrate_selection_files(cfg: Config, report: _Report, dry_run: bool, remove
         if dry_run:
             print(f"[dry-run] would write {sidecar}")
         else:
-            sidecar.write_text(_dump_fm(merged) + "\n", encoding="utf-8")
+            # pha.yaml is plain YAML (no `---` front-matter delimiters — those
+            # belong only to the .md definition files).
+            sidecar.write_text(
+                yaml.safe_dump(merged, sort_keys=False, default_flow_style=False, allow_unicode=True),
+                encoding="utf-8",
+            )
         report.sidecars_written.append(str(sidecar))
         if remove:
             for p in to_remove:
