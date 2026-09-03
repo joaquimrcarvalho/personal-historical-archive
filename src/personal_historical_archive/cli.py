@@ -378,7 +378,10 @@ def cmd_unbundle(cfg: Config, args) -> None:
 
 
 def cmd_export(cfg: Config, args) -> None:
-    """Regenerate per-page transcription files from the DB (no re-extraction)."""
+    """Regenerate per-page transcription + editor files from the DB (no
+    re-extraction / re-editing)."""
+    from .ingest import write_edited_pages
+
     conn = db.connect(cfg.db_path)
     try:
         docs = db.list_documents(conn, limit=10000)
@@ -387,6 +390,8 @@ def cmd_export(cfg: Config, args) -> None:
             out = write_document_pages(cfg, conn, d["id"])
             if out:
                 n += 1
+            if d["editor"]:
+                write_edited_pages(cfg, conn, d["id"], d["editor"])
         print(f"exported {n} document(s) to {cfg.library}")
     finally:
         conn.close()
@@ -461,18 +466,18 @@ def cmd_palaeographer(cfg: Config, args) -> None:
             print(f"not found: {args.file}")
             return
         file_dir = p if p.is_dir() else p.parent
-        sc = resolve_sidecar(cfg.dropbox, file_dir)
-        model_override = None
+        sc = resolve_sidecar(cfg.dropbox, file_dir, stem=(p.stem if not p.is_dir() else None))
+        model_id = None
         if sc.palaeographer:
             pal_id = sc.palaeographer.rules
             source = f"{sc.source} (pha.yaml)"
-            model_override = sc.palaeographer.model
+            model_id = sc.palaeographer.model
         else:
             pal_id, source = resolve_palaeographer_id(p.stem, file_dir, cfg.dropbox)
         pal = cfg.get_palaeographer(pal_id) if pal_id else cfg.get_palaeographer()
+        pal = cfg.resolve_model(pal, model_id)
         print(f"palaeographer: {pal.id} ({pal.description or pal.model})")
-        if model_override:
-            print(f"model override: {model_override}")
+        print(f"model: {pal.model_ref} ({pal.model})")
         print(f"source: {source or 'config default (vision.palaeographer)'}")
         return
     print(f"default (vision.palaeographer): {cfg.active_palaeographer}")
@@ -500,21 +505,21 @@ def cmd_editor(cfg: Config, args) -> None:
             print(f"not found: {args.file}")
             return
         file_dir = p if p.is_dir() else p.parent
-        sc = resolve_sidecar(cfg.dropbox, file_dir)
-        model_override = None
+        sc = resolve_sidecar(cfg.dropbox, file_dir, stem=(p.stem if not p.is_dir() else None))
+        model_id = None
         if sc.editor_set:
             ed_id = sc.editor.rules if sc.editor else None
             source = str(sc.source) if sc.source else None
-            model_override = sc.editor.model if sc.editor else None
+            model_id = sc.editor.model if sc.editor else None
         else:
             ed_id, source = resolve_editor_id(p.stem, file_dir, cfg.dropbox)
         if ed_id and ed_id in cfg.editors:
             ed = cfg.editors[ed_id]
+            ed = cfg.resolve_model(ed, model_id)
             print(f"editor: {ed.id} ({ed.description or ed.model})")
+            print(f"model: {ed.model_ref} ({ed.model})")
         else:
             print(f"editor: {ed_id or 'none (no editing)'}")
-        if model_override:
-            print(f"model override: {model_override}")
         print(f"source: {source or '(none — no editor configured)'}")
         return
     print(f"configured editors ({cfg.editors_dir}):")

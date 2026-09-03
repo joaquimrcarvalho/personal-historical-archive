@@ -31,9 +31,9 @@ def _schema() -> dict:
 
 @dataclass
 class StageSpec:
-    """A stage pointer: the content-rules id plus an optional model override."""
+    """A stage pointer: the content-rules id plus its model (both required)."""
     rules: str
-    model: str | None = None  # None = use the stage's default model
+    model: str
 
 
 @dataclass
@@ -48,14 +48,14 @@ class Sidecar:
 
 
 def _normalize_stage(value) -> StageSpec | None:
-    """Accept a bare string (rules id) or {rules, model?} and return a StageSpec."""
-    if value is None:
+    """Accept a {rules, model} mapping (both required) and return a StageSpec."""
+    if value is None or not isinstance(value, dict):
         return None
-    if isinstance(value, str):
-        return StageSpec(rules=value)
-    if isinstance(value, dict):
-        return StageSpec(rules=str(value.get("rules", "")).strip(), model=value.get("model"))
-    return None
+    rules = str(value.get("rules", "")).strip()
+    model = str(value.get("model", "") or "").strip()
+    if not rules or not model:
+        return None
+    return StageSpec(rules=rules, model=model)
 
 
 def _merge_keywise(merged: dict, data: dict) -> None:
@@ -102,12 +102,20 @@ def sidecar_chain(dropbox: Path, file_dir: Path) -> list[Path]:
     return list(reversed(chain))
 
 
-def resolve_sidecar(dropbox: Path, file_dir: Path) -> Sidecar:
-    """Merge the pha.yaml sidecars along the chain root→nearest (per-key)."""
+def resolve_sidecar(dropbox: Path, file_dir: Path, stem: str | None = None) -> Sidecar:
+    """Merge the pha.yaml sidecars along the chain root→nearest (per-key).
+
+    `stem` names a document-specific sidecar (`<stem>.pha.yaml` next to the
+    document) that wins over the directory-level `pha.yaml`."""
     merged: dict = {}
     last_source: Path | None = None
     for d in sidecar_chain(dropbox, file_dir):
         p = d / "pha.yaml"
+        if p.is_file():
+            merged.update(load_sidecar(p))
+            last_source = p
+    if stem:
+        p = file_dir / f"{stem}.pha.yaml"
         if p.is_file():
             merged.update(load_sidecar(p))
             last_source = p

@@ -43,6 +43,7 @@ def make_vision_client(
 ) -> tuple[ModelClient, Palaeographer]:
     """Create a ModelClient for a palaeographer (or the active one)."""
     pal = cfg.get_palaeographer(pal_id)
+    pal = cfg.resolve_model(pal)  # bind the default model when rules-only
     return ModelClient(pal.base_url, timeout_s=pal.timeout_s, api_key=pal.api_key,
                        api_style=pal.api_style), pal
 
@@ -51,6 +52,7 @@ def make_editor_client(cfg: Config, editor_id: str) -> tuple[ModelClient, Editor
     """Create a ModelClient for an editor (a text model, possibly on a
     different endpoint/model than the palaeographer)."""
     editor = cfg.get_editor(editor_id)
+    editor = cfg.resolve_model(editor)  # bind the default model when rules-only
     return ModelClient(editor.base_url, timeout_s=editor.timeout_s, api_key=editor.api_key,
                        api_style=editor.api_style), editor
 
@@ -66,8 +68,11 @@ def _client_key(pal: Palaeographer) -> tuple:
 
 
 def _doc_sidecar(cfg: Config, path: Path) -> Sidecar:
-    """Resolve the merged pha.yaml sidecar for a document path."""
-    return resolve_sidecar(cfg.dropbox, path if path.is_dir() else path.parent)
+    """Resolve the merged pha.yaml sidecar for a document path, including a
+    document-specific `<stem>.pha.yaml` when present."""
+    if path.is_dir():
+        return resolve_sidecar(cfg.dropbox, path)
+    return resolve_sidecar(cfg.dropbox, path.parent, stem=path.stem)
 
 
 def _raw_sha(text: str) -> str:
@@ -474,9 +479,11 @@ def ingest_file(
         conn, filename=path.name, path=str(path), sha256=sha,
         size_bytes=size, mtime=mtime, kind=kind, now=now, dir_path=rel_dir,
         palaeographer=palaeographer.id, editor=ed_id,
+        palaeographer_model=palaeographer.model_ref or None,
     )
     if reuse:
-        db.update_document(conn, doc_id, palaeographer=palaeographer.id, editor=ed_id)
+        db.update_document(conn, doc_id, palaeographer=palaeographer.id, editor=ed_id,
+                           palaeographer_model=palaeographer.model_ref or None)
     db.set_document_status(conn, doc_id, "processing")
     conn.commit()
 
@@ -646,6 +653,8 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
         "document_id": doc["id"],
         "pages_total": doc["page_count"],
         "palaeographer": pal,
+        "model": doc["palaeographer_model"] or None,
+        "editor": doc["editor"] or None,
         "prompt": doc["prompt_source"],
     }
     for p in pages:
@@ -717,7 +726,9 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
         "collection": doc["dir_path"] or "(root)",
         "document_id": doc["id"],
         "pages_total": doc["page_count"],
+        "palaeographer": doc["palaeographer"] or None,
         "editor": editor_id,
+        "model": doc["editor_model"] or None,
     }
     for e in db.edits_for_document(conn, doc_id, editor_id):
         p = conn.execute("SELECT page_no, source_name, reviewed_at FROM pages WHERE id = ?", (e["page_id"],)).fetchone()
@@ -918,7 +929,7 @@ def _edit_null(cfg: Config, conn, doc_id: int, resolved: str,
         conn.commit()
         write_edited_pages(cfg, conn, doc_id, resolved)
     if doc["editor"] != resolved:
-        db.update_document(conn, doc_id, editor=resolved)
+        db.update_document(conn, doc_id, editor=resolved, editor_model=None)
         conn.commit()
     write_edited_pages(cfg, conn, doc_id, resolved)
     return {"action": "edited", "filename": doc["filename"], "editor": resolved, "pages": edited}
@@ -966,8 +977,7 @@ def edit_document(
     if resolved in ("null", "passthrough"):
         return _edit_null(cfg, conn, doc_id, resolved, reprocess, verbose)
     editor = cfg.get_editor(resolved)
-    if editor_model:
-        editor = cfg.with_model(editor, editor_model)
+    editor = cfg.resolve_model(editor, editor_model)
     pages = db.get_pages(conn, doc_id)
     client = ModelClient(editor.base_url, timeout_s=editor.timeout_s, api_key=editor.api_key,
                          api_style=editor.api_style)
@@ -998,8 +1008,9 @@ def edit_document(
             write_edited_pages(cfg, conn, doc_id, resolved)  # grow output page by page
     finally:
         client.close()
-    if doc["editor"] != resolved:
-        db.update_document(conn, doc_id, editor=resolved)
+    if doc["editor"] != resolved or (doc["editor_model"] or None) != (editor.model_ref or None):
+        db.update_document(conn, doc_id, editor=resolved,
+                           editor_model=editor.model_ref or None)
         conn.commit()
     write_edited_pages(cfg, conn, doc_id, resolved)
     return {"action": "edited", "filename": doc["filename"], "editor": resolved, "pages": edited}
@@ -1035,6 +1046,7 @@ def make_encoder_client(cfg: Config, encoder_id: str | None = None,
     (legacy) or the loaded encoder object (collection-local)."""
     if encoder is None:
         encoder = cfg.get_encoder(encoder_id)
+    encoder = cfg.resolve_model(encoder)  # bind the default model when rules-only
     return ModelClient(encoder.base_url, timeout_s=encoder.timeout_s, api_key=encoder.api_key,
                        api_style=encoder.api_style), encoder
 
@@ -1324,8 +1336,7 @@ def encode_document(
             return {"action": "skipped", "filename": doc["filename"], "reason": "no encoder configured"}
         encoder = cfg.get_encoder(resolved)
 
-    if model_override:
-        encoder = cfg.with_model(encoder, model_override)
+    encoder = cfg.resolve_model(encoder, model_override)
     pages = db.get_pages(conn, doc_id)
     edits: dict[int, str] = {}
     if doc["editor"]:
@@ -1575,9 +1586,11 @@ def scan_once(
             pal_id, pal_src = resolve_palaeographer_id(
                 f.stem, f if f.is_dir() else f.parent, cfg.dropbox
             )
+            model_id = None
             if sc.palaeographer:
                 pal_id = sc.palaeographer.rules
                 pal_src = str(sc.source)
+                model_id = sc.palaeographer.model
             if pal_id:
                 try:
                     pal = cfg.get_palaeographer(pal_id)
@@ -1587,13 +1600,11 @@ def scan_once(
                     pal = palaeographer
             else:
                 pal = palaeographer
-            # per-document model override (pha.yaml palaeographer.model)
-            if sc.palaeographer and sc.palaeographer.model:
-                try:
-                    pal = cfg.with_model(pal, sc.palaeographer.model)
-                except KeyError:
-                    print(f"  warning: unknown model {sc.palaeographer.model!r}; keeping {pal.id}'s model",
-                          flush=True)
+            try:
+                pal = cfg.resolve_model(pal, model_id)
+            except KeyError:
+                print(f"  warning: unknown model {model_id or cfg.default_model!r}; leaving {pal.id} unbound",
+                      flush=True)
             key = _client_key(pal)
             if key not in clients:
                 clients[key] = (_vision_client(pal), pal)

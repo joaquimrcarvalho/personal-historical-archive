@@ -70,10 +70,10 @@ structured records grounded to the page each one starts on.
   separate layers.** A `models/<id>.md` file holds the pure model interface
   (`base_url`, `model`, `api_key`, `api_style`, `thinking`, `max_vision_px`,
   `vision_jpeg_quality`, `context_tokens`); a `palaeographers/`, `editors/` or
-  `encoders/<id>.md` file holds content rules and references a model via
-  `model: <id>`; a `pha.yaml` sidecar selects which rules + model each
-  document/collection uses. Run `pha migrate-config` to split legacy files
-  that still inline their interface.
+  `encoders/<id>.md` file holds **content rules only** (no model); a
+  `pha.yaml` sidecar pairs each stage's `rules` with its `model` (both
+  required) per document/collection. Run `pha migrate-config` to split legacy
+  files that still inline their interface.
   - `api_style: openai` (default — `/chat/completions`, works with LM Studio,
     Ollama, vLLM, OpenAI, OpenRouter, ...) **or** `anthropic`
     (`/anthropic/v1/messages`; needed for MiniMax, whose OpenAI-compatible
@@ -351,16 +351,15 @@ Editing a prompt file (sidecar, collection `prompt.md`, or the default)
 
 A **palaeographer** is a named set of transcription rules (content only). Each
 palaeographer is **one file** in the `palaeographers/` directory (the file
-name, without extension, is the id): YAML front matter declares the `model:` it
-uses (a `models/<id>.md` id) plus `temperature`/`max_tokens`/`timeout_s`; the
-body is the base prompt. The endpoint/model/api-key/resolution limits live in
-the model file:
+name, without extension, is the id): YAML front matter holds only
+`temperature`/`max_tokens`/`timeout_s`; the body is the base prompt. It carries
+**no model** — the endpoint/model/api-key/resolution limits live in the model
+file, and the pairing is made in `pha.yaml`:
 
 ```markdown
 # palaeographers/qwen-local.md   (content rules)
 ---
 description: qwen3-vl-8b via LM Studio (local, default)
-model: default                  # references models/default.md
 temperature: 0.1
 max_tokens: 4096
 timeout_s: 900
@@ -384,23 +383,23 @@ context_tokens: 32768
 ```
 
 **To add a palaeographer**: duplicate `palaeographers/_sample.md`, rename
-(the name becomes the id), set `model:`, replace the body with your expertise,
-save. To add a **model**, duplicate `models/_sample.md`. Invalid files are
-skipped with a warning — a typo never breaks the load. `pha palaeographer`
-lists the configured palaeographers.
+(the name becomes the id), replace the body with your expertise, save. To add
+a **model**, duplicate `models/_sample.md`. Invalid files are skipped with a
+warning — a typo never breaks the load. `pha palaeographer` lists the
+configured palaeographers.
 
-- `vision.palaeographer` in `config.yaml` selects the active one; `pha scan
-  --palaeographer ID` overrides it for one run; the MCP `pha_scan_now` uses
-  the configured default.
+- `vision.palaeographer` / `vision.model` in `config.yaml` select the active
+  rules + model; `pha scan --palaeographer ID` overrides the rules for one run;
+  the MCP `pha_scan_now` uses the configured defaults.
 - **Per-document / per-collection selection**: a **`pha.yaml` sidecar** next to
   the document or at a collection root (nearest-wins per key up the directory
-  chain) selects the rules and optionally overrides the model:
+  chain) pairs the rules with the model:
 
   ```yaml
   # dropbox/collections/COLX/pha.yaml
   palaeographer:
     rules: portuguese-secretary
-    model: minimax-m3       # optional: swap the vision model per collection
+    model: minimax-m3       # required — which model these rules run on
   ```
 
   The legacy plain-text `palaeographer` file (`.txt`/`.md` variants, one id)
@@ -448,14 +447,13 @@ spelling, translate, normalize names, … The faithful transcription is never
 destroyed — the edited version is a derivative.
 
 Each editor is **one file** in the `editors/` directory (same convention as
-palaeographers: content-only rules + `model:` reference). To add one,
-duplicate `editors/_sample.md`, rename, edit, save:
+palaeographers: content-only rules, no model). To add one, duplicate
+`editors/_sample.md`, rename, edit, save:
 
 ```markdown
 # editors/modern-portuguese.md   (content rules)
 ---
 description: Convert to modern Portuguese orthography, expand abbreviations
-model: amalia-text              # references models/amalia-text.md
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
@@ -472,7 +470,7 @@ nearest-wins chain as palaeographers):
 # dropbox/collections/letters-from-missons/pha.yaml
 editor:
   rules: modern-portuguese
-  # model: ...   # optional text-model override
+  model: amalia-text       # required — which model these rules run on
 ```
 
 The legacy `editor` file (one id) still works as a fallback.
@@ -511,9 +509,10 @@ pages (a letter header on one page, its body on the next) is seen whole:
 
 Encoders live **next to their sources** so they travel with the documents:
 one file per *structure type* in the document's `encoders/` folder (content
-rules + `model:` reference in the front matter/body; add `batch_pages`,
-`extraction_passes`, and `pages` — the page range this encoder handles — in
-the front matter; `context_tokens` now lives on the model):
+rules only; add `batch_pages`, `extraction_passes`, and `pages` — the page
+range this encoder handles — in the front matter; `context_tokens` lives on
+the model). Each encoder's model is paired in the collection's `pha.yaml`
+`encoders:` list:
 
 ```
 dropbox/collections/pfister-notices/encoders/

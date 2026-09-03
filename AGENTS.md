@@ -40,13 +40,13 @@
 - **Three config layers.** (1) `models/<id>.md` — pure model interface
   (endpoint, api key, server model name, `api_style`, `max_vision_px`,
   `vision_jpeg_quality`, `context_tokens`); (2) `palaeographers/`, `editors/`,
-  `encoders/<id>.md` — CONTENT ONLY (prompt/rules + `model: <id>` +
-  `temperature`/`max_tokens` + encoder params); (3) `pha.yaml` sidecars that
-  select which rules + model each document/collection uses (per-stage `rules`
-  + `model` overrides, per-collection `render` settings). To add one:
-  duplicate `_sample.md`, rename, edit, save. The file stem is the id. Legacy
-  files that still inline their interface keep working (treated as an inline
-  model); run `pha migrate-config` to split them.
+  `encoders/<id>.md` — CONTENT ONLY (prompt/rules + `temperature`/`max_tokens`
+  + encoder params; they carry NO model); (3) `pha.yaml` sidecars that pair
+  each stage's `rules` with its `model` (BOTH required per stage), plus
+  per-collection `render` settings. To add one: duplicate `_sample.md`,
+  rename, edit, save. The file stem is the id. Legacy files that still inline
+  their interface keep working (treated as an inline model); run
+  `pha migrate-config` to split them.
 - **Staleness by mtime**: editing a palaeographer / editor / encoder / prompt
   file triggers re-extraction / re-editing / re-encoding of affected documents
   on the next scan/run. A document also re-extracts when the resolved
@@ -156,13 +156,20 @@ came from (a dropbox `editor` file, a config default, or nowhere).
 ### Setting the palaeographer / editor / encoders for a collection
 
 - A collection selects its models with a **`pha.yaml` sidecar** next to the
-  documents (nearest-wins per key up the directory chain), e.g.:
+  documents (nearest-wins per key up the directory chain). Each stage pairs
+  `rules` with its `model` — **both required** — e.g.:
   ```yaml
   palaeographer:
     rules: jesuit-cat1
-    model: minimax-m3        # optional per-stage model override
-  editor: null
-  encoders: [table, biographies]
+    model: minimax-m3
+  editor:                     # or `editor: null` for no editor
+    rules: modernise
+    model: minimax-m2-5
+  encoders:
+    - rules: table
+      model: minimax-m2-5
+    - rules: biographies
+      model: minimax-m2-5
   render: {max_image_px: 3000, jpeg_quality: 88}
   ```
   The legacy plain-text selection files (`palaeographer`, `editor`) still work

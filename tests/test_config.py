@@ -144,10 +144,16 @@ def test_config_seeds_zero_config_defaults(tmp_path):
     assert list(cfg.palaeographers) == ["default"]
     assert list(cfg.editors) == ["default"]
     assert list(cfg.encoders) == ["default"]
-    # all point at the same local qwen model (zero config)
-    assert cfg.palaeographers["default"].model == "qwen/qwen3-vl-8b"
-    assert cfg.editors["default"].model == "qwen/qwen3-vl-8b"
-    assert cfg.encoders["default"].model == "qwen/qwen3-vl-8b"
+    # rules-only stage files (no model at load time); the model is in models/
+    assert cfg.default_model == "default"
+    assert cfg.models["default"].model == "qwen/qwen3-vl-8b"
+    assert cfg.palaeographers["default"].model == ""
+    assert cfg.editors["default"].model == ""
+    assert cfg.encoders["default"].model == ""
+    # resolving binds the default model
+    pal = cfg.resolve_model(cfg.palaeographers["default"])
+    assert pal.model == "qwen/qwen3-vl-8b"
+    assert pal.model_ref == "default"
     # the files exist in the archive
     arc = (tmp_path / "arc").resolve()
     assert (arc / "palaeographers" / "default.md").exists()

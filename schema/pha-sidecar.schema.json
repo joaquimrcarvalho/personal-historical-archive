@@ -8,53 +8,41 @@
   "properties": {
     "palaeographer": {
       "title": "Palaeographer stage (vision transcription)",
-      "description": "Which transcription rules and (optionally) vision model to use.",
-      "oneOf": [
-        {
+      "description": "Which transcription rules and vision model to use.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rules", "model"],
+      "properties": {
+        "rules": {
           "type": "string",
-          "description": "Palaeographer rules id (shorthand for {rules: ...})."
+          "description": "Palaeographer rules id (palaeographers/<id>.md)."
         },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["rules"],
-          "properties": {
-            "rules": {
-              "type": "string",
-              "description": "Palaeographer rules id (palaeographers/<id>.md)."
-            },
-            "model": {
-              "type": ["string", "null"],
-              "description": "Optional vision-model override (models/<id>.md). null = use the palaeographer's default model."
-            }
-          }
+        "model": {
+          "type": "string",
+          "description": "Vision model id (models/<id>.md)."
         }
-      ]
+      }
     },
     "editor": {
       "title": "Editor stage (text transform)",
-      "description": "Which editing rules and (optionally) text model to use. null = no editor.",
+      "description": "Which editing rules and text model to use. null = no editor.",
       "oneOf": [
         {
           "type": "null",
-          "description": "No editor (null/passthrough editor)."
-        },
-        {
-          "type": "string",
-          "description": "Editor rules id (shorthand for {rules: ...})."
+          "description": "No editor."
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["rules"],
+          "required": ["rules", "model"],
           "properties": {
             "rules": {
               "type": "string",
               "description": "Editor rules id (editors/<id>.md)."
             },
             "model": {
-              "type": ["string", "null"],
-              "description": "Optional text-model override (models/<id>.md). null = use the editor's default model."
+              "type": "string",
+              "description": "Text model id (models/<id>.md)."
             }
           }
         }
@@ -65,27 +53,19 @@
       "description": "Encoders to run, in page order. Omit to auto-discover the collection's encoders/ directory.",
       "type": "array",
       "items": {
-        "oneOf": [
-          {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rules", "model"],
+        "properties": {
+          "rules": {
             "type": "string",
-            "description": "Encoder name (shorthand for {rules: ...})."
+            "description": "Encoder name (encoders/<name>.md)."
           },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["rules"],
-            "properties": {
-              "rules": {
-                "type": "string",
-                "description": "Encoder name (encoders/<name>.md)."
-              },
-              "model": {
-                "type": ["string", "null"],
-                "description": "Optional model override (models/<id>.md). null = use the encoder's default model."
-              }
-            }
+          "model": {
+            "type": "string",
+            "description": "Model id (models/<id>.md)."
           }
-        ]
+        }
       }
     },
     "render": {

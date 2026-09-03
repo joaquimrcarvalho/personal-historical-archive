@@ -35,24 +35,27 @@ def test_migrate_splits_interface_and_writes_sidecar(tmp_path):
     assert "default.md" in model_files  # seeded on load
     assert any(name.startswith("minimax-m3") for name in model_files)
 
-    # stage file rewritten content-only
+    # stage file rewritten content-only (no model — that moved to pha.yaml)
     stage = (arch / "palaeographers" / "cat1.md").read_text()
-    assert "model: minimax-m3" in stage
+    assert "model:" not in stage
     assert "base_url" not in stage
 
-    # sidecar written, selection files removed
+    # sidecar written with the model, selection files removed
     sidecar = (coll / "pha.yaml").read_text()
     assert "palaeographer:" in sidecar
-    assert "cat1" in sidecar
+    assert "rules: cat1" in sidecar
+    assert "model: minimax-m3" in sidecar
     assert not (coll / "palaeographer").exists()
     assert not (coll / "editor").exists()
 
-    # reload resolves the registry model
+    # reload: stage is rules-only; the model is bound at document resolution
     cfg2 = Config.load(root)
     p = cfg2.get_palaeographer("cat1")
-    assert p.model_ref.startswith("minimax-m3")
-    assert p.model == "MiniMax-M3"
-    assert p.max_vision_px == 3000
+    assert p.model == ""          # no model until bound
+    assert p.model_ref == ""
+    p2 = cfg2.resolve_model(p, "minimax-m3")
+    assert p2.model == "MiniMax-M3"
+    assert p2.max_vision_px == 3000
 
 
 def test_migrate_is_idempotent(tmp_path):

@@ -32,16 +32,16 @@ paths:
   # engine-level (PROJECT-relative, not archive-relative):
   prompts: prompts        # default + per-file prompt files
 
-# Palaeographers live as one file per model in the 'palaeographers/' directory.
-# To add one: duplicate palaeographers/_sample.md, rename, edit, save.
-# The file name (without extension) is the palaeographer id; the YAML front
-# matter holds the endpoint/model settings, the body is the base prompt that
-# is prepended BEFORE the document/collection sidecar prompt.
-# Select per document/collection with a 'palaeographer' file next to it.
+# Palaeographers (and editors/encoders) are CONTENT ONLY — one file per rules
+# set in palaeographers/editors/encoders/ (file name = id, body = the rules).
+# The model is chosen per document/collection in a pha.yaml sidecar
+# (palaeographer: {rules: <id>, model: <id>}); `model:` here is the fallback
+# used when no sidecar/selection file resolves one.
 
 vision:
-  palaeographer: default            # which palaeographer transcribes documents;
-                                    # 'default' is seeded into archive_dir/palaeographers/
+  palaeographer: default            # which palaeographer rules transcribe documents
+  model: default                    # which model those rules use by default
+                                    # (both are seeded into archive_dir on first run)
 
 # Editors live as one file per model in the 'editors/' directory (same
 # convention: duplicate editors/_sample.md, rename, edit, save). Each editor

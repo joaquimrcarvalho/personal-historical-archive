@@ -97,6 +97,10 @@ def migrate(conn: sqlite3.Connection) -> None:
         statements.append("ALTER TABLE documents ADD COLUMN editor TEXT")
     if "encoder" not in cols:
         statements.append("ALTER TABLE documents ADD COLUMN encoder TEXT")
+    if "palaeographer_model" not in cols:
+        statements.append("ALTER TABLE documents ADD COLUMN palaeographer_model TEXT")
+    if "editor_model" not in cols:
+        statements.append("ALTER TABLE documents ADD COLUMN editor_model TEXT")
     if statements:
         import time
 
@@ -170,12 +174,15 @@ def add_document(
     dir_path: str = "",
     palaeographer: str | None = None,
     editor: str | None = None,
+    palaeographer_model: str | None = None,
+    editor_model: str | None = None,
 ) -> int:
     cur = _write(
         conn,
-        """INSERT INTO documents (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, editor, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, editor, now, now),
+        """INSERT INTO documents (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, editor, palaeographer_model, editor_model, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, editor,
+         palaeographer_model, editor_model, now, now),
     )
     return int(cur.lastrowid)
 

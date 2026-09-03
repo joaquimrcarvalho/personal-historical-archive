@@ -338,9 +338,10 @@ class Config:
     encoders_dir: Path
     models_dir: Path
     db_path: Path
-    # model interface registry (models/<id>.md) — palaeographers/editors/encoders
-    # reference these by id; interface fields are resolved onto the stage objects.
+    # model interface registry (models/<id>.md); stage rules files carry no
+    # model — the model is chosen per document in pha.yaml (or this default).
     models: dict[str, Model]
+    default_model: str
     # palaeographers (vision models)
     palaeographers: dict[str, Palaeographer]
     active_palaeographer: str
@@ -461,6 +462,7 @@ class Config:
             models_dir=models_dir,
             db_path=_p(archive_dir, paths.get("db", "archive.db")),
             models=models,
+            default_model=str(vis.get("model", "default")).strip() or "default",
             palaeographers=palaeographers,
             active_palaeographer=active,
             editors=editors,
@@ -528,6 +530,16 @@ class Config:
             common["max_vision_px"] = m.max_vision_px
             common["vision_jpeg_quality"] = m.vision_jpeg_quality
         return dataclasses.replace(stage, **common)
+
+    def resolve_model(self, stage, model_id: str | None = None):
+        """Bind a model to a stage: `model_id` when given (from pha.yaml),
+        else the stage's own legacy inline interface, else the global
+        default_model."""
+        if model_id:
+            return self.with_model(stage, model_id)
+        if not getattr(stage, "base_url", ""):
+            return self.with_model(stage, self.default_model)
+        return stage
 
     def encoder_from_file(self, path: Path) -> Encoder | None:
         """Load a single encoder definition file (collection-local:
@@ -745,9 +757,10 @@ def _model_from_frontmatter(model_id: str, text: str, file: Path) -> Model | Non
 def _resolve_model(fm: dict, models: dict) -> tuple[Model, str]:
     """Resolve a stage file's model interface.
 
-    New content-only stage files declare `model: <id>` referencing models/.
-    Legacy files inline their interface (`base_url`/`api_key`/`api_style`/...)
-    and are synthesised into an anonymous Model (model_ref = "").
+    New rules files carry NO model — the model is chosen in pha.yaml at
+    document time. Legacy files inline their interface
+    (`base_url`/`api_key`/`api_style`/...) and are synthesised into an
+    anonymous Model (model_ref = "").
     """
     if "base_url" in fm or "api_key" in fm or "api_style" in fm:
         # legacy inline interface (pre-registry)
@@ -764,13 +777,9 @@ def _resolve_model(fm: dict, models: dict) -> tuple[Model, str]:
             context_tokens=int(fm.get("context_tokens", 200_000)),
         )
         return m, ""
-    model_ref = str(fm.get("model", "") or "").strip()
-    if model_ref and model_ref in models:
-        return models[model_ref], model_ref
-    if "default" in models:
-        return models["default"], "default"
-    # no registry model and no inline interface: blank inline model
-    return Model(id=""), ""
+    # new rules-only file: no model here (chosen per document in pha.yaml);
+    # empty base_url marks it as unbound so resolve_model() fills the default.
+    return Model(id="", base_url=""), ""
 
 
 def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path, models: dict | None = None) -> Palaeographer | None:
@@ -941,7 +950,6 @@ context_tokens: 32768
 
 _DEFAULT_PAL = """---
 description: default palaeographer — generic transcription (qwen3-vl-8b local)
-model: default
 temperature: 0.1
 max_tokens: 4096
 timeout_s: 900
@@ -964,7 +972,6 @@ Do not add any comments other than those above.
 
 _DEFAULT_ED = """---
 description: default editor — expand abbreviations, extract named entities + notes (qwen3-vl-8b local)
-model: default
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
@@ -1003,7 +1010,6 @@ preamble or commentary.
 
 _DEFAULT_ENC = """---
 description: default encoder — JSON dump of document metadata + named entities + notes (qwen3-vl-8b local)
-model: default
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
@@ -1040,8 +1046,8 @@ _MODEL_SAMPLE = """---
 #   2. Edit the settings below: endpoint (base_url), server model name, api
 #      key, wire format (api_style), and the limits (max_vision_px,
 #      vision_jpeg_quality, context_tokens).
-#   3. Reference it from a palaeographer/editor/encoder file with `model: <id>`,
-#      or override it per document/collection in pha.yaml.
+#   3. Reference it from a pha.yaml sidecar, e.g.
+#      `palaeographer: {rules: <id>, model: <id>}`.
 #   4. Save — the model is ready.
 # Fields (all optional except base_url/model):
 #   base_url: the API root (LM Studio/Ollama/vLLM/OpenAI/MiniMax/...).
@@ -1070,10 +1076,9 @@ _PAL_SAMPLE = """---
 # HOW TO CREATE A NEW PALAEOGRAPHER (transcription rules)
 #   1. Duplicate this file and give it a new name (the file name, without the
 #      extension, becomes the palaeographer's id, e.g. "my-hand.md").
-#   2. Set `model:` to the model interface to use (models/<id>.md).
+#   2. This file is CONTENT ONLY — the model is chosen in pha.yaml.
 #   3. Replace this body with the instructions the vision model should follow
-#      when transcribing (your palaeographic expertise). This file is CONTENT
-#      ONLY — endpoint/api key/resolution live in the model file.
+#      when transcribing (your palaeographic expertise).
 #   4. Save — the palaeographer is ready. Select it per document/collection in
 #      pha.yaml (palaeographer.rules) or a 'palaeographer' file.
 # Optional front matter:
@@ -1082,7 +1087,6 @@ _PAL_SAMPLE = """---
 #   timeout_s: HTTP timeout in seconds (default 900 for vision).
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example palaeographer — edit me
-model: default
 temperature: 0.1
 max_tokens: 4096
 timeout_s: 900
@@ -1101,9 +1105,9 @@ _ED_SAMPLE = """---
 # HOW TO CREATE A NEW EDITOR (transform rules)
 #   1. Duplicate this file and give it a new name (the file name, without the
 #      extension, becomes the editor's id, e.g. "translate-english.md").
-#   2. Set `model:` to the text model to use (models/<id>.md).
+#   2. This file is CONTENT ONLY — the model is chosen in pha.yaml.
 #   3. Replace this body with your editing instructions (e.g. convert to
-#      modern Portuguese, translate to English, normalize names). CONTENT ONLY.
+#      modern Portuguese, translate to English, normalize names).
 #   4. Save — the editor is ready. Select it per document/collection in
 #      pha.yaml (editor.rules) or an 'editor' file.
 # Optional front matter:
@@ -1112,7 +1116,6 @@ _ED_SAMPLE = """---
 #   timeout_s: HTTP timeout in seconds (default 300 for text).
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example editor — edit me
-model: default
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300
@@ -1130,7 +1133,7 @@ _ENC_SAMPLE = """---
 #      and add one file per STRUCTURE TYPE in the document (e.g. table.md for
 #      the chronological table, biographies.md for the person notices). The
 #      encoder files travel with the source PDFs.
-#   2. Set `model:` to the text model to use (models/<id>.md).
+#   2. This file is CONTENT ONLY — the model is chosen in pha.yaml.
 #   3. `pages: "1-15"` limits this encoder to those PDF page numbers (the
 #      number in the PDF, NOT the number printed on the page — e.g. Pfister's
 #      chronological table is printed as i–xv but occupies PDF pages 1-15).
@@ -1160,7 +1163,6 @@ _ENC_SAMPLE = """---
 #   batch_pages / overlap_pages / extraction_passes: chunking + recall knobs.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example encoder — edit me
-model: default
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300

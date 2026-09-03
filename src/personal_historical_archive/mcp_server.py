@@ -300,7 +300,7 @@ def make_server(cfg: Config) -> FastMCP:
         from pathlib import Path
         p = (cfg.dropbox / document_relpath).resolve()
         sel_path = p if p.is_dir() else p.parent
-        sc = resolve_sidecar(cfg.dropbox, sel_path)
+        sc = resolve_sidecar(cfg.dropbox, sel_path, stem=(p.stem if not p.is_dir() else None))
         pal_override = None
         if sc.palaeographer:
             pal_id, pal_src = sc.palaeographer.rules, f"{sc.source} (pha.yaml)"
@@ -316,22 +316,21 @@ def make_server(cfg: Config) -> FastMCP:
             ed_id, ed_src = resolve_editor_id(p.stem, sel_path, cfg.dropbox)
         prompt_txt, prompt_src = resolve_prompt(p.stem, sel_path, cfg.dropbox, cfg.prompts)
         pal = cfg.get_palaeographer(pal_id) if pal_id else cfg.get_palaeographer()
-        if pal_override:
-            try:
-                pal = cfg.with_model(pal, pal_override)
-            except KeyError:
-                pass
+        try:
+            pal = cfg.resolve_model(pal, pal_override)
+        except KeyError:
+            pass
         ed = cfg.editors.get(ed_id) if ed_id else None
-        if ed and ed_override:
+        if ed:
             try:
-                ed = cfg.with_model(ed, ed_override)
+                ed = cfg.resolve_model(ed, ed_override)
             except KeyError:
                 pass
         return {
             "document": document_relpath,
-            "palaeographer": {"id": pal.id, "model": pal.model, "source": pal_src},
-            "editor": {"id": ed.id, "model": ed.model, "source": ed_src} if ed else
-                      {"id": None, "model": None, "source": ed_src},
+            "palaeographer": {"id": pal.id, "model": pal.model, "model_ref": pal.model_ref, "source": pal_src},
+            "editor": {"id": ed.id, "model": ed.model, "model_ref": ed.model_ref, "source": ed_src} if ed else
+                      {"id": None, "model": None, "model_ref": None, "source": ed_src},
             "prompt_source": prompt_src,
             "prompt": (prompt_txt or ""),
         }
