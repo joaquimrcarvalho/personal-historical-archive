@@ -642,9 +642,10 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
     if not doc:
         return None
     pal = doc["palaeographer"] or "default"
+    pal_model = doc["palaeographer_model"] or None
     slug = _doc_slug(doc)
     rel_dir = Path(doc["dir_path"] or "")
-    out_dir = cfg.library / rel_dir / slug / f"transcription-{pal}"
+    out_dir = cfg.library / rel_dir / slug / (f"transcription-{pal}" + (f"@{pal_model}" if pal_model else ""))
     out_dir.mkdir(parents=True, exist_ok=True)
     base = {
         "source": doc["path"],
@@ -716,9 +717,10 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
     doc = db.get_document(conn, doc_id)
     if not doc:
         return None
+    ed_model = doc["editor_model"] or None
     slug = _doc_slug(doc)
     rel_dir = Path(doc["dir_path"] or "")
-    out_dir = cfg.library / rel_dir / slug / f"edited-{editor_id}"
+    out_dir = cfg.library / rel_dir / slug / (f"edited-{editor_id}" + (f"@{ed_model}" if ed_model else ""))
     out_dir.mkdir(parents=True, exist_ok=True)
     base = {
         "source": doc["path"],
@@ -813,7 +815,7 @@ def pending_review_files(cfg: Config, conn) -> list[dict]:
                 pending.append({"path": str(p), "document_id": int(d_id),
                                 "page_no": int(page_no), "variant": variant})
         else:
-            editor = variant[len("edited-"):]
+            editor = variant[len("edited-"):].split("@", 1)[0]
             edit = db.get_page_edit(conn, page["id"], editor)
             if edit is not None and edit["exported_at"] is not None:
                 edited = mtime > edit["exported_at"]
@@ -898,7 +900,7 @@ def review_import(cfg: Config, conn, doc_id: int | None = None, verbose: bool = 
             if verbose:
                 print(f"  reviewed transcription: doc {d_id} page {page_no} ({p.name})")
         elif variant.startswith("edited-"):
-            editor = variant[len("edited-"):]
+            editor = variant[len("edited-"):].split("@", 1)[0]
             db.set_page_edit(conn, page["id"], editor, text=body,
                              raw_sha=_raw_sha(page_row_raw(conn, page["id"])))
             db.mark_edit_reviewed(conn, page["id"], editor, body)
