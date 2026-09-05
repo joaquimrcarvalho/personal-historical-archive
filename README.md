@@ -543,7 +543,11 @@ editor:
 The legacy `editor` file (one id) still works as a fallback.
 
 - `pha edit` runs the editor pass over every document that has an editor and
-  re-indexes; `pha editor [file]` shows resolution.
+  re-indexes; `pha edit --path collections/COLX` re-edits just one collection
+  (or document folder). A document re-edits when its editor rules file
+  (`editors/<id>.md`), its editor MODEL file (`models/<id>.md`), or the paired
+  editor model id changed since the last edit. `pha editor [file]` shows
+  resolution.
 - **The null editor**: the special editor id `null` (or `passthrough`) keeps
   the transcription verbatim — `pha edit` copies each page's text as the
   "edited" version without a model call. Select it with an `editor` file
@@ -643,7 +647,7 @@ pha status
 pha export
 pha reindex
 pha review [--doc N]      # import human corrections from library .md files into the DB
-pha edit [--reprocess]
+pha edit [--reprocess] [--path collections/COLX]
 pha rm ID|NAME
 pha prompts [file]
 pha palaeographer [file]

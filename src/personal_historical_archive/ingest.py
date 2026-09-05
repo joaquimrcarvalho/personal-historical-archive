@@ -763,7 +763,13 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
 
 # --------------------------------------------------------------------------- editors
 
-def _edit_needed(page, edit_row, editor: Editor, reprocess: bool) -> bool:
+def _edit_needed(
+    page,
+    edit_row,
+    editor: Editor,
+    reprocess: bool,
+    model_files: tuple = (),
+) -> bool:
     """Does this page need (re-)editing?"""
     if edit_row is not None and edit_row["reviewed_at"]:
         return False  # a human corrected this edit; never re-edit over it
@@ -777,6 +783,12 @@ def _edit_needed(page, edit_row, editor: Editor, reprocess: bool) -> bool:
         try:
             if editor.prompt_file.stat().st_mtime > (edit_row["updated_at"] or 0):
                 return True  # the editor's prompt changed
+        except OSError:
+            pass
+    for mf in model_files:
+        try:
+            if mf.stat().st_mtime > (edit_row["updated_at"] or 0):
+                return True  # the editor's MODEL file changed (models/<id>.md)
         except OSError:
             pass
     return False
@@ -1050,6 +1062,19 @@ def edit_document(
         return _edit_null(cfg, conn, doc_id, resolved, reprocess, verbose)
     editor = cfg.get_editor(resolved)
     editor = cfg.resolve_model(editor, editor_model)
+    # Staleness inputs: (a) the editor's MODEL interface file (models/<id>.md)
+    # — editing it (e.g. switching the server model) re-edits, exactly like the
+    # rules prompt file; (b) a CHANGE OF MODEL ID since the last run forces a
+    # full re-edit (the old text was produced by a different model).
+    model_files: list = []
+    if editor.model_ref and editor.model_ref in cfg.models:
+        mf = cfg.models[editor.model_ref].prompt_file
+        if mf is not None:
+            model_files.append(mf)
+    model_identity_changed = (
+        bool(editor.model_ref) and (doc["editor_model"] or None) != editor.model_ref
+    )
+    force = reprocess or model_identity_changed
     pages = db.get_pages(conn, doc_id)
     client = ModelClient(editor.base_url, timeout_s=editor.timeout_s, api_key=editor.api_key,
                          api_style=editor.api_style)
@@ -1060,7 +1085,7 @@ def edit_document(
             if not raw:
                 continue
             edit_row = db.get_page_edit(conn, p["id"], resolved)
-            if not _edit_needed(p, edit_row, editor, reprocess):
+            if not _edit_needed(p, edit_row, editor, force, model_files=tuple(model_files)):
                 continue
             if verbose:
                 print(f"  editing page {p['page_no']}/{doc['page_count']} ...", flush=True)
@@ -1104,6 +1129,49 @@ def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> dict
         results = []
         for d in db.list_documents(conn, limit=10000):
             results.append(edit_document(cfg, conn, d["id"], reprocess=reprocess, verbose=verbose))
+        return {"results": results}
+    finally:
+        conn.close()
+        _release_scan_lock(cfg)
+
+
+def edit_documents_under(
+    cfg: Config, path: str, reprocess: bool = False, verbose: bool = True
+) -> dict:
+    """Run the editor pass for JUST the documents under a dropbox subpath
+    (`pha edit --path collections/COLX`, a document folder, ...).
+
+    Shares the scan lock with scan_once/edit_all (one job at a time). Only
+    ALREADY-INGESTED documents are edited; a document whose transcription is
+    missing is skipped (run `pha scan --path` for it first)."""
+    root = Path(path)
+    if not root.is_absolute():
+        root = cfg.dropbox / root
+    root = root.resolve()
+    if root != cfg.dropbox.resolve() and cfg.dropbox.resolve() not in root.parents:
+        if not root.exists():
+            print(f"  target path does not exist: {path}", flush=True)
+            return {"results": []}
+    if not _acquire_scan_lock(cfg):
+        return {"results": [{"action": "skipped", "filename": "(edit)",
+                             "reason": "another scan/edit job is running (one local model at a time)"}]}
+    cfg.ensure_dirs()
+    conn = db.connect(cfg.db_path)
+    try:
+        results = []
+        seen: set[int] = set()
+        for f in discover(cfg.dropbox, cfg.dir_documents, root=root):
+            doc = db.get_document_by_path(conn, str(f))
+            if doc is None or doc["id"] in seen:
+                continue
+            if doc["status"] != "done":
+                if verbose:
+                    print(f"  skipping {doc['filename']}: not extracted yet "
+                          f"(status={doc['status']})", flush=True)
+                continue
+            seen.add(doc["id"])
+            results.append(edit_document(cfg, conn, doc["id"], reprocess=reprocess,
+                                         verbose=verbose))
         return {"results": results}
     finally:
         conn.close()

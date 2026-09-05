@@ -552,7 +552,12 @@ def cmd_editor(cfg: Config, args) -> None:
 
 
 def cmd_edit(cfg: Config, args) -> None:
-    res = edit_all(cfg, reprocess=args.reprocess, verbose=True)
+    from .ingest import edit_documents_under
+
+    if getattr(args, "path", None):
+        res = edit_documents_under(cfg, args.path, reprocess=args.reprocess, verbose=True)
+    else:
+        res = edit_all(cfg, reprocess=args.reprocess, verbose=True)
     edited = sum(1 for r in res["results"] if r["action"] == "edited")
     print(f"edited {edited} document(s)")
     for r in res["results"]:
@@ -1054,8 +1059,11 @@ def main(argv: list[str] | None = None) -> None:
     ed.add_argument("file", nargs="?")
     ed.set_defaults(fn=cmd_editor)
 
-    e2 = sub.add_parser("edit", help="run the editor pass over all documents with an editor")
-    e2.add_argument("--reprocess", action="store_true", help="re-edit everything")
+    e2 = sub.add_parser("edit", help="run the editor pass (all documents, or only a subpath)")
+    e2.add_argument("--path", "--collection", default=None,
+                    help="only edit documents under this subpath of the dropbox "
+                         "(e.g. collections/COLX); default: every document")
+    e2.add_argument("--reprocess", action="store_true", help="re-edit everything matched")
     e2.set_defaults(fn=cmd_edit)
 
     en = sub.add_parser("encoder", help="show encoder resolution for a file, or create one")

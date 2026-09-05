@@ -496,3 +496,32 @@ def test_scan_lock_pidless_fresh_is_held_but_old_is_stale(tmp_path):
     os.utime(lock, (old, old))
     assert ing._acquire_scan_lock(cfg) is True
     assert lock.read_text().strip() == str(os.getpid())
+
+
+def test_edit_needed_model_file_staleness(tmp_path):
+    """Editing the editor's MODEL file (models/<id>.md) re-triggers editing."""
+    import time as _t
+
+    from personal_historical_archive.ingest import _edit_needed, _raw_sha
+
+    page = {"raw_text": "raw text"}
+    editor = SimpleNamespace(prompt_file=None)
+    model_file = tmp_path / "model.md"
+    model_file.write_text("interface")
+    now = _t.time()
+
+    # last edit is OLDER than the model file -> re-edit
+    row = {"reviewed_at": None, "status": "done", "text": "e",
+           "updated_at": now - 100, "raw_sha": _raw_sha("raw text")}
+    assert _edit_needed(page, row, editor, reprocess=False,
+                        model_files=(model_file,)) is True
+    # last edit is NEWER than the model file -> no re-edit
+    os.utime(model_file, (now - 500, now - 500))
+    row2 = {"reviewed_at": None, "status": "done", "text": "e",
+            "updated_at": now, "raw_sha": _raw_sha("raw text")}
+    assert _edit_needed(page, row2, editor, reprocess=False,
+                        model_files=(model_file,)) is False
+    # reviewed edits are never re-run, even with a newer model file
+    row3 = dict(row, reviewed_at=now)
+    assert _edit_needed(page, row3, editor, reprocess=True,
+                        model_files=(model_file,)) is False

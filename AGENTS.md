@@ -50,7 +50,11 @@
 - **Staleness by mtime**: editing a palaeographer / editor / encoder / prompt
   file triggers re-extraction / re-editing / re-encoding of affected documents
   on the next scan/run. A document also re-extracts when the resolved
-  palaeographer differs from the one recorded on it.
+  palaeographer differs from the one recorded on it. A document RE-EDITS when
+  the editor's rules file (`editors/<id>.md`) OR its model interface file
+  (`models/<id>.md`) changed, or when the paired editor MODEL id differs from
+  the one recorded — re-run `pha edit` (all documents) or `pha edit --path
+  collections/COLX` (just one collection/document) to pick the change up.
 - **Prompt layering**: the palaeographer base prompt is the format authority
   and goes first; document/collection prompts add aspects only
   (e.g. modernizing spelling) and cannot change the output structure. The
