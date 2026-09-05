@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -10,6 +11,106 @@ import httpx
 
 class ModelError(RuntimeError):
     pass
+
+
+def run_tesseract(image_path: str | Path, lang: str = "", psm: int | None = None) -> str:
+    """Run Tesseract OCR on a page image and return its recognized text.
+
+    Tesseract is a LOCAL OCR executable, not an LLM/HTTP model — it reads the
+    rendered page image and prints its best guess of the text. Used when a
+    palaeographer declares ``engine: tesseract`` (replacing ``chat_vision``).
+
+    - ``lang`` is the ``-l`` value (one language or several joined with ``+``),
+      e.g. ``"por"``, ``"lat"``, ``"por+lat"``. Empty means Tesseract's own
+      default (usually ``eng``). The language data must be installed (on mac:
+      ``brew install tesseract tesseract-lang``).
+    - ``psm`` is the ``--psm`` page-segmentation mode (e.g. ``6`` for a single
+      uniform block). ``None`` lets Tesseract choose.
+
+    Raises ``ModelError`` if Tesseract is not installed or fails.
+    """
+    cmd = ["tesseract", str(image_path), "stdout"]
+    if lang:
+        cmd += ["-l", lang]
+    if psm is not None:
+        cmd += ["--psm", str(psm)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except FileNotFoundError as e:
+        raise ModelError(
+            "tesseract is not installed or not on PATH. "
+            "Install it (e.g. `brew install tesseract tesseract-lang`) so the "
+            f"palaeographer's `engine: tesseract` can run. ({e})"
+        ) from e
+    except subprocess.TimeoutExpired as e:
+        raise ModelError(f"tesseract timed out on {image_path}") from e
+    if proc.returncode != 0:
+        raise ModelError(
+            f"tesseract failed on {image_path}: "
+            f"{proc.stderr.strip() or proc.stdout.strip()}"
+        )
+    return proc.stdout.strip()
+
+
+def run_liteparse(image_path: str | Path, lang: str = "", dpi: int | None = None) -> str:
+    """Run LiteParse (`lit parse`) on a page image and return its text.
+
+    LiteParse is a LOCAL document/OCR parser (install ``pip install liteparse``
+    or ``npm i -g @llamaindex/liteparse``) — no cloud dependency or LLM. It
+    OCRs/parses the rendered page image and prints layout-preserved plain text
+    (the ``--format text`` default), which becomes the page transcript. Used
+    when a palaeographer declares ``engine: liteparse``.
+
+    - ``lang`` is the ``--ocr-language`` value (Tesseract format: ``"por"``,
+      ``"fra"``, ...; ``""`` lets LiteParse use its default ``eng``).
+    - ``dpi`` sets ``--dpi`` render resolution (default 150; 300 for quality).
+
+    Raises ``ModelError`` if ``lit`` is not installed or fails.
+    """
+    cmd = ["lit", "parse", str(image_path)]
+    if lang:
+        cmd += ["--ocr-language", lang]
+    if dpi:
+        cmd += ["--dpi", str(dpi)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except FileNotFoundError as e:
+        raise ModelError(
+            "lit (LiteParse) is not installed or not on PATH. Install it "
+            "(`pip install liteparse` or `npm i -g @llamaindex/liteparse`) so "
+            f"the palaeographer's `engine: liteparse` can run. ({e})"
+        ) from e
+    except subprocess.TimeoutExpired as e:
+        raise ModelError(f"liteparse timed out on {image_path}") from e
+    if proc.returncode != 0:
+        raise ModelError(
+            f"liteparse failed on {image_path}: "
+            f"{proc.stderr.strip() or proc.stdout.strip()}"
+        )
+    return proc.stdout.strip()
+
+
+def _tesseract_page_engine(palaeographer, image_path, _ctx) -> str:
+    """Produce a page transcript with the local Tesseract OCR executable."""
+    return run_tesseract(image_path, palaeographer.tesseract_lang, palaeographer.tesseract_psm)
+
+
+def _liteparse_page_engine(palaeographer, image_path, _ctx) -> str:
+    """Produce a page transcript with the local LiteParse parser (lit CLI)."""
+    return run_liteparse(image_path, palaeographer.liteparse_lang, palaeographer.liteparse_dpi)
+
+
+# Registry of non-LLM page engines: name -> (palaeographer, image_path, ctx) -> str.
+# An "engine" produces ONE page's transcript locally (OCR/parsing), replacing the
+# LLM `chat_vision` call. To support another local tool, add a `run_*` helper
+# here plus an engine entry (and per-engine settings on the Model/Palaeographer
+# in config.py). The engine selector is `palaeographer.engine`; the default
+# (""/"llm") is handled by the caller via ModelClient.chat_vision and is NOT in
+# this dict.
+PAGE_ENGINES: dict[str, Any] = {
+    "tesseract": _tesseract_page_engine,
+    "liteparse": _liteparse_page_engine,
+}
 
 
 _MIME = {

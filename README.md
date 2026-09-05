@@ -388,6 +388,34 @@ a **model**, duplicate `models/_sample.md`. Invalid files are skipped with a
 warning — a typo never breaks the load. `pha palaeographer` lists the
 configured palaeographers.
 
+> **A palaeographer doesn't have to be an LLM — local OCR/parse engines.** A
+> model interface with an `engine` replaces the vision call with a **local**
+> OCR/parse tool (not an LLM, no endpoint/api key). Supported engines:
+
+| Engine | Model file fields | Tool needed |
+|--------|-------------------|-------------|
+| `tesseract` | `engine: tesseract`, `tesseract_lang` (e.g. `por`/`lat`/`por+lat`), optional `tesseract_psm` | `tesseract` + language data (`brew install tesseract tesseract-lang`) |
+| `liteparse` | `engine: liteparse`, `liteparse_lang` (e.g. `por`/`fra`), optional `liteparse_dpi` | `lit` CLI (`pip install liteparse` or `npm i -g @llamaindex/liteparse`) |
+
+> An OCR engine has no `base_url`/`model` — set `engine` and the engine's
+> settings instead. Select it per document/collection exactly like any other
+> model:
+>
+> ```yaml
+> # dropbox/collections/COLX/pha.yaml
+> palaeographer:
+>   rules: ocr
+>   model: tesseract     # or: liteparse, or a vision-model id
+> ```
+>
+> The engine's per-page text becomes the raw transcript; the editor (if
+> configured) still normalizes it and adds the Notes, and the document is
+> indexed as usual. OCR is a complement to vision models — great on
+> printed/typeset text, weaker on dense handwriting. Engines are a pluggable
+> registry (`model_client.PAGE_ENGINES`): to support another local tool, add a
+> `run_*` helper there, an entry in the dict, and the engine's settings on the
+> Model/Palaeographer.
+
 - `vision.palaeographer` / `vision.model` in `config.yaml` select the active
   rules + model; `pha scan --palaeographer ID` overrides the rules for one run;
   the MCP `pha_scan_now` uses the configured defaults.

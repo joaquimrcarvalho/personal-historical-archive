@@ -9,6 +9,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
@@ -34,8 +35,46 @@ from .extract import (
     resolve_palaeographer_id,
     resolve_prompt,
 )
-from .model_client import ModelClient, ModelError
+from .model_client import ModelClient, ModelError, PAGE_ENGINES
 from .sidecar import Sidecar, effective_render, resolve_sidecar
+
+
+def transcribe_page(
+    client: ModelClient,
+    palaeographer: Palaeographer,
+    prompt_txt: str,
+    img: Path,
+    *,
+    source: Path | None = None,
+    page_no: int | None = None,
+    total: int | None = None,
+) -> str:
+    """Produce ONE page's transcript.
+
+    - An `engine`-bearing palaeographer is NOT an LLM: it has no
+      base_url/model/tokens. Look the engine up in `PAGE_ENGINES` (a local
+      OCR/parse tool such as tesseract or liteparse) and run it on the page
+      render; its plain-text output becomes the transcript (no prompt — the
+      editor stage, if configured, later normalizes it and adds the Notes).
+    - Everything else ("" / "llm") is a vision LLM call via `chat_vision`.
+    """
+    engine = (palaeographer.engine or "").strip().lower()
+    if engine and engine != "llm":
+        fn = PAGE_ENGINES.get(engine)
+        if fn is None:
+            raise ModelError(
+                f"unknown palaeographer engine {engine!r}; "
+                f"supported: {sorted(PAGE_ENGINES)}"
+            )
+        ctx = SimpleNamespace(source=source, page_no=page_no, total=total)
+        return fn(palaeographer, img, ctx)
+    return client.chat_vision(
+        palaeographer.model, prompt_txt, img,
+        palaeographer.temperature, palaeographer.max_tokens,
+        thinking=palaeographer.thinking,
+        max_vision_px=palaeographer.max_vision_px,
+        jpeg_quality=palaeographer.vision_jpeg_quality,
+    )
 
 
 def make_vision_client(
@@ -538,13 +577,8 @@ def ingest_file(
         if verbose:
             print(f"  page {i}/{total}: extracting ...", flush=True)
         try:
-            text = client.chat_vision(
-                palaeographer.model, prompt_txt, img,
-                palaeographer.temperature, palaeographer.max_tokens,
-                thinking=palaeographer.thinking,
-                max_vision_px=palaeographer.max_vision_px,
-                jpeg_quality=palaeographer.vision_jpeg_quality,
-            )
+            text = transcribe_page(client, palaeographer, prompt_txt, img,
+                                   source=path, page_no=i, total=total)
             db.set_page_result(conn, page_id, raw_text=text)
             consecutive_failures = 0
         except ModelError as e:

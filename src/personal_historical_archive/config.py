@@ -190,6 +190,19 @@ class Model:
     max_vision_px: int = 1800
     vision_jpeg_quality: int = 88
     context_tokens: int = 200_000
+    # engine: the implementation that produces the stage's output.
+    #   "" / "llm" (default) - an HTTP chat/vision endpoint via ModelClient.
+    #   otherwise - a named local engine looked up in model_client.PAGE_ENGINES
+    #     (e.g. "tesseract", "liteparse"). Non-LLM engines have no
+    #     base_url/model/api_key; their settings live in the per-engine fields
+    #     below.
+    engine: str = ""
+    # Tesseract engine settings
+    tesseract_lang: str = ""       # -l language(s), e.g. "por", "lat", "por+lat" ("" = tesseract default)
+    tesseract_psm: int | None = None  # --psm page-segmentation mode (tesseract) or None
+    # LiteParse engine settings (local document/OCR parser via `lit parse`)
+    liteparse_lang: str = ""       # --ocr-language (Tesseract format, e.g. "por", "fra")
+    liteparse_dpi: int | None = None  # --dpi render resolution (default 150; 300 = quality)
     prompt_file: Path | None = None
 
 
@@ -232,6 +245,15 @@ class Palaeographer:
     # openai-style images (LM Studio, qwen) are sent as rendered, untouched.
     vision_jpeg_quality: int = 88
     model_ref: str = ""  # models/<id>.md this palaeographer uses ("" = legacy inline)
+    # engine: ""/"llm" (default) = chat_vision via ModelClient; otherwise a
+    # named local engine in model_client.PAGE_ENGINES. Local OCR/parse engines
+    # (tesseract, liteparse) are NOT HTTP models — no base_url / api_key /
+    # token limits. Their per-page output becomes the page transcript.
+    engine: str = ""
+    tesseract_lang: str = ""       # -l language(s), e.g. "por", "lat", "por+lat" ("" = tesseract default)
+    tesseract_psm: int | None = None  # --psm page-segmentation mode (tesseract) or None
+    liteparse_lang: str = ""       # --ocr-language (Tesseract format, e.g. "por", "fra")
+    liteparse_dpi: int | None = None  # --dpi render resolution (default 150; 300 = quality)
 
     @property
     def prompt_source(self) -> str:
@@ -529,6 +551,11 @@ class Config:
         if isinstance(stage, Palaeographer):
             common["max_vision_px"] = m.max_vision_px
             common["vision_jpeg_quality"] = m.vision_jpeg_quality
+            common["engine"] = m.engine
+            common["tesseract_lang"] = m.tesseract_lang
+            common["tesseract_psm"] = m.tesseract_psm
+            common["liteparse_lang"] = m.liteparse_lang
+            common["liteparse_dpi"] = m.liteparse_dpi
         return dataclasses.replace(stage, **common)
 
     def resolve_model(self, stage, model_id: str | None = None):
@@ -750,6 +777,11 @@ def _model_from_frontmatter(model_id: str, text: str, file: Path) -> Model | Non
         max_vision_px=int(fm.get("max_vision_px", 1800)),
         vision_jpeg_quality=int(fm.get("vision_jpeg_quality", 88)),
         context_tokens=int(fm.get("context_tokens", 200_000)),
+        engine=str(fm.get("engine", "")).strip().lower(),
+        tesseract_lang=str(fm.get("tesseract_lang", "")).strip(),
+        tesseract_psm=(int(fm["tesseract_psm"]) if fm.get("tesseract_psm") is not None else None),
+        liteparse_lang=str(fm.get("liteparse_lang", "")).strip(),
+        liteparse_dpi=(int(fm["liteparse_dpi"]) if fm.get("liteparse_dpi") is not None else None),
         prompt_file=file,
     )
 
@@ -762,8 +794,12 @@ def _resolve_model(fm: dict, models: dict) -> tuple[Model, str]:
     (`base_url`/`api_key`/`api_style`/...) and are synthesised into an
     anonymous Model (model_ref = "").
     """
-    if "base_url" in fm or "api_key" in fm or "api_style" in fm:
-        # legacy inline interface (pre-registry)
+    if "base_url" in fm or "api_key" in fm or "api_style" in fm or "engine" in fm \
+            or "tesseract_lang" in fm or "tesseract_psm" in fm \
+            or "liteparse_lang" in fm or "liteparse_dpi" in fm:
+        # legacy inline interface (pre-registry) — includes non-LLM engines
+        # (e.g. `engine: tesseract` or `engine: liteparse`) which have no
+        # base_url/api_key.
         m = Model(
             id="",
             description=str(fm.get("description", "")),
@@ -775,6 +811,11 @@ def _resolve_model(fm: dict, models: dict) -> tuple[Model, str]:
             max_vision_px=int(fm.get("max_vision_px", 1800)),
             vision_jpeg_quality=int(fm.get("vision_jpeg_quality", 88)),
             context_tokens=int(fm.get("context_tokens", 200_000)),
+            engine=str(fm.get("engine", "")).strip().lower(),
+            tesseract_lang=str(fm.get("tesseract_lang", "")).strip(),
+            tesseract_psm=(int(fm["tesseract_psm"]) if fm.get("tesseract_psm") is not None else None),
+            liteparse_lang=str(fm.get("liteparse_lang", "")).strip(),
+            liteparse_dpi=(int(fm["liteparse_dpi"]) if fm.get("liteparse_dpi") is not None else None),
         )
         return m, ""
     # new rules-only file: no model here (chosen per document in pha.yaml);
@@ -797,6 +838,13 @@ def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path, models: 
         thinking=m.thinking,
         max_vision_px=m.max_vision_px,
         vision_jpeg_quality=m.vision_jpeg_quality,
+        engine=m.engine or str(fm.get("engine", "")).strip().lower(),
+        tesseract_lang=m.tesseract_lang or str(fm.get("tesseract_lang", "")).strip(),
+        tesseract_psm=m.tesseract_psm if m.tesseract_psm is not None
+        else (int(fm["tesseract_psm"]) if fm.get("tesseract_psm") is not None else None),
+        liteparse_lang=m.liteparse_lang or str(fm.get("liteparse_lang", "")).strip(),
+        liteparse_dpi=m.liteparse_dpi if m.liteparse_dpi is not None
+        else (int(fm["liteparse_dpi"]) if fm.get("liteparse_dpi") is not None else None),
         temperature=float(fm.get("temperature", 0.1)),
         max_tokens=int(fm.get("max_tokens", 4096)),
         prompt_text=body,
@@ -1058,6 +1106,23 @@ _MODEL_SAMPLE = """---
 #   max_vision_px: longest image edge sent to a vision model (default 1800).
 #   vision_jpeg_quality: JPEG quality when re-encoding for the vision path.
 #   context_tokens: the model's input window in tokens (drives encoder chunking).
+#
+# NON-LLM ENGINES (no HTTP endpoint): set an `engine` to drive the palaeographer
+# stage with a LOCAL OCR/parse tool instead of an LLM vision call. Engines have
+# no base_url/model/api_key; set `engine` + the engine's settings instead:
+#   engine: tesseract                # Tesseract OCR (needs `tesseract` on PATH)
+#   tesseract_lang: por              # -l value ("por", "lat", "por+lat", ...; "" = tesseract default)
+#   tesseract_psm: 6                 # optional --psm page-segmentation mode
+#   engine: liteparse                # LiteParse `lit parse` (needs `lit` on PATH:
+#                                    #   pip install liteparse | npm i -g @llamaindex/liteparse)
+#   liteparse_lang: por              # --ocr-language (Tesseract format, e.g. "por", "fra")
+#   liteparse_dpi: 300               # optional --dpi render resolution (default 150; 300 = quality)
+# Then select it per document/collection in pha.yaml:
+#   palaeographer: {rules: <rules-id>, model: <this-model-id>}
+# (or inline `engine: tesseract`/`engine: liteparse` in the palaeographer's own
+# front matter). Engines are a registry in model_client.PAGE_ENGINES — add a
+# run_* helper + entry there (and the settings on Model/Palaeographer) for a new
+# local tool.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example model — edit me
 base_url: http://127.0.0.1:1234/v1
@@ -1081,6 +1146,11 @@ _PAL_SAMPLE = """---
 #      when transcribing (your palaeographic expertise).
 #   4. Save — the palaeographer is ready. Select it per document/collection in
 #      pha.yaml (palaeographer.rules) or a 'palaeographer' file.
+#   To drive this stage with a LOCAL OCR/parse tool (not an LLM) instead of a
+#   vision model, reference a model file with an `engine` — e.g. pha.yaml:
+#   palaeographer: {rules: <this-id>, model: tesseract} (or ...model: liteparse)
+#   — or put `engine: tesseract`/`engine: liteparse` (+ its settings) directly
+#   in this file's front matter.
 # Optional front matter:
 #   temperature: sampling temperature (default 0.1).
 #   max_tokens: completion token cap (default 4096).

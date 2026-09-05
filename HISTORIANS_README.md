@@ -176,6 +176,75 @@ Notes:
   document/collection prompt only adds specific aspects (e.g. which fields
   matter, whether to modernize spelling).
 
+### How pha reads a page: LLM vision vs OCR
+
+There are two ways pha can turn a page image into a transcription, and they
+behave very differently. You choose per collection in `pha.yaml`.
+
+**1. Vision model (an LLM that reads images) — the default.**
+
+A *vision language model* (e.g. `qwen/qwen3-vl-8b`) reads the page like a
+scholar: it sees the whole layout, follows the hand, recognises a damaged or
+difficult word *from context*, and writes brief reading notes (language,
+script, difficult words). It can transcribe dense handwriting, marginalia and
+interlinear notes that plain OCR cannot. It runs in LM Studio on your machine
+and needs a loaded vision model.
+
+*Best for:* handwritten manuscripts, secretary hands, old scripts, pages full
+of annotations — anything where judgement and context matter.
+
+**2. OCR (optical character recognition) — Tesseract or LiteParse.**
+
+An OCR engine matches characters to shapes. It is fast, deterministic, and
+runs **locally without any model or LM Studio**. It is excellent at **clean
+printed or typeset text** (printed books, typewritten letters, printed
+tables). It does **not** use context: it struggles with handwriting, unusual
+scripts, damaged or touching letters, and produces no reading notes.
+
+*Best for:* printed/typed documents where you want speed and simplicity, and
+don't need paleographic judgement.
+
+**Choosing:** printed books and typewritten text → OCR. Handwritten manuscripts
+or pages with notes you want explained → a vision model. You can even use OCR
+for one collection and a vision model for another.
+
+**The settings, in pha terms** — both are set exactly the same way: as the
+`palaeographer` for a collection, in the `pha.yaml` next to the documents. The
+only difference is the model file you point at.
+
+| What | Vision model (LLM) | Tesseract OCR | LiteParse OCR |
+|------|--------------------|---------------|---------------|
+| Needs LM Studio / a loaded model | yes | no | no |
+| Understands handwriting & context | yes | weak | weak |
+| Reads marginalia / gives reading notes | yes | no | no |
+| Great on printed/typeset text | yes | yes | yes |
+| Runs on | your machine | your machine | your machine |
+
+In the model file (`models/<id>.md`):
+
+- **Vision model** — `base_url`, `model` (the LM Studio model name), optional
+  `max_vision_px` (largest page image sent; keep ≤ the model's window),
+  `vision_jpeg_quality`, `api_style`, `context_tokens`, `thinking`.
+- **Tesseract** — `engine: tesseract`, `tesseract_lang` (the language(s), e.g.
+  `por`, `lat`, `por+lat`), optional `tesseract_psm` (page-segmentation mode).
+  Needs the `tesseract` program installed (and its language data).
+- **LiteParse** — `engine: liteparse`, `liteparse_lang` (OCR language, e.g.
+  `por`, `fra`), optional `liteparse_dpi` (resolution; use `300` for quality).
+  Needs the `lit` program installed (`pip install liteparse` or
+  `npm i -g @llamaindex/liteparse`).
+
+Select it for a collection exactly like any other model:
+
+```yaml
+# dropbox/collections/COLX/pha.yaml
+palaeographer:
+  rules: <rules-file-id>
+  model: tesseract        # or: liteparse, or a vision-model id
+```
+
+then run `pha scan`. The editor and encoder stages afterwards are unchanged —
+they still run on the text/LLM model of your choice.
+
 ---
 
 ## 4. Process the documents and query the archive

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from personal_historical_archive.ingest import (
     _expand_records,
     _page_filter,
@@ -314,3 +316,124 @@ def test_encode_needed_records_without_pages_updated_at(tmp_path):
     # must not raise; records present + nothing newer -> no re-encode
     assert _encode_needed(cfg_lite, conn, doc_id, encoder, "enc1", src, False, None) is False
     conn.close()
+
+
+# --------------------------------------------------------------------------- engine dispatch
+# A non-LLM engine (tesseract / liteparse / future tools) is looked up in
+# model_client.PAGE_ENGINES and run on the page render; the default (""/"llm")
+# calls chat_vision on the vision LLM.
+
+def test_transcribe_page_dispatches_tesseract(monkeypatch):
+    """An `engine: tesseract` palaeographer runs Tesseract, never chat_vision."""
+    from pathlib import Path
+
+    from personal_historical_archive import config as cconfig
+    from personal_historical_archive.ingest import transcribe_page
+
+    calls: dict = {}
+
+    def fake_run(img, lang, psm):
+        calls["tesseract"] = (img, lang, psm)
+        return "TESS TEXT"
+
+    monkeypatch.setattr("personal_historical_archive.model_client.run_tesseract", fake_run)
+
+    class FakeClient:
+        def chat_vision(self, *a, **k):  # pragma: no cover - must not be called
+            calls["chat_vision"] = True
+            return "LLM TEXT"
+
+    pal = cconfig.Palaeographer(
+        id="ocr", description="", base_url="", api_key="", model="",
+        temperature=0.1, max_tokens=4096, timeout_s=600, prompt_text="",
+        engine="tesseract", tesseract_lang="por", tesseract_psm=6,
+    )
+    out = transcribe_page(FakeClient(), pal, "prompt", Path("/tmp/p.jpg"))
+    assert out == "TESS TEXT"
+    assert calls["tesseract"] == (Path("/tmp/p.jpg"), "por", 6)
+    assert "chat_vision" not in calls
+
+
+def test_transcribe_page_dispatches_liteparse(monkeypatch):
+    """An `engine: liteparse` palaeographer runs `lit parse`, never chat_vision."""
+    from pathlib import Path
+
+    from personal_historical_archive import config as cconfig
+    from personal_historical_archive.ingest import transcribe_page
+
+    calls: dict = {}
+
+    def fake_run(img, lang, dpi):
+        calls["liteparse"] = (img, lang, dpi)
+        return "LITE TEXT"
+
+    monkeypatch.setattr("personal_historical_archive.model_client.run_liteparse", fake_run)
+
+    class FakeClient:
+        def chat_vision(self, *a, **k):  # pragma: no cover - must not be called
+            calls["chat_vision"] = True
+            return "LLM TEXT"
+
+    pal = cconfig.Palaeographer(
+        id="lparse", description="", base_url="", api_key="", model="",
+        temperature=0.1, max_tokens=4096, timeout_s=600, prompt_text="",
+        engine="liteparse", liteparse_lang="por", liteparse_dpi=300,
+    )
+    out = transcribe_page(FakeClient(), pal, "prompt", Path("/tmp/p.jpg"))
+    assert out == "LITE TEXT"
+    assert calls["liteparse"] == (Path("/tmp/p.jpg"), "por", 300)
+    assert "chat_vision" not in calls
+
+
+def test_transcribe_page_unknown_engine_raises(monkeypatch):
+    from pathlib import Path
+
+    from personal_historical_archive.model_client import ModelError
+    from personal_historical_archive import config as cconfig
+    from personal_historical_archive.ingest import transcribe_page
+
+    pal = cconfig.Palaeographer(
+        id="x", description="", base_url="", api_key="", model="",
+        temperature=0.1, max_tokens=4096, timeout_s=600, prompt_text="",
+        engine="not-a-real-engine",
+    )
+    with pytest.raises(ModelError, match="unknown palaeographer engine"):
+        transcribe_page(object(), pal, "prompt", Path("/tmp/p.jpg"))
+
+
+def test_transcribe_page_dispatches_llm(monkeypatch):
+    """A normal palaeographer calls chat_vision with its model settings."""
+    from pathlib import Path
+
+    from personal_historical_archive import config as cconfig
+    from personal_historical_archive.ingest import transcribe_page
+
+    seen: dict = {}
+
+    def fake_run(img, lang, psm):  # pragma: no cover - must not be called
+        seen["tesseract"] = True
+        return "TESS"
+
+    monkeypatch.setattr("personal_historical_archive.model_client.run_tesseract", fake_run)
+
+    class FakeClient:
+        def chat_vision(self, model, prompt, img, temperature, max_tokens,
+                        thinking, max_vision_px, jpeg_quality):
+            seen["chat"] = dict(model=model, prompt=prompt, img=img, temperature=temperature,
+                                max_tokens=max_tokens, thinking=thinking,
+                                max_vision_px=max_vision_px, jpeg_quality=jpeg_quality)
+            return "LLM TEXT"
+
+    pal = cconfig.Palaeographer(
+        id="qwen", description="", base_url="http://x/v1", api_key="",
+        model="qwen/qwen3-vl-8b", temperature=0.2, max_tokens=2048,
+        timeout_s=900, prompt_text="", thinking=False,
+        max_vision_px=1400, vision_jpeg_quality=77,
+    )
+    out = transcribe_page(FakeClient(), pal, "P", Path("/tmp/p.jpg"))
+    assert out == "LLM TEXT"
+    assert seen["chat"]["model"] == "qwen/qwen3-vl-8b"
+    assert seen["chat"]["temperature"] == 0.2
+    assert seen["chat"]["max_vision_px"] == 1400
+    assert seen["chat"]["jpeg_quality"] == 77
+    assert "tesseract" not in seen

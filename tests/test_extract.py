@@ -110,7 +110,7 @@ def test_resolve_prompt_builtin_fallback(tmp_path):
     prompts.mkdir()
     text, src = resolve_prompt("orphan", dropbox, dropbox, prompts)
     assert src == "builtin"
-    assert "scholarly transcriber" in text
+    assert text == "Extract text from this image"
 
 
 def test_resolve_palaeographer_nearest_wins(tmp_path):
