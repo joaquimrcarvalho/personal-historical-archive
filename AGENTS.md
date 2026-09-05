@@ -92,6 +92,31 @@
   "another scan/edit job is running" and exits. Remote models (MiniMax)
   don't compete with LM Studio. A palaeographer and editor may use the SAME
   local model (e.g. qwen for both on Pfister) to keep one slot loaded.
+- **Local OCR/parse engines (`engine: tesseract` / `engine: liteparse`) run
+  WITHOUT LM Studio** — they are local executables, not LLMs, so an OCR scan
+  loads no model (it still takes the pha scan lock). The engine + its settings
+  live in the MODEL file (`models/tesseract.md`: `tesseract_lang`,
+  `tesseract_psm`; `models/liteparse.md`: `liteparse_lang`, `liteparse_dpi`,
+  `liteparse_ocr` fresh|embedded, `liteparse_format` text|markdown|json); a
+  content-only rules file names the pass and is paired in pha.yaml, e.g.
+  `palaeographer: {rules: ocr, model: tesseract}` (one rules file serves both
+  engines — OCR ignores the prompt). Start from the samples
+  `models/_sample.tesseract.md`, `models/_sample.liteparse.md`,
+  `palaeographers/_sample.ocr.md`.
+  **Install on the ARCHIVE machine** (check `command -v tesseract` /
+  `command -v lit` first — if pha reports a "not installed" ModelError, the
+  binary is missing; install it rather than retrying blindly):
+  - Tesseract (standalone OCR): macOS `brew install tesseract tesseract-lang`
+    (the `-lang` formula provides the language data, e.g. `por`, `lat`);
+    Debian/Ubuntu `apt-get install tesseract-ocr tesseract-ocr-por` (one
+    package per language); Windows `choco install tesseract` or the
+    UB-Mannheim installer.
+  - LiteParse (`lit parse`, ships the `lit` CLI): `pip install liteparse` or
+    `npm i -g @llamaindex/liteparse`; it BUNDLES its own Tesseract, so it needs
+    no separate tesseract install. A non-English `liteparse_lang` requires that
+    language's traineddata to be reachable — offline, set `TESSDATA_PREFIX` to
+    a directory containing the `.traineddata` files.
+  Verify with `tesseract --version` and `lit --version`.
 - Pipeline: dropbox → palaeographer per-page transcription → optional editor
   transform → optional encoder (concatenated whole-document text, page-grounded
   records) → SQLite (FTS5 + embeddings, indexing both raw and edited
