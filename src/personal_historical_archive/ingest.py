@@ -994,7 +994,7 @@ def review_import(cfg: Config, conn, doc_id: int | None = None, verbose: bool = 
 
 
 def _edit_null(cfg: Config, conn, doc_id: int, resolved: str,
-               reprocess: bool, verbose: bool) -> dict:
+               reprocess: bool, verbose: bool, page_no: int | None = None) -> dict:
     """Null/passthrough editor: copy each page's transcription verbatim as
     the 'edited' text (no model call). Produces edited-<resolved>/ pages and
     records the editor on the document for provenance."""
@@ -1002,6 +1002,8 @@ def _edit_null(cfg: Config, conn, doc_id: int, resolved: str,
     pages = db.get_pages(conn, doc_id)
     edited = 0
     for p in pages:
+        if page_no is not None and p["page_no"] != page_no:
+            continue  # targeted: only this one page
         raw = (p["raw_text"] or "").strip()
         if not raw:
             continue
@@ -1026,6 +1028,7 @@ def edit_document(
     editor_id: str | None = None,
     reprocess: bool = False,
     verbose: bool = True,
+    page_no: int | None = None,
 ) -> dict:
     """Run the editor pass over a document's transcription pages. The editor is
     a DIFFERENT (text) model than the palaeographer; it transforms each page's
@@ -1059,7 +1062,7 @@ def edit_document(
     if not resolved:
         return {"action": "skipped", "filename": doc["filename"], "reason": "no editor configured"}
     if resolved in ("null", "passthrough"):
-        return _edit_null(cfg, conn, doc_id, resolved, reprocess, verbose)
+        return _edit_null(cfg, conn, doc_id, resolved, reprocess, verbose, page_no=page_no)
     editor = cfg.get_editor(resolved)
     editor = cfg.resolve_model(editor, editor_model)
     # Staleness inputs: (a) the editor's MODEL interface file (models/<id>.md)
@@ -1081,6 +1084,8 @@ def edit_document(
     edited = 0
     try:
         for p in pages:
+            if page_no is not None and p["page_no"] != page_no:
+                continue  # targeted: only re-edit this one page
             raw = (p["raw_text"] or "").strip()
             if not raw:
                 continue
@@ -1113,7 +1118,8 @@ def edit_document(
     return {"action": "edited", "filename": doc["filename"], "editor": resolved, "pages": edited}
 
 
-def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> dict:
+def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True,
+             page_no: int | None = None) -> dict:
     """Run the editor pass for every document that has an editor configured.
 
     Uses the SAME lock as scan_once: a scan and an edit must not run
@@ -1128,7 +1134,8 @@ def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> dict
     try:
         results = []
         for d in db.list_documents(conn, limit=10000):
-            results.append(edit_document(cfg, conn, d["id"], reprocess=reprocess, verbose=verbose))
+            results.append(edit_document(cfg, conn, d["id"], reprocess=reprocess,
+                                         verbose=verbose, page_no=page_no))
         return {"results": results}
     finally:
         conn.close()
@@ -1136,7 +1143,8 @@ def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> dict
 
 
 def edit_documents_under(
-    cfg: Config, path: str, reprocess: bool = False, verbose: bool = True
+    cfg: Config, path: str, reprocess: bool = False, verbose: bool = True,
+    page_no: int | None = None,
 ) -> dict:
     """Run the editor pass for JUST the documents under a dropbox subpath
     (`pha edit --path collections/COLX`, a document folder, ...).
@@ -1171,7 +1179,7 @@ def edit_documents_under(
                 continue
             seen.add(doc["id"])
             results.append(edit_document(cfg, conn, doc["id"], reprocess=reprocess,
-                                         verbose=verbose))
+                                         verbose=verbose, page_no=page_no))
         return {"results": results}
     finally:
         conn.close()

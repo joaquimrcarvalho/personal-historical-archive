@@ -554,10 +554,12 @@ def cmd_editor(cfg: Config, args) -> None:
 def cmd_edit(cfg: Config, args) -> None:
     from .ingest import edit_documents_under
 
+    page_no = getattr(args, "page", None)
     if getattr(args, "path", None):
-        res = edit_documents_under(cfg, args.path, reprocess=args.reprocess, verbose=True)
+        res = edit_documents_under(cfg, args.path, reprocess=args.reprocess,
+                                   verbose=True, page_no=page_no)
     else:
-        res = edit_all(cfg, reprocess=args.reprocess, verbose=True)
+        res = edit_all(cfg, reprocess=args.reprocess, verbose=True, page_no=page_no)
     edited = sum(1 for r in res["results"] if r["action"] == "edited")
     print(f"edited {edited} document(s)")
     for r in res["results"]:
@@ -1063,6 +1065,9 @@ def main(argv: list[str] | None = None) -> None:
     e2.add_argument("--path", "--collection", default=None,
                     help="only edit documents under this subpath of the dropbox "
                          "(e.g. collections/COLX); default: every document")
+    e2.add_argument("--page", type=int, default=None,
+                    help="only edit this page number of each matched document "
+                         "(combine with --path to target one page of one document)")
     e2.add_argument("--reprocess", action="store_true", help="re-edit everything matched")
     e2.set_defaults(fn=cmd_edit)
 

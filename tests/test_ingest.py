@@ -525,3 +525,55 @@ def test_edit_needed_model_file_staleness(tmp_path):
     row3 = dict(row, reviewed_at=now)
     assert _edit_needed(page, row3, editor, reprocess=True,
                         model_files=(model_file,)) is False
+
+
+def test_edit_document_page_filter_edits_only_that_page(tmp_path, monkeypatch):
+    """edit_document(page_no=N) edits only page N of the document."""
+    import time as _t
+
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import edit_document
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    drop = cfg.dropbox
+    src_dir = drop / "collections" / "tcol"
+    src_dir.mkdir(parents=True)
+    src = src_dir / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/tcol", now=_t.time())
+    for n in (1, 2, 3):
+        pid = _db.add_page(conn, doc_id, n)
+        _db.set_page_result(conn, pid, raw_text=f"raw page {n}")
+    _db.update_document(conn, doc_id, page_count=3)
+    conn.commit()
+
+    calls: list[dict] = []
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def close(self):
+            pass
+
+        def chat_text(self, model, prompt, temperature, max_tokens, thinking):
+            # the prompt embeds "Page: N of M"
+            calls.append(prompt)
+            return "edited"
+
+    monkeypatch.setattr("personal_historical_archive.ingest.ModelClient", FakeClient)
+    res = edit_document(cfg, conn, doc_id, editor_id="default", page_no=2)
+    assert res["pages"] == 1
+    assert len(calls) == 1
+    assert "Page: 2 of 3" in calls[0]
+    # only page 2 got an edit row
+    rows = conn.execute("SELECT page_id FROM page_edits WHERE editor='default'").fetchall()
+    assert [r["page_id"] for r in rows] == [_db.get_pages(conn, doc_id)[1]["id"]]
+    conn.close()
