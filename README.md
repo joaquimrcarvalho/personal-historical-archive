@@ -429,6 +429,31 @@ configured palaeographers.
 >   LiteParse's text + per-item bounding boxes/confidence — a spatial dump a
 >   later model/encoder stage can reason over, at the cost of the raw page not
 >   being clean prose.
+>
+> Ready-to-duplicate samples ship in the project's `models/` folder:
+> `_sample.tesseract.md` and `_sample.liteparse.md` (also seeded on first run;
+> names starting with `_` are never loaded). Copy one to `models/tesseract.md`
+> or `models/liteparse.md`, edit, and select it via `pha.yaml`.
+>
+> **Pairing them with a palaeographer.** An OCR engine ignores the palaeographer
+> prompt (there is no prompt), so one content file serves both engines — copy
+> `palaeographers/_sample.ocr.md` to `palaeographers/ocr.md` (or twice, as
+> `ocr-tesseract.md`/`ocr-liteparse.md`, for distinct ids), then choose the
+> engine per collection:
+>
+> ```yaml
+> # dropbox/collections/COLX/pha.yaml
+> palaeographer:
+>   rules: ocr                # palaeographers/ocr.md (content-only; same for both)
+>   model: tesseract          # engine + tesseract_lang/psm live in models/tesseract.md
+>
+> # another collection, same rules file, LiteParse instead:
+> # palaeographer: {rules: ocr, model: liteparse}
+> ```
+>
+> The engine + all its settings live in the **model** file; the palaeographer
+> file only names the reading pass (its description shows in `pha palaeographer`
+> and in library headers).
 
 - `vision.palaeographer` / `vision.model` in `config.yaml` select the active
   rules + model; `pha scan --palaeographer ID` overrides the rules for one run;

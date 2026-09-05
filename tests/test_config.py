@@ -321,3 +321,55 @@ def test_liteparse_palaeographer_bound_via_model_id(tmp_path):
     assert bound.liteparse_format == "json"
     assert bound.liteparse_ocr == "embedded"
     assert bound.model_ref == "liteparse"
+
+
+def test_ocr_engine_model_samples_parse():
+    """The tesseract/liteparse sample model definitions load into valid Models."""
+    t = c._model_from_frontmatter("tesseract", c._MODEL_TESSERACT_SAMPLE, Path("/tmp/_sample.tesseract.md"))
+    assert t.engine == "tesseract"
+    assert t.tesseract_lang == "por+lat"
+    assert t.tesseract_psm == 6
+
+    lp = c._model_from_frontmatter("liteparse", c._MODEL_LITEPARSE_SAMPLE, Path("/tmp/_sample.liteparse.md"))
+    assert lp.engine == "liteparse"
+    assert lp.liteparse_lang == "por"
+    assert lp.liteparse_dpi == 300
+    assert lp.liteparse_ocr == "fresh"
+    assert lp.liteparse_format == "text"
+
+
+def test_ensure_dirs_seeds_ocr_engine_samples(tmp_path):
+    """ensure_dirs seeds the OCR engine sample files (never loaded as models)."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    cfg.ensure_dirs()
+    md = root / "models"
+    assert (md / "_sample.tesseract.md").exists()
+    assert (md / "_sample.liteparse.md").exists()
+    assert (md / "_sample.md").exists()
+    # underscore-prefixed samples are ignored by the loader
+    assert list(cfg.models) == ["default"]
+
+
+def test_ocr_palaeographer_sample_parses_content_only():
+    """The OCR palaeographer sample is CONTENT ONLY (no inline model interface)."""
+    pal = c._palaeographer_from_frontmatter("ocr", c._PAL_OCR_SAMPLE, Path("/tmp/_sample.ocr.md"))
+    assert pal.id == "ocr"
+    assert "OCR palaeographer" in pal.description
+    assert pal.prompt_text.strip()  # a self-documenting body is present
+    # content-only: no engine inlined (the paired model carries it)
+    assert pal.engine == ""
+    assert pal.base_url == ""  # unbound -> resolve_model would bind a model
+
+
+def test_ensure_dirs_seeds_ocr_palaeographer_sample(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    cfg.ensure_dirs()
+    assert (root / "palaeographers" / "_sample.ocr.md").exists()
+    # underscore sample is not loaded as a real palaeographer
+    assert list(cfg.palaeographers) == ["default"]
