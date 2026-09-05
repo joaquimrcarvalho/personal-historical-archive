@@ -231,44 +231,80 @@ def _scan_lock_path(cfg: Config) -> Path:
     return cfg.data / "scan.lock"
 
 
+def _lock_owner_pid(lock: Path) -> int:
+    """Read the pid recorded in a lock file (0 = none/unknown)."""
+    try:
+        return int(lock.read_text(encoding="utf-8").strip() or "0")
+    except (ValueError, OSError):
+        return 0
+
+
+def _lock_stale(lock: Path, pid: int) -> bool:
+    """Is this lock file reclaimable?
+
+    - A recorded pid that is no longer alive -> stale (its holder died).
+    - A pid-less file (created but not yet written) -> stale only after the
+      6 h age threshold: it may belong to a scan that is still starting, and
+      stealing it would let two scans run together.
+    - A lock OLDER than 6 h is always stale even when its pid looks alive
+      (pids get reused; a stale lock must never wedge every future scan).
+    """
+    try:
+        age = time.time() - lock.stat().st_mtime
+    except OSError:
+        age = 0.0
+    if pid > 0:
+        return pid != os.getpid() and not _pid_alive(pid)
+    return age > 6 * 3600
+
+
 def _scan_lock_held_by_other(cfg: Config) -> bool:
     """True if a DIFFERENT, still-running process holds the scan lock."""
     lock = _scan_lock_path(cfg)
     if not lock.exists():
         return False
-    try:
-        pid = int(lock.read_text(encoding="utf-8").strip() or "0")
-    except (ValueError, OSError):
+    pid = _lock_owner_pid(lock)
+    if pid == os.getpid():
         return False
-    return pid != os.getpid() and _pid_alive(pid)
+    return not _lock_stale(lock, pid)
 
 
 def _acquire_scan_lock(cfg: Config) -> bool:
-    """Take the scan lock. Returns False if another live scan is running."""
+    """Take the scan lock ATOMICALLY (O_CREAT|O_EXCL).
+
+    When two scans start at the same instant, exactly ONE creates the lock
+    file and the other refuses — no window in which both think they hold it
+    (unlike check-then-write on a plain file). A lock whose holder is dead is
+    reclaimed; a 6 h old lock is stale even if its pid looks alive.
+
+    Returns False if a live scan owns the lock, True once this process owns it
+    (or when locking is impossible and pha proceeds best-effort)."""
     lock = _scan_lock_path(cfg)
-    try:
-        if lock.exists():
-            # A lock older than a scan could plausibly last (6 h) is stale
-            # even if its PID looks alive — PIDs get reused and a stale lock
-            # must never wedge every future scan.
-            try:
-                age = time.time() - lock.stat().st_mtime
-            except OSError:
-                age = 0.0
-            if age > 6 * 3600:
-                lock.unlink()
-            else:
+    for _attempt in range(20):
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            pid = _lock_owner_pid(lock)
+            if pid == os.getpid():
+                return True  # this process already owns it
+            if _lock_stale(lock, pid):
+                # Reclaim. A racer may replace the file between our staleness
+                # check and the unlink, so loop back to the atomic create.
                 try:
-                    pid = int(lock.read_text(encoding="utf-8").strip() or "0")
-                except (ValueError, OSError):
-                    pid = 0
-                if pid != os.getpid() and _pid_alive(pid):
-                    return False
-                lock.unlink()  # stale lock
-        lock.write_text(str(os.getpid()), encoding="utf-8")
-        return True
-    except OSError:
-        return True  # cannot lock; proceed (best effort)
+                    lock.unlink()
+                except OSError:
+                    pass
+                continue
+            return False  # a live scan owns the lock
+        except OSError:
+            return True  # cannot lock; proceed (best effort, as before)
+        else:
+            try:
+                os.write(fd, str(os.getpid()).encode("utf-8"))
+            finally:
+                os.close(fd)
+            return True
+    return False  # repeated stale-reclaim races: refuse rather than collide
 
 
 def _release_scan_lock(cfg: Config) -> None:

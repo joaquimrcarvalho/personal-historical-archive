@@ -4,6 +4,7 @@ import argparse
 import os
 import json
 import re
+import sqlite3
 import subprocess
 import sys
 from datetime import datetime
@@ -1150,7 +1151,21 @@ def main(argv: list[str] | None = None) -> None:
         except Exception:  # noqa: BLE001 - the notice must never break a command
             pass
 
-    args.fn(cfg, args)
+    try:
+        args.fn(cfg, args)
+    except sqlite3.OperationalError as e:
+        if "locked" in str(e).lower():
+            # _write already retries through short contention; reaching here
+            # means another job held the DB past that window. Fail cleanly
+            # instead of dumping a traceback.
+            print(
+                "the archive database is busy: another pha job (scan / edit / "
+                "encode / review / reindex) is writing right now.\n"
+                "Wait for it to finish, then run the command again.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        raise
 
 
 if __name__ == "__main__":

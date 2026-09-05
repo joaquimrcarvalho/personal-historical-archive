@@ -1,6 +1,6 @@
 [project]
 name = "personal-historical-archive"
-version = "0.7.2"
+version = "0.7.3"
 description = "Personal Historical Archive (pha): local archive of historical documents (manuscripts, old books, maps, ...) — drop folder + VLM text extraction (Ollama/LM Studio) + index + MCP search"
 requires-python = ">=3.11"
 dependencies = [

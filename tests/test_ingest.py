@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -437,3 +438,61 @@ def test_transcribe_page_dispatches_llm(monkeypatch):
     assert seen["chat"]["max_vision_px"] == 1400
     assert seen["chat"]["jpeg_quality"] == 77
     assert "tesseract" not in seen
+
+
+# --------------------------------------------------------------------------- scan lock (atomic)
+
+def test_scan_lock_acquire_release(tmp_path):
+    from personal_historical_archive import ingest as ing
+
+    cfg = SimpleNamespace(data=tmp_path)
+    assert ing._acquire_scan_lock(cfg) is True
+    lock = ing._scan_lock_path(cfg)
+    assert lock.exists()
+    assert lock.read_text().strip() == str(os.getpid())
+    # same process already owns it
+    assert ing._acquire_scan_lock(cfg) is True
+    ing._release_scan_lock(cfg)
+    assert not lock.exists()
+
+
+def test_scan_lock_refuses_when_other_alive(tmp_path, monkeypatch):
+    from personal_historical_archive import ingest as ing
+
+    cfg = SimpleNamespace(data=tmp_path)
+    lock = ing._scan_lock_path(cfg)
+    lock.write_text("999999")  # a foreign pid
+    monkeypatch.setattr(ing, "_pid_alive", lambda pid: True)
+    assert ing._acquire_scan_lock(cfg) is False
+    assert lock.read_text().strip() == "999999"  # not stolen
+
+
+def test_scan_lock_reclaims_when_other_dead(tmp_path, monkeypatch):
+    from personal_historical_archive import ingest as ing
+
+    cfg = SimpleNamespace(data=tmp_path)
+    lock = ing._scan_lock_path(cfg)
+    lock.write_text("999999")
+    monkeypatch.setattr(ing, "_pid_alive", lambda pid: False)
+    assert ing._acquire_scan_lock(cfg) is True
+    assert lock.read_text().strip() == str(os.getpid())
+
+
+def test_scan_lock_pidless_fresh_is_held_but_old_is_stale(tmp_path):
+    """A pid-less lock is a scan that is still starting (never steal it fresh);
+    after the age threshold it is stale and reclaimable."""
+    import time as _t
+
+    from personal_historical_archive import ingest as ing
+
+    cfg = SimpleNamespace(data=tmp_path)
+    lock = ing._scan_lock_path(cfg)
+    lock.write_text("")  # created, pid not written yet
+    # fresh -> treated as held by an unknown process
+    assert ing._scan_lock_held_by_other(cfg) is True
+    assert ing._acquire_scan_lock(cfg) is False
+    # make it very old -> stale -> reclaimed
+    old = _t.time() - 7 * 3600
+    os.utime(lock, (old, old))
+    assert ing._acquire_scan_lock(cfg) is True
+    assert lock.read_text().strip() == str(os.getpid())
