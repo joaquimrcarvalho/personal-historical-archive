@@ -259,12 +259,24 @@ def test_liteparse_model_interface_parsed():
     m = c._model_from_frontmatter(
         "liteparse",
         "---\ndescription: ocr\nengine: liteparse\n"
-        "liteparse_lang: fra\nliteparse_dpi: 300\n---\n",
+        "liteparse_lang: fra\nliteparse_dpi: 300\n"
+        "liteparse_format: json\nliteparse_ocr: embedded\n---\n",
         Path("/tmp/liteparse.md"),
     )
     assert m.engine == "liteparse"
     assert m.liteparse_lang == "fra"
     assert m.liteparse_dpi == 300
+    assert m.liteparse_format == "json"
+    assert m.liteparse_ocr == "embedded"
+
+
+def test_liteparse_model_defaults_text_fresh():
+    """A liteparse model with no format/ocr keys defaults to text + fresh."""
+    m = c._model_from_frontmatter(
+        "liteparse", "---\nengine: liteparse\n---\n", Path("/tmp/liteparse.md")
+    )
+    assert m.liteparse_format == "text"
+    assert m.liteparse_ocr == "fresh"
 
 
 def test_liteparse_palaeographer_inline_engine():
@@ -273,12 +285,15 @@ def test_liteparse_palaeographer_inline_engine():
     pal = c._palaeographer_from_frontmatter(
         "lparse",
         "---\ndescription: liteparse\nengine: liteparse\n"
-        "liteparse_lang: por\nliteparse_dpi: 300\n---\nbody\n",
+        "liteparse_lang: por\nliteparse_dpi: 300\n"
+        "liteparse_format: markdown\nliteparse_ocr: embedded\n---\nbody\n",
         Path("/tmp/lparse.md"),
     )
     assert pal.engine == "liteparse"
     assert pal.liteparse_lang == "por"
     assert pal.liteparse_dpi == 300
+    assert pal.liteparse_format == "markdown"
+    assert pal.liteparse_ocr == "embedded"
     assert pal.base_url == "http://127.0.0.1:1234/v1"
 
 
@@ -290,7 +305,8 @@ def test_liteparse_palaeographer_bound_via_model_id(tmp_path):
     arc = tmp_path / "arc"
     (arc / "models").mkdir(parents=True)
     (arc / "models" / "liteparse.md").write_text(
-        "---\nengine: liteparse\nliteparse_lang: por\nliteparse_dpi: 300\n---\n"
+        "---\nengine: liteparse\nliteparse_lang: por\nliteparse_dpi: 300\n"
+        "liteparse_format: json\nliteparse_ocr: embedded\n---\n"
     )
     (arc / "palaeographers").mkdir(parents=True)
     (arc / "palaeographers" / "ocr-rules.md").write_text(
@@ -302,4 +318,6 @@ def test_liteparse_palaeographer_bound_via_model_id(tmp_path):
     assert bound.engine == "liteparse"
     assert bound.liteparse_lang == "por"
     assert bound.liteparse_dpi == 300
+    assert bound.liteparse_format == "json"
+    assert bound.liteparse_ocr == "embedded"
     assert bound.model_ref == "liteparse"

@@ -395,7 +395,7 @@ configured palaeographers.
 | Engine | Model file fields | Tool needed |
 |--------|-------------------|-------------|
 | `tesseract` | `engine: tesseract`, `tesseract_lang` (e.g. `por`/`lat`/`por+lat`), optional `tesseract_psm` | `tesseract` + language data (`brew install tesseract tesseract-lang`) |
-| `liteparse` | `engine: liteparse`, `liteparse_lang` (e.g. `por`/`fra`), optional `liteparse_dpi` | `lit` CLI (`pip install liteparse` or `npm i -g @llamaindex/liteparse`) |
+| `liteparse` | `engine: liteparse`, `liteparse_lang` (e.g. `por`/`fra`), optional `liteparse_dpi`; plus `liteparse_ocr` (`fresh`/`embedded`) and `liteparse_format` (`text`/`markdown`/`json`) | `lit` CLI (`pip install liteparse` or `npm i -g @llamaindex/liteparse`) |
 
 > An OCR engine has no `base_url`/`model` — set `engine` and the engine's
 > settings instead. Select it per document/collection exactly like any other
@@ -415,6 +415,20 @@ configured palaeographers.
 > registry (`model_client.PAGE_ENGINES`): to support another local tool, add a
 > `run_*` helper there, an entry in the dict, and the engine's settings on the
 > Model/Palaeographer.
+>
+> LiteParse-specific behaviour, set on the model file:
+> - `liteparse_ocr: fresh` (default) feeds each **rendered page raster**, so
+>   LiteParse must OCR it — right for historical scans whose PDF may carry an
+>   old, low-quality embedded text layer. `liteparse_ocr: embedded` instead
+>   parses the **original source PDF page** (`--target-pages`), using the
+>   PDF's embedded/native text layer where present (faster/cleaner on typed
+>   PDFs; may surface the archive's old layer). Non-PDF sources are always
+>   `fresh`.
+> - `liteparse_format: text` (default) stores layout-preserved plain text as
+>   the transcript; `markdown` stores structured markdown; `json` stores
+>   LiteParse's text + per-item bounding boxes/confidence — a spatial dump a
+>   later model/encoder stage can reason over, at the cost of the raw page not
+>   being clean prose.
 
 - `vision.palaeographer` / `vision.model` in `config.yaml` select the active
   rules + model; `pha scan --palaeographer ID` overrides the rules for one run;
@@ -727,18 +741,37 @@ their source scan (`502V.md`); PDF pages use `page-NNN.md`.
 
 ### Reviewing and correcting transcriptions
 
-The library files are meant to be READ and CORRECTED by a historian:
+The library files are meant to be READ and CORRECTED by a historian. Each
+document has **two page variants**, and correcting them behaves differently:
 
-1. Edit a page file: `library/.../transcription-<pal>/502V.md` or
-   `library/.../edited-<editor>/502V.md` (keep the YAML front matter; change
-   the body).
+- `transcription-<pal>/…` — the palaeographer's ORIGINAL reading (the raw text
+  the editor starts from). Correcting this fixes a misreading **at the source**;
+  the editor must then re-run to pick up your correction.
+- `edited-<editor>/…` — the editor's transformed text (modernized/translated).
+  Correcting this fixes the final output and protects it as-is.
+
+**You corrected the TRANSCRIPTION (the original palaeographer reading):**
+
+1. Edit `library/.../transcription-<pal>/502V.md` (keep the YAML front matter;
+   change the body).
 2. `pha status` shows how many pages have un-imported corrections
    (timestamp-based: a file whose mtime is newer than when pha last wrote it
    is pending).
-3. `pha review [--doc N]` imports those corrections back into the database
-   and stamps the pages **reviewed** — later `pha scan` / `pha edit` passes
-   never overwrite a reviewed page, even with `--reprocess`.
-4. `pha reindex` so search uses the corrected text.
+3. `pha review [--doc N]` imports the corrected text into the database and
+   stamps the page **reviewed** — `pha scan` will never re-read that page,
+   even with `--reprocess`.
+4. `pha edit` **re-runs the editor for just that page**, now from your
+   corrected transcription (it detects the raw text changed); other pages are
+   untouched.
+5. `pha reindex` so search uses the corrected text and the new edited text.
+
+**You corrected the EDITED text (the editor's final output):**
+
+1. Edit `library/.../edited-<editor>/502V.md` (keep the front matter).
+2. `pha status`, then `pha review [--doc N]` — the corrected text is imported
+   and the edit is stamped **reviewed**, so neither `pha scan` nor `pha edit`
+   will ever overwrite it.
+3. `pha reindex`.
 
 Reviewed pages show `reviewed: true` in their front matter.
 

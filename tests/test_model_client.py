@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import subprocess
 
@@ -191,3 +192,89 @@ def test_run_liteparse_raises_on_nonzero_returncode(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: Proc())
     with pytest.raises(ModelError, match="failed to parse"):
         run_liteparse("/tmp/page.jpg")
+
+
+def test_run_liteparse_format_and_target_page(monkeypatch):
+    """--format json/--target-pages <n> are appended when requested."""
+    calls: list[list[str]] = []
+
+    class Proc:
+        returncode = 0
+        stdout = '{"total_pages": 1}'
+        stderr = ""
+
+    def fake_run(cmd, capture_output, text, timeout):
+        calls.append(cmd)
+        return Proc()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    out = run_liteparse("/tmp/source.pdf", fmt="json", target_page=7, dpi=200)
+    assert out == '{"total_pages": 1}'
+    assert calls[0] == ["lit", "parse", "/tmp/source.pdf", "--dpi", "200",
+                        "--format", "json", "--target-pages", "7"]
+
+
+# --------------------------------------------------------------------------- liteparse engine routing
+
+def _pal(**kw) -> SimpleNamespace:
+    base = dict(liteparse_lang="", liteparse_dpi=None, liteparse_format="text", liteparse_ocr="fresh")
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_liteparse_engine_fresh_feeds_raster(monkeypatch):
+    """liteparse_ocr fresh (default) parses the rendered page raster."""
+    from pathlib import Path
+    from personal_historical_archive.model_client import _liteparse_page_engine
+
+    seen: dict = {}
+    monkeypatch.setattr(
+        "personal_historical_archive.model_client.run_liteparse",
+        lambda *a, **k: seen.update(args=a, kwargs=k) or "out",
+    )
+    pal = _pal(liteparse_lang="por", liteparse_dpi=300)
+    ctx = SimpleNamespace(source=Path("/tmp/source.pdf"), page_no=3, total=10)
+    out = _liteparse_page_engine(pal, Path("/tmp/render/p003.jpg"), ctx)
+    assert out == "out"
+    assert seen["args"][0] == Path("/tmp/render/p003.jpg")  # the raster, not the PDF
+    assert seen["args"][1] == "por"
+    assert seen["args"][2] == 300
+    assert seen["kwargs"] == {"fmt": "text"}  # fresh: no --target-pages; text fmt -> no --format
+
+
+def test_liteparse_engine_embedded_feeds_source_pdf_page(monkeypatch, tmp_path):
+    """liteparse_ocr embedded parses the SOURCE PDF page via --target-pages."""
+    from pathlib import Path
+    from personal_historical_archive.model_client import _liteparse_page_engine
+
+    src_pdf = tmp_path / "source.pdf"
+    src_pdf.write_bytes(b"%PDF-1.4 fake")
+    seen: dict = {}
+    monkeypatch.setattr(
+        "personal_historical_archive.model_client.run_liteparse",
+        lambda *a, **k: seen.update(args=a, kwargs=k) or "out",
+    )
+    pal = _pal(liteparse_ocr="embedded", liteparse_format="json", liteparse_lang="lat")
+    ctx = SimpleNamespace(source=src_pdf, page_no=3, total=10)
+    out = _liteparse_page_engine(pal, Path("/tmp/render/p003.jpg"), ctx)
+    assert out == "out"
+    assert seen["args"][0] == src_pdf  # the source PDF, not the raster
+    assert seen["args"][1] == "lat"
+    assert seen["kwargs"] == {"fmt": "json", "target_page": 3}
+
+
+def test_liteparse_engine_embedded_non_pdf_falls_back_to_raster(monkeypatch):
+    """embedded on a non-PDF source (image) has no text layer -> fresh raster."""
+    from pathlib import Path
+    from personal_historical_archive.model_client import _liteparse_page_engine
+
+    seen: dict = {}
+    monkeypatch.setattr(
+        "personal_historical_archive.model_client.run_liteparse",
+        lambda *a, **k: seen.update(args=a, kwargs=k) or "out",
+    )
+    pal = _pal(liteparse_ocr="embedded")
+    ctx = SimpleNamespace(source=Path("/tmp/source.png"), page_no=1, total=1)
+    _liteparse_page_engine(pal, Path("/tmp/render/p001.jpg"), ctx)
+    assert seen["args"][0] == Path("/tmp/render/p001.jpg")
+    assert seen["kwargs"] == {"fmt": "text"}

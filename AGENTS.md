@@ -110,8 +110,12 @@
   files are the human review surface. A historian edits a page body; `pha
   status` reports un-imported corrections (timestamp-based: file mtime newer
   than the page's `exported_at`); `pha review [--doc N]` imports them into the
-  DB and stamps the page `reviewed` (`reviewed_at`), so later `pha scan` /
-  `pha edit` (even `--reprocess`) never overwrite a reviewed page. Then
+  DB. Correcting a `transcription-*` page fixes the palaeographer's reading:
+  the page is stamped `reviewed` (`reviewed_at`), so `pha scan` never re-reads
+  it, and `pha edit` must then run so the editor re-processes JUST that page
+  from the corrected text (it detects the raw changed). Correcting an
+  `edited-*` page fixes the final output: that edit is stamped `reviewed` and
+  is never overwritten by `pha scan`/`pha edit`. Either way, follow with
   `pha reindex`. Reviewed pages show `reviewed: true` in front matter.
 - Full usage: README.md; planned web UI: WEB_INTERFACE_PLAN.md.
 

@@ -203,6 +203,19 @@ class Model:
     # LiteParse engine settings (local document/OCR parser via `lit parse`)
     liteparse_lang: str = ""       # --ocr-language (Tesseract format, e.g. "por", "fra")
     liteparse_dpi: int | None = None  # --dpi render resolution (default 150; 300 = quality)
+    # liteparse_format: `lit parse` output format. "text" (default) is the
+    # human-readable, layout-preserved transcription; "markdown" is structured
+    # markdown; "json" is text + per-item bounding boxes/confidence (a spatial
+    # dump a later model/encoder stage can reason over).
+    liteparse_format: str = "text"
+    # liteparse_ocr: which input `lit parse` reads.
+    #   "fresh" (default) - the rendered page RASTER, so LiteParse must OCR it
+    #     (no embedded text layer to fall back on). Safe on historical scans.
+    #   "embedded" - the ORIGINAL source PDF page (--target-pages), so LiteParse
+    #     uses the PDF's embedded/native text layer where present, OCRing only
+    #     the gaps. Faster/cleaner on typed PDFs, but may surface an archive's
+    #     old low-quality text layer. Non-PDF sources always fall back to fresh.
+    liteparse_ocr: str = "fresh"
     prompt_file: Path | None = None
 
 
@@ -254,6 +267,8 @@ class Palaeographer:
     tesseract_psm: int | None = None  # --psm page-segmentation mode (tesseract) or None
     liteparse_lang: str = ""       # --ocr-language (Tesseract format, e.g. "por", "fra")
     liteparse_dpi: int | None = None  # --dpi render resolution (default 150; 300 = quality)
+    liteparse_format: str = "text"  # "text" | "markdown" | "json" (see Model)
+    liteparse_ocr: str = "fresh"    # "fresh" (raster -> must OCR) | "embedded" (source PDF text layer)
 
     @property
     def prompt_source(self) -> str:
@@ -556,6 +571,8 @@ class Config:
             common["tesseract_psm"] = m.tesseract_psm
             common["liteparse_lang"] = m.liteparse_lang
             common["liteparse_dpi"] = m.liteparse_dpi
+            common["liteparse_format"] = m.liteparse_format
+            common["liteparse_ocr"] = m.liteparse_ocr
         return dataclasses.replace(stage, **common)
 
     def resolve_model(self, stage, model_id: str | None = None):
@@ -782,6 +799,8 @@ def _model_from_frontmatter(model_id: str, text: str, file: Path) -> Model | Non
         tesseract_psm=(int(fm["tesseract_psm"]) if fm.get("tesseract_psm") is not None else None),
         liteparse_lang=str(fm.get("liteparse_lang", "")).strip(),
         liteparse_dpi=(int(fm["liteparse_dpi"]) if fm.get("liteparse_dpi") is not None else None),
+        liteparse_format=str(fm.get("liteparse_format", "text")).strip().lower() or "text",
+        liteparse_ocr=str(fm.get("liteparse_ocr", "fresh")).strip().lower() or "fresh",
         prompt_file=file,
     )
 
@@ -796,7 +815,8 @@ def _resolve_model(fm: dict, models: dict) -> tuple[Model, str]:
     """
     if "base_url" in fm or "api_key" in fm or "api_style" in fm or "engine" in fm \
             or "tesseract_lang" in fm or "tesseract_psm" in fm \
-            or "liteparse_lang" in fm or "liteparse_dpi" in fm:
+            or "liteparse_lang" in fm or "liteparse_dpi" in fm \
+            or "liteparse_format" in fm or "liteparse_ocr" in fm:
         # legacy inline interface (pre-registry) — includes non-LLM engines
         # (e.g. `engine: tesseract` or `engine: liteparse`) which have no
         # base_url/api_key.
@@ -816,6 +836,8 @@ def _resolve_model(fm: dict, models: dict) -> tuple[Model, str]:
             tesseract_psm=(int(fm["tesseract_psm"]) if fm.get("tesseract_psm") is not None else None),
             liteparse_lang=str(fm.get("liteparse_lang", "")).strip(),
             liteparse_dpi=(int(fm["liteparse_dpi"]) if fm.get("liteparse_dpi") is not None else None),
+            liteparse_format=str(fm.get("liteparse_format", "text")).strip().lower() or "text",
+            liteparse_ocr=str(fm.get("liteparse_ocr", "fresh")).strip().lower() or "fresh",
         )
         return m, ""
     # new rules-only file: no model here (chosen per document in pha.yaml);
@@ -845,6 +867,10 @@ def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path, models: 
         liteparse_lang=m.liteparse_lang or str(fm.get("liteparse_lang", "")).strip(),
         liteparse_dpi=m.liteparse_dpi if m.liteparse_dpi is not None
         else (int(fm["liteparse_dpi"]) if fm.get("liteparse_dpi") is not None else None),
+        liteparse_format=m.liteparse_format if m.liteparse_format != "text"
+        else str(fm.get("liteparse_format", "text")).strip().lower() or "text",
+        liteparse_ocr=m.liteparse_ocr if m.liteparse_ocr != "fresh"
+        else str(fm.get("liteparse_ocr", "fresh")).strip().lower() or "fresh",
         temperature=float(fm.get("temperature", 0.1)),
         max_tokens=int(fm.get("max_tokens", 4096)),
         prompt_text=body,
@@ -1117,6 +1143,15 @@ _MODEL_SAMPLE = """---
 #                                    #   pip install liteparse | npm i -g @llamaindex/liteparse)
 #   liteparse_lang: por              # --ocr-language (Tesseract format, e.g. "por", "fra")
 #   liteparse_dpi: 300               # optional --dpi render resolution (default 150; 300 = quality)
+#   liteparse_format: text           # output: "text" (default) | "markdown" | "json"
+#                                    #   ("json" = text + per-item bboxes/confidence for a
+#                                    #   later reasoning/encoder stage)
+#   liteparse_ocr: fresh             # input: "fresh" (default) = OCR the rendered page
+#                                    #   raster (ignores any embedded text layer; safe on
+#                                    #   scans); "embedded" = parse the ORIGINAL source PDF
+#                                    #   page, using its embedded/native text layer where
+#                                    #   present (fast on typed PDFs; may surface an archive's
+#                                    #   old low-quality layer). Non-PDF sources: always fresh.
 # Then select it per document/collection in pha.yaml:
 #   palaeographer: {rules: <rules-id>, model: <this-model-id>}
 # (or inline `engine: tesseract`/`engine: liteparse` in the palaeographer's own

@@ -363,7 +363,7 @@ def test_transcribe_page_dispatches_liteparse(monkeypatch):
 
     calls: dict = {}
 
-    def fake_run(img, lang, dpi):
+    def fake_run(img, lang, dpi, fmt="text"):
         calls["liteparse"] = (img, lang, dpi)
         return "LITE TEXT"
 

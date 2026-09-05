@@ -52,26 +52,43 @@ def run_tesseract(image_path: str | Path, lang: str = "", psm: int | None = None
     return proc.stdout.strip()
 
 
-def run_liteparse(image_path: str | Path, lang: str = "", dpi: int | None = None) -> str:
-    """Run LiteParse (`lit parse`) on a page image and return its text.
+def run_liteparse(
+    target: str | Path,
+    lang: str = "",
+    dpi: int | None = None,
+    fmt: str = "text",
+    target_page: int | None = None,
+) -> str:
+    """Run LiteParse (`lit parse`) on a file and return its output.
 
     LiteParse is a LOCAL document/OCR parser (install ``pip install liteparse``
-    or ``npm i -g @llamaindex/liteparse``) — no cloud dependency or LLM. It
-    OCRs/parses the rendered page image and prints layout-preserved plain text
-    (the ``--format text`` default), which becomes the page transcript. Used
+    or ``npm i -g @llamaindex/liteparse``) — no cloud dependency or LLM. Used
     when a palaeographer declares ``engine: liteparse``.
+
+    ``target`` is either the rendered page RASTER (``liteparse_ocr: fresh`` —
+    no embedded text layer, so LiteParse MUST OCR it) or the ORIGINAL source
+    PDF page (``liteparse_ocr: embedded`` + ``target_page`` — LiteParse uses
+    the PDF's native/embedded text where present and OCRs the gaps).
 
     - ``lang`` is the ``--ocr-language`` value (Tesseract format: ``"por"``,
       ``"fra"``, ...; ``""`` lets LiteParse use its default ``eng``).
     - ``dpi`` sets ``--dpi`` render resolution (default 150; 300 for quality).
+    - ``fmt`` is ``--format``: ``"text"`` (default, layout-preserved plain
+      text), ``"markdown"`` (structured markdown) or ``"json"`` (text + per
+      item bounding boxes/confidence).
+    - ``target_page`` adds ``--target-pages <n>`` (1-based page number).
 
     Raises ``ModelError`` if ``lit`` is not installed or fails.
     """
-    cmd = ["lit", "parse", str(image_path)]
+    cmd = ["lit", "parse", str(target)]
     if lang:
         cmd += ["--ocr-language", lang]
     if dpi:
         cmd += ["--dpi", str(dpi)]
+    if fmt and fmt != "text":
+        cmd += ["--format", fmt]
+    if target_page is not None:
+        cmd += ["--target-pages", str(target_page)]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     except FileNotFoundError as e:
@@ -81,10 +98,10 @@ def run_liteparse(image_path: str | Path, lang: str = "", dpi: int | None = None
             f"the palaeographer's `engine: liteparse` can run. ({e})"
         ) from e
     except subprocess.TimeoutExpired as e:
-        raise ModelError(f"liteparse timed out on {image_path}") from e
+        raise ModelError(f"liteparse timed out on {target}") from e
     if proc.returncode != 0:
         raise ModelError(
-            f"liteparse failed on {image_path}: "
+            f"liteparse failed on {target}: "
             f"{proc.stderr.strip() or proc.stdout.strip()}"
         )
     return proc.stdout.strip()
@@ -95,9 +112,30 @@ def _tesseract_page_engine(palaeographer, image_path, _ctx) -> str:
     return run_tesseract(image_path, palaeographer.tesseract_lang, palaeographer.tesseract_psm)
 
 
-def _liteparse_page_engine(palaeographer, image_path, _ctx) -> str:
-    """Produce a page transcript with the local LiteParse parser (lit CLI)."""
-    return run_liteparse(image_path, palaeographer.liteparse_lang, palaeographer.liteparse_dpi)
+def _liteparse_page_engine(palaeographer, image_path, ctx) -> str:
+    """Produce a page transcript with the local LiteParse parser (lit CLI).
+
+    ``liteparse_ocr`` decides what ``lit parse`` reads:
+    - "fresh" (default): the rendered page RASTER, so LiteParse must OCR it
+      (safe on historical scans with a bad embedded text layer).
+    - "embedded": the ORIGINAL source PDF page (``ctx.source`` +
+      ``ctx.page_no``, via ``--target-pages``), so LiteParse uses the PDF's
+      embedded/native text layer where present. Non-PDF sources (single
+      images / folders of images) have no embedded layer and fall back to the
+      raster.
+    """
+    fmt = (palaeographer.liteparse_format or "text").strip().lower() or "text"
+    lang = palaeographer.liteparse_lang
+    dpi = palaeographer.liteparse_dpi
+    if (palaeographer.liteparse_ocr or "fresh").strip().lower() == "embedded":
+        source = getattr(ctx, "source", None)
+        page_no = getattr(ctx, "page_no", None)
+        if source is not None and page_no is not None:
+            sp = Path(source)
+            if sp.is_file() and sp.suffix.lower() == ".pdf":
+                return run_liteparse(sp, lang, dpi, fmt=fmt, target_page=page_no)
+        # no embedded text layer to use (non-PDF source) -> fresh OCR on the raster
+    return run_liteparse(image_path, lang, dpi, fmt=fmt)
 
 
 # Registry of non-LLM page engines: name -> (palaeographer, image_path, ctx) -> str.

@@ -168,8 +168,10 @@ def test_pending_summary_groups_by_document():
     # which documents and pages
     assert "#4   [collections/cat] doc4.pdf  — pages 1, 2" in joined
     assert "#7   [collections/cat] doc7.pdf  — pages 5" in joined
-    # instruction line
-    assert "pha review" in lines[-1]
+    # instruction: a transcription correction is pending -> pha edit is advised
+    assert "pha review" in joined
+    assert "pha edit" in joined
+    assert joined.rstrip().endswith("pha reindex")
 
 
 def test_pending_summary_missing_doc():

@@ -115,7 +115,13 @@ def _pending_summary_lines(pending: list[dict], get_doc) -> list[str]:
         col = doc["dir_path"] if doc and doc["dir_path"] else "(root)"
         pages = ", ".join(str(p) for p in sorted(by_doc[d_id]))
         lines.append(f"       #{d_id:<3d} [{col}] {name}  — pages {pages}")
-    lines.append("     Run:  pha review   (imports your corrections, then pha reindex)")
+    if any(x.get("variant", "").startswith("transcription-") for x in pending):
+        lines.append("     Run:  pha review   (imports your corrections)")
+        lines.append("          then  pha edit   — you corrected a TRANSCRIPTION, so the")
+        lines.append("                editor re-runs on your corrected text")
+        lines.append("          then  pha reindex")
+    else:
+        lines.append("     Run:  pha review   (imports your corrections, then pha reindex)")
     return lines
 
 
@@ -302,10 +308,15 @@ def cmd_review(cfg: Config, args) -> None:
     """Import human corrections from the library markdown files into the DB.
 
     The historian edits library/.../transcription-<pal>/<stem>.md or
-    edited-<editor>/<stem>.md; `pha review` reads those files back, updates
-    pages.raw_text / page_edits.text, and stamps them reviewed so later
-    scan/edit passes never overwrite the corrections. Run `pha reindex`
-    afterwards so search uses the corrected text.
+    edited-<editor>/<stem>.md; `pha review` reads those files back and updates
+    pages.raw_text / page_edits.text, stamping them reviewed.
+
+    Correcting a transcription-* page fixes the palaeographer's reading: that
+    page is never re-read by `pha scan`, and you should then run `pha edit` so
+    the editor re-processes just that page from your corrected text. Correcting
+    an edited-* page fixes the final output, which neither `pha scan` nor
+    `pha edit` will overwrite. Run `pha reindex` afterwards so search uses the
+    corrected text.
     """
     from .ingest import review_import
     conn = db.connect(cfg.db_path)

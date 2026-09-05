@@ -342,18 +342,37 @@ palaeographer, editor, status) followed by the text.
 
 ## Reviewing and correcting the transcriptions
 
-You can read the library files and correct them. pha will **import your
-corrections** and never overwrite them afterwards:
+You can read the library files and correct them. There are **two page
+variants**, and which one you correct changes what happens next:
 
-1. **Edit a page file** — open e.g.
+- `transcription-<palaeographer>/` — the palaeographer's **original reading**.
+  Correcting this fixes a misreading at the source; the editor must then re-run
+  to use your corrected text.
+- `edited-<editor>/` — the editor's transformed text (modernized / translated).
+  Correcting this fixes the final output and pha leaves it as you wrote it.
+
+**You corrected the TRANSCRIPTION (e.g. you spotted an OCR or reading error):**
+
+1. **Edit the transcription file** — open
    `library/.../transcription-<palaeographer>/502V.md` and correct the text
    under the header (keep the header as it is).
-2. **Check pending work** — run `pha status`; it will tell you how many pages
-   have corrections that are not imported yet (✏️ message).
-3. **Import your corrections** — run `pha review`. The database is updated
-   and those pages are marked as *reviewed*: future scans and edits will not
-   change them, even if you re-run with `--reprocess`.
-4. **Make search use the corrections** — run `pha reindex`.
+2. **Check pending work** — run `pha status`; it tells you how many pages have
+   corrections that are not imported yet (✏️ message).
+3. **Import your correction** — run `pha review`. Your text becomes the page's
+   transcription and the page is marked *reviewed*: `pha scan` will never
+   re-read it, even with `--reprocess`.
+4. **Let the editor redo that page** — run `pha edit`. It detects the
+   transcription changed and re-processes **only that page** from your
+   corrected text (nothing else is re-edited).
+5. **Make search use the results** — run `pha reindex`.
+
+**You corrected the EDITED text (the editor's final output):**
+
+1. Open `library/.../edited-<editor>/502V.md` and correct the text under the
+   header.
+2. Run `pha status`, then `pha review`. The corrected edit is marked
+   *reviewed*, so neither `pha scan` nor `pha edit` will overwrite it.
+3. Run `pha reindex`.
 
 Reviewed pages show `reviewed: true` in their header.
 
