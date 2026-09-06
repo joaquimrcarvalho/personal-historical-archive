@@ -125,6 +125,12 @@
   transform → optional encoder (concatenated whole-document text, page-grounded
   records) → SQLite (FTS5 + embeddings, indexing both raw and edited
   variants) → hybrid search + FastMCP (`pha_*` tools).
+- **Search → full page text**: `pha search` hits carry a `page_file` (the
+  library `.md`) and the CLI prints that path plus a shortcut under each hit.
+  `pha page <doc> <page> [--edited]` prints one page's FULL text (raw, or the
+  edited/translated variant with `--edited`); `<doc>` is an id or filename
+  substring, and `--json` gives agent-friendly output. Use it to read the
+  context around a search snippet.
 - **SQLite schema — do not guess column names.** The `pages` table links to a
   document via **`document_id`** (not `doc_id`) and has no `path`/`sha256`;
   those columns live on **`documents`**. `page_edits` keys on `(page_id,

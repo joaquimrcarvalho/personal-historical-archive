@@ -471,6 +471,57 @@ def remove_library_artifact(cfg: Config, doc) -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def library_page_path(
+    cfg: Config,
+    doc,
+    page_no: int,
+    variant: str = "raw",
+    source_name: str | None = None,
+    editor_id: str | None = None,
+) -> Path | None:
+    """Locate the library page file for (doc, page) on disk.
+
+    Returns the exact path when the file exists (None otherwise). ``variant``
+    is 'raw' (``transcription-<pal>[@model]/``) or 'edited'
+    (``edited-<editor>[@model]/``). The dated document folder is found via the
+    document's slug, falling back to the newest matching ``<stem>_*`` folder."""
+    if not doc:
+        return None
+    if not isinstance(doc, dict):  # accept sqlite3.Row too
+        try:
+            doc = dict(doc)
+        except (TypeError, ValueError):
+            return None
+    stem = Path(doc["path"]).stem
+    rel = Path(doc["dir_path"] or "")
+    base = cfg.library / rel
+    doc_dir = base / _doc_slug(doc)
+    if not doc_dir.exists():
+        folders = sorted(base.glob(f"{stem}_*"), key=lambda p: p.stat().st_mtime
+                         if p.is_dir() else 0.0)
+        if not folders:
+            return None
+        doc_dir = folders[-1]
+    if variant == "edited":
+        ed = editor_id or doc.get("editor") or None
+        if not ed:
+            return None
+        prefix = f"edited-{ed}"
+    else:
+        pal = doc.get("palaeographer") or "default"
+        prefix = f"transcription-{pal}"
+    variant_dir = None
+    for d in doc_dir.iterdir():
+        if d.is_dir() and d.name.startswith(prefix):
+            variant_dir = d
+            break
+    if variant_dir is None:
+        return None
+    name = f"{source_name}.md" if source_name else f"page-{page_no:03d}.md"
+    f = variant_dir / name
+    return f if f.exists() else None
+
+
 def ingest_file(
     cfg: Config,
     conn,

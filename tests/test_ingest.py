@@ -577,3 +577,26 @@ def test_edit_document_page_filter_edits_only_that_page(tmp_path, monkeypatch):
     rows = conn.execute("SELECT page_id FROM page_edits WHERE editor='default'").fetchall()
     assert [r["page_id"] for r in rows] == [_db.get_pages(conn, doc_id)[1]["id"]]
     conn.close()
+
+
+def test_library_page_path_resolves_raw_and_edited(tmp_path):
+    from personal_historical_archive.ingest import library_page_path
+
+    cfg = SimpleNamespace(library=tmp_path / "library")
+    (cfg.library / "doc_1970-01-01" / "transcription-default@qwen").mkdir(parents=True)
+    (cfg.library / "doc_1970-01-01" / "edited-latin-english@minimax").mkdir(parents=True)
+    raw_f = cfg.library / "doc_1970-01-01" / "transcription-default@qwen" / "page-007.md"
+    raw_f.write_text("raw")
+    ed_f = cfg.library / "doc_1970-01-01" / "edited-latin-english@minimax" / "page-007.md"
+    ed_f.write_text("edited")
+    doc = {"path": "/x/doc.pdf", "dir_path": "", "created_at": 0,
+           "palaeographer": "default", "editor": "latin-english"}
+    assert library_page_path(cfg, doc, 7) == raw_f
+    assert library_page_path(cfg, doc, 7, variant="edited", editor_id="latin-english") == ed_f
+    assert library_page_path(cfg, doc, 99) is None
+    # falls back to the newest <stem>_* folder when the exact slug is missing
+    old = cfg.library / "doc_2020-01-01"
+    (old / "transcription-default").mkdir(parents=True)
+    (old / "transcription-default" / "page-001.md").write_text("x")
+    doc2 = dict(doc, created_at=1_700_000_000)  # slug doc_2023-11-14 -> not on disk
+    assert library_page_path(cfg, doc2, 1) == old / "transcription-default" / "page-001.md"

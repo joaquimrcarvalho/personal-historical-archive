@@ -76,6 +76,27 @@ def cmd_search(cfg: Config, args) -> None:
         except ModelError as e:
             print(f"model error: {e}", file=sys.stderr)
             sys.exit(2)
+        # Point each hit at its full page: the library file + the pha page cmd.
+        if res and res.get("results"):
+            from .ingest import library_page_path
+
+            for r in res["results"]:
+                doc = db.get_document(conn, r["document_id"])
+                r["page_file"] = None
+                if doc is None:
+                    continue
+                doc = dict(doc)
+                pg = conn.execute(
+                    "SELECT source_name FROM pages WHERE document_id=? AND page_no=?",
+                    (doc["id"], r["page_no"]),
+                ).fetchone()
+                edited = r.get("variant") == "edited"
+                r["page_file"] = library_page_path(
+                    cfg, doc, r["page_no"], variant="edited" if edited else "raw",
+                    source_name=pg["source_name"] if pg else None,
+                    editor_id=doc.get("editor") or None)
+                if r["page_file"] is not None:
+                    r["page_file"] = str(r["page_file"])
     finally:
         client.close()
         conn.close()
@@ -90,7 +111,95 @@ def cmd_search(cfg: Config, args) -> None:
     for i, r in enumerate(res["results"], 1):
         print(f"{i:2d}. [{r['source']:8s}][{r.get('variant','raw'):6s}] {r['filename']}  [{r['collection']}]  p.{r['page_no']}  score={r['score']}")
         print(f"     {r['snippet']}")
+        if r.get("page_file"):
+            edited = r.get("variant") == "edited"
+            print(f"     full page: {r['page_file']}")
+            print(f"               pha page {r['document_id']} {r['page_no']}" + (" --edited" if edited else ""))
     print(f"\n{len(res['results'])} result(s) in mode '{res['mode']}'")
+
+
+def _resolve_doc_for_page(conn, target: str):
+    """Find a document by numeric id or filename substring; returns (doc, matches)
+    where matches lists candidates when the target is ambiguous."""
+    from . import db as _db
+
+    docs = _db.list_documents(conn, limit=10000)
+    try:
+        doc_id = int(str(target).strip())
+        for d in docs:
+            if d["id"] == doc_id:
+                return d, []
+    except ValueError:
+        pass
+    matches = [d for d in docs if str(target).lower() in (d["filename"] or "").lower()]
+    if len(matches) == 1:
+        return matches[0], []
+    return None, matches
+
+
+def cmd_page(cfg: Config, args) -> None:
+    """Print the FULL transcription of one page: `pha page <doc> <page> [--edited]`."""
+    from .ingest import library_page_path
+
+    conn = db.connect(cfg.db_path)
+    try:
+        doc, matches = _resolve_doc_for_page(conn, args.doc)
+        if doc is None:
+            if matches:
+                names = ", ".join(f"#{d['id']} {d['filename']}" for d in matches[:8])
+                print(f"ambiguous document {args.doc!r} — matches: {names}", file=sys.stderr)
+            else:
+                print(f"no document matching {args.doc!r}", file=sys.stderr)
+            sys.exit(1)
+        page = conn.execute(
+            "SELECT * FROM pages WHERE document_id=? AND page_no=?",
+            (doc["id"], args.page)).fetchone()
+        if page is None:
+            print(f"document #{doc['id']} ({doc['filename']}) has no page {args.page}",
+                  file=sys.stderr)
+            sys.exit(1)
+        edited = bool(getattr(args, "edited", False))
+        editor_id = None
+        text = page["raw_text"] or ""
+        if edited:
+            editor_id = args.editor or doc["editor"]
+            if not editor_id:
+                print("this document has no editor configured; nothing to show for --edited",
+                      file=sys.stderr)
+                sys.exit(1)
+            e = db.get_page_edit(conn, page["id"], editor_id)
+            if e is not None and e["text"]:
+                text = e["text"]
+            else:
+                print(f"no edited text for page {args.page} (editor {editor_id})",
+                      file=sys.stderr)
+                sys.exit(1)
+        pf = library_page_path(cfg, doc, args.page,
+                               variant="edited" if edited else "raw",
+                               source_name=page["source_name"], editor_id=editor_id)
+        meta = {
+            "document_id": doc["id"],
+            "filename": doc["filename"],
+            "collection": doc["dir_path"] or "(root)",
+            "source": doc["path"],
+            "page_no": args.page,
+            "variant": "edited" if edited else "raw",
+            "editor": editor_id,
+            "palaeographer": doc["palaeographer"],
+            "reviewed": bool(page["reviewed_at"]),
+            "page_file": str(pf) if pf else None,
+        }
+        if getattr(args, "json", False):
+            print(json.dumps({**meta, "text": text}, ensure_ascii=False, indent=2))
+            return
+        print(f"== {doc['filename']} — page {args.page}"
+              + (f" [{editor_id}]" if edited else " [raw]") + " ==")
+        if pf:
+            print(f"   file: {pf}")
+        print("")
+        print(text or "(no text)")
+    finally:
+        conn.close()
 
 
 def _pending_summary_lines(pending: list[dict], get_doc) -> list[str]:
@@ -1017,6 +1126,15 @@ def main(argv: list[str] | None = None) -> None:
 
     st = sub.add_parser("status", help="archive summary")
     st.set_defaults(fn=cmd_status)
+
+    pg = sub.add_parser("page", help="print the full transcription of one page")
+    pg.add_argument("doc", help="document id (number) or a filename substring")
+    pg.add_argument("page", type=int, help="page number")
+    pg.add_argument("--edited", action="store_true",
+                    help="show the edited variant (translated/modernized) instead of the raw reading")
+    pg.add_argument("--editor", default=None, help="editor id when --edited (default: the document's editor)")
+    pg.add_argument("--json", action="store_true", help="structured output for agents")
+    pg.set_defaults(fn=cmd_page)
 
     m = sub.add_parser("mcp", help="run the MCP server (stdio or sse)")
     m.add_argument("--transport", choices=["stdio", "sse"], default="stdio")

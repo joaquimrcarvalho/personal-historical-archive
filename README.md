@@ -117,6 +117,10 @@ pha scan --watch                    # keep watching the dropbox
 pha search "doação de Évora ao mosteiro"
 pha search "alfange" --mode keyword
 pha search "monastery donation charter" --mode semantic
+# every hit prints its library page file + a shortcut to read the full page:
+pha page 12 37              # full raw transcription of doc 12, page 37
+pha page 12 37 --edited     # the edited (modernized/translated) variant
+pha page NAME 37 --json     # structured output for agents
 
 # 5. MCP server (stdio)
 pha mcp
@@ -644,6 +648,7 @@ printed i–xv but occupies PDF pages 1-15).
 pha help [topic]              # orientation + pointers to README/MCP_CLIENTS/HISTORIANS/AGENTS
 pha scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--path COLLECTION] [--reprocess]
 pha search QUERY [--mode hybrid|keyword|semantic] [--collection COLX] [--limit N] [--json]
+pha page DOC PAGE [--edited]    # print the FULL text of one page (doc = id or filename substring)
 pha status
 pha export
 pha reindex
