@@ -16,17 +16,25 @@ def is_supported(name: str) -> bool:
 
 def render_document(
     path: Path, out_dir: Path, dpi: int = 200, max_px: int = 1800, jpeg_quality: int = 88,
-    prefix: str | None = None,
+    prefix: str | None = None, pages: set[int] | None = None,
 ) -> list[Path]:
     """Render every page of a PDF (or a single image) to JPEG files, returning their paths.
 
     `prefix`, when given, replaces the `pNNN` page-index base name — used to
     give each image of a directory-of-images document a distinct file (its
-    source stem) instead of overwriting p001.jpg."""
+    source stem) instead of overwriting p001.jpg.
+
+    `pages`, when given, restricts rendering to those 1-based PDF page numbers
+    (an empty set renders nothing). The output file names keep the ABSOLUTE
+    page index (p001.jpg) so a caller can map a returned path back to the page
+    number that produced it. Used by `pha test` to render only a sample of a
+    large document instead of every page."""
     out_dir.mkdir(parents=True, exist_ok=True)
     images: list[Path] = []
     with fitz.open(str(path)) as doc:
         for i, page in enumerate(doc):
+            if pages is not None and (i + 1) not in pages:
+                continue
             rect = page.rect
             zoom = dpi / 72.0
             if max_px and max(rect.width, rect.height) * zoom > max_px:

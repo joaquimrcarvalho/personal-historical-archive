@@ -17,14 +17,17 @@ from .ingest import (
     edit_all,
     encode_all,
     make_vision_client,
+    prune_orphan_renders,
     reindex_all,
     remove_library_artifact,
+    remove_render_if_orphaned,
     scan_once,
     watch,
     write_document_pages,
 )
 from .model_client import ModelClient, ModelError
 from .sidecar import resolve_sidecar
+from .doctor import ENGINES as DOCTOR_ENGINES
 
 
 def _client(cfg: Config, base_url: str, timeout_s: int) -> ModelClient:
@@ -552,6 +555,22 @@ def cmd_rm(cfg: Config, args) -> None:
             db.delete_document(conn, d["id"])
             print(f"removed #{d['id']} {d['filename']}")
         conn.commit()
+        # drop the render cache for the removed docs (skipped when another
+        # live document still shares the content hash)
+        for d in docs:
+            remove_render_if_orphaned(cfg, conn, d["sha256"])
+    finally:
+        conn.close()
+
+
+def cmd_prune(cfg: Config, args) -> None:
+    """Remove orphaned generated artifacts (render image caches whose document
+    is gone or was superseded)."""
+    conn = db.connect(cfg.db_path)
+    try:
+        n = prune_orphan_renders(cfg, conn, dry_run=args.dry_run, verbose=True)
+        verb = "would remove" if args.dry_run else "removed"
+        print(f"{verb} {n} orphaned render folder(s)")
     finally:
         conn.close()
 
@@ -868,6 +887,57 @@ def cmd_encode(cfg: Config, args) -> None:
             print(f"  ! {r['filename']}: {r.get('reason', r['action'])}")
 
 
+def cmd_test(cfg: Config, args) -> None:
+    """`pha test [target]` — run transcription/editing/encoding on a sample.
+
+    Tests the resolved pha.yaml configuration on a handful of pages, writing
+    the output (and a report.md) to a scratch dir WITHOUT touching the real
+    archive. `--show` re-prints the most recent saved report.
+    """
+    from .testrun import run_test, show_latest
+
+    if getattr(args, "show", False):
+        sys.exit(show_latest(cfg, getattr(args, "target", None)))
+
+    if not getattr(args, "target", None):
+        print("error: specify a document or collection to test, e.g.\n"
+              "  pha test collections/COLX --pages 3\n"
+              "  pha test documents/ms123 --pages 2 --random\n"
+              "  pha test --show          # re-print the most recent report",
+              file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        res = run_test(
+            cfg,
+            getattr(args, "target", None),
+            pages=getattr(args, "pages", 3),
+            randomize=bool(getattr(args, "random", False)),
+            seed=getattr(args, "seed", None),
+            palaeographer=getattr(args, "palaeographer", None),
+            editor=getattr(args, "editor", None),
+            encoder=getattr(args, "encoder", None),
+            model=getattr(args, "model", None),
+            prompt=getattr(args, "prompt", None),
+            temperature=getattr(args, "temperature", None),
+            max_tokens=getattr(args, "max_tokens", None),
+            verbose=True,
+        )
+    except KeyError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    if res.get("skipped"):
+        print(f"test skipped: {res['reason']}", file=sys.stderr)
+        sys.exit(1)
+
+    report = Path(res["scratch"]) / "report.md"
+    if report.exists():
+        print(report.read_text(encoding="utf-8"))
+    else:
+        print(f"results in {res['scratch']}")
+
+
 def cmd_encoder_new(cfg: Config, args) -> None:
     from .encoder_helper import run
     raise SystemExit(run(cfg))
@@ -888,6 +958,37 @@ def cmd_mcp(cfg: Config, args) -> None:
     from . import mcp_server
 
     mcp_server.main(args.transport, args.host, args.port)
+
+
+def cmd_doctor(cfg: Config, args) -> None:
+    """`pha doctor` — are the local OCR/parse engines installed and usable?
+
+    Works even when no archive is configured: the binary checks are
+    machine-level. A model file that declares `engine: tesseract` /
+    `engine: liteparse` makes that engine REQUIRED; `--engine <name>` also
+    requires one (handy before configuring a collection, to ask "is lit even
+    installed?"). Exits 1 when a required engine is missing/broken; `--json`
+    prints the machine-readable report.
+    """
+    from . import doctor
+
+    declared: dict[str, list[str]] = {}
+    for m_id, m in sorted((cfg.models or {}).items()):
+        eng = (m.engine or "").strip().lower()
+        if eng in doctor.ENGINES:
+            declared.setdefault(eng, []).append(m_id)
+    require = set(getattr(args, "engine", None) or [])
+    report = doctor.diagnose(
+        declared=declared,
+        require=require,
+        archive=None if _archive_unconfigured(cfg) else str(cfg.archive_dir),
+    )
+    if getattr(args, "json", False):
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print(doctor.render(report))
+    if not report["ok"]:
+        sys.exit(1)
 
 
 def cmd_update(cfg: Config, args) -> None:
@@ -977,6 +1078,7 @@ def cmd_help(cfg: Config, args) -> None:
     print("  pha mcp                       run the MCP server (stdio)")
     print("  pha bundle <collections...>   export collections for another archive (no re-scan there)")
     print("  pha unbundle <bundle>         import a bundle into THIS archive (no re-scan/edit)")
+    print("  pha test [target] [--pages N] [--random]  test a config on a sample; --show re-prints a report")
     print("  pha update                    check GitHub for a newer pha and install it")
     print("  pha help <topic>              details on readme|mcp|historians|agents")
     print()
@@ -1149,6 +1251,12 @@ def main(argv: list[str] | None = None) -> None:
                     help="install without asking for confirmation")
     up.set_defaults(fn=cmd_update)
 
+    doc = sub.add_parser("doctor", help="check that local OCR/parse engines (tesseract, liteparse) are installed")
+    doc.add_argument("--engine", action="append", choices=sorted(DOCTOR_ENGINES),
+                     help="treat this engine as required (repeatable); default: only engines a model file declares")
+    doc.add_argument("--json", action="store_true", help="machine-readable output (agents)")
+    doc.set_defaults(fn=cmd_doctor)
+
     h = sub.add_parser("help", help="orientation and pointers to the instruction files")
     h.add_argument("topic", nargs="?", help="readme | mcp | historians | agents")
     h.set_defaults(fn=cmd_help)
@@ -1166,6 +1274,11 @@ def main(argv: list[str] | None = None) -> None:
     rm = sub.add_parser("rm", help="remove document(s) from the index (by id or filename substring)")
     rm.add_argument("target")
     rm.set_defaults(fn=cmd_rm)
+
+    prn = sub.add_parser("prune", help="remove orphaned render image caches (no registered document)")
+    prn.add_argument("--dry-run", action="store_true",
+                     help="report what would be removed without deleting")
+    prn.set_defaults(fn=cmd_prune)
 
     pr = sub.add_parser("prompts", help="show prompt resolution")
     pr.add_argument("file", nargs="?")
@@ -1198,6 +1311,23 @@ def main(argv: list[str] | None = None) -> None:
     ec = sub.add_parser("encode", help="run the encoder pass (structured records) over documents with an encoder")
     ec.add_argument("--reprocess", action="store_true", help="re-encode everything")
     ec.set_defaults(fn=cmd_encode)
+
+    tt = sub.add_parser("test", help="test a configuration on a sample of pages (transcription + editing + encoding)")
+    tt.add_argument("target", nargs="?",
+                    help="document or collection path under the dropbox (required unless --show)")
+    tt.add_argument("--pages", "-n", type=int, default=3, help="number of pages to sample (default 3)")
+    tt.add_argument("--random", action="store_true", help="sample random pages instead of the first N")
+    tt.add_argument("--seed", type=int, default=None, help="random seed (with --random, for reproducibility)")
+    tt.add_argument("--palaeographer", default=None, help="override palaeographer rules id")
+    tt.add_argument("--editor", default=None, help="override editor rules id (or 'none'/'null'/'passthrough')")
+    tt.add_argument("--encoder", default=None, help="override encoder id (collection-local or global)")
+    tt.add_argument("--model", default=None, help="override the model interface id for all stages")
+    tt.add_argument("--prompt", default=None, help="override the transcription prompt file")
+    tt.add_argument("--temperature", type=float, default=None, help="override temperature for all stages")
+    tt.add_argument("--max-tokens", type=int, default=None, help="override max_tokens for all stages")
+    tt.add_argument("--show", action="store_true",
+                    help="re-print the most recent test report without re-running the models")
+    tt.set_defaults(fn=cmd_test)
 
     k = sub.add_parser("key", help="manage API keys (OS secret store or .env)")
     k.add_argument("--set", metavar="NAME", help="store a value for NAME (read from stdin)")
@@ -1263,7 +1393,7 @@ def main(argv: list[str] | None = None) -> None:
     # that needs it. Setup commands (`set archive-dir`, `init-archive`,
     # `dropbox`, `key`) and `help` must always run so the guard can be
     # resolved and orientation is always available.
-    if args.cmd not in ("set", "archive-dir", "dropbox", "init-archive", "key", "help", "update") \
+    if args.cmd not in ("set", "archive-dir", "dropbox", "init-archive", "key", "help", "update", "doctor") \
             and _archive_unconfigured(cfg):
         if _prompt_archive_setup(cfg):
             cfg = Config.load()  # reload now that archive_dir may have changed

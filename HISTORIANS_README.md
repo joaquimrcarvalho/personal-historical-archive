@@ -230,8 +230,15 @@ In the model file (`models/<id>.md`):
   Needs the `tesseract` program installed (and its language data).
 - **LiteParse** — `engine: liteparse`, `liteparse_lang` (OCR language, e.g.
   `por`, `fra`), optional `liteparse_dpi` (resolution; use `300` for quality).
-  Needs the `lit` program installed (`pip install liteparse` or
-  `npm i -g @llamaindex/liteparse`).
+  Needs the `lit` program installed. The same `lit` CLI comes from either
+  `pip install liteparse` or `npm i -g @llamaindex/liteparse` — install with
+  whichever toolchain you already use: pha finds engines the same way your
+  Terminal does (its own PATH, then the PATH your login shell would provide),
+  so any normal install just works. Verify
+  with `lit --version` (it must print a LiteParse version, not some other
+  `lit`). LiteParse bundles its own Tesseract. When unsure whether an engine
+  is installed, run `pha doctor` — it reports what is missing and how to
+  install it.
 
 Select it for a collection exactly like any other model:
 

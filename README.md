@@ -224,7 +224,12 @@ Model notes for a new machine:
   `-> qwen-local-19-20c-books` for a local 19th–20th c. printed-book model.
 - **Renders**: default `render_dpi: 72` is fast and adequate for printed
   books (qwen reads fine at 72 dpi). Bump it in `config.yaml` if your source
-  needs more detail.
+  needs more detail. Rendered page images are cached under
+  `renders/<content-sha>/`. Changing a document's content supersedes that
+  folder, and `pha rm` / `pha bundle --move` remove the document — so orphaned
+  render folders are deleted automatically when no other document still uses
+  their content hash. Anything left behind (pre-existing orphans, manual
+  deletions) can be swept with `pha prune` (`--dry-run` to preview).
 
 ### Uploading documents & collections
 
@@ -399,7 +404,28 @@ configured palaeographers.
 | Engine | Model file fields | Tool needed |
 |--------|-------------------|-------------|
 | `tesseract` | `engine: tesseract`, `tesseract_lang` (e.g. `por`/`lat`/`por+lat`), optional `tesseract_psm` | `tesseract` + language data (`brew install tesseract tesseract-lang`) |
-| `liteparse` | `engine: liteparse`, `liteparse_lang` (e.g. `por`/`fra`), optional `liteparse_dpi`; plus `liteparse_ocr` (`fresh`/`embedded`) and `liteparse_format` (`text`/`markdown`/`json`) | `lit` CLI (`pip install liteparse` or `npm i -g @llamaindex/liteparse`) |
+| `liteparse` | `engine: liteparse`, `liteparse_lang` (e.g. `por`/`fra`), optional `liteparse_dpi`; plus `liteparse_ocr` (`fresh`/`embedded`) and `liteparse_format` (`text`/`markdown`/`json`) | `lit` CLI — install ONE of `pip install liteparse` (Python) or `npm i -g @llamaindex/liteparse` (Node); see below |
+
+> **Installing the engines** (on the machine that runs pha). Probe first with
+> `pha doctor` (`--engine liteparse` requires a specific engine; `--json` for
+> machine-readable output; MCP: `pha_doctor()`) — it checks the binaries pha
+> spawns and flags e.g. a wrong `lit`. Why a tool can work in your Terminal
+> yet be reported missing: pha is often launched from a GUI / agent / cron
+> context whose PATH is minimal, unlike your interactive shell. pha therefore
+> resolves each engine binary as (1) its own PATH, (2) the dirs in the
+> `PHA_ENGINE_PATH` env var, (3) the PATH your login shell would provide
+> (queried once via `$SHELL -lic`, cached; `PHA_NO_LOGIN_PATH=1` disables),
+> (4) the interpreter's own bin dir — so any normal install (brew, pyenv,
+> nvm, pipx, `uv tool`, npm `-g`, pip into pha's own venv) is found
+> automatically, and only genuinely unusual locations need `PHA_ENGINE_PATH`.
+> Tesseract comes from the package managers (see the table above). The `lit`
+> CLI is the SAME whether installed via pip or npm — install with whichever
+> toolchain you already use. `command -v lit` hitting is not proof — `lit` is
+> a common name (e.g. LLVM's test runner); `lit --version` must print a
+> LiteParse version. LiteParse bundles its own Tesseract, so it needs no
+> separate tesseract install; for a non-English `liteparse_lang`, make that
+> language's `.traineddata` reachable (offline: point `TESSDATA_PREFIX` at the
+> folder containing them).
 
 > An OCR engine has no `base_url`/`model` — set `engine` and the engine's
 > settings instead. Select it per document/collection exactly like any other
@@ -642,6 +668,42 @@ printed i–xv but occupies PDF pages 1-15).
   - **few-shot `## Examples`** in the encoder file teach the model the exact
     classes/attributes/shapes with grounded Q/A pairs.
 
+## Testing a configuration (`pha test`)
+
+`pha test` runs the WHOLE pipeline — transcription, editing and encoding — on a
+small **sample** of a document's pages so you can sanity-check (and fine-tune) a
+configuration before committing to a full `pha scan` / `pha edit` / `pha
+encode`. It is deliberately **isolated**: it renders only the sampled pages and
+writes everything to a scratch directory
+`<archive_dir>/.pha-test/<doc>-<timestamp>/` (page images, per-page
+transcriptions/edits, records, and a readable `report.md` + machine-readable
+`report.json`). It NEVER touches the archive DB, library or renders folders.
+
+```
+pha test [target] [--pages N] [--random] [--seed S] [--show]
+                 [--palaeographer ID] [--editor ID] [--encoder ID]
+                 [--model ID] [--prompt FILE] [--temperature T] [--max-tokens N]
+```
+
+- `target` is a document or collection path under the dropbox (required unless
+  using `--show`).
+- `--pages N` samples N pages (default 3); `--random` picks them at random and
+  `--seed S` makes that reproducible.
+- It resolves the SAME way a real run does — the `pha.yaml` sidecar
+  (palaeographer/editor/encoder + models), the prompt chain, and the collection
+  encoders — and prints what it resolved, the per-page result lengths, and any
+  per-page errors.
+- The `--palaeographer/--editor/--encoder/--model/--prompt/--temperature/
+  --max-tokens` flags override the resolved config for that run, so you can
+  tune a prompt or model, re-run, and diff the outputs. Every stage's effective
+  prompt is written to the scratch dir (`prompt-transcription.md`,
+  `prompt-edit.md`, `prompt-encode-<name>.md`).
+- `pha test --show [target]` re-prints the most recent test report without
+  running the models again.
+
+Because it runs the pipeline for real, it takes the same single-job lock as
+`pha scan`/`pha edit` (one local model at a time).
+
 ## CLI reference
 
 ```
@@ -654,12 +716,17 @@ pha export
 pha reindex
 pha review [--doc N]      # import human corrections from library .md files into the DB
 pha edit [--reprocess] [--path collections/COLX] [--page N]
-pha rm ID|NAME
+pha rm ID|NAME            # remove document(s) from the index
+pha prune [--dry-run]     # delete orphaned render image caches (no registered document)
 pha prompts [file]
 pha palaeographer [file]
 pha editor [file]
 pha encoder [file] [--new]
 pha encode [--reprocess]
+pha test [target] [--pages N] [--random] [--seed S] [--show]
+                                    # run transcription+editing+encoding on a sample of pages
+                                    #   (safe: writes to a scratch dir; never touches the archive;
+                                    #    --show re-prints the most recent test report)
 pha init-archive [PATH]      # create a new self-contained archive directory
 pha set archive-dir [PATH]   # set the archive data root (stored in gitignored .env)
 pha archive-dir              # alias for `pha set archive-dir`

@@ -471,6 +471,68 @@ def remove_library_artifact(cfg: Config, doc) -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _sha_referenced(conn, sha: str) -> bool:
+    """True if any registered document still carries this content sha.
+
+    Several documents can share a sha when two files have identical bytes, so a
+    render folder must not be dropped while any of them still references it."""
+    if not sha:
+        return False
+    return conn.execute(
+        "SELECT 1 FROM documents WHERE sha256 = ? LIMIT 1", (sha,)
+    ).fetchone() is not None
+
+
+def remove_render_dir(cfg: Config, sha: str) -> bool:
+    """Delete ``renders/<sha>`` unconditionally (callers must confirm the sha
+    is no longer needed). Returns whether a directory was removed."""
+    if not sha:
+        return False
+    d = cfg.renders / sha
+    if not d.is_dir():
+        return False
+    shutil.rmtree(d, ignore_errors=True)
+    return True
+
+
+def remove_render_if_orphaned(cfg: Config, conn, sha: str) -> bool:
+    """After dropping a document's DB row, remove its ``renders/<sha>`` folder
+    when no other live document still shares that content hash.
+
+    The render cache is keyed by content sha, so a superseded or removed
+    document leaves its folder (and its JPEGs) behind. Callers should already
+    have committed the document deletion; this helper then verifies the sha is
+    unreferenced and deletes only that folder."""
+    if _sha_referenced(conn, sha):
+        return False
+    return remove_render_dir(cfg, sha)
+
+
+def prune_orphan_renders(cfg: Config, conn, dry_run: bool = False, verbose: bool = True) -> int:
+    """Remove ``renders/<sha>`` folders that no registered document references.
+
+    A render folder is keyed by the document's content sha; superseded or
+    deleted documents leave their folder behind. This scans the renders dir and
+    deletes every subdirectory whose name is not a live document sha. With
+    ``dry_run`` it only reports. Returns the number of folders removed (or that
+    would be removed in a dry run)."""
+    live = {row["sha256"] for row in conn.execute("SELECT sha256 FROM documents") if row["sha256"]}
+    removed = 0
+    if not cfg.renders.is_dir():
+        return 0
+    for d in sorted(cfg.renders.iterdir()):
+        if not d.is_dir():
+            continue
+        if d.name in live:
+            continue
+        if not dry_run:
+            shutil.rmtree(d, ignore_errors=True)
+        removed += 1
+        if verbose:
+            print(f"  {'[dry-run] would remove' if dry_run else 'removed'} {d}")
+    return removed
+
+
 def library_page_path(
     cfg: Config,
     doc,
@@ -585,9 +647,13 @@ def ingest_file(
     elif existing:
         # File content changed (new sha) -> the document is a NEW version.
         # The old library folder is keyed by the old sha, so it is left on
-        # disk untouched; only the stale DB row is replaced.
+        # disk untouched; only the stale DB row is replaced. The old render
+        # folder (also keyed by the old sha) is orphaned, so drop it now
+        # unless another live document still shares that content hash.
+        old_sha = existing["sha256"]
         db.delete_document(conn, existing["id"])
         conn.commit()
+        remove_render_if_orphaned(cfg, conn, old_sha)
 
     try:
         rel_dir = str(path.parent.relative_to(cfg.dropbox))

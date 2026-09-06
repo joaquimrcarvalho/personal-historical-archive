@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from . import db
+from . import doctor
 from .config import Config
 from .ingest import make_vision_client, scan_once
 from .model_client import ModelClient
@@ -19,7 +20,9 @@ def make_server(cfg: Config) -> FastMCP:
             "`pha_list_documents` to browse, `pha_upload` to add a document/collection file "
             "into the dropbox (send its base64 bytes — the client and server may be on "
             "different machines), `pha_scan_now` after new files are dropped into the "
-            "dropbox, and `pha_extraction_status` to see ingestion progress."
+            "dropbox, and `pha_extraction_status` to see ingestion progress. "
+            "Call `pha_doctor` to check whether the local OCR/parse engines "
+            "(tesseract, liteparse) are installed on this machine."
         ),
     )
 
@@ -193,6 +196,25 @@ def make_server(cfg: Config) -> FastMCP:
             return db.summary(conn)
         finally:
             conn.close()
+
+    @mcp.tool()
+    def pha_doctor() -> dict:
+        """Check that the local OCR/parse engines (tesseract, liteparse) are
+        installed and usable ON THIS archive machine.
+
+        pha has no other engine probe — a scan only discovers a missing engine
+        when it actually runs it. Call this to learn whether the engines that
+        model files declare (`engine: tesseract` / `engine: liteparse`) can
+        run here, and how to install them when not. Returns one entry per
+        engine: binary, found, path, version, ok, which model files declare
+        it, and install/verify hints for broken ones.
+        """
+        declared: dict[str, list[str]] = {}
+        for m_id, m in (cfg.models or {}).items():
+            eng = (m.engine or "").strip().lower()
+            if eng in doctor.ENGINES:
+                declared.setdefault(eng, []).append(m_id)
+        return doctor.diagnose(declared=declared, archive=str(cfg.archive_dir))
 
     @mcp.tool()
     def pha_schema() -> dict:

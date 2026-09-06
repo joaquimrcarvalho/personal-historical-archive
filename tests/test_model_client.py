@@ -7,6 +7,7 @@ import subprocess
 
 import pytest
 
+import personal_historical_archive.model_client as mc
 from personal_historical_archive.model_client import (
     ModelClient,
     ModelError,
@@ -15,6 +16,29 @@ from personal_historical_archive.model_client import (
     run_liteparse,
     run_tesseract,
 )
+
+# The real resolver, captured before the autouse fixture below disables it.
+_REAL_FIND_ENGINE_BINARY = mc.find_engine_binary
+
+
+@pytest.fixture(autouse=True)
+def _clean_engine_state(monkeypatch):
+    """Keep engine-binary resolution out of the command-construction tests.
+
+    Those tests assert the spawned argv uses the BARE binary name
+    (["tesseract", ...], ["lit", "parse", ...]), so resolution must return
+    None there. The dedicated resolver tests at the bottom restore the real
+    function. Also clears the cached fallback dir list between tests."""
+    mc._reset_engine_fallback_cache()
+    monkeypatch.setattr(mc, "find_engine_binary", lambda name: None)
+    yield
+    mc._reset_engine_fallback_cache()
+
+
+def _use_real_resolver(monkeypatch):
+    """Re-enable the real find_engine_binary for the resolver tests."""
+    mc._reset_engine_fallback_cache()
+    monkeypatch.setattr(mc, "find_engine_binary", _REAL_FIND_ENGINE_BINARY)
 
 
 def test_clean_html_entities():
@@ -278,3 +302,93 @@ def test_liteparse_engine_embedded_non_pdf_falls_back_to_raster(monkeypatch):
     _liteparse_page_engine(pal, Path("/tmp/render/p001.jpg"), ctx)
     assert seen["args"][0] == Path("/tmp/render/p001.jpg")
     assert seen["kwargs"] == {"fmt": "text"}
+
+
+# --------------------------------------------------------------------------- engine binary resolution
+
+def test_find_engine_binary_prefers_path(monkeypatch):
+    monkeypatch.setattr(mc, "shutil", SimpleNamespace(which=lambda name: "/usr/bin/" + name))
+    _use_real_resolver(monkeypatch)
+    assert mc.find_engine_binary("tesseract") == "/usr/bin/tesseract"
+
+
+def test_find_engine_binary_uses_pha_engine_path(monkeypatch, tmp_path):
+    exe = tmp_path / "lit"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(mc, "shutil", SimpleNamespace(which=lambda name: None))
+    monkeypatch.setenv("PHA_ENGINE_PATH", str(tmp_path))
+    monkeypatch.setenv("PHA_NO_LOGIN_PATH", "1")
+    _use_real_resolver(monkeypatch)
+    assert mc.find_engine_binary("lit") == str(exe)
+
+
+def test_find_engine_binary_uses_login_shell_path(monkeypatch, tmp_path):
+    exe = tmp_path / "tesseract"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(mc, "shutil", SimpleNamespace(which=lambda name: None))
+    monkeypatch.setenv("PHA_ENGINE_PATH", "")
+    monkeypatch.delenv("PHA_NO_LOGIN_PATH", raising=False)
+    monkeypatch.setattr(mc, "_login_shell_path", lambda: str(tmp_path))
+    _use_real_resolver(monkeypatch)
+    assert mc.find_engine_binary("tesseract") == str(exe)
+
+
+def test_find_engine_binary_none_when_nowhere(monkeypatch):
+    monkeypatch.setattr(mc, "shutil", SimpleNamespace(which=lambda name: None))
+    monkeypatch.setattr(mc, "_fallback_bin_dirs", lambda: [])
+    _use_real_resolver(monkeypatch)
+    assert mc.find_engine_binary("tesseract") is None
+
+
+def test_login_shell_path_parses_markers(monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    monkeypatch.delenv("PHA_NO_LOGIN_PATH", raising=False)
+
+    def fake_run(cmd, capture_output, text, timeout):
+        assert cmd[0] == "/bin/zsh"
+        assert "-l" in cmd and "-i" in cmd
+        return subprocess.CompletedProcess(
+            cmd, 0,
+            stdout="\n__PHA_PATH_START__\n/a:/b\n__PHA_PATH_END__\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(mc.subprocess, "run", fake_run)
+    assert mc._login_shell_path() == "/a:/b"
+
+
+def test_login_shell_path_ignores_rc_noise(monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    monkeypatch.delenv("PHA_NO_LOGIN_PATH", raising=False)
+
+    def fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(
+            cmd, 0,
+            stdout="noise\n__PHA_PATH_START__\n/one\n__PHA_PATH_END__\nmore\n",
+            stderr="pyenv warning\n",
+        )
+
+    monkeypatch.setattr(mc.subprocess, "run", fake_run)
+    assert mc._login_shell_path() == "/one"
+
+
+def test_login_shell_path_opt_out_and_no_shell(monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    monkeypatch.setenv("PHA_NO_LOGIN_PATH", "1")
+    assert mc._login_shell_path() is None  # opt-out: must not spawn a shell
+    monkeypatch.delenv("PHA_NO_LOGIN_PATH")
+    monkeypatch.delenv("SHELL")
+    assert mc._login_shell_path() is None
+
+
+def test_login_shell_path_timeout_returns_none(monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    monkeypatch.delenv("PHA_NO_LOGIN_PATH", raising=False)
+
+    def boom(cmd, capture_output, text, timeout):
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(mc.subprocess, "run", boom)
+    assert mc._login_shell_path() is None

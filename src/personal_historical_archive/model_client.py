@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import base64
+import os
+import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -11,6 +14,128 @@ import httpx
 
 class ModelError(RuntimeError):
     pass
+
+
+def _dec(v) -> str:
+    """Normalise subprocess output to str, tolerating non-UTF-8 bytes.
+
+    OCR/parse engines sometimes emit bytes that are not valid UTF-8 (e.g. a
+    Latin-1 glyph byte); decoding with ``errors="replace"`` recovers the text
+    instead of crashing the whole scan/test run."""
+    if isinstance(v, bytes):
+        return v.decode("utf-8", "replace")
+    if v is None:
+        return ""
+    return str(v)
+
+
+def _login_shell_path(timeout_s: float = 8.0) -> str | None:
+    """The PATH the current user's interactive login shell would set.
+
+    pha is often launched from a context whose PATH is minimal — a GUI app,
+    an agent harness, cron — which does NOT include the dirs the user's
+    Terminal adds in shell rc files (~/.zshrc / .bash_profile / .zshenv ...).
+    There is no OS-level "the user PATH"; the closest generic source is the
+    shell itself, so we ask it: `$SHELL -l -i -c 'printf $PATH'`.
+
+    Returns None (no query, or the shell refused/timed out) when this cannot
+    be determined — e.g. $SHELL is unset or not a POSIX shell, or on Windows.
+    The result is parsed between unique markers so rc-file noise (pyenv
+    warnings, etc.) never contaminates it.
+    """
+    if os.name != "posix":
+        return None
+    if os.environ.get("PHA_NO_LOGIN_PATH"):
+        return None  # explicit opt-out (service accounts, restricted shells)
+    shell = os.environ.get("SHELL") or ""
+    if not shell or Path(shell).name not in ("bash", "zsh", "sh", "dash", "ksh"):
+        return None
+    probe = (
+        'printf "\\n__PHA_PATH_START__\\n%s\\n__PHA_PATH_END__\\n" "$PATH"'
+    )
+    try:
+        proc = subprocess.run(
+            [shell, "-l", "-i", "-c", probe],
+            capture_output=True, text=True, timeout=timeout_s,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    out = (proc.stdout or "") + proc.stderr
+    start = out.find("__PHA_PATH_START__")
+    end = out.find("__PHA_PATH_END__")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    return out[start + len("__PHA_PATH_START__"):end].strip() or None
+
+
+# Cached fallback dir list for this process: PATH never changes under us, and
+# the login-shell query is comparatively expensive (it starts a shell), so
+# resolve it once, lazily, only when a binary is NOT already on pha's PATH.
+_ENGINE_FALLBACK_DIRS: list[str] | None = None
+
+
+def _reset_engine_fallback_cache() -> None:
+    """Forget cached fallback dirs (tests / after env changes)."""
+    global _ENGINE_FALLBACK_DIRS
+    _ENGINE_FALLBACK_DIRS = None
+
+
+def _fallback_bin_dirs() -> list[str]:
+    """Dirs to search when a local engine binary is not on pha's own PATH.
+
+    Generic, not machine-specific — in order:
+    1. PHA_ENGINE_PATH env (colon-separated, os.pathsep): an explicit
+       override any user/machine can set.
+    2. the PATH the user's own login shell would provide (see
+       ``_login_shell_path``) — this is where interactive-shell installs
+       (brew, pyenv, nvm, pipx, uv tool, npm -g, ...) actually land for THAT
+       user, whatever their setup is.
+    3. the bin dir of the interpreter pha itself runs from (covers
+       ``pip install liteparse`` into pha's own environment).
+    """
+    global _ENGINE_FALLBACK_DIRS
+    if _ENGINE_FALLBACK_DIRS is not None:
+        return _ENGINE_FALLBACK_DIRS
+
+    dirs: list[str] = []
+    extra = os.environ.get("PHA_ENGINE_PATH", "")
+    if extra:
+        dirs.extend(d for d in extra.split(os.pathsep) if d)
+    login_path = _login_shell_path()
+    if login_path:
+        dirs.extend(d for d in login_path.split(os.pathsep) if d)
+    dirs.append(str(Path(sys.executable).resolve().parent))
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for d in dirs:
+        if d and d not in seen:
+            seen.add(d)
+            deduped.append(d)
+    _ENGINE_FALLBACK_DIRS = deduped
+    return deduped
+
+
+def find_engine_binary(name: str) -> str | None:
+    """Resolve the executable pha should spawn for a local engine (e.g.
+    ``"tesseract"`` or ``"lit"``).
+
+    PATH first (so an intentional override on pha's PATH wins), then the
+    fallback dirs from ``_fallback_bin_dirs`` — chiefly the PATH the user's
+    own login shell would provide — so pha finds engines that work in the
+    user's Terminal even when pha itself was launched with a minimal PATH.
+    Returns None if the binary is nowhere to be found.
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    for d in _fallback_bin_dirs():
+        cand = Path(d) / name
+        if cand.is_file() and os.access(cand, os.X_OK):
+            return str(cand)
+    return None
 
 
 def run_tesseract(image_path: str | Path, lang: str = "", psm: int | None = None) -> str:
@@ -29,13 +154,13 @@ def run_tesseract(image_path: str | Path, lang: str = "", psm: int | None = None
 
     Raises ``ModelError`` if Tesseract is not installed or fails.
     """
-    cmd = ["tesseract", str(image_path), "stdout"]
+    cmd = [find_engine_binary("tesseract") or "tesseract", str(image_path), "stdout"]
     if lang:
         cmd += ["-l", lang]
     if psm is not None:
         cmd += ["--psm", str(psm)]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        proc = subprocess.run(cmd, capture_output=True, text=False, timeout=600)
     except FileNotFoundError as e:
         raise ModelError(
             "tesseract is not installed or not on PATH. "
@@ -47,9 +172,9 @@ def run_tesseract(image_path: str | Path, lang: str = "", psm: int | None = None
     if proc.returncode != 0:
         raise ModelError(
             f"tesseract failed on {image_path}: "
-            f"{proc.stderr.strip() or proc.stdout.strip()}"
+            f"{_dec(proc.stderr or proc.stdout).strip()}"
         )
-    return proc.stdout.strip()
+    return _dec(proc.stdout).strip()
 
 
 def run_liteparse(
@@ -80,7 +205,7 @@ def run_liteparse(
 
     Raises ``ModelError`` if ``lit`` is not installed or fails.
     """
-    cmd = ["lit", "parse", str(target)]
+    cmd = [find_engine_binary("lit") or "lit", "parse", str(target)]
     if lang:
         cmd += ["--ocr-language", lang]
     if dpi:
@@ -90,7 +215,7 @@ def run_liteparse(
     if target_page is not None:
         cmd += ["--target-pages", str(target_page)]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        proc = subprocess.run(cmd, capture_output=True, text=False, timeout=600)
     except FileNotFoundError as e:
         raise ModelError(
             "lit (LiteParse) is not installed or not on PATH. Install it "
@@ -102,9 +227,9 @@ def run_liteparse(
     if proc.returncode != 0:
         raise ModelError(
             f"liteparse failed on {target}: "
-            f"{proc.stderr.strip() or proc.stdout.strip()}"
+            f"{_dec(proc.stderr or proc.stdout).strip()}"
         )
-    return proc.stdout.strip()
+    return _dec(proc.stdout).strip()
 
 
 def _tesseract_page_engine(palaeographer, image_path, _ctx) -> str:

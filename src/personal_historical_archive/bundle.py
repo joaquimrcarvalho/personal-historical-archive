@@ -66,6 +66,7 @@ from .ingest import (
     discover,
     index_document,
     remove_library_artifact,
+    remove_render_if_orphaned,
     sha256_of,
     sha256_of_dir,
     write_document_pages,
@@ -404,6 +405,10 @@ def _remove_bundled(
         db.delete_document(conn, row["id"])
         docs += 1
     conn.commit()
+    # the bundle already carries a copy of these renders, so drop the source
+    # cache (skipped when another live document still shares the content hash).
+    for row, _u in bundled:
+        remove_render_if_orphaned(cfg, conn, row["sha256"])
     return {"documents": docs, "dropbox_paths": removed_paths}
 
 
@@ -718,6 +723,7 @@ def import_bundle(cfg, bundle_dir: Path, force: bool = False, verbose: bool = Tr
                     remove_library_artifact(cfg, existing)
                     db.delete_document(conn, existing["id"])
                     conn.commit()
+                    remove_render_if_orphaned(cfg, conn, existing["sha256"])
                 else:
                     skipped_docs.append(rel)
                     if verbose:

@@ -107,20 +107,38 @@
   engines — OCR ignores the prompt). Start from the samples
   `models/_sample.tesseract.md`, `models/_sample.liteparse.md`,
   `palaeographers/_sample.ocr.md`.
-  **Install on the ARCHIVE machine** (check `command -v tesseract` /
-  `command -v lit` first — if pha reports a "not installed" ModelError, the
-  binary is missing; install it rather than retrying blindly):
+  **Install on the ARCHIVE machine.** Probe FIRST with `pha doctor` — it
+  checks the binaries pha spawns (and works even before an archive is set).
+  Options: `--engine liteparse` treats an engine as required, `--json` prints
+  a machine-readable report, and it exits non-zero when a required engine is
+  broken. Remotely, call the MCP tool `pha_doctor()` — the same check, run on
+  the archive machine. HOW pha finds engines (why a tool can work in your
+  Terminal yet "not be on PATH" for pha): pha is often launched from a GUI /
+  agent / cron context whose PATH is minimal, unlike your interactive shell.
+  So pha resolves each engine binary as: (1) its own PATH; (2) the dirs in
+  the `PHA_ENGINE_PATH` env var; (3) the PATH your login shell would provide
+  (queried once via `$SHELL -lic`, cached; set `PHA_NO_LOGIN_PATH=1` to
+  disable); (4) the bin dir of the interpreter pha runs from. In practice any
+  install your Terminal can run — brew, pyenv, nvm, pipx, `uv tool`, npm -g,
+  `pip` into pha's own venv — is found automatically; only genuinely unusual
+  locations need `PHA_ENGINE_PATH`. When pha DOES report a missing engine at
+  scan time ("…is not installed or not on PATH"), the tool is really absent —
+  install it rather than retrying.
   - Tesseract (standalone OCR): macOS `brew install tesseract tesseract-lang`
     (the `-lang` formula provides the language data, e.g. `por`, `lat`);
     Debian/Ubuntu `apt-get install tesseract-ocr tesseract-ocr-por` (one
     package per language); Windows `choco install tesseract` or the
     UB-Mannheim installer.
-  - LiteParse (`lit parse`, ships the `lit` CLI): `pip install liteparse` or
-    `npm i -g @llamaindex/liteparse`; it BUNDLES its own Tesseract, so it needs
-    no separate tesseract install. A non-English `liteparse_lang` requires that
-    language's traineddata to be reachable — offline, set `TESSDATA_PREFIX` to
-    a directory containing the `.traineddata` files.
-  Verify with `tesseract --version` and `lit --version`.
+  - LiteParse (`lit parse`, ships the `lit` CLI): the SAME `lit` CLI comes from
+    `pip install liteparse` (Python) or `npm i -g @llamaindex/liteparse`
+    (Node) — alternatives, not both; install with whichever toolchain you
+    already use (see resolution above — any normal install works). A bare
+    `command -v lit` hit is NOT proof (`lit` is a common name, e.g. LLVM's
+    test runner): `lit --version` must print a LiteParse version. LiteParse
+    BUNDLES its own Tesseract, so it needs no separate tesseract install. A
+    non-English `liteparse_lang` requires that language's traineddata to be
+    reachable — offline, set `TESSDATA_PREFIX` to a
+    directory containing the `.traineddata` files.
 - Pipeline: dropbox → palaeographer per-page transcription → optional editor
   transform → optional encoder (concatenated whole-document text, page-grounded
   records) → SQLite (FTS5 + embeddings, indexing both raw and edited
@@ -180,6 +198,15 @@ collection's processing = the resolved **palaeographer**, **editor**, and
   - `pha prompts <collection-or-doc>` → effective prompt + its source file.
   - `pha encoder` → lists collection-local encoders; `pha encoder <file>`
     shows a document's resolved encoders.
+- **`pha test <doc-or-collection> [--pages N] [--random]`** → run the WHOLE
+  pipeline (transcription → editing → encoding) on a SAMPLE of pages to
+  sanity-check / fine-tune a config before a full pass. It resolves the same
+  `pha.yaml` the real run uses, writes everything to
+  `<archive_dir>/.pha-test/<doc>-<timestamp>/` (never touching the DB/library/
+  renders), and prints a `report.md`. `--palaeographer/--editor/--encoder/
+  --model/--prompt/--temperature/--max-tokens` override the config for that
+  run; `pha test --show` re-prints the most recent report. It takes the same
+  single-model lock as `pha scan`/`pha edit`.
 - **Remotely / connected via MCP** (agent on another machine):
   - `pha_collection_config("collections/COLX")` returns **one object** with
     the resolved `palaeographer`, `editor` (or `{id: None, ...}` when none is
