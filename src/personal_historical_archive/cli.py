@@ -894,16 +894,45 @@ def cmd_test(cfg: Config, args) -> None:
     the output (and a report.md) to a scratch dir WITHOUT touching the real
     archive. `--show` re-prints the most recent saved report.
     """
-    from .testrun import run_test, show_latest
+    from .testrun import run_test, show_latest, list_runs, clean_runs
 
     if getattr(args, "show", False):
         sys.exit(show_latest(cfg, getattr(args, "target", None)))
+
+    if getattr(args, "list", False):
+        runs = list_runs(cfg)
+        if not runs:
+            print("no pha test reports found")
+            return
+        for r in runs:
+            ts = datetime.fromtimestamp(r["mtime"]).strftime("%Y-%m-%d %H:%M:%S")
+            print(f"  {r['name']}  {r['target']!r}  "
+                  f"({r['documents']} doc(s), pages={r['pages']})  {ts}")
+        print(f"\n{len(runs)} test run(s). `pha test --clean` removes them.")
+        return
+
+    if getattr(args, "clean", False):
+        res = clean_runs(cfg, getattr(args, "target", None),
+                         dry_run=bool(getattr(args, "dry_run", False)))
+        verb = "would remove" if getattr(args, "dry_run", False) else "removed"
+        for c in res["cleaned"]:
+            print(f"  {verb} {c}")
+        if not res["cleaned"]:
+            msg = "nothing to clean"
+            if getattr(args, "target", None):
+                msg += f" matching {args.target!r}"
+            print(msg)
+        else:
+            print(f"{verb} {res['removed']} test run(s)")
+        return
 
     if not getattr(args, "target", None):
         print("error: specify a document or collection to test, e.g.\n"
               "  pha test collections/COLX --pages 3\n"
               "  pha test documents/ms123 --pages 2 --random\n"
-              "  pha test --show          # re-print the most recent report",
+              "  pha test --show          # re-print the most recent report\n"
+              "  pha test --list          # list saved test reports\n"
+              "  pha test --clean         # delete them",
               file=sys.stderr)
         sys.exit(1)
 
@@ -1078,7 +1107,7 @@ def cmd_help(cfg: Config, args) -> None:
     print("  pha mcp                       run the MCP server (stdio)")
     print("  pha bundle <collections...>   export collections for another archive (no re-scan there)")
     print("  pha unbundle <bundle>         import a bundle into THIS archive (no re-scan/edit)")
-    print("  pha test [target] [--pages N] [--random]  test a config on a sample; --show re-prints a report")
+    print("  pha test [target] [--pages N] [--random]  test a config on a sample; --show/--list/--clean manage reports")
     print("  pha update                    check GitHub for a newer pha and install it")
     print("  pha help <topic>              details on readme|mcp|historians|agents")
     print()
@@ -1327,6 +1356,12 @@ def main(argv: list[str] | None = None) -> None:
     tt.add_argument("--max-tokens", type=int, default=None, help="override max_tokens for all stages")
     tt.add_argument("--show", action="store_true",
                     help="re-print the most recent test report without re-running the models")
+    tt.add_argument("--list", action="store_true",
+                    help="list saved test reports (no models are run)")
+    tt.add_argument("--clean", action="store_true",
+                    help="delete saved test report scratch dirs (all, or those matching target)")
+    tt.add_argument("--dry-run", action="store_true",
+                    help="with --clean: report what would be removed without deleting")
     tt.set_defaults(fn=cmd_test)
 
     k = sub.add_parser("key", help="manage API keys (OS secret store or .env)")

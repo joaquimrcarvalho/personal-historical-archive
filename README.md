@@ -683,10 +683,12 @@ transcriptions/edits, records, and a readable `report.md` + machine-readable
 pha test [target] [--pages N] [--random] [--seed S] [--show]
                  [--palaeographer ID] [--editor ID] [--encoder ID]
                  [--model ID] [--prompt FILE] [--temperature T] [--max-tokens N]
+pha test --list             # list saved test reports
+pha test --clean [target]   # delete test report scratch dirs (--dry-run to preview)
 ```
 
 - `target` is a document or collection path under the dropbox (required unless
-  using `--show`).
+  using `--show`/`--list`/`--clean`).
 - `--pages N` samples N pages (default 3); `--random` picks them at random and
   `--seed S` makes that reproducible.
 - It resolves the SAME way a real run does — the `pha.yaml` sidecar
@@ -700,6 +702,10 @@ pha test [target] [--pages N] [--random] [--seed S] [--show]
   `prompt-edit.md`, `prompt-encode-<name>.md`).
 - `pha test --show [target]` re-prints the most recent test report without
   running the models again.
+- Each run leaves a scratch dir under `<archive_dir>/.pha-test/`. `pha test
+  --list` shows them; `pha test --clean` deletes them (all, or those matching
+  an optional target substring); `pha test --clean [target] --dry-run` previews
+  without deleting.
 
 Because it runs the pipeline for real, it takes the same single-job lock as
 `pha scan`/`pha edit` (one local model at a time).
@@ -726,7 +732,7 @@ pha encode [--reprocess]
 pha test [target] [--pages N] [--random] [--seed S] [--show]
                                     # run transcription+editing+encoding on a sample of pages
                                     #   (safe: writes to a scratch dir; never touches the archive;
-                                    #    --show re-prints the most recent test report)
+                                    #    --show re-prints, --list lists, --clean deletes test run dirs)
 pha init-archive [PATH]      # create a new self-contained archive directory
 pha set archive-dir [PATH]   # set the archive data root (stored in gitignored .env)
 pha archive-dir              # alias for `pha set archive-dir`

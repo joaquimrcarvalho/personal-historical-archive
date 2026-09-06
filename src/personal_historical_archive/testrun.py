@@ -26,6 +26,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import random
+import shutil
 import sys
 import time
 from dataclasses import dataclass, field
@@ -585,6 +586,77 @@ def show_latest(cfg: Config, target: str | None = None) -> int:
                          ensure_ascii=False, indent=2))
     print(f"\n(scratch: {d})")
     return 0
+
+
+# --------------------------------------------------------------------------- listing + cleaning
+
+def _run_dir(cfg: Config) -> Path:
+    return cfg.data / ".pha-test"
+
+
+def list_runs(cfg: Config) -> list[dict]:
+    """All `pha test` runs under the archive's `.pha-test/`, newest first, with
+    a little metadata from each report.json."""
+    root = _run_dir(cfg)
+    if not root.is_dir():
+        return []
+    runs: list[dict] = []
+    for d in sorted(root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if not d.is_dir():
+            continue
+        rj = d / "report.json"
+        if not rj.is_file():
+            continue
+        try:
+            payload = json.loads(rj.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+        runs.append({
+            "dir": d,
+            "name": d.name,
+            "mtime": d.stat().st_mtime,
+            "target": payload.get("target"),
+            "pages": payload.get("pages"),
+            "documents": len(payload.get("documents", [])),
+            # all document paths, for a substring match on `--clean`/`--list`
+            "paths": [doc.get("path") for doc in payload.get("documents", [])],
+        })
+    return runs
+
+
+def _run_matches(run: dict, target: str) -> bool:
+    t = target.lower()
+    if t in run["name"].lower():
+        return True
+    if run["target"] and t in run["target"].lower():
+        return True
+    return any(p and t in p.lower() for p in run.get("paths", []))
+
+
+def clean_runs(cfg: Config, target: str | None = None, dry_run: bool = False) -> dict:
+    """Remove `pha test` scratch runs (all of them, or those matching `target`).
+
+    Only ever deletes directories under the archive's `.pha-test/` — never the
+    archive itself. With `dry_run` nothing is deleted; the would-be-removed
+    paths are still reported."""
+    root = _run_dir(cfg)
+    if not root.is_dir():
+        return {"removed": 0, "cleaned": [], "root": str(root)}
+    runs = list_runs(cfg)
+    if target:
+        runs = [r for r in runs if _run_matches(r, target)]
+    cleaned: list[str] = []
+    for r in runs:
+        cleaned.append(str(r["dir"]))
+        if not dry_run:
+            shutil.rmtree(r["dir"], ignore_errors=True)
+    if not dry_run:
+        try:
+            if not any(root.iterdir()):
+                root.rmdir()
+        except OSError:
+            pass
+    return {"removed": len(runs), "cleaned": cleaned, "root": str(root)}
 
 
 # --------------------------------------------------------------------------- main entry

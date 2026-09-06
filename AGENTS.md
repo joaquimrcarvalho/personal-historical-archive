@@ -205,7 +205,9 @@ collection's processing = the resolved **palaeographer**, **editor**, and
   `<archive_dir>/.pha-test/<doc>-<timestamp>/` (never touching the DB/library/
   renders), and prints a `report.md`. `--palaeographer/--editor/--encoder/
   --model/--prompt/--temperature/--max-tokens` override the config for that
-  run; `pha test --show` re-prints the most recent report. It takes the same
+  run; `pha test --show` re-prints the most recent report, `pha test --list`
+  lists saved runs, `pha test --clean [target] [--dry-run]` deletes the `.pha-test`
+  scratch dirs (run dirs accumulate one per run). It takes the same
   single-model lock as `pha scan`/`pha edit`.
 - **Remotely / connected via MCP** (agent on another machine):
   - `pha_collection_config("collections/COLX")` returns **one object** with

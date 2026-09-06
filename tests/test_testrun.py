@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import fitz  # pymupdf
@@ -183,3 +184,55 @@ def test_run_test_no_match_skips(tmp_path):
     cfg = _make_cfg(tmp_path)
     res = tr.run_test(cfg, "collections/ghost", pages=2, verbose=False)
     assert res.get("skipped") is True
+
+
+# --------------------------------------------------------------------------- listing + cleaning
+
+def _mk_run(cfg, name: str, target: str, paths: list[str]) -> Path:
+    root = tr._run_dir(cfg)
+    d = root / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "report.json").write_text(json.dumps({
+        "target": target, "pages": 1,
+        "documents": [{"path": p} for p in paths],
+    }))
+    return d
+
+
+def test_list_runs_newest_first(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    _mk_run(cfg, "doc-a-111", "collections/a/doc.pdf", ["/x/collections/a/doc.pdf"])
+    _mk_run(cfg, "doc-b-222", "collections/b/other.pdf", ["/x/collections/b/other.pdf"])
+    runs = tr.list_runs(cfg)
+    assert len(runs) == 2
+    assert {r["name"] for r in runs} == {"doc-a-111", "doc-b-222"}
+    assert all(r["documents"] == 1 for r in runs)
+
+
+def test_clean_runs_matches_target_substring(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    _mk_run(cfg, "doc-a-111", "collections/a/doc.pdf", ["/x/collections/a/doc.pdf"])
+    _mk_run(cfg, "doc-b-222", "collections/b/other.pdf", ["/x/collections/b/other.pdf"])
+    res = tr.clean_runs(cfg, "b")
+    assert res["removed"] == 1
+    remaining = tr.list_runs(cfg)
+    assert len(remaining) == 1
+    assert remaining[0]["name"] == "doc-a-111"
+
+
+def test_clean_runs_dry_run_removes_nothing(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    _mk_run(cfg, "doc-a-111", "collections/a/doc.pdf", ["/x/a"])
+    res = tr.clean_runs(cfg, dry_run=True)
+    assert res["removed"] == 1
+    assert len(tr.list_runs(cfg)) == 1  # still present
+
+
+def test_clean_runs_all_removes_root(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    _mk_run(cfg, "doc-a-111", "collections/a/doc.pdf", ["/x/a"])
+    _mk_run(cfg, "doc-b-222", "collections/b/other.pdf", ["/x/b"])
+    res = tr.clean_runs(cfg)
+    assert res["removed"] == 2
+    assert tr.list_runs(cfg) == []
+    assert not tr._run_dir(cfg).exists()  # empty .pha-test root removed too
