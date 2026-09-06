@@ -550,7 +550,10 @@ def test_edit_document_page_filter_edits_only_that_page(tmp_path, monkeypatch):
                               dir_path="collections/tcol", now=_t.time())
     for n in (1, 2, 3):
         pid = _db.add_page(conn, doc_id, n)
-        _db.set_page_result(conn, pid, raw_text=f"raw page {n}")
+        # keep well above the blank-page threshold so the model IS called
+        _db.set_page_result(
+            conn, pid, raw_text=f"raw page {n} with more than forty characters of transcribed text"
+        )
     _db.update_document(conn, doc_id, page_count=3)
     conn.commit()
 
@@ -576,6 +579,92 @@ def test_edit_document_page_filter_edits_only_that_page(tmp_path, monkeypatch):
     # only page 2 got an edit row
     rows = conn.execute("SELECT page_id FROM page_edits WHERE editor='default'").fetchall()
     assert [r["page_id"] for r in rows] == [_db.get_pages(conn, doc_id)[1]["id"]]
+    conn.close()
+
+
+def test_edit_document_blank_page_skips_model(tmp_path, monkeypatch):
+    """A page whose transcription has no readable content (after the page
+    marker) is stamped blank deterministically — the editor model is never
+    called, while a page with real text still is. The blank sentinel never
+    reaches the index or the encoder's edited text."""
+    import time as _t
+
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import (
+        _BLANK_EDIT_TEXT,
+        _edited_texts,
+        _is_blank_edit,
+        edit_document,
+        index_document,
+    )
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    src_dir = cfg.dropbox / "collections" / "tcol"
+    src_dir.mkdir(parents=True)
+    src = src_dir / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/tcol", now=_t.time())
+    # page 1: only the page marker -> blank; page 2: real content -> model call
+    pid1 = _db.add_page(conn, doc_id, 1)
+    _db.set_page_result(conn, pid1, raw_text="--- Page 1 ---")
+    pid2 = _db.add_page(conn, doc_id, 2)
+    _db.set_page_result(conn, pid2, raw_text="A" * 100)
+    _db.update_document(conn, doc_id, page_count=2)
+    conn.commit()
+
+    calls: list[str] = []
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def close(self):
+            pass
+
+        def chat_text(self, model, prompt, temperature, max_tokens, thinking):
+            calls.append(prompt)
+            return "edited"
+
+    monkeypatch.setattr("personal_historical_archive.ingest.ModelClient", FakeClient)
+    res = edit_document(cfg, conn, doc_id, editor_id="default")
+    conn.commit()
+
+    edits = {r["page_id"]: r for r in conn.execute(
+        "SELECT * FROM page_edits WHERE editor='default'").fetchall()}
+    assert edits[pid1]["status"] == "done"
+    assert edits[pid1]["text"] == _BLANK_EDIT_TEXT
+    assert edits[pid2]["status"] == "done"
+    assert edits[pid2]["text"] == "edited"
+    # only the real page reached the model; the blank page was stamped in code
+    assert len(calls) == 1
+    assert res["pages"] == 2
+
+    # the blank stamp is recognized as such, and excluded from the edited text
+    # the indexer and encoder consume (so it never reaches search or the prompt)
+    assert _is_blank_edit(_BLANK_EDIT_TEXT) is True
+    assert _is_blank_edit("edited") is False
+    texts = _edited_texts(conn, doc_id, "default")
+    assert pid1 not in texts
+    assert texts[pid2] == "edited"
+
+    class FakeEmbed:
+        def embed(self, model, texts, batch_size):
+            return [None] * len(texts)
+
+    index_document(cfg, conn, doc_id, embed_client=FakeEmbed(), verbose=False)
+    chunks = conn.execute(
+        "SELECT page_id, text, variant FROM chunks WHERE document_id=?", (doc_id,)
+    ).fetchall()
+    assert not any(c["text"] == _BLANK_EDIT_TEXT for c in chunks)
+    assert not any(c["page_id"] == pid1 and c["variant"] == "edited" for c in chunks)
+    assert any(c["page_id"] == pid2 and c["variant"] == "edited" for c in chunks)
     conn.close()
 
 

@@ -777,9 +777,7 @@ def index_document(
     doc = db.get_document(conn, doc_id)
     edited: dict[int, str] = {}
     if doc and doc["editor"]:
-        for e in db.edits_for_document(conn, doc_id, doc["editor"]):
-            if e["status"] == "done" and e["text"]:
-                edited[e["page_id"]] = e["text"]
+        edited = _edited_texts(conn, doc_id, doc["editor"])
     items: list[tuple[int, int, str, str]] = []  # (page_id, chunk_no, text, variant)
     n = 0
     for p in pages:
@@ -1138,6 +1136,51 @@ def _edit_null(cfg: Config, conn, doc_id: int, resolved: str,
     return {"action": "edited", "filename": doc["filename"], "editor": resolved, "pages": edited}
 
 
+# Pages whose transcription has no readable content after the page marker are
+# stamped as blank WITHOUT calling the model. Keeping this decision in code (not
+# in the editor prompt) stops editors from both fabricating content on empty
+# pages and over-applying blank rules to sparse-but-real pages (title/index
+# pages, scattered OCR). A page is blank when it has fewer than this many
+# letters/digits after stripping the marker: punctuation, whitespace and pure
+# OCR noise don't count, so a real short title still reaches the editor model.
+_EDIT_BLANK_MIN_CONTENT_CHARS = 1
+_BLANK_EDIT_TEXT = "[Blank page -- no readable transcription]"
+
+
+def _content_chars(text: str) -> int:
+    """Count the readable characters (letters/digits) in `text`."""
+    return sum(1 for ch in text if ch.isalnum())
+
+
+def _is_blank_edit(text: str | None) -> bool:
+    """True when `text` is the deterministic blank-page stamp (no real content)."""
+    return bool(text) and text.strip() == _BLANK_EDIT_TEXT
+
+
+def _edited_texts(conn, doc_id: int, editor: str | None) -> dict[int, str]:
+    """page_id -> editor text for DONE, non-blank edits.
+
+    Blank-page stamps, errors and empty rows are excluded, so callers fall back
+    to the page's raw transcription. Shared by the indexer (edited variant) and
+    the encoder (edited-preferred whole-document text) so the blank sentinel
+    never reaches search or the encoder prompt."""
+    out: dict[int, str] = {}
+    if not editor:
+        return out
+    for e in db.edits_for_document(conn, doc_id, editor):
+        if e["status"] == "done" and e["text"] and not _is_blank_edit(e["text"]):
+            out[e["page_id"]] = e["text"]
+    return out
+
+
+def _strip_page_marker(raw: str) -> str:
+    """Return `raw` minus a leading OCR page-marker line (e.g. '--- Page 1 ---')."""
+    lines = raw.splitlines()
+    if lines and re.match(r"^---\s*page\s+\d+\s*---$", lines[0], re.IGNORECASE):
+        lines = lines[1:]
+    return "\n".join(lines).strip()
+
+
 def edit_document(
     cfg: Config,
     conn,
@@ -1211,18 +1254,27 @@ def edit_document(
                 continue
             if verbose:
                 print(f"  editing page {p['page_no']}/{doc['page_count']} ...", flush=True)
-            prompt = (
-                f"{editor.prompt_text}\n\n"
-                f"Document: {doc['filename']}\nPage: {p['page_no']} of {doc['page_count']}\n\n"
-                f"Transcription to edit:\n{raw}"
-            )
-            try:
-                out = client.chat_text(editor.model, prompt, editor.temperature, editor.max_tokens,
-                                       thinking=editor.thinking)
-                db.set_page_edit(conn, p["id"], resolved, text=out, raw_sha=_raw_sha(raw))
+            body = _strip_page_marker(raw)
+            if _content_chars(body) < _EDIT_BLANK_MIN_CONTENT_CHARS:
+                # Deterministic blank page: no model call, so a page cannot be
+                # hallucinated into content when its transcription is empty, and
+                # real sparse text (any letters/digits) always reaches the model.
+                db.set_page_edit(conn, p["id"], resolved, text=_BLANK_EDIT_TEXT,
+                                 raw_sha=_raw_sha(raw))
                 edited += 1
-            except ModelError as e:
-                db.set_page_edit(conn, p["id"], resolved, error=str(e), raw_sha=_raw_sha(raw))
+            else:
+                prompt = (
+                    f"{editor.prompt_text}\n\n"
+                    f"Document: {doc['filename']}\nPage: {p['page_no']} of {doc['page_count']}\n\n"
+                    f"Transcription to edit:\n{raw}"
+                )
+                try:
+                    out = client.chat_text(editor.model, prompt, editor.temperature, editor.max_tokens,
+                                           thinking=editor.thinking)
+                    db.set_page_edit(conn, p["id"], resolved, text=out, raw_sha=_raw_sha(raw))
+                    edited += 1
+                except ModelError as e:
+                    db.set_page_edit(conn, p["id"], resolved, error=str(e), raw_sha=_raw_sha(raw))
             conn.commit()
             write_edited_pages(cfg, conn, doc_id, resolved)  # grow output page by page
     finally:
@@ -1605,9 +1657,7 @@ def encode_document(
     pages = db.get_pages(conn, doc_id)
     edits: dict[int, str] = {}
     if doc["editor"]:
-        for e in db.edits_for_document(conn, doc_id, doc["editor"]):
-            if e["status"] == "done" and e["text"]:
-                edits[e["page_id"]] = e["text"]
+        edits = _edited_texts(conn, doc_id, doc["editor"])
     texts = [(p["page_no"], (edits.get(p["id"]) or p["raw_text"] or "").strip())
              for p in pages if (edits.get(p["id"]) or p["raw_text"] or "").strip()]
     page_filter = _page_filter(encoder)
