@@ -33,43 +33,25 @@ entirely on your machine.
 
 ### Create one workspace for your archive in your agent (do this first)
 
-Give your archive a permanent home in your favourite agent before anything
-else: a dedicated **project / workspace** (a "project" in Claude or ChatGPT,
-a project folder in Cursor, a workspace in your agent's app — whatever your
-agent calls it). Everything about your archive then lives in one place: the
-prompts in this guide are grouped together there, the prompts you will write
-later for your own collections sit beside them, and you grant file access
-**once** instead of re-explaining it in every session.
-
-Copy this into the agent when you create the workspace:
+Give your archive a permanent home in your favourite agent: a dedicated
+**project / workspace** (a "project" in Claude or ChatGPT, a project folder
+in Cursor, …). All the prompts in this guide then stay grouped together for
+every session, and you grant your agent file access **once** — to the archive
+folder whose layout is described below (step 2 explains it).
 
 ```
-Create a dedicated workspace for my personal historical archive and set it up
-as follows:
-
-1. Name it "My historical archive" (or after the archive itself).
-2. Put ALL of the pha prompts I use into it, grouped in one place:
-   - the prompts in the pha guide for historians (the blocks in that guide),
-   - the Model Helper and Encoder Helper prompts — the files
-     prompts/model-helper.md and prompts/encoder-helper.md in the pha
-     installation (they create the model and encoder configuration for me),
-   - any prompts I write later for my own collections or documents.
-3. Give this workspace permission to access the files of my archive, and only
-   those:
-   - the archive folder, and inside it: dropbox/ (my documents and any
-     prompts/encoders that travel with them), library/ (the transcriptions
-     and edited texts I may correct), and models/, palaeographers/,
-     editors/, encoders/ (the configuration),
-   - the prompts/ folder of the pha installation (the helper prompts),
-   - the right to run the pha program on this computer (e.g. the project's
-     .venv/bin/pha command).
+Create a dedicated workspace for my personal historical archive:
+1. Name it "My historical archive".
+2. Put ALL of the pha prompts I use into it, grouped in one place: the
+   prompts in the pha guide for historians, the Model Helper and Encoder
+   Helper prompts (prompts/model-helper.md and prompts/encoder-helper.md),
+   and any prompts I write later for my own collections.
+3. Give this workspace permission to access my archive — the archive folder
+   and the right to run pha on this computer — and nothing else.
 ```
 
-From now on, put every prompt block of this guide — and any prompt you write
-for a specific collection — into that one workspace, and work with your agent
-there. It will already know your archive's layout, your models and your
-collections, and it will have the file access it needs to process documents,
-show you results and apply your corrections.
+Work with your agent in that workspace from now on: it will already know your
+archive and have the file access it needs.
 
 ---
 
