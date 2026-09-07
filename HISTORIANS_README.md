@@ -16,18 +16,28 @@ what to ask, and each section has a block you can copy straight into the chat.
 You need:
 
 - A computer with **macOS or Windows**
-- **LM Studio** (free, from lmstudio.ai) — this runs the AI models locally on
-  your machine. If you do not have it, your agent can install it for you
-  (step 1 below)
 - An AI assistant you trust with file operations
+- **The AI models pha uses** — the models that read and transform your pages.
+  There are two ways to get them, and you can use both side by side:
+  - **Local models**, run on your own machine by **LM Studio** (free, from
+    lmstudio.ai). Nothing ever leaves your computer, but your hardware limits
+    which models can run.
+  - **Remote models**, hosted by a provider (MiniMax, OpenRouter, OpenAI, …)
+    and reached over the internet. They are far more powerful, but you need an
+    **API key** from the provider and the page images are sent there. See
+    step 1b.
 
-The archive itself lives on **your** computer. Nothing is uploaded anywhere.
+The archive itself always lives on **your** computer. Only the pages you
+choose to process with a remote model leave it; local processing stays
+entirely on your machine.
 
 ---
 
-## 1. Install LM Studio, choose models, and install pha
+## 1. Set up the models and install pha
 
-You can ask your agent to do all of it. Three short prompts, in order:
+You can ask your agent to do all of it. Three short steps, in order (step 1a —
+installing LM Studio — is only needed if you will run models locally; for
+remote models you can skip it):
 
 ### 1a. Install LM Studio (if you don't have it)
 
@@ -38,8 +48,38 @@ install it, and open it so its local server can run. Tell me when it is ready.
 
 ### 1b. Choose the best models for your documents
 
-Different vision and text models are better for different material. Ask your
-agent to research and recommend:
+Different vision and text models are better for different material, and you are
+not limited to what runs on your own computer: pha can use **models hosted
+remotely** as well as local ones. That matters more than you might expect.
+
+Two important facts in September 2026:
+
+- **Reading handwritten manuscripts well needs a powerful vision model.** The
+  best current vision models (large multi-modal models) are far too big to run
+  on a normal laptop or desktop, so **today manuscript reading almost always
+  uses a remote model**. This will tend to change in the future as stronger
+  models run locally — but don't be surprised that the manuscript-reading model
+  is not on your machine yet. For **old printed / typeset text**, by contrast,
+  a local vision model (or OCR — see below) is normally fine; printed letters
+  and shapes don't need that much judgement.
+- **Editing/translating text is much lighter**, and a local text model is often
+  enough (it can also be remote if you prefer).
+- **Remote image processing costs money.** A page image is a lot of tokens, so
+  a remote vision model bills more per page than a local one (this is a
+  current limitation of how vision models are priced). It is usually worth it
+  for handwritten manuscripts; for clean printed text a local model or OCR is
+  much cheaper.
+
+So the practical setup for most historians right now is: a **remote vision
+model** for handwritten **manuscripts**, a **local vision model (or OCR)** for
+old **printed / typeset text**, and a **local text model** to edit everything
+(remote if you prefer). Use whichever fits each collection — you are not locked
+into one model for the whole archive. Below are prompts for both local and
+remote cases.
+
+#### Local models (everything on your machine)
+
+Ask your agent to research and recommend:
 
 ```
 Research and recommend the best LOCAL models for my archive, considering my
@@ -61,6 +101,45 @@ A good starting point, already configured in pha by default: the vision model
 `text-embedding-nomic-embed-text-v1.5`, and the text/editing model
 `amalia-9b-0626-dpo` (or `google/gemma-4-e4b`). Keep these if the research
 agrees, or switch per the recommendation.
+
+#### Remote models (hosted by a provider)
+
+For the reading model in particular, this is the route most historians will
+take today. To use a remote model you need an **API key** from its provider
+(an account with MiniMax, OpenRouter, OpenAI, … gives you one; some are paid).
+Give your agent a prompt like this:
+
+```
+Set me up to use a REMOTE vision model to read my manuscripts. Please:
+
+1. Research and recommend 2-3 strong REMOTE vision models for reading
+   [describe your documents, e.g. 17th-century manuscript letters] and pick one.
+2. Tell me which provider hosts it and exactly how to get an API key
+   (create an account / buy credits / copy the key from the provider's
+   dashboard). Do not invent a key — tell me what to do.
+3. Once I give you the key, store it safely (run: pha key --set VARNAME,
+   where VARNAME is a name pha recognizes, e.g. MINIMAX_API_KEY or
+   OPENROUTER_API_KEY). Keep the key secret — do not paste it into documents.
+4. Create the model file (models/<id>.md) with the provider's base_url, the
+   server-side model name, api_key: "${VARNAME}", and api_style (openai by
+   default; anthropic for MiniMax). Set the vision limits (max_vision_px,
+   vision_jpeg_quality, context_tokens) to suit the model.
+5. Point my palaeographer/editor rules at it in pha.yaml, then verify with
+   `pha test` on a couple of pages. Tell me the result.
+```
+
+If you would rather not write all that, ask your agent to run the
+**Model Helper** prompt (see the note below) — it asks you a few plain-language
+questions and produces the model + rules files for you, local or remote, and
+safely stores the API key.
+
+> **Model Helper prompt for your agent.** A ready-to-use interview prompt that
+> guides an agent through configuring any pha model — local (LM Studio /
+> Ollama) or remote (MiniMax, OpenRouter, OpenAI, …) — is in
+> `prompts/model-helper.md`. Have the agent read that file and follow it: it
+> asks for the provider, the endpoint and model name, whether it needs vision,
+> and (for remote) safely stores the API key with `pha key --set` and writes
+> the model + rules + `pha.yaml` files for you.
 
 ### 1c. Install pha (from GitHub)
 
@@ -187,8 +266,10 @@ A *vision language model* (e.g. `qwen/qwen3-vl-8b`) reads the page like a
 scholar: it sees the whole layout, follows the hand, recognises a damaged or
 difficult word *from context*, and writes brief reading notes (language,
 script, difficult words). It can transcribe dense handwriting, marginalia and
-interlinear notes that plain OCR cannot. It runs in LM Studio on your machine
-and needs a loaded vision model.
+interlinear notes that plain OCR cannot. It runs on a **local vision model**
+(LM Studio) **or a remote one** — see section 1b. Reading difficult manuscripts
+today most often needs a remote vision model, because the model strong enough
+is too big for a normal computer.
 
 *Best for:* handwritten manuscripts, secretary hands, old scripts, pages full
 of annotations — anything where judgement and context matter.
@@ -214,17 +295,22 @@ only difference is the model file you point at.
 
 | What | Vision model (LLM) | Tesseract OCR | LiteParse OCR |
 |------|--------------------|---------------|---------------|
-| Needs LM Studio / a loaded model | yes | no | no |
+| Needs LM Studio / a local model | maybe* | no | no |
 | Understands handwriting & context | yes | weak | weak |
 | Reads marginalia / gives reading notes | yes | no | no |
 | Great on printed/typeset text | yes | yes | yes |
-| Runs on | your machine | your machine | your machine |
+| Runs on | your machine *or* a remote provider | your machine | your machine |
+
+\* A vision model runs locally (LM Studio/Ollama) **or** remotely (via an API
+key). Only the local option needs LM Studio; a remote one needs a key instead.
 
 In the model file (`models/<id>.md`):
 
-- **Vision model** — `base_url`, `model` (the LM Studio model name), optional
-  `max_vision_px` (largest page image sent; keep ≤ the model's window),
-  `vision_jpeg_quality`, `api_style`, `context_tokens`, `thinking`.
+- **Vision model** — `base_url` (an LM Studio/Ollama address for a local model,
+  or a provider's API root, e.g. `https://api.minimax.io/v1`, for a remote one,
+  plus `api_key` as `"${VARNAME}"`), `model` (the server-side model name),
+  optional `max_vision_px` (largest page image sent; keep ≤ the model's
+  window), `vision_jpeg_quality`, `api_style`, `context_tokens`, `thinking`.
 - **Tesseract** — `engine: tesseract`, `tesseract_lang` (the language(s), e.g.
   `por`, `lat`, `por+lat`), optional `tesseract_psm` (page-segmentation mode).
   Needs the `tesseract` program installed (and its language data).
@@ -387,8 +473,11 @@ Reviewed pages show `reviewed: true` in their header.
 
 ## Troubleshooting (quick)
 
-- **Nothing happens / errors about a model** → check that LM Studio is open
-  and its server is running (port 1234); your agent can test it.
+- **Nothing happens / errors about a model** → for a **local** model, make sure
+  LM Studio is open and its server is running (port 1234); your agent can test
+  it. For a **remote** model, check that the API key was stored (`pha key`) and
+  that it is set on the model file (`api_key: "${VARNAME}"`). Then run `pha
+  test` to confirm the model responds.
 - **Extraction seems stuck** → it is probably waiting while the computer
   slept; run `pha scan` again, it resumes.
 - **Search returns nothing** → the extraction may not be finished; check

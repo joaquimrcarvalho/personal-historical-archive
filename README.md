@@ -825,7 +825,8 @@ archive_dir/
 ```
 
 The PROJECT dir (code, versioned) holds only `src/`, `config.yaml`,
-`prompts/default_prompt.md`, `prompts/encoder-helper.md`, `schema/`, and the
+`prompts/default_prompt.md`, `prompts/encoder-helper.md`,
+`prompts/model-helper.md`, `schema/`, and the
 `models/_sample.md`, `palaeographers/_sample.md`, `editors/_sample.md`,
 `encoders/_sample.md` templates. A fresh archive is seeded with `default.md`
 model/palaeographer/editor/encoder pointing at `qwen/qwen3-vl-8b` (LM Studio),
