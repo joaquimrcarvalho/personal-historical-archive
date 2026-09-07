@@ -4,6 +4,7 @@ import argparse
 import os
 import json
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -327,7 +328,7 @@ def cmd_status(cfg: Config, args) -> None:
 
         known = {r["path"] for r in conn.execute("SELECT path FROM documents").fetchall()}
         try:
-            units = discover(cfg.dropbox, cfg.dir_documents)
+            units = discover(cfg.dropbox, cfg.dir_documents, exclude=[cfg.inbox])
         except Exception:
             units = []
         unscanned: dict[str, list[str]] = {}
@@ -336,6 +337,18 @@ def cmd_status(cfg: Config, args) -> None:
             key = str(rel.parent) if str(rel.parent) != "." else "(root)"
             unscanned.setdefault(key, []).append(rel.name)
         total_new = sum(len(v) for v in unscanned.values())
+
+        # documents parked in the inbox (on hold): never scanned, shown as held.
+        holds: dict[str, list[str]] = {}
+        try:
+            hold_units = discover(cfg.dropbox, cfg.dir_documents, root=cfg.inbox)
+        except Exception:
+            hold_units = []
+        for u in hold_units:
+            rel = u.relative_to(cfg.inbox)
+            key = str(rel.parent) if str(rel.parent) != "." else "(inbox root)"
+            holds.setdefault(key, []).append(rel.name)
+        total_hold = sum(len(v) for v in holds.values())
 
         docs = db.list_documents(conn, limit=10000)
         stats = db.chunk_stats(conn)
@@ -362,6 +375,8 @@ def cmd_status(cfg: Config, args) -> None:
         print(f"  chunks:    {s['chunks']} indexed   ({s['chunks_embedded']} embedded)")
         if total_new:
             print(f"  new:       {total_new} file(s) not yet scanned")
+        if total_hold:
+            print(f"  inbox:     {total_hold} file(s) on hold (not scanned)")
 
         keys = sorted(set(archived) | set(unscanned), key=lambda k: (k == "(root)", k))
         if keys:
@@ -400,12 +415,117 @@ def cmd_status(cfg: Config, args) -> None:
                     listing = _snip(names, width - len(prefix) - 1)
                     print(_fit(prefix + listing + ")", width))
 
+        if holds:
+            print()
+            print("on hold (inbox)")
+            for hkey in sorted(holds, key=lambda k: (k == "(inbox root)", k)):
+                display_h = hkey[len("collections/"):] if hkey.startswith("collections/") else hkey
+                print(_fit(f"  {display_h}", width))
+                names = holds[hkey]
+                prefix = f"    {len(names)} file(s)  ("
+                listing = _snip(names, width - len(prefix) - 1)
+                print(_fit(prefix + listing + ")", width))
+            print("  →  run `pha inbox --move` to put them in the dropbox, then `pha scan`")
+
         if pending:
             print()
             for line in _pending_summary_lines(pending, lambda d_id: db.get_document(conn, d_id)):
                 print(line)
     finally:
         conn.close()
+
+
+def _inbox_held(cfg: Config) -> list:
+    """Document units parked in the inbox (absolute paths), or [] if absent."""
+    from .ingest import discover
+    try:
+        return discover(cfg.dropbox, cfg.dir_documents, root=cfg.inbox)
+    except Exception:
+        return []
+
+
+def _move_into(src: Path, dst: Path) -> None:
+    """Move `src` to `dst`, MERGING when `dst` already exists as a directory
+    (so `inbox/collections/COLX` merges into `dropbox/collections/COLX` rather
+    than nesting). An existing file of the same name is replaced by `src`."""
+    if src.is_dir():
+        if dst.exists() and dst.is_dir():
+            for child in src.iterdir():
+                _move_into(child, dst / child.name)
+            try:
+                src.rmdir()  # prune the now-empty source dir
+            except OSError:
+                pass
+            return
+        if dst.exists():
+            if dst.is_dir():
+                shutil.rmtree(dst)
+            else:
+                dst.unlink()
+        shutil.move(str(src), str(dst))
+        return
+    # src is a file
+    if dst.exists():
+        if dst.is_dir():
+            shutil.rmtree(dst)
+        else:
+            dst.unlink()
+    shutil.move(str(src), str(dst))
+
+
+def cmd_inbox(cfg: Config, args) -> None:
+    """Manage documents parked ON HOLD in the inbox.
+
+    Documents sitting in <archive_dir>/inbox are never scanned; `pha status`
+    reports them as 'on hold'. `pha inbox` lists them; `pha inbox --dry-run`
+    shows the move plan; `pha inbox --move` relocates them into the dropbox
+    (preserving the relative layout) so a following `pha scan` ingests them."""
+    held = _inbox_held(cfg)
+    move = bool(getattr(args, "move", False))
+    dry = bool(getattr(args, "dry_run", False))
+
+    # --dry-run takes precedence: show the move plan without touching anything.
+    if dry:
+        if not held:
+            print("inbox is empty (nothing to move)")
+            return
+        print(f"would move {len(held)} file(s) from the inbox into the dropbox:")
+        for p in held:
+            print(f"  {p.relative_to(cfg.inbox)}  →  dropbox/{p.relative_to(cfg.inbox)}")
+        print("  (run `pha inbox --move` to move them, then `pha scan`)")
+        return
+
+    if move:
+        if not held:
+            print("inbox is empty (nothing to move)")
+            return
+        for entry in sorted(cfg.inbox.iterdir()):
+            if entry.name.startswith("."):
+                continue
+            _move_into(entry, cfg.dropbox / entry.name)
+        print(f"moved {len(held)} file(s) from the inbox into the dropbox")
+        print("  →  run `pha scan` to ingest them")
+        return
+
+    if not held:
+        print("inbox is empty — park documents for later in " + str(cfg.inbox))
+        return
+
+    width = _term_width()
+    holds: dict[str, list[str]] = {}
+    for p in held:
+        rel = p.relative_to(cfg.inbox)
+        key = str(rel.parent) if str(rel.parent) != "." else "(inbox root)"
+        holds.setdefault(key, []).append(rel.name)
+    print("inbox (on hold, never scanned): " + str(cfg.inbox))
+    for key in sorted(holds, key=lambda k: (k == "(inbox root)", k)):
+        d = key[len("collections/"):] if key.startswith("collections/") else key
+        print(_fit(f"  {d}", width))
+        names = holds[key]
+        prefix = f"    {len(names)} file(s)  ("
+        listing = _snip(names, width - len(prefix) - 1)
+        print(_fit(prefix + listing + ")", width))
+    print("  →  `pha inbox --move` to put them in the dropbox, then `pha scan`")
 
 
 def cmd_reindex(cfg: Config, args) -> None:
@@ -1100,6 +1220,7 @@ def cmd_help(cfg: Config, args) -> None:
     print()
     print("COMMON COMMANDS")
     print("  pha status                    per-collection tree of what is ingested, new, pending")
+    print("  pha inbox [--move|--dry-run]  list / move documents parked on hold in the inbox")
     print("  pha scan                      extract + index new/changed files in dropbox")
     print('  pha search "query"            search the extracted text')
     print("  pha set archive-dir <path>    point pha at an archive")
@@ -1257,6 +1378,13 @@ def main(argv: list[str] | None = None) -> None:
 
     st = sub.add_parser("status", help="archive summary")
     st.set_defaults(fn=cmd_status)
+
+    ib = sub.add_parser("inbox", help="list documents on hold, or move them into the dropbox")
+    ib.add_argument("--move", action="store_true",
+                    help="move held documents into the dropbox (then `pha scan`)")
+    ib.add_argument("--dry-run", action="store_true",
+                    help="show what --move would do without moving anything")
+    ib.set_defaults(fn=cmd_inbox)
 
     pg = sub.add_parser("page", help="print the full transcription of one page")
     pg.add_argument("doc", help="document id (number) or a filename substring")

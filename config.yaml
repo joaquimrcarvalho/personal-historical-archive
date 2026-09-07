@@ -20,6 +20,10 @@ paths:
                           #     dropbox/documents/            individual documents
                           #     dropbox/collections/COLX/     a collection of sources
                           #     dropbox/collections/COLX/prompt.md  -> prompt for the collection
+  inbox: inbox            # documents parked ON HOLD: never scanned; `pha status`
+                          #   reports them as 'on hold', `pha inbox --move`
+                          #   relocates them into the dropbox to be scanned.
+                          #   Keep it OUTSIDE dropbox (a sibling of it).
   library: library        # generated: human-readable extracted markdown per document
   renders: renders        # generated: cached page images fed to the vision model
   models: models          # model-interface definitions (endpoint/api key/limits)

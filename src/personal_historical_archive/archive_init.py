@@ -96,6 +96,7 @@ missing (or the path is wrong): run `pha set archive-dir` with this directory.
 | --- | --- |
 | `dropbox/documents/` | individual source documents |
 | `dropbox/collections/COLX/` | collections of documents (per-collection model selections & prompts can sit beside them) |
+| `inbox/` | documents parked ON HOLD — never scanned; `pha status` reports them, `pha inbox --move` puts them in the dropbox |
 | `palaeographers/`, `editors/`, `encoders/` | model/prompt definitions (one file each; `_sample.md` = template) |
 | `library/` | generated per-page transcriptions and edited text — the human review surface |
 | `renders/`, `archive.db` | generated cache and index (do not edit) |
@@ -103,7 +104,8 @@ missing (or the path is wrong): run `pha set archive-dir` with this directory.
 ## Everyday commands
 
 ```bash
-pha status                       # what's ingested, pending corrections
+pha status                       # what's ingested, pending corrections, on hold
+pha inbox [--move]               # list / move documents parked in the inbox
 pha scan                         # extract + index new/changed dropbox files
 pha search "query"               # search the extracted text
 pha review [--doc N]             # import human corrections from library/
@@ -227,6 +229,7 @@ def init_archive(path: str | Path) -> Path:
     # user-facing structure
     (p / "dropbox" / "documents").mkdir(parents=True, exist_ok=True)
     (p / "dropbox" / "collections").mkdir(parents=True, exist_ok=True)
+    (p / "inbox").mkdir(exist_ok=True)
     (p / "library").mkdir(exist_ok=True)
     (p / "renders").mkdir(exist_ok=True)
     pal = p / "palaeographers"

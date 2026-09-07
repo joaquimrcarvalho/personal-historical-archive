@@ -366,6 +366,7 @@ class Config:
     archive_dir: Path
     # paths
     dropbox: Path
+    inbox: Path
     library: Path
     data: Path
     renders: Path
@@ -467,6 +468,10 @@ class Config:
         ed_dir = _p(archive_dir, paths.get("editors", "editors"))
         enc_dir = _p(archive_dir, paths.get("encoders", "encoders"))
         models_dir = _p(archive_dir, paths.get("models", "models"))
+        # inbox: documents parked on hold. pha scan never touches them and
+        # `pha status` reports them as 'on hold'; `pha inbox --move` relocates
+        # them into the dropbox (preserving the relative layout) to be scanned.
+        inbox = _p(archive_dir, paths.get("inbox", "inbox"))
 
         # Seed the zero-config defaults BEFORE parsing, so a fresh archive has
         # working default model/palaeographer/editor/encoder on first load.
@@ -489,6 +494,7 @@ class Config:
             root=root,
             archive_dir=archive_dir,
             dropbox=dropbox,
+            inbox=inbox,
             library=_p(archive_dir, paths.get("library", "library")),
             data=archive_dir,  # runtime state (e.g. the scan lock) lives at the root of the archive
             renders=_p(archive_dir, paths.get("renders", "renders")),
@@ -597,7 +603,7 @@ class Config:
             return None
 
     def ensure_dirs(self) -> None:
-        for d in (self.dropbox, self.library, self.data, self.renders, self.prompts,
+        for d in (self.dropbox, self.inbox, self.library, self.data, self.renders, self.prompts,
                   self.palaeographers_dir, self.editors_dir, self.encoders_dir, self.models_dir):
             d.mkdir(parents=True, exist_ok=True)
         # pre-create the dropbox sub-layout so a fresh archive is ready to use:

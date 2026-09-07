@@ -324,6 +324,29 @@ Every document is tagged with its relative directory (`documents`,
 and can be used to filter: `pha search "..." --collection COLX` or via the MCP
 `collection` parameter. `pha status` lists documents grouped by collection.
 
+## Parking documents on hold (the inbox)
+
+Documents you don't want processed yet can be **parked on hold** in an
+`inbox/` folder beside the dropbox (a sibling of `dropbox/`, i.e.
+`<archive_dir>/inbox`, configurable via `paths.inbox`). The inbox mirrors the
+dropbox layout, so a held collection lives at `inbox/collections/COLX/…`.
+`pha scan` never touches the inbox — held documents are neither extracted nor
+indexed — and `pha status` reports them as **on hold**:
+
+```
+on hold (inbox)
+  documenta-indica
+    16 file(s)  (DOCUMENTA-INDICA-1550-1553.pdf, …)
+  (inbox root)
+    1 file(s)  (teixeira-documentos-historia-jesuitas.pdf)
+  →  run `pha inbox --move` to put them in the dropbox, then `pha scan`
+```
+
+To actually process them: `pha inbox --dry-run` shows what would move
+(nothing is touched), then `pha inbox --move` relocates everything into the
+dropbox preserving the relative layout, then `pha scan` ingests them. `pha
+inbox` with no flags just lists the held documents.
+
 ## Custom extraction prompts
 
 Each document can carry its own extraction instructions. Prompt resolution

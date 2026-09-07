@@ -349,7 +349,12 @@ def _is_document_dir(path: Path) -> bool:
     return True
 
 
-def discover(dropbox: Path, dir_documents: bool = True, root: Path | None = None) -> list[Path]:
+def discover(
+    dropbox: Path,
+    dir_documents: bool = True,
+    root: Path | None = None,
+    exclude: list[Path] | None = None,
+) -> list[Path]:
     """List document units: individual files plus image-directory documents.
 
     By default walks the whole `dropbox` tree. Pass `root` to restrict
@@ -361,7 +366,17 @@ def discover(dropbox: Path, dir_documents: bool = True, root: Path | None = None
     (the folder is the document, its images are pages) — the same rule that
     applies to image-directories below a collection root. This makes
     `--path` to a leaf image-folder behave consistently with `--path` to the
-    collection root."""
+    collection root.
+
+    `exclude` skips any unit at or under one of the given paths (e.g. the
+    archive's `inbox` when it is nested inside the dropbox) so parked/on-hold
+    documents are never picked up by a scan."""
+    exclusions = [p.resolve() for p in (exclude or [])]
+
+    def _excluded(p: Path) -> bool:
+        rp = p.resolve()
+        return any(rp == ex or ex in rp.parents for ex in exclusions)
+
     base = dropbox if root is None else root
     if not base.exists():
         return []
@@ -369,16 +384,18 @@ def discover(dropbox: Path, dir_documents: bool = True, root: Path | None = None
     # When scanning a specific root that is itself a document-directory, the
     # whole folder is the document — do not enumerate its images separately.
     if root is not None and dir_documents and base.is_dir() and _is_document_dir(base):
-        return [base]
+        return [] if _excluded(base) else [base]
     for p in sorted(base.rglob("*")):
         if not p.is_file() or not is_supported(p.name) or p.name.startswith("."):
             continue
         if dir_documents and p.parent != base and _is_document_dir(p.parent):
             continue  # this file is a page of a document-directory
+        if _excluded(p):
+            continue
         units.append(p)
     if dir_documents:
         for d in sorted(base.rglob("*")):
-            if d.is_dir() and d != base and _is_document_dir(d):
+            if d.is_dir() and d != base and _is_document_dir(d) and not _excluded(d):
                 units.append(d)
     return sorted(units, key=lambda p: str(p))
 
@@ -1337,7 +1354,7 @@ def edit_documents_under(
     try:
         results = []
         seen: set[int] = set()
-        for f in discover(cfg.dropbox, cfg.dir_documents, root=root):
+        for f in discover(cfg.dropbox, cfg.dir_documents, root=root, exclude=[cfg.inbox]):
             doc = db.get_document_by_path(conn, str(f))
             if doc is None or doc["id"] in seen:
                 continue
@@ -1892,7 +1909,7 @@ def scan_once(
     }
     try:
         db.backfill_dir_path(conn, cfg.dropbox)
-        files = discover(cfg.dropbox, cfg.dir_documents, root=scan_root)
+        files = discover(cfg.dropbox, cfg.dir_documents, root=scan_root, exclude=[cfg.inbox])
         results = []
         for i, f in enumerate(files, 1):
             if verbose:

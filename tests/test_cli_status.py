@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from personal_historical_archive import cli
 from personal_historical_archive import db as _db
 from personal_historical_archive.config import Config
-from personal_historical_archive.ingest import sha256_of
+from personal_historical_archive.ingest import discover, sha256_of
 
 
 def _make_cfg(tmp_path) -> Config:
@@ -14,9 +14,9 @@ def _make_cfg(tmp_path) -> Config:
     root.mkdir()
     (root / "config.yaml").write_text(
         f"paths:\n  archive_dir: {root / 'archive'}\n"
-        "  dropbox: dropbox\n  library: library\n  renders: renders\n"
+        "  dropbox: dropbox\n  inbox: inbox\n  library: library\n  renders: renders\n"
         "  palaeographers: palaeographers\n  editors: editors\n  encoders: encoders\n"
-        "  prompts: prompts\n  db: archive.db\n"
+        "  models: models\n  prompts: prompts\n  db: archive.db\n"
     )
     return Config.load(root)
 
@@ -103,3 +103,75 @@ def test_status_no_new_section_when_everything_scanned(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "new in dropbox" not in out
     assert "doc.pdf" in out
+
+
+def test_status_shows_on_hold_inbox(tmp_path, capsys):
+    """pha status reports documents parked in the inbox as 'on hold' — they are
+    shown under an 'on hold (inbox)' section and a tally, not as scanned or new."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    held = cfg.inbox / "collections" / "CAT"
+    held.mkdir(parents=True)
+    (held / "h.pdf").write_bytes(b"%PDF h")
+    (cfg.inbox / "loose.pdf").write_bytes(b"%PDF loose")
+
+    cli.cmd_status(cfg, SimpleNamespace())
+    out = capsys.readouterr().out
+    assert "on hold (inbox)" in out
+    assert "2 file(s) on hold" in out
+    assert "  CAT" in out
+    assert "h.pdf" in out
+    assert "loose.pdf" in out
+
+
+def test_status_no_on_hold_when_inbox_empty_or_absent(tmp_path, capsys):
+    """No 'on hold' section when the inbox is empty or does not exist."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    cli.cmd_status(cfg, SimpleNamespace())
+    out = capsys.readouterr().out
+    assert "on hold (inbox)" not in out
+
+
+def test_inbox_dry_run_then_move(tmp_path, capsys):
+    """`pha inbox --dry-run` shows the plan without moving; `pha inbox --move`
+    relocates held documents (and siblings) into the dropbox, preserving the
+    relative layout, and empties the inbox."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    held = cfg.inbox / "collections" / "CAT"
+    held.mkdir(parents=True)
+    (held / "h.pdf").write_bytes(b"%PDF h")
+    (held / "prompt.md").write_text("sidecar")
+    (cfg.inbox / "loose.pdf").write_bytes(b"%PDF loose")
+
+    cli.cmd_inbox(cfg, SimpleNamespace(move=False, dry_run=True))
+    out = capsys.readouterr().out
+    assert "would move 2 file(s)" in out
+    assert (cfg.inbox / "loose.pdf").exists()
+    assert not (cfg.dropbox / "loose.pdf").exists()
+
+    cli.cmd_inbox(cfg, SimpleNamespace(move=True, dry_run=False))
+    out = capsys.readouterr().out
+    assert "moved 2 file(s) from the inbox into the dropbox" in out
+    assert (cfg.dropbox / "collections" / "CAT" / "h.pdf").exists()
+    assert (cfg.dropbox / "collections" / "CAT" / "prompt.md").exists()  # sidecar travels
+    assert (cfg.dropbox / "loose.pdf").exists()
+    assert not (cfg.inbox / "loose.pdf").exists()
+
+
+def test_discover_excludes_path(tmp_path):
+    """discover(..., exclude=[...]) skips units at/under the excluded path, so
+    a nested inbox is never picked up by a scan."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    nested = cfg.dropbox / "inbox"
+    nested.mkdir(parents=True, exist_ok=True)
+    (nested / "held.pdf").write_bytes(b"%PDF held")
+    (cfg.dropbox / "documents" / "a.pdf").parent.mkdir(parents=True, exist_ok=True)
+    (cfg.dropbox / "documents" / "a.pdf").write_bytes(b"%PDF a")
+
+    units = discover(cfg.dropbox, True, exclude=[cfg.dropbox / "inbox"])
+    rels = {str(u.relative_to(cfg.dropbox)) for u in units}
+    assert "documents/a.pdf" in rels
+    assert not any(r.startswith("inbox") for r in rels)
