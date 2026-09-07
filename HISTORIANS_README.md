@@ -25,33 +25,45 @@ You need:
   - **Remote models**, hosted by a provider (MiniMax, OpenRouter, OpenAI, …)
     and reached over the internet. They are far more powerful, but you need an
     **API key** from the provider and the page images are sent there. See
-    step 1b.
+    step 1c.
 
 The archive itself always lives on **your** computer. Only the pages you
 choose to process with a remote model leave it; local processing stays
 entirely on your machine.
 
-### Create one workspace for your archive in your agent (do this first)
+### Create the workspace folder first: it becomes your archive
 
-Give your archive a permanent home in your favourite agent: a dedicated
-**project / workspace** (a "project" in Claude or ChatGPT, a project folder
-in Cursor, …). All the prompts in this guide then stay grouped together for
-every session, and you grant your agent file access **once** — to the archive
-folder whose layout is described below (step 2 explains it).
+Your archive lives in **one folder on your computer**, and that same folder
+is the dedicated **project / workspace** you work in with your agent (a
+project folder in Cursor or Claude Code; in Claude or ChatGPT, the folder a
+"project" can give access to). Everything pha keeps — your documents
+(`dropbox/`), the transcriptions (`library/`) and the configuration — lives
+inside that one folder, so you grant your agent file access **once**, and
+every prompt of this guide stays grouped in the same workspace for every
+session.
+
+Create the folder now, **empty**: in step 1b pha turns it into the archive,
+and pha refuses to create an archive in a folder that already has files in
+it. Your own prompts are added *after* that (see the end of this section).
 
 ```
-Create a dedicated workspace for my personal historical archive:
-1. Name it "My historical archive".
-2. Put ALL of the pha prompts I use into it, grouped in one place: the
-   prompts in the pha guide for historians, the Model Helper and Encoder
-   Helper prompts (prompts/model-helper.md and prompts/encoder-helper.md),
-   and any prompts I write later for my own collections.
-3. Give this workspace permission to access my archive — the archive folder
-   and the right to run pha on this computer — and nothing else.
+Create a dedicated workspace folder for my personal historical archive,
+for example "~/My historical archive":
+1. Create the folder and open it as the project/workspace I work with you
+   in. Leave it EMPTY for now — in the next step you will create my pha
+   archive inside it (documents, transcriptions and configuration).
+2. Give this workspace permission to access this folder and to run pha on
+   this computer — and nothing else.
 ```
 
-Work with your agent in that workspace from now on: it will already know your
-archive and have the file access it needs.
+Work with your agent in that folder from now on. It is the one folder your
+archive lives in, so the agent will already know where the archive is and
+have the file access it needs. Once the archive exists (after step 1b), you
+can also keep your own prompts inside it, grouped in one place (e.g. a
+`prompts/` subfolder): the prompts of this guide you want to reuse, the
+Model Helper and Encoder Helper prompts (the files
+`prompts/model-helper.md` and `prompts/encoder-helper.md` in the pha
+installation), and any prompts you write later for your own collections.
 
 ---
 
@@ -59,7 +71,7 @@ archive and have the file access it needs.
 
 You can ask your agent to do all of it. Three short steps, in order (step 1a —
 installing LM Studio — is only needed if you will run models locally; for
-remote models you can skip it):
+remote models you can skip it and go straight to step 1b):
 
 ### 1a. Install LM Studio (if you don't have it)
 
@@ -68,7 +80,54 @@ Please install LM Studio on my computer: download it from lmstudio.ai,
 install it, and open it so its local server can run. Tell me when it is ready.
 ```
 
-### 1b. Choose the best models for your documents
+### 1b. Install pha (from GitHub)
+
+Copy this into your agent's chat and let it do the work:
+
+```
+Please install the "personal-historical-archive" (pha) program from
+https://github.com/joaquimrcarvalho/personal-historical-archive
+
+Steps:
+1. Clone the repository to a folder of your choice, e.g. ~/develop/personal-historical-archive
+   (the code stays there — it is NOT my archive)
+2. Install `uv` if it is not present, create a Python virtual environment
+   in the project and install the package (uv pip install -e .)
+3. Check that LM Studio is running with its local server on port 1234.
+4. Set up my archive in the empty workspace folder I created at the
+   beginning, "~/My historical archive":
+       pha init-archive "~/My historical archive"
+       pha set archive-dir "~/My historical archive"
+5. Verify the installation and tell me the result of `pha status`.
+```
+
+**Your agent will ask where your archive is — expect it.** A freshly
+installed pha does not know any archive yet: the first real command (like
+`pha status`) reports *"No pha archive is configured or found"* and stops,
+and the agent then asks you for the archive's location. The answer is the
+**workspace folder you created in the previous step** — your agent will
+normally suggest it, because that is the folder you designated as the
+archive's home. Confirm it: the agent runs the two commands of step 4
+(create the archive inside that folder and remember its location for every
+future command), and `pha status` then works. If that folder already has
+files in it (pha refuses to create an archive there), tell the agent to
+create the archive in an empty subfolder inside it instead.
+
+What you should see afterwards: a short report that the archive is ready and
+which palaeographers and editors are configured (`qwen-local` by default,
+plus a `modern-portuguese` editor). Installing pha before choosing the models
+lets your agent check your actual setup (defaults, `pha status`, `pha
+palaeographer`) when it makes the recommendations below.
+
+**Windows note:** the commands are the same, only the environment folder
+differs (`Scripts\python.exe` instead of `bin/python`). Your agent will
+handle this.
+
+### 1c. Choose the best models for your documents
+
+pha is now installed, so your agent can first look at your actual setup — run
+`pha palaeographer` and `pha status` to see what is already configured — and
+then research with that in hand.
 
 Different vision and text models are better for different material, and you are
 not limited to what runs on your own computer: pha can use **models hosted
@@ -163,49 +222,21 @@ safely stores the API key.
 > and (for remote) safely stores the API key with `pha key --set` and writes
 > the model + rules + `pha.yaml` files for you.
 
-### 1c. Install pha (from GitHub)
-
-Copy this into your agent's chat and let it do the work:
-
-```
-Please install the "personal-historical-archive" (pha) program from
-https://github.com/joaquimrcarvalho/personal-historical-archive
-
-Steps:
-1. Clone the repository to a folder of your choice, e.g. ~/develop/personal-historical-archive
-2. Install `uv` if it is not present, create a Python virtual environment
-   in the project and install the package (uv pip install -e .)
-3. Check that LM Studio is running with its local server on port 1234 and
-   that the chosen models are available (the vision model, the embedding
-   model, and the text/editing model). Load them if needed.
-4. Verify the installation and tell me the result of `pha status`.
-```
-
-What you should see afterwards: a short report that the archive is ready and
-which palaeographers and editors are configured (`qwen-local` by default,
-plus a `modern-portuguese` editor).
-
-**Windows note:** the commands are the same, only the environment folder
-differs (`Scripts\python.exe` instead of `bin/python`). Your agent will
-handle this.
-
 ---
 
 ## 2. Put your documents in the archive
 
-pha expects a simple folder layout. Tell your agent:
+Your archive's "dropbox" folder is already set up with the layout pha
+expects — you only add content to it. Tell your agent:
 
 ```
-Create these folders in the archive (inside the "dropbox" folder):
-  dropbox/documents/          — individual documents
-  dropbox/collections/<NAME>/ — one folder per collection, e.g. "letters-from-missons"
-
-Then copy my files in, following these rules:
-- a PDF or an image file = one document
+Copy my files into the archive's "dropbox" folder, following these rules:
+- a PDF or an image file = one document → goes into dropbox/documents/
 - a FOLDER containing only images = one document whose pages are those images
   (put it inside documents/ or inside a collection)
 - anything that belongs together historically (e.g. all letters of one
-  correspondence) goes into its own collection folder
+  correspondence) goes into its own collection folder under
+  dropbox/collections/ — create the collection folder if it does not exist yet
 - tell me where each file ended up
 ```
 
@@ -254,7 +285,7 @@ and pha editor). Then, for my documents, I want:
 
 Create the corresponding files by copying palaeographers/_sample.md and
 editors/_sample.md, giving them good names, setting `model:` (the model we
-chose in step 1b) and temperature, and writing the instructions in the body.
+chose in step 1c) and temperature, and writing the instructions in the body.
 Then SELECT them for my collections: write a pha.yaml sidecar in each
 collection folder, e.g.
   palaeographer:
@@ -289,7 +320,7 @@ scholar: it sees the whole layout, follows the hand, recognises a damaged or
 difficult word *from context*, and writes brief reading notes (language,
 script, difficult words). It can transcribe dense handwriting, marginalia and
 interlinear notes that plain OCR cannot. It runs on a **local vision model**
-(LM Studio) **or a remote one** — see section 1b. Reading difficult manuscripts
+(LM Studio) **or a remote one** — see section 1c. Reading difficult manuscripts
 today most often needs a remote vision model, because the model strong enough
 is too big for a normal computer.
 
@@ -500,6 +531,10 @@ Reviewed pages show `reviewed: true` in their header.
   it. For a **remote** model, check that the API key was stored (`pha key`) and
   that it is set on the model file (`api_key: "${VARNAME}"`). Then run `pha
   test` to confirm the model responds.
+- **"No pha archive is configured or found"** → the archive was never set up
+  or its location was forgotten. Point pha at the workspace folder you created
+  at the beginning: `pha init-archive "<folder>"` if it is still empty,
+  `pha set archive-dir "<folder>"` otherwise, then run `pha status` again.
 - **Extraction seems stuck** → it is probably waiting while the computer
   slept; run `pha scan` again, it resumes.
 - **Search returns nothing** → the extraction may not be finished; check
