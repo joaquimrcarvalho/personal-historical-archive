@@ -1,0 +1,306 @@
+# Implementation plan — pha encoders with bundled tools (phase A: tool runner)
+
+Design doc for the enhancement proposal
+`<archive_dir>/.writing/pha-encoder-tools-enhancement-request.md`
+("pha encoders with bundled tools, e.g. write one Markdown file per extracted
+record"). Written before any code. Validated against current pha: the
+reference encoder files (`documenta-indica/encoders/{documents,apparatus}.md`
++ `*.tools/`, `_tools/`, `prescan/doca_prescan.py`) load cleanly today and
+the proposal's layout is inert for the current loader.
+
+Scope of THIS plan = **phase A: the tool runner** (proposal §2.1–2.3 + the
+staleness part of §2.3). Phases B (ship `markdown-from-records` as a built-in
+tool) and C (structure prescan → layout injection, §3.4) are outlined at the
+end; §3.1–3.3 of the proposal are separate encoder-stage changes and are
+listed for reference only.
+
+## 1. What we build
+
+After `pha encode` has stored a document's records
+(`library/<slug>/records-<encoder>.json`) and the concatenated input
+(`concatenated-<encoder>.md`), pha runs the encoder's **bundled tools** in
+front-matter order. A tool is a directory next to the encoder definition
+carrying a `tool.md` manifest + payload; pha invokes it with a small JSON
+context describing the document, the records and the library page folders,
+and reports per-tool success/failure. Tool runs are **idempotent** via a
+stamp file, so a tool-only edit does not force a re-encode of the document
+model pass.
+
+### Resolved design decisions
+
+- **D1 — Tool types: phase A ships `type: script` only.** A `tools:` item
+  that declares `model:` (the optional LLM-backed `structure-document`
+  tool) is validated but **skipped with a warning** ("LLM-backed tools are
+  not implemented yet"). The runner contract (context JSON, params, stamping)
+  is type-agnostic so `type: llm` can be added later without rework.
+- **D2 — Staleness is two-level and the tool level never triggers the model
+  pass.** `_encode_needed` (records freshness) stays untouched. Tools run
+  when (a) records were just written by this encode call, or (b) any tool
+  source file is newer than the tool's last successful run. Freshness is
+  recorded in `library/<slug>/.tools-stamps/<encoder>.<tool>.stamp`
+  containing the newest mtime (float) of the tool's sources at the last
+  success; a failed run writes no stamp, so the next `pha encode` retries.
+- **D3 — Invocation.** Payload entrypoint defaults to `<tool>/<name>.py`
+  executed with `sys.executable` (pha's own interpreter — always present);
+  a manifest `command:` (string or list) overrides the whole argv. Arguments:
+  `--context <file>` with the context JSON (D4). Spawn with a timeout
+  (manifest `timeout_s`, default 1800), capture stdout/stderr (last ~2 KB
+  kept for reporting), exit code != 0 → tool failed.
+- **D4 — Context over stdin is rejected.** `--context <file>` only (a temp
+  file removed after the run): portable on Windows, and lets the human run a
+  tool interactively by pointing it at a saved context file. The context
+  document in the proposal is the spec (encoder, document path,
+  records_file, concatenated_file, library_dir, pages_dir_edited,
+  pages_dir_raw, params). Fixed keys (encoder/document/records_file/…) are
+  **not overridable** by front matter.
+- **D5 — Param merging.** Manifest `params:` = defaults; encoder front-matter
+  `tools:` item keys (other than `name`) override; merged dict is what the
+  context `params` carries. Tool authors read only context `params`.
+- **D6 — Security posture.** Tool payloads are arbitrary local code supplied
+  by the archive owner — same trust as palaeographer/editor prompts. **No
+  sandbox.** Documented in README/AGENTS and in `_ENC_SAMPLE`.
+- **D7 — Reporting.** `encode_document`'s result dict gains `"tools":
+  [{tool, action: ran|skipped|stale-failed, error?, out_dir?}]`; `pha encode`
+  prints one line per tool; `pha encoder <file>` shows each encoder's
+  configured tools; `pha test` runs tools into its scratch dir (flag
+  `--no-tools` to skip) and lists them in `report.md`.
+- **D8 — Bad config never loses records.** Unknown tool name / missing tool
+  dir / malformed manifest → warning + tool skipped, records kept, encode
+  still reports success for the records.
+
+### Manifest format (`<tool>/tool.md`)
+
+```markdown
+---
+name: markdown-from-records     # must equal the tool dir name (warning only)
+type: script                    # phase A: only "script"
+description: one-line summary
+command: []                     # optional override of the default argv
+timeout_s: 1800
+params:                         # defaults; free-form
+  out_dir: segments-documents
+  page_marker: "--- page N ---"
+  footnote_policy: page
+---
+Human-readable description and usage notes (shown by `pha encoder`).
+```
+
+`name`/`type`/`params` are read; unknown keys are carried in the manifest
+dict for forward compatibility. A tool dir with **no** `tool.md` and no
+`<name>.py` is not a tool (ignored).
+
+## 2. File-by-file changes
+
+### New module `src/personal_historical_archive/encoder_tools.py`
+
+Keeps the runner out of the already-large `ingest.py`. Imports only
+`config`/`extract`/stdlib (no import of `ingest`, to avoid a cycle — the
+library-dir resolution helpers live in `ingest` and results are *passed in*).
+
+- `@dataclass Tool`: `name`, `dir: Path`, `manifest: dict`, `payload:
+  Path | None` (entrypoint script when a `command:` override is absent).
+- `discover_tools(enc_file: Path | None) -> dict[str, Tool]` — per-encoder
+  tool dirs in order: `enc_file.parent/f"{enc_file.stem}.tools"`, then
+  `enc_file.parent/"_tools"`, then the package built-in dir
+  (`personal_historical_archive/tools/builtin`, empty until phase B). Each
+  dir contributes `<tool>/` subdirs that contain `tool.md` **or**
+  `<tool>/<tool>.py`. A subdir named like a stage-prompt companion is never
+  a tool (only exact `<tool>/tool.md` + payload count). `enc_file=None`
+  (legacy global encoder, no collection dir) → no tools.
+- `load_manifest(tool_dir) -> dict` — parse YAML front matter with the same
+  `_split_frontmatter` used elsewhere (config.py); on parse failure return
+  `{}` and warn.
+- `tool_sources(tool) -> list[Path]` — every regular file under `tool.dir`
+  (mtime inputs for D2).
+- `merge_params(manifest, item) -> dict` — manifest `params:` defaults,
+  overlaid with the front-matter item's extra keys.
+- `build_context(...) -> dict` — the D4 context JSON.
+- `run_tool(tool, ctx, *, cwd) -> dict` — resolves argv (D3), spawns via
+  `subprocess.run` with `timeout`, temp `--context` file, returns
+  `{"ok": bool, "returncode": int|None, "output_tail": str, "timed_out": bool}`.
+- `run_encoder_tools(cfg, *, doc, enc_file, encoder, records_file,
+  concatenated_file, library_dir, pages_dir_edited, pages_dir_raw,
+  force=False) -> list[dict]` — orchestration: resolve the encoder's
+  `tools:` items (D8), discover each, decide run/skip per D2 using stamps
+  under `library_dir/.tools-stamps/`, call `run_tool`, write/refresh the
+  stamp on success only, and return one result dict per configured tool.
+
+### `src/personal_historical_archive/config.py`
+
+- `Encoder` dataclass: add `tools: list[dict] = field(default_factory=list)`.
+- `_encoder_from_frontmatter` (line ~922): after `pages`, parse
+  `fm.get("tools")` — must be a list of dicts each with a string `name`;
+  anything else → warning and empty list (D8). Items are stored **raw**
+  (params + possible future `model:` key survive untouched).
+- `_ENC_SAMPLE`: add a commented `tools:` example block and a one-line note
+  that tool dirs (`<name>.tools/`, `_tools/`) are inert for the loader.
+- No change to `Config` paths for phase A (the built-in tool dir is package
+  data, not an archive dir).
+
+### `src/personal_historical_archive/ingest.py`
+
+- Add `library_variant_dir(cfg, doc, variant, editor_id=None) -> Path | None`
+  next to `library_page_path` (line ~553): like that helper's prefix logic
+  but returns the **directory**; when several match (e.g. a legacy
+  `edited-<editor>` and `edited-<editor>@<model>`), prefer the one ending
+  `@…` (newest run-folder convention, commit "Name library run folders
+  rules@model"), else the newest by mtime. Raw variant dir =
+  `transcription-<pal>` with the same rule. Returns `None` when the doc has
+  no such folder (raw should always exist for a done doc; edited may not).
+- `encode_document` (after `write_records_file`/`write_concatenated_file`,
+  line ~1817): build the four paths from the doc record + resolved editor
+  and call `run_encoder_tools(..., force=True)`; add the results to the
+  returned dict as `"tools"`.
+- `encode_document` **skip path** ("records up to date", line ~1686):
+  instead of returning immediately, resolve the variant dirs and call
+  `run_encoder_tools(..., force=False)`; include `"tools"` in the returned
+  skipped dict. This is the D2 tool-only re-run path.
+- Import `run_encoder_tools` lazily inside `encode_document` (module
+  import at top is fine too — `encoder_tools` does not import `ingest`).
+- Leave `_encode_needed`, `_parse_json_array`, chunking untouched (phase A).
+
+### `src/personal_historical_archive/cli.py`
+
+- `cmd_encode` (line ~999): after printing per-document encode results,
+  print each result's tool lines — `tool <name>: ok` / `failed (rc N)` /
+  `skipped (stale-unconfigured)` — and a summary count of tool failures.
+- `cmd_encoder` (line ~966): when listing a document's resolved encoders or
+  the collection encoders, show `tools: <names>` from
+  `cfg.encoder_from_file(f).tools` when non-empty.
+
+### `src/personal_historical_archive/testrun.py`
+
+- In the encoder stage (line ~432-480), after the test records are written
+  to the scratch dir, run the encoder's tools with the scratch dir standing
+  in for `library_dir` and the scratch page folders for
+  `pages_dir_edited`/`pages_dir_raw` (testrun already mirrors the library
+  layout under `.pha-test/<doc>-<ts>/`). Tools failing must not abort the
+  report — record per-tool lines in `report.md` and continue. Add
+  `--no-tools` to the parser (line ~730 region) and thread it through.
+
+### `src/personal_historical_archive/mcp_server.py` (cheap, optional)
+
+- `pha_encoders` (line ~295): include `"tools": [names]` per encoder by
+  parsing the file with `cfg.encoder_from_file` when available. Nice-to-have
+  for remote config checks; can land with phase A or later.
+
+### Docs
+
+- `README.md` §"Encoders": new subsection "Bundled tools (encoder tool
+  runner)" — layout, `tool.md` manifest, `tools:` front matter, context
+  fields, param merge, stamp-based re-run semantics, security note, and the
+  pointer that tool payloads travel with the collection (bundle already
+  copies the whole `encoders/` tree).
+- `AGENTS.md`: short conventions bullets — encoder tool dirs are inert for
+  the loader; tools are archive-owner code (no sandbox); tool edits re-run
+  only the tool (not the model pass).
+- `encoders/_sample.md` (`_ENC_SAMPLE` above).
+
+## 3. Behavior contract (what a tool author gets)
+
+Context JSON passed via `--context <file>` (exact proposal §2.3 fields):
+
+```json
+{
+  "encoder": "documents",
+  "document": "/path/to/dropbox/.../DOCUMENTA-INDICA-1540-49.pdf",
+  "records_file": "…/library/<slug>/records-documents.json",
+  "concatenated_file": "…/library/<slug>/concatenated-documents.md",
+  "library_dir": "…/library/<slug>",
+  "pages_dir_edited": "…/edited-latin-to-english@deepseek-v4-flash",
+  "pages_dir_raw": "…/transcription-gemma-4-e4b-it@gemma-4-e4b-it",
+  "params": { "out_dir": "segments-documents", "page_marker": "--- page N ---" }
+}
+```
+
+- A field may be `null` when it does not exist (e.g. no edited variant);
+  tools must tolerate that (exit 0 with a warning when the variant they need
+  is missing is acceptable; exit non-zero only on real failure).
+- The tool writes artifacts under `library_dir/<out_dir>/` by default (its
+  own choice — pha does not restrict writes, D6), prints progress to stdout,
+  exits 0 on success. pha never parses the tool's output; the exit code is
+  the contract.
+- Out-dir overwrite policy is the tool's (phase-A built-ins are phase B).
+
+## 4. Staleness rules (D2, precise)
+
+Tool `T` for encoder `E`, doc `D` runs when **any** of:
+
+1. this call just wrote `D`'s records (action `encoded`), or `--reprocess`;
+2. no stamp `library/<slug>/.tools-stamps/E.T.stamp` exists;
+3. newest mtime of `tool_sources(T)` > the float stored in the stamp.
+
+After a successful run pha rewrites the stamp with the current newest source
+mtime. A failed/timed-out run leaves the old stamp (or none) → next run
+retries. Records freshness is untouched (`_encode_needed` unchanged), so a
+`pha encode` on an up-to-date document is cheap: `library_variant_dir` +
+stat comparisons + (at most) the stale tools.
+
+## 5. Test plan (`tests/test_encoder_tools.py` + integration tweaks)
+
+1. Discovery: per-encoder `<name>.tools/` wins over `_tools/`; missing dir →
+   `{}`; `enc_file=None` → no tools; stage-prompt companions never tools.
+2. Manifest: parse defaults + description; malformed front matter → `{}` +
+   warning; `name` mismatch warning only.
+3. Param merge: manifest default < front-matter override; fixed context keys
+   not overridable (a front-matter `records_file:` is ignored).
+4. End-to-end with a fake script tool (writes a file to `out_dir`):
+   `force=True` runs and stamps; second `force=False` run skips; touching the
+   payload re-runs; non-zero exit → `ok=False`, no stamp, records intact.
+5. `encode_document` integration: doc with existing records + stale tool →
+   result action `skipped` **with** a tool result `ran`; action `encoded`
+   path runs tools (verified via a records-bearing fixture + monkeypatched
+   model so no network).
+6. Unknown/missing tool configured in front matter → warning, tool skipped,
+   encode success (D8).
+7. No edited variant dir → context `pages_dir_edited: null`, tool that
+   ignores it exits 0.
+8. `pha test`: tools run into the scratch dir (or are skipped with
+   `--no-tools`); failing tool does not break `report.md`.
+9. Back-compat sweep: existing fixtures with encoder front matter lacking
+   `tools:` behave identically (no tools, no stamps).
+
+Run: `.venv/bin/python -m pytest tests/test_encoder_tools.py` + the existing
+`test_ingest.py`/`test_testrun.py`/`test_mcp.py` suites (no regressions).
+
+## 6. Out of scope for phase A (later phases)
+
+- **Phase B — built-in `markdown-from-records`.** Move the validated
+  reference script
+  (`documenta-indica/encoders/_tools/markdown-from-records/markdown_from_records.py`,
+  235 lines, stdlib) into package data
+  `src/personal_historical_archive/tools/builtin/markdown-from-records/`
+  with a `tool.md`; add a **shared library-page reader** in `ingest.py`
+  (page md → body with YAML front matter and any trailing `## Notes` block
+  stripped — the reference re-implements this by string parsing today);
+  improve `library_page_path`'s first-match loop to prefer the `@model`
+  folder (needed by both the tool and review).
+- **Phase C — structure prescan → layout injection** (proposal §3.4):
+  `structure: prescan` front matter resolved **per document**; lazy run +
+  cache `library/<slug>/structure-<slug>.json` (mtime-invalidated); `pages:
+  "@documents"` indirection in `_page_filter`; register block appended to the
+  composed prompt; bundle support for collection-sibling scripts
+  (`prescan/` today does not travel with `pha bundle`, only the encoders
+  tree does). Until C, `doca_prescan.py --write-encoder-pages` remains the
+  operative mechanism.
+- **Proposal §3.1** model-assisted entry detection (extend
+  `detect_entry_pages` beyond the regex fast path) and **§3.2**
+  character-aware chunking (chunk by `effective_max_input_chars`, not
+  `batch_pages`) — independent encoder-stage improvements; **§3.3** raw/
+  edited cross-reference is a phase-B tool enhancement once
+  `pages_dir_raw` is in every context.
+
+## 7. Risks / compat notes
+
+- **Cyclic imports**: `encoder_tools.py` must not import `ingest` (helpers
+  passed in as paths). `config._split_frontmatter` is import-safe.
+- **Run-folder ambiguity**: several `edited-*` folders may exist for one
+  document (legacy + `@model`); `library_variant_dir`'s preference rule
+  must match what `write_edited_pages` actually produced last
+  (ingest.py:937) or tools read stale pages. Covered by tests 5 + 8.
+- **Tool payload size / bundle**: `pha bundle` copies whole `encoders/`
+  trees already → payloads travel; no change needed in phase A.
+- **Windows**: no stdin piping, no shell interpolation (`subprocess.run`
+  with a list argv); timestamps float comparison is fine.
+- **Verbose output**: cap captured tool output (last ~2 KB) so a chatty tool
+  cannot flood `pha encode` logs.
