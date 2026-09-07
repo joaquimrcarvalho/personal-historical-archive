@@ -1,6 +1,6 @@
 # VS Code extension for pha — specification (for analysis)
 
-Status: **Draft for review** · Author: AI agent · Scope: research + design, no code yet.
+Status: **Spec v1.1** — §17 open questions resolved · Author: AI agent · Scope: research + design, no code yet.
 
 This document is a spec for a VS Code extension that helps users **manage a
 personal-historical-archive (pha)** archive from inside VS Code. It is written
@@ -104,10 +104,10 @@ interface ArchiveConnection {
 - `RemoteConnection` — `@modelcontextprotocol/sdk` client over SSE to machine B
   (v2; see §10 for the one tool gap it has).
 
-**Recommendation:** build **local first** (it is the common case for the person
-who operates the archive, and it needs no new pha code), and design the
-interface so `RemoteConnection` slots in later. For remote users in the
-meantime, the extension's "Configure MCP" command writes the correct
+**Decision (§17): local-first.** Build **local first** (it is the common case
+for the person who operates the archive, and it needs no new pha code), and
+design the interface so `RemoteConnection` slots in later. For remote users in
+the meantime, the extension's "Configure MCP" command writes the correct
 `.vscode/mcp.json` and the built-in chat/agent experience carries the load.
 
 ---
@@ -353,16 +353,16 @@ thin.
 
 ## 10. Gaps to close in pha (small, optional)
 
-These are the only places the extension would benefit from new pha code, and
-none blocks the local MVP:
+These are the only places the extension would benefit from new pha code. Items
+1 and 2 are **approved** (see §17); none blocks the local MVP:
 
-1. **`pha_list_dropbox` MCP tool** — the MCP surface has no way to browse the
-   *unscanned* dropbox tree (only `pha_get_archive`'s diagnostic 10-PDF list).
-   A remote `RemoteConnection` needs this to build the browser. (Local mode
-   reads the filesystem directly, so it is unaffected.)
-2. **JSON output on a few CLI read commands** — `pha status`, `pha
-   palaeographer`, `pha editor`, `pha encoder`, `pha prompts` print human text.
-   Adding `--json` would let the extension shell out cleanly instead of
+1. **`pha_list_dropbox` MCP tool** *(approved — §17)* — the MCP surface has no
+   way to browse the *unscanned* dropbox tree (only `pha_get_archive`'s
+   diagnostic 10-PDF list). A remote `RemoteConnection` needs this to build the
+   browser. (Local mode reads the filesystem directly, so it is unaffected.)
+2. **JSON output on a few CLI read commands** *(approved — §17)* — `pha status`,
+   `pha palaeographer`, `pha editor`, `pha encoder`, `pha prompts` print human
+   text. Adding `--json` would let the extension shell out cleanly instead of
    reading the DB directly. (Nice-to-have; the DB read is a fine substitute.)
 3. **A stable, versioned read-only SQLite accessor** — the schema is already
    documented via `pha_schema`; freezing it (or adding a tiny
@@ -428,8 +428,10 @@ These are hard requirements derived from `AGENTS.md` and the code:
 - **Engines:** `node >= 20` (VS Code's current baseline); target `vscode@^1.96`
   or later (higher if we use `vscode.lm` tool registration, which is the
   newest surface).
-- **Distribution:** Marketplace (`.vsix`); activation on
-  `onView:pha.explorer` + `workspaceContains:archive.db`/`.vscode/mcp.json`.
+- **Distribution:** private `.vsix` (no Marketplace publishing, per §17), with
+  the extension source living **in this repository** (e.g. under
+  `vscode-extension/`); activation on `onView:pha.explorer` +
+  `workspaceContains:archive.db`/`.vscode/mcp.json`.
 - **Testing:** unit tests for the DB/SQL + path resolution (the
   `library_page_path` naming rules, `(root)` grouping, source-stem page names);
   integration tests that run a real archive through scan→edit→encode and assert
@@ -451,7 +453,9 @@ prompts). Options:
 - **Supersede:** if VS Code is the primary surface, the extension's dashboard
   can replace the web UI's dashboard, and `pha web` can stay a thin API server.
 
-No conflict blocks either; decide after seeing the MVP.
+**Decision (§17): stay complementary.** The extension and `pha web` coexist:
+the extension targets VS Code users, `pha web` targets browser-first users, and
+both share the same backend and correctness contract.
 
 ---
 
@@ -489,37 +493,41 @@ with lock gating. Ship as `.vsix`.
 diff view raw⇄edited; review-pending badges.
 
 **Phase 3 — Remote.**
-`RemoteConnection` via `@modelcontextprotocol/sdk` over SSE; add
-`pha_list_dropbox` (and any `--json` read commands) to pha so the remote
-browser is complete.
+`RemoteConnection` via `@modelcontextprotocol/sdk` over SSE; the approved
+`pha_list_dropbox` tool and `--json` read commands (see §10, §17) can land in
+pha any time before this phase so the remote browser is complete.
 
 ---
 
-## 17. Open questions for the user (decision points)
+## 17. Decisions (confirmed by the user)
 
-1. **Primary deployment:** is the extension for the *archive operator on the
-   archive machine* (→ local-first, Phase 1), or for *remote researchers*
-   (→ remote/SSE first)? Recommended: local-first, remote in Phase 3.
-2. **Chat/agent scope:** do you want the `@pha` chat participant + tool
-   integration, or is the structured browser/status the whole ask?
-   Recommended: ship the zero-code MCP wiring regardless; treat `@pha` as Phase 2.
-3. **Web UI relationship:** should the extension embed/replace `pha web`, or
-   stay complementary (recommended)?
-4. **New pha surface:** is it acceptable to add the small, backward-compatible
-   `pha_list_dropbox` tool and `--json` read outputs to pha to round out
-   remote/CLI support (recommended: yes)?
-5. **Marketplace vs private `.vsix`:** publish to the Marketplace, or distribute
-   privately to the archive's users?
+1. **Local-first.** The extension is built for the *archive operator on the
+   archive machine* (`LocalConnection` first); remote (`RemoteConnection`/SSE)
+   stays Phase 3.
+2. **Chat/agent = Phase 2.** Ship the zero-code `.vscode/mcp.json` wiring
+   regardless; treat the `@pha` chat participant / language-model tools as
+   Phase 2.
+3. **Stay complementary to `pha web`.** The extension does not embed or replace
+   `pha web`; the two coexist and share the backend/correctness contract.
+4. **Add the additional tool.** Approve the small, backward-compatible
+   `pha_list_dropbox` MCP tool and `--json` on the read commands so the remote
+   browser and CLI shell-outs are complete.
+5. **Private, in-repo.** Distribute as a private `.vsix` (no Marketplace
+   publishing) and keep the extension source in this repository.
 
 ---
 
 ## Appendix A — pha surface reference (as of this analysis)
 
-**MCP tools (15):** `pha_search`, `pha_get_document`, `pha_get_page`,
-`pha_list_documents`, `pha_upload`, `pha_get_archive`, `pha_palaeographers`,
-`pha_editors`, `pha_encoders`, `pha_collection_config`,
-`pha_collection_status`, `pha_scan_now`, `pha_extraction_status`, `pha_schema`,
-`pha_doctor`.
+**MCP tools (15 shipped, 1 approved addition):** `pha_search`,
+`pha_get_document`, `pha_get_page`, `pha_list_documents`, `pha_upload`,
+`pha_get_archive`, `pha_palaeographers`, `pha_editors`, `pha_encoders`,
+`pha_collection_config`, `pha_collection_status`, `pha_scan_now`,
+`pha_extraction_status`, `pha_schema`, `pha_doctor` — plus
+`pha_list_dropbox` (approved — §17, not yet implemented).
+
+**CLI read commands gaining `--json` (approved — §17):** `pha status`,
+`pha palaeographer`, `pha editor`, `pha encoder`, `pha prompts`.
 
 **SQLite (key columns only — see `pha_schema()` for the full picture):**
 
