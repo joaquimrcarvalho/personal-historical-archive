@@ -1,4 +1,4 @@
-# Implementation plan — pha encoders with bundled tools (phase A: tool runner)
+# Implementation plan — pha encoders with bundled tools (phases A + B: tool runner + built-in markdown-from-records)
 
 Design doc for the enhancement proposal
 `<archive_dir>/.writing/pha-encoder-tools-enhancement-request.md`
@@ -8,11 +8,47 @@ reference encoder files (`documenta-indica/encoders/{documents,apparatus}.md`
 + `*.tools/`, `_tools/`, `prescan/doca_prescan.py`) load cleanly today and
 the proposal's layout is inert for the current loader.
 
-Scope of THIS plan = **phase A: the tool runner** (proposal §2.1–2.3 + the
-staleness part of §2.3). Phases B (ship `markdown-from-records` as a built-in
-tool) and C (structure prescan → layout injection, §3.4) are outlined at the
-end; §3.1–3.3 of the proposal are separate encoder-stage changes and are
-listed for reference only.
+Scope of THIS plan = **phase A (the tool runner) + phase B (the built-in
+`markdown-from-records` tool), implemented together** (proposal §2.1–2.4).
+Phase C (structure prescan → layout injection, §3.4) is a separate follow-up
+after A+B works on a real volume; §3.1–3.3 of the proposal are separate
+encoder-stage changes, listed for reference only.
+
+### Decisions recorded (archive-owner rulings)
+
+- **DEC-1 (scope/approach):** keep the **generic tool runner**; the
+  motivating built-in is the per-record "export segments" tool. Its defining
+  correctness requirement — everything else follows from it — is that the
+  encoder must be able to **reconstruct documents that span pages and that
+  start in the middle of a page**, as is common in historical source
+  editions. This drives the phase-B reader/spanning logic and its tests
+  (§6).
+- **DEC-2 (sequencing):** phases **A + B ship together** as one feature;
+  phase C comes after (own review cycle).
+- **DEC-3 (= D1):** **LLM-backed tools are deferred** — phase A ships
+  `type: script` only; a `tools:` item declaring `model:` is validated but
+  skipped with a warning (the `structure-document` second-stage tool is
+  therefore not part of this work).
+- **DEC-4 (= D2):** two-level staleness with stamp files, as designed below.
+- **DEC-5 (overwrite policy):** tool outputs use deterministic file names and
+  are **overwritten in place** on re-run. They are regenerated artifacts,
+  like `renders/` — the human review/correction surface stays the
+  `library/` edited-* pages; a correction is applied there and the segments
+  are rebuilt (see DEC-6), not hand-edited.
+- **DEC-6 (review interplay):** tool staleness **tracks corrections to the
+  edited pages**. A page file under `pages_dir_edited` newer than the tool's
+  stamp marks the tool stale, so a historian's correction to an edited page
+  re-materialises the affected segments on the next `pha encode` — whether
+  or not the correction has been imported with `pha review` (the tool reads
+  the page files).
+- **DEC-7 (defaults adopted, veto anytime):** on tool failure `pha encode`
+  still succeeds for the records and reports the tool failure (exit 0; a
+  `pha test` report shows it); `pha test` runs script tools by default
+  (`--no-tools` to skip); a tool with no `out_dir` defaults it to the tool
+  name; tool artifacts are **not** indexed for search (a later enhancement);
+  `pha bundle` keeps carrying the whole `encoders/` tree (payloads included)
+  while collection-sibling script dirs (`prescan/`) travel only once phase C
+  lands. The record JSON format stays unchanged (proposal §4 non-goal).
 
 ## 1. What we build
 
@@ -36,10 +72,14 @@ model pass.
 - **D2 — Staleness is two-level and the tool level never triggers the model
   pass.** `_encode_needed` (records freshness) stays untouched. Tools run
   when (a) records were just written by this encode call, or (b) any tool
-  source file is newer than the tool's last successful run. Freshness is
-  recorded in `library/<slug>/.tools-stamps/<encoder>.<tool>.stamp`
-  containing the newest mtime (float) of the tool's sources at the last
-  success; a failed run writes no stamp, so the next `pha encode` retries.
+  source file is newer than the tool's last successful run, or (c) any
+  edited-page file the tool consumes is newer than the tool's last run
+  (DEC-6 — a human correction to an edited page marks the tool stale).
+  Freshness is recorded in
+  `library/<slug>/.tools-stamps/<encoder>.<tool>.stamp` containing the newest
+  mtime (float) of the tool's sources **and the edited pages it reads** at
+  the last success; a failed run writes no stamp, so the next `pha encode`
+  retries.
 - **D3 — Invocation.** Payload entrypoint defaults to `<tool>/<name>.py`
   executed with `sys.executable` (pha's own interpreter — always present);
   a manifest `command:` (string or list) overrides the whole argv. Arguments:
@@ -228,13 +268,17 @@ Tool `T` for encoder `E`, doc `D` runs when **any** of:
 
 1. this call just wrote `D`'s records (action `encoded`), or `--reprocess`;
 2. no stamp `library/<slug>/.tools-stamps/E.T.stamp` exists;
-3. newest mtime of `tool_sources(T)` > the float stored in the stamp.
+3. newest mtime of `tool_sources(T)` > the float stored in the stamp;
+4. newest mtime of any **edited-page file under `pages_dir_edited`** > the
+   float stored in the stamp (DEC-6: a human correction to an edited page
+   marks the tool stale even when `_encode_needed` sees the records as
+   fresh).
 
-After a successful run pha rewrites the stamp with the current newest source
-mtime. A failed/timed-out run leaves the old stamp (or none) → next run
-retries. Records freshness is untouched (`_encode_needed` unchanged), so a
-`pha encode` on an up-to-date document is cheap: `library_variant_dir` +
-stat comparisons + (at most) the stale tools.
+After a successful run pha rewrites the stamp with the current newest mtime
+over (tool sources ∪ edited pages). A failed/timed-out run leaves the old
+stamp (or none) → next run retries. Records freshness is untouched
+(`_encode_needed` unchanged), so a `pha encode` on an up-to-date document is
+cheap: `library_variant_dir` + stat comparisons + (at most) the stale tools.
 
 ## 5. Test plan (`tests/test_encoder_tools.py` + integration tweaks)
 
@@ -257,24 +301,43 @@ stat comparisons + (at most) the stale tools.
    ignores it exits 0.
 8. `pha test`: tools run into the scratch dir (or are skipped with
    `--no-tools`); failing tool does not break `report.md`.
-9. Back-compat sweep: existing fixtures with encoder front matter lacking
-   `tools:` behave identically (no tools, no stamps).
+9. DEC-6 staleness: records fresh + a page file under `pages_dir_edited`
+   touched → tool re-runs on the next `pha encode`; untouched → skips.
+10. Back-compat sweep: existing fixtures with encoder front matter lacking
+    `tools:` behave identically (no tools, no stamps).
 
 Run: `.venv/bin/python -m pytest tests/test_encoder_tools.py` + the existing
 `test_ingest.py`/`test_testrun.py`/`test_mcp.py` suites (no regressions).
 
-## 6. Out of scope for phase A (later phases)
+## 6. Phase B — built-in `markdown-from-records` (in scope, DEC-2)
 
-- **Phase B — built-in `markdown-from-records`.** Move the validated
-  reference script
-  (`documenta-indica/encoders/_tools/markdown-from-records/markdown_from_records.py`,
-  235 lines, stdlib) into package data
-  `src/personal_historical_archive/tools/builtin/markdown-from-records/`
-  with a `tool.md`; add a **shared library-page reader** in `ingest.py`
-  (page md → body with YAML front matter and any trailing `## Notes` block
-  stripped — the reference re-implements this by string parsing today);
-  improve `library_page_path`'s first-match loop to prefer the `@model`
-  folder (needed by both the tool and review).
+Move the validated reference script
+(`documenta-indica/encoders/_tools/markdown-from-records/markdown_from_records.py`,
+235 lines, stdlib) into package data
+`src/personal_historical_archive/tools/builtin/markdown-from-records/` with a
+`tool.md` manifest; the documenta-indica collection then references the
+built-in (single source of truth, mtime-driven updates) instead of its local
+copy. Add a **shared library-page reader** in `ingest.py` (page md → body
+with YAML front matter and any trailing `## Notes` block stripped — the
+reference re-implements this by string parsing today) and improve
+`library_page_path`'s first-match loop to prefer the `@model` folder (needed
+by both the tool and review).
+
+**Correctness requirement (DEC-1).** The built-in must reconstruct each
+record as its own document even when records **span pages** and when a new
+record **starts mid-page** — the reference implementation already does this
+(`page_chunks` infers `page_end` as the page before the next record's
+`page_start`, or the last page; `find_boundary` uses the record's
+`line_start`, falling back to a header search, to split a shared page so the
+top stays with the previous document and the header onward starts the next).
+Port that behaviour faithfully and cover it with explicit test vectors:
+(i) a record spanning several pages, (ii) the next record's header starting
+mid-page (`line_start` set), (iii) the last record ending at the volume's
+final page, (iv) two records sharing one page, (v) records with no
+`line_start` where the header is found by search.
+
+## 7. Later (after A+B): phase C and the §3 follow-ups
+
 - **Phase C — structure prescan → layout injection** (proposal §3.4):
   `structure: prescan` front matter resolved **per document**; lazy run +
   cache `library/<slug>/structure-<slug>.json` (mtime-invalidated); `pages:
@@ -287,10 +350,10 @@ Run: `.venv/bin/python -m pytest tests/test_encoder_tools.py` + the existing
   `detect_entry_pages` beyond the regex fast path) and **§3.2**
   character-aware chunking (chunk by `effective_max_input_chars`, not
   `batch_pages`) — independent encoder-stage improvements; **§3.3** raw/
-  edited cross-reference is a phase-B tool enhancement once
+  edited cross-reference is a phase-B-adjacent tool enhancement once
   `pages_dir_raw` is in every context.
 
-## 7. Risks / compat notes
+## 8. Risks / compat notes
 
 - **Cyclic imports**: `encoder_tools.py` must not import `ingest` (helpers
   passed in as paths). `config._split_frontmatter` is import-safe.
