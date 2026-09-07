@@ -292,6 +292,29 @@ Exposed tools:
 | `pha_scan_now()` | ingest newly dropped files |
 | `pha_extraction_status()` | ingestion summary |
 
+### Agent skills (SKILL files)
+
+Agents that search the archive through pha benefit from a bundled skill that
+fixes a common failure mode: answering from a search *snippet* instead of the
+full page/document it came from. The skill lives in the repo so it is versioned
+with pha and installed by anyone who sets up agents from the repo:
+
+- **Repo location:** [`skills/pha-search-context/SKILL.md`](skills/pha-search-context/SKILL.md)
+- **What it does:** after `pha search` / `pha_search`, present hits numbered;
+  retrieve the complete page text of each hit (raw transcription *and* the
+  edited variant when one exists) before answering; and when a hit is a page of
+  a document/item that started on an earlier page, read back to the
+  document/item start so answers have real context. It branches by capability:
+  MCP-tools-only agents vs agents with CLI + library file access.
+- **Installing it for your agents:** copy the folder into the user-level skills
+  directory used by agent runtimes on this machine
+  (`~/.agents/skills/` — where DSH and other agent tools pick skills up from):
+  ```bash
+  cp -R skills/pha-search-context ~/.agents/skills/
+  ```
+  (Re-copy to update after pulling a newer repo version. The skill's front
+  matter `name` must match the folder name, so keep the folder name unchanged.)
+
 ## Dropbox layout: documents and collections
 
 The dropbox is scanned recursively, so any subdirectory structure works.
