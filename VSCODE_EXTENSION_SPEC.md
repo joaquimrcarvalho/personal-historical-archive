@@ -116,7 +116,7 @@ the meantime, the extension's "Configure MCP" command writes the correct
 
 ### 4.1 Data model of the tree
 
-Two sources must be merged, because pha tracks **two disjoint sets**:
+Three sources must be merged, because pha tracks **three disjoint sets**:
 
 - **Archived documents** — rows in `documents` (the DB), one per *unit* (a PDF,
   an image, or a directory-of-images). Keyed by `path` (unique), with
@@ -125,6 +125,10 @@ Two sources must be merged, because pha tracks **two disjoint sets**:
 - **Unscanned dropbox files** — files under `dropbox/` whose resolved path is
   **not** in `documents.path`. This is exactly what `pha status` computes as its
   "new" list.
+- **On-hold inbox files** — files under `<archive_dir>/inbox/` (a *sibling* of
+  `dropbox/`, configurable via `paths.inbox`). Never scanned or indexed;
+  `pha status` reports them as "on hold", and `pha inbox [--move|--dry-run]`
+  lists/moves them into the dropbox.
 
 Tree shape:
 
@@ -138,6 +142,8 @@ PHA
 │   └─ 📁 COLX/
 │       ├─ 📄 sample_charter.pdf               # done · 2 pages · portuguese-secretary
 │       └─ ⏳ new-file.pdf                     # "not yet scanned"
+├─ 📥 inbox/                                   # on hold — never scanned
+│   └─ 📄 parked-letter.pdf                    # "on hold · pha inbox --move"
 └─ ⚙️ Configuration
     ├─ Models            (models/*.md)
     ├─ Palaeographers   (palaeographers/*.md)
@@ -155,11 +161,14 @@ Conventions to honour (from `AGENTS.md` + the code):
   it as one document, not one node per image.
 - `render/` cache and library folders are *derived*, so they should not be part
   of the "dropbox" tree (they surface inside the document drill-down instead).
+- `inbox/` is a sibling of `dropbox/`, not inside it — show it as its own
+  top-level "on hold" node; its files get a "Move to dropbox" action
+  (`pha inbox --move`), never a scan/edit action.
 
 ### 4.2 Refresh and performance
 
 - Refresh on demand (toolbar "Refresh") + on a `FileSystemWatcher` over
-  `dropbox/` and `library/` (debounced) + after any action completes.
+  `dropbox/`, `inbox/` and `library/` (debounced) + after any action completes.
 - For a large archive, **lazy-load** children (`getChildren` per node) and read
   the DB read-only. SQLite in WAL mode tolerates concurrent readers with the
   watcher/CLI writers; the extension opens `archive.db` with
@@ -283,7 +292,8 @@ A tree or webview backed by `db.summary` + `pha_collection_status`:
   (transcribed / edited / encoded / embedded), **render phase** (rendering /
   transcribing / complete), and **config drift** (recorded vs resolved
   pal/editor/encoder).
-- **New/unscanned** files list.
+- **New/unscanned** files list, and the **on hold (inbox)** list with a
+  "Move to dropbox" action (`pha inbox --move`).
 - **Pending review** list, grouped by document+pages (reuse
   `_pending_summary_lines` semantics).
 - **Errors** surfaced inline (document `error`, page `error`).
@@ -314,7 +324,8 @@ Mirror the CLI, with sensible defaults and no shell knowledge required:
 | `pha.encode` | `pha encode` | |
 | `pha.reindex` | `pha reindex` | |
 | `pha.review` | `pha review [--doc N]` | after corrections |
-| `pha.test` | `pha test <target> [--pages N] [--random]` | show `report.md` result in a webview |
+| `pha.test` | `pha test <target> [--pages N] [--random]` | show `report.md` in a webview; `--show` re-prints, `--list` lists, `--clean [--dry-run]` deletes saved runs |
+| `pha.inbox` | `pha inbox [--move \| --dry-run]` | list on-hold documents; move them into the dropbox (then `pha scan`) |
 | `pha.bundle` / `pha.unbundle` | `pha bundle/unbundle` | |
 | `pha.upload` | `pha upload document|collection <path>` | native file picker → dropbox |
 | `pha.doctor` | `pha doctor --json` | engines health |
@@ -551,4 +562,6 @@ source stem (`502V.md`).
 **Config layout:** `models/<id>.md` (interface), `palaeographers/`,
 `editors/`, `encoders/<id>.md` (content rules), `dropbox/…/pha.yaml` (pairs
 `rules`+`model`), `collections/COLX/encoders/*.md` (collection-local), legacy
-plain `palaeographer`/`editor` selection files.
+plain `palaeographer`/`editor` selection files. `inbox/` (a sibling of
+`dropbox/`, configurable via `paths.inbox`) holds on-hold documents that are
+never scanned; `pha inbox [--move|--dry-run]` manages them.
