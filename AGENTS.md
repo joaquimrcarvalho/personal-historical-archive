@@ -183,6 +183,19 @@ Run `pha help` (or `pha help <readme|mcp|historians|agents>`) for an
 orientation that points at this file, README.md, MCP_CLIENTS.md and
 HISTORIANS_README.md — it always works, even before an archive is configured.
 
+### DeepSeek Harness plugin (dsh-pha)
+
+A Harness agent on a machine with pha + a Harness install can expose the archive through the
+repo's bundled `dsh-pha` plugin: it registers the `pha_*` model tools (`pha_status`,
+`pha_documents`, `pha_document`, `pha_page`, `pha_search`, `pha_archive`,
+`pha_job_start`/`pha_job_status`/`pha_job_kill`) and a same-origin `/pha/*` JSON API. See
+[`DSH_PLUGIN.md`](DSH_PLUGIN.md) and [`dsh-pha/README.md`](dsh-pha/README.md). Install it into
+a Harness profile (`pnpm add <repo>/dsh-pha` + the [`cordis.patch` row](dsh-pha/cordis.patch.example.yml)
++ restart). Reads are read-only (`immutable=1` sqlite / the `pha` CLI); mutations still go
+through the real `pha` CLI, so the single-model lock, staleness and review round-trip rules
+below still apply — never start `pha scan`/`pha edit` while another local-model job holds the
+lock.
+
 ### How to check how a collection/document is configured
 
 Before processing or changing anything, find out what is already set. A

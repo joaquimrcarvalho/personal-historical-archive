@@ -315,6 +315,21 @@ with pha and installed by anyone who sets up agents from the repo:
   (Re-copy to update after pulling a newer repo version. The skill's front
   matter `name` must match the folder name, so keep the folder name unchanged.)
 
+## DeepSeek Harness plugin (dsh-pha)
+
+This repo also ships a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+host plugin, [`dsh-pha/`](dsh-pha/), that lets a Harness agent drive pha from chat on any
+machine with both installed. It provides the nine `pha_*` model tools, a read-only archive
+accessor (`immutable=1` sqlite open), a background job runner, a same-origin `/pha/*` JSON
+API, and a PHA conversation view (client module).
+
+- **Quick-start / what-you-get:** [`DSH_PLUGIN.md`](DSH_PLUGIN.md)
+- **Full install + build reference:** [`dsh-pha/README.md`](dsh-pha/README.md)
+- **Install:** `pnpm add <repo>/dsh-pha` into a Harness profile + the
+  [`cordis.patch` row](dsh-pha/cordis.patch.example.yml) + restart. The `pha_*` tools and
+  `/pha/*` API are live immediately; the PHA view additionally needs the Harness `dev:web`
+  client build (`dsh-pha/src/client/index.js` → `lib/client.js`) and a restart.
+
 ## Dropbox layout: documents and collections
 
 The dropbox is scanned recursively, so any subdirectory structure works.
