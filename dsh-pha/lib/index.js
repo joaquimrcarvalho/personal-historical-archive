@@ -35,6 +35,9 @@ const DB_SCRIPT = [
   'out({"error": "unknown op: " + op})',
 ].join('\n')
 
+const LIST_NOTES = "import os,sys,json\nd=sys.argv[1]\nout=[]\nfor f in sorted(os.listdir(d)) if os.path.isdir(d) else []:\n    if f.endswith('.md') and f.lower() != 'readme.md':\n        out.append({'name': f[:-3], 'file': f})\nprint(json.dumps(out, ensure_ascii=False))"
+const READ_NOTE = "import sys\nsys.stdout.write(open(sys.argv[1], encoding='utf-8').read())"
+
 function apply(ctx) {
   const cwd = '/'
   const jobs = new Map()
@@ -357,6 +360,24 @@ function apply(ctx) {
       return { ok: true, query: q, results }
     })],
     ['/pha/pageImage', json(pageImage)],
+    ['/pha/notes', json(async () => {
+      await discover()
+      const r = await pyRun(LIST_NOTES, [archiveDir + '/notes'])
+      if (r.code !== 0) return { ok: true, notes: [] }
+      let notes
+      try { notes = JSON.parse(String(r.out).trim()) } catch (e) { notes = [] }
+      return { ok: true, notes }
+    })],
+    ['/pha/note', json(async (p) => {
+      if (!p.name) throw new Error('name required')
+      const name = String(p.name)
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) throw new Error('invalid note name')
+      await discover()
+      const path = archiveDir + '/notes/' + name + '.md'
+      const r = await pyRun(READ_NOTE, [path])
+      if (r.code !== 0) throw new Error('note not found')
+      return { ok: true, name, path, content: String(r.out) }
+    })],
     ['/pha/status', json(async () => ({ ok: true, text: String((await phaRun(['status'])).out || '') }))],
     ['/pha/archive', json(async () => ({ ok: true, archive: await discover().then(() => archiveDir) }))],
   ]
