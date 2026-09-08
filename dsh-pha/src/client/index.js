@@ -14,7 +14,12 @@ async function get(path) {
 function inline(t, opts) {
   const onNote = opts && opts.onNote
   const out = []
-  const re = /(\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|`[^`\n]+`|~~[^~\n]+~~|\[\[([^\]]+)\]\]|\[\^(\d+)\]|\[([^\]]+)\]\(([^)]+)\))/g
+  // Normalize LaTeX-style \\(^{n}\\) / \\(_{n}\\) to $^{n}$ / $_{n}$ so they render as sup/sub.
+  let s = String(t == null ? '' : t)
+  s = s.split('\\(').join('$')
+  s = s.split('\\)').join('$')
+  t = s
+  const re = /(\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|`[^`\n]+`|~~[^~\n]+~~|\[\[([^\]]+)\]\]|\[\^(\d+)\]|\[([^\]]+)\]\(([^)]+)\)|\$[\^_]\{[^}]*\}\$)/g
   let last = 0
   let m
   while ((m = re.exec(t))) {
@@ -33,6 +38,9 @@ function inline(t, opts) {
     } else if (tok.startsWith('[')) {
       const nm = tok.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
       out.push(nm ? React.createElement('a', { href: nm[2] }, nm[1]) : tok)
+    } else if (tok.startsWith('$')) {
+      const sc = tok.match(/^\$([\^_])\{(.*)\}\$$/)
+      out.push(sc ? React.createElement(sc[1] === '^' ? 'sup' : 'sub', null, sc[2]) : tok)
     } else if ((tok.startsWith('*') && tok.endsWith('*')) || (tok.startsWith('_') && tok.endsWith('_'))) {
       out.push(React.createElement('em', null, tok.slice(1, -1)))
     } else out.push(tok)
@@ -44,18 +52,50 @@ function inline(t, opts) {
 
 function renderMd(text, opts) {
   const o = opts || {}
+  if (o.renderFootnotes === undefined) o.renderFootnotes = true
   if (o.footnotes === undefined) o.footnotes = {}
   const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n')
   const blocks = []
   let i = 0
   let para = []
   const flushPara = () => { if (para.length) { blocks.push(React.createElement('p', null, inline(para.join(' '), o))); para = [] } }
+  let footnotesFlushed = false
+  const flushFootnotes = () => {
+    if (footnotesFlushed) return
+    footnotesFlushed = true
+    const fids = Object.keys(o.footnotes)
+    if (!fids.length || !o.renderFootnotes) return
+    const kids = [React.createElement('div', { className: 'pha-fn-h' }, 'Footnotes')]
+    for (const id of fids) {
+      kids.push(React.createElement('p', { className: 'pha-fn', key: id, id: 'fn-' + id },
+        React.createElement('span', { className: 'pha-fn-num' }, '[' + id + '] '),
+        ...inline(o.footnotes[id], o),
+      ))
+    }
+    blocks.push(React.createElement('section', { className: 'pha-footnotes' }, kids))
+  }
   while (i < lines.length) {
     const line = lines[i]
     const trimmed = line.trim()
-    if (trimmed === '') { flushPara(); i++; continue }
+    if (trimmed === '') { flushPara(); if (Object.keys(o.footnotes).length) flushFootnotes(); i++; continue }
     const fn = trimmed.match(/^\[\^(\d+)\]\s*:\s*(.*)$/)
     if (fn && !trimmed.startsWith('|')) { o.footnotes[fn[1]] = fn[2]; i++; continue }
+    const BS = String.fromCharCode(92)
+    if (trimmed.charAt(0) === BS && trimmed.charAt(1) === '(' && trimmed.charAt(2) === '^') {
+      const restIn = trimmed.slice(3)
+      if (restIn.charAt(0) === '{') {
+        const close = restIn.indexOf('}')
+        if (close > 0) {
+          const num = restIn.slice(1, close)
+          const after = restIn.slice(close + 1)
+          if (after.charAt(0) === BS && after.charAt(1) === ')') {
+            o.footnotes[num] = after.slice(2).trim()
+            i++
+            continue
+          }
+        }
+      }
+    }
     if (trimmed.startsWith('```')) {
       flushPara(); const code = []; i++
       while (i < lines.length && !lines[i].trim().startsWith('```')) { code.push(lines[i]); i++ }
@@ -99,17 +139,7 @@ function renderMd(text, opts) {
     i++
   }
   flushPara()
-  const fids = Object.keys(o.footnotes)
-  if (fids.length && o.renderFootnotes) {
-    const kids = [React.createElement('div', { className: 'pha-fn-h' }, 'Footnotes')]
-    for (const id of fids) {
-      kids.push(React.createElement('p', { className: 'pha-fn', key: id, id: 'fn-' + id },
-        React.createElement('span', { className: 'pha-fn-num' }, '[' + id + '] '),
-        ...inline(o.footnotes[id], o),
-      ))
-    }
-    blocks.push(React.createElement('section', { className: 'pha-footnotes' }, kids))
-  }
+  flushFootnotes()
   return blocks
 }
 
