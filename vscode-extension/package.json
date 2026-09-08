@@ -1,0 +1,112 @@
+{
+  "name": "pha-vscode",
+  "displayName": "PHA — personal historical archive",
+  "description": "Manage a pha archive from VS Code: browse the dropbox, walk document → transcription → edited → encoded, check configuration, run pipeline jobs.",
+  "version": "0.1.0",
+  "publisher": "joaquimrcarvalho",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:phaExplorer",
+    "workspaceContains:archive.db"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "PHA",
+      "properties": {
+        "pha.executablePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the pha executable. Empty = auto-discover (pha on PATH, <workspace>/.venv/bin/pha, uv tool locations)."
+        },
+        "pha.archiveDir": {
+          "type": "string",
+          "default": "",
+          "description": "Archive data root. Empty = resolve like pha does (PHA_ARCHIVE_DIR env, .env, config.yaml paths.archive_dir, workspace root)."
+        },
+        "pha.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "Python interpreter used for the read-only archive.db queries."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "pha",
+          "title": "PHA Archive",
+          "icon": "media/archive.svg"
+        }
+      ]
+    },
+    "views": {
+      "pha": [
+        {
+          "id": "phaExplorer",
+          "name": "PHA Explorer"
+        },
+        {
+          "id": "phaStatus",
+          "name": "Status"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "pha.refresh", "title": "PHA: Refresh", "icon": "$(refresh)" },
+      { "command": "pha.scan", "title": "PHA: Scan (extract new/changed documents)", "icon": "$(play)" },
+      { "command": "pha.scanPath", "title": "PHA: Scan this path" },
+      { "command": "pha.edit", "title": "PHA: Run editor pass", "icon": "$(play)" },
+      { "command": "pha.editPath", "title": "PHA: Run editor pass on this path" },
+      { "command": "pha.encode", "title": "PHA: Run encoder pass", "icon": "$(play)" },
+      { "command": "pha.reindex", "title": "PHA: Reindex (re-embed chunks)" },
+      { "command": "pha.review", "title": "PHA: Import corrections (review)", "icon": "$(check)" },
+      { "command": "pha.reviewDoc", "title": "PHA: Import corrections for this document" },
+      { "command": "pha.openTranscription", "title": "PHA: Open transcription" },
+      { "command": "pha.openEdited", "title": "PHA: Open edited page" },
+      { "command": "pha.openEncoded", "title": "PHA: Open encoded records" },
+      { "command": "pha.splitPage", "title": "PHA: Split view raw ⇄ edited", "icon": "$(split-horizontal)" },
+      { "command": "pha.showPageImage", "title": "PHA: Show page image", "icon": "$(file-media)" },
+      { "command": "pha.openDocumentWhole", "title": "PHA: Open whole document text" },
+      { "command": "pha.openConfigFile", "title": "PHA: Open configuration file" },
+      { "command": "pha.newFromSample", "title": "PHA: New definition from sample", "icon": "$(add)" },
+      { "command": "pha.inboxMove", "title": "PHA: Move inbox file to dropbox (scan next)", "icon": "$(arrow-right)" },
+      { "command": "pha.doctor", "title": "PHA: Doctor — check local OCR engines" },
+      { "command": "pha.showOutput", "title": "PHA: Show job output" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "pha.refresh", "when": "view == phaExplorer", "group": "navigation" },
+        { "command": "pha.scan", "when": "view == phaExplorer", "group": "navigation" },
+        { "command": "pha.edit", "when": "view == phaExplorer", "group": "navigation" },
+        { "command": "pha.refresh", "when": "view == phaStatus", "group": "navigation" }
+      ],
+      "view/item/context": [
+        { "command": "pha.scanPath", "when": "view == phaExplorer && pha.node == collection" },
+        { "command": "pha.editPath", "when": "view == phaExplorer && pha.node == collection" },
+        { "command": "pha.splitPage", "when": "view == phaExplorer && pha.node == page", "group": "inline" },
+        { "command": "pha.showPageImage", "when": "view == phaExplorer && pha.node == page", "group": "inline" },
+        { "command": "pha.reviewDoc", "when": "view == phaExplorer && pha.node == document" },
+        { "command": "pha.inboxMove", "when": "view == phaExplorer && pha.node == inboxFile", "group": "inline" },
+        { "command": "pha.newFromSample", "when": "view == phaExplorer && pha.node == configSection" }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.96.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.5.0"
+  }
+}
