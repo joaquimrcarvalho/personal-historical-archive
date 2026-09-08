@@ -84,21 +84,41 @@ agent: `list the documents`, `show document 1 page 2`, `search for missão`. Mut
 (`pha scan/edit/encode/reindex/review/inbox`) can be started with `pha_job_start` and polled
 with `pha_job_status`; pha's own lock prevents overlapping local-model jobs.
 
-## GUI (conversation) view — follow-up
+## GUI (conversation) view
 
-The dynamic prototype also added a graphical **PHA view** (document list, page reader,
-side-by-side page image, search). That browser UI is **not yet part of this durable package**,
-because it uses the dynamic-plugin–only client↔host RPC (`harness.handle`/`host.call`), which
-real client modules don't have; a durable version must instead:
+The graphical **PHA view** is preserved in this package as:
 
-1. expose the read/mutation surface as a real client↔host **remote service** on the host side,
-2. ship a **client module** (`lib/client.js` + a `dsh.client` declaration in `package.json`),
-   registered into `conversation.view`, and
-3. be rebuilt into the harness web bundle (the `dev:web` client build) and the app restarted.
+- **Host data layer** (`lib/index.js`): same-origin read-only JSON routes under `/pha/*`
+  (`/pha/documents`, `/pha/document`, `/pha/page`, `/pha/search`, `/pha/pageImage`,
+  `/pha/status`, `/pha/archive`) registered on the harness `webServer` service.
+- **Client module source** (`src/client/index.js`): the PHA conversation view (document
+  list + search, page reader with raw/edited, side-by-side page image, markdown rendering,
+  draggable splitter), registered into `conversation.view`, fetching `/pha/*`.
 
-This is a separate change in this same package; the plan is documented in the repo's
-`WEB_INTERFACE_PLAN.md` / `VSCODE_EXTENSION_SPEC.md` spirit. The host tool surface above is the
-durable, portable part that already works — chat with your archive from any session.
+`package.json` already declares the module (`dsh.client` → `./client`) and the `dsh.client`
+inject list. The view is **not built into the harness web bundle here** — the DSH
+`dev:web` client build compiles `src/client/` into `lib/client.js`, which is registered into
+the browser on the next app start. So after install + restart the PHA view appears in the
+conversation header (labelled **PHA**), alongside the `pha_*` tools.
+
+Steps to render it on a machine with the harness build toolchain:
+
+```sh
+# 1. Build the client module (run from the harness repo's web build)
+pnpm --filter <web> build:client        # or `pnpm dev:web` — the deployment's client build
+#    outputs lib/client.js in dsh-pha (and re-runs the client module scan)
+
+# 2. Install + compose (as above)
+pnpm add /path/to/repo/dsh-pha          # into the profile workspace
+# add the row to cordis.patch.yml (see cordis.patch.example.yml)
+
+# 3. Restart the harness profile
+```
+
+> The `dsh.client.inject` list is a best-effort guess against the installed version's
+> client module contract (`@deepseek-ai/dsh-client-ui-slots`). If the view doesn't mount,
+> adjust that inject list to the client APIs the module actually uses; the host data layer
+> and tools are independent of it and work regardless.
 
 ## Development
 

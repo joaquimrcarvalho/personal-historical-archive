@@ -282,6 +282,90 @@ function apply(ctx) {
     }
   }
 
+  // ---- durable browser data layer (same-origin /pha/* JSON routes) --------
+  // Read-only: browsing, page text + render image, search. Mutations go through
+  // the pha_* tools / the agent, so do the pha lock + staleness semantics.
+  function json(handler) {
+    return (req, res) => {
+      (async () => {
+        try {
+          const params = Object.fromEntries(new URL(req.url, 'http://localhost').searchParams)
+          const data = await handler(params)
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(data))
+        } catch (e) {
+          res.writeHead(500, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ ok: false, error: String((e && e.message) || e) }))
+        }
+      })()
+    }
+  }
+
+  async function pageImage(params) {
+    if (!params.doc || !params.page) throw new Error('doc and page required')
+    await discover()
+    const meta = await runDb('pagemeta', [String(params.doc), String(params.page)])
+    if (!meta || !meta.sha256) return { ok: false, error: 'no render metadata for this page' }
+    const dir = archiveDir + '/renders/' + meta.sha256
+    const cands = []
+    if (meta.source_name) cands.push(meta.source_name + '.jpg', meta.source_name + '.jpeg')
+    cands.push('p' + String(params.page).padStart(3, '0') + '.jpg')
+    const code = [
+      'import base64,sys,os,json',
+      'dirp=sys.argv[1]; cands=json.loads(sys.argv[2])',
+      'path=None',
+      'for f in cands:',
+      '    p=os.path.join(dirp,f)',
+      '    if os.path.isfile(p): path=p; break',
+      'if path is None:',
+      '    print(""); raise SystemExit(1)',
+      'sys.stdout.buffer.write(b"data:image/jpeg;base64," + base64.b64encode(open(path,"rb").read()))',
+    ].join('\n')
+    const r = await pyRun(code, [dir, JSON.stringify(cands)])
+    if (r.code !== 0 || !r.out) return { ok: false, exists: false, error: 'render not found for this page' }
+    return { ok: true, dataUrl: String(r.out).trim(), path: dir }
+  }
+
+  const routes = [
+    ['/pha/documents', json(async () => ({ ok: true, archive: archiveDir, documents: await runDb('documents') }))],
+    ['/pha/document', json(async (p) => {
+      if (!p.doc) throw new Error('doc required')
+      const r = await runDb('document', [String(p.doc)])
+      if (r === null) return { ok: true, doc: null, pages: [], edits: [] }
+      return { ok: true, doc: r.doc, pages: r.pages, edits: r.edits }
+    })],
+    ['/pha/page', json(async (p) => {
+      if (!p.doc || !p.page) throw new Error('doc and page required')
+      const argv = ['page', String(p.doc), String(p.page), '--json']
+      if (p.edited === '1' || p.edited === 'true') argv.push('--edited')
+      const r = await phaRun(argv)
+      if (r.code !== 0) throw new Error('pha page failed: ' + String(r.err || r.out).slice(0, 400))
+      return { ok: true, page: parseJson(r.out) }
+    })],
+    ['/pha/search', json(async (p) => {
+      const q = String(p.q || '').trim()
+      if (!q) throw new Error('query required')
+      const limit = Math.min(20, Math.max(1, Number(p.limit) || 5))
+      const r = await phaRun(['search', q, '--json', '--limit', String(limit)])
+      if (r.code !== 0) throw new Error('pha search failed: ' + String(r.err || r.out).slice(0, 400))
+      const data = parseJson(r.out)
+      const results = (data.results || []).map((hit) => ({
+        document_id: hit.document_id, filename: hit.filename, collection: hit.collection,
+        page_no: hit.page_no, variant: hit.variant,
+        text: String(hit.text || '').slice(0, 900),
+      }))
+      return { ok: true, query: q, results }
+    })],
+    ['/pha/pageImage', json(pageImage)],
+    ['/pha/status', json(async () => ({ ok: true, text: String((await phaRun(['status'])).out || '') }))],
+    ['/pha/archive', json(async () => ({ ok: true, archive: await discover().then(() => archiveDir) }))],
+  ]
+  for (const [path, handler] of routes) {
+    const ws = ctx.get('webServer')
+    if (!ws) break
+    ctx.effect(() => ws.register({ kind: 'exact', path, handler }))
+  }
+
   return { dispose() { jobs.forEach((rec) => { if (rec.handle && rec.state === 'running') { try { rec.handle.terminate() } catch (e) {} } }) } }
 }
 
