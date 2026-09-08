@@ -1,0 +1,10 @@
+# dsh-pha — example cordis patch layer for a harness profile.
+#
+# Append to the profile's cordis.patch.yml (e.g. $DSH_HOME/profiles/desktop/cordis.patch.yml)
+# AFTER the package is resolvable in that profile's node_modules (see README.md).
+#
+# `dsh-pha` registers the pha_* model tools on the host `tools` registry, so they appear in
+# every session. It needs no isolate realm: it publishes no Cordis service.
+- insert:
+    - id: dsh-pha
+      name: '@personal-historical-archive/dsh-pha'
