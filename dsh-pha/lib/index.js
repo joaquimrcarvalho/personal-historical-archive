@@ -222,6 +222,20 @@ function apply(ctx) {
     ctx.effect(() => ctx.tools.register(def))
   }
 
+  // Open a page's library file in the OS-default app via `pha open <doc> <page>`.
+  // pha resolves doc/page to the .md under the archive and validates it, so the
+  // caller never hands us an arbitrary path.
+  async function runOpen(a) {
+    if (!a.doc || !a.page) throw new Error('doc and page required')
+    const argv = ['open', String(a.doc), String(a.page)]
+    if (a.edited) argv.push('--edited')
+    const r = await phaRun(argv)
+    if (r.code !== 0) throw new Error('pha open failed: ' + String(r.err || r.out).slice(0, 400))
+    const out = String(r.out || '').trim()
+    const m = out.match(/^opened:\s*(.+)$/m)
+    return { ok: true, output: out, path: m ? m[1].trim() : null }
+  }
+
   const tools = [
     ['pha_status', 'Run `pha status` on the configured archive and return its text report (documents, pages, chunks, new and on-hold files).', {}, [], async () => {
       const r = await phaRun(['status'])
@@ -254,6 +268,7 @@ function apply(ctx) {
       }))
       return { ok: true, query: q, mode: data.mode || 'keyword', results }
     }],
+    ['pha_open', 'Open one page of a document in the OS-default application (e.g. a markdown editor) so a human can review/edit the library file on the archive machine. The OS decides which app handles the .md; pha never edits the text (a human edits, then pha review imports).', { doc: { type: 'string', description: 'document id or filename substring' }, page: { type: 'integer', description: 'page number (1-based)' }, edited: { type: 'boolean', description: 'open the edited variant instead of raw' } }, ['doc', 'page'], async (a) => runOpen(a)],
     ['pha_archive', 'Show the configured archive directory and engine health (pha doctor). Broken optional engines are reported as data, not an error.', {}, [], async () => {
       const r = await phaRun(['doctor', '--json'])
       let data
@@ -288,6 +303,8 @@ function apply(ctx) {
   // ---- durable browser data layer (same-origin /pha/* JSON routes) --------
   // Read-only: browsing, page text + render image, search. Mutations go through
   // the pha_* tools / the agent, so do the pha lock + staleness semantics.
+  // `/pha/open` is the exception: it launches the OS-default app on a page
+  // file (doc/page resolved + validated by `pha open`).
   function json(handler) {
     return (req, res) => {
       (async () => {
@@ -344,6 +361,10 @@ function apply(ctx) {
       const r = await phaRun(argv)
       if (r.code !== 0) throw new Error('pha page failed: ' + String(r.err || r.out).slice(0, 400))
       return { ok: true, page: parseJson(r.out) }
+    })],
+    ['/pha/open', json(async (p) => {
+      if (!p.doc || !p.page) throw new Error('doc and page required')
+      return await runOpen({ doc: p.doc, page: p.page, edited: (p.edited === '1' || p.edited === 'true') })
     })],
     ['/pha/search', json(async (p) => {
       const q = String(p.q || '').trim()

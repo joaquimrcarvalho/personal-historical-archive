@@ -233,7 +233,7 @@ function relPath(doc) {
 
 function PhaView() {
   const h = React.createElement
-  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null })
+  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, editMsg: null })
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -318,6 +318,20 @@ function PhaView() {
     setState((s) => ({ ...s, hits: r && r.ok ? r.results : null }))
   }
   function clearSearch() { setSearchText(''); setState((s) => ({ ...s, searchMode: false, hits: null, selectedId: null, detail: null, page: null, pageReq: null })) }
+  async function editOpen() {
+    const doc = state.detail && state.detail.doc
+    const pr = state.pageReq
+    if (!doc || !pr) { setState((x) => ({ ...x, editMsg: 'select a page first' })); return }
+    const url = '/pha/open?doc=' + encodeURIComponent(String(doc.id)) + '&page=' + encodeURIComponent(String(pr.page)) + (pr.edited ? '&edited=1' : '')
+    try {
+      const r = await get(url)
+      if (r && r.ok) {
+        setState((x) => ({ ...x, editMsg: (r.path ? 'opened: ' + r.path : (r.output || 'opened')) + ' — edit the file, then run pha review' }))
+      } else {
+        setState((x) => ({ ...x, editMsg: (r && r.error) || 'open failed' }))
+      }
+    } catch (e) { setState((x) => ({ ...x, editMsg: String((e && e.message) || e) })) }
+  }
 
   const s = state
   const searchMode = !!s.searchMode
@@ -448,9 +462,11 @@ function PhaView() {
       h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
         h('button', { className: 'pha-btn small' + (selIsEdited ? '' : ' primary'), onClick: () => { if (s.pageReq) openPage(s.pageReq.page, false) } }, 'raw'),
         h('button', { className: 'pha-btn small' + (selIsEdited ? ' primary' : ''), onClick: () => { if (editors.length && s.pageReq) openPage(s.pageReq.page, true) } }, editors.length ? 'edited (' + editors.join(',') + ')' : 'edited'),
+        h('button', { className: 'pha-btn small', title: 'Open this page in your default markdown editor (the OS picks the app)', onClick: editOpen }, 'Edit'),
         h('button', { className: 'pha-btn small' + (showImg ? ' on' : ''), onClick: () => setShowImg(!showImg) }, 'image'),
         h('button', { className: 'pha-btn small' + (plainShow ? ' on' : ''), onClick: () => setPlainShow(!plainShow) }, plainShow ? 'md' : 'txt'),
       ),
+      s.editMsg ? h('div', { className: 'pha-muted', style: { fontSize: 12 } }, s.editMsg) : null,
       h('div', { className: 'pha-content' }, mediaBlock, textBlock),
     )
   }
