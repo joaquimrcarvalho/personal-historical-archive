@@ -240,19 +240,19 @@ function apply(ctx) {
       if (r.code !== 0) throw new Error('pha page failed: ' + String(r.err || r.out).slice(0, 400))
       return { ok: true, page: parseJson(r.out) }
     }],
-    ['pha_search', 'Full-text search across the archive (hybrid). Returns structured hits with document id, page number, variant and snippet text.', { query: { type: 'string', description: 'search terms' }, limit: { type: 'integer', description: 'max hits (default 5, max 20)' } }, ['query'], async (a) => {
+    ['pha_search', 'Full-text search across the archive (keyword / phrase match). Returns structured hits with document id, page number, variant and snippet text — only pages that actually contain the query terms.', { query: { type: 'string', description: 'search terms' }, limit: { type: 'integer', description: 'max hits (default 5, max 20)' } }, ['query'], async (a) => {
       const q = String(a.query || '').trim()
       if (!q) throw new Error('query required')
       const limit = Math.min(20, Math.max(1, Number(a.limit) || 5))
-      const r = await phaRun(['search', q, '--json', '--limit', String(limit)])
+      const r = await phaRun(['search', q, '--mode', 'keyword', '--json', '--limit', String(limit)])
       if (r.code !== 0) throw new Error('pha search failed: ' + String(r.err || r.out).slice(0, 400))
       const data = parseJson(r.out)
       const results = (data.results || []).map((hit) => ({
         document_id: hit.document_id, filename: hit.filename, collection: hit.collection,
-        page_no: hit.page_no, variant: hit.variant, mode: data.mode || 'hybrid',
+        page_no: hit.page_no, variant: hit.variant, mode: data.mode || 'keyword',
         text: String(hit.text || '').slice(0, 900),
       }))
-      return { ok: true, query: q, mode: data.mode || 'hybrid', results }
+      return { ok: true, query: q, mode: data.mode || 'keyword', results }
     }],
     ['pha_archive', 'Show the configured archive directory and engine health (pha doctor). Broken optional engines are reported as data, not an error.', {}, [], async () => {
       const r = await phaRun(['doctor', '--json'])
@@ -349,7 +349,7 @@ function apply(ctx) {
       const q = String(p.q || '').trim()
       if (!q) throw new Error('query required')
       const limit = Math.min(20, Math.max(1, Number(p.limit) || 5))
-      const r = await phaRun(['search', q, '--json', '--limit', String(limit)])
+      const r = await phaRun(['search', q, '--mode', 'keyword', '--json', '--limit', String(limit)])
       if (r.code !== 0) throw new Error('pha search failed: ' + String(r.err || r.out).slice(0, 400))
       const data = parseJson(r.out)
       const results = (data.results || []).map((hit) => ({
