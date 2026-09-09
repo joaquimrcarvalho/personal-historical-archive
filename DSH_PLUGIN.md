@@ -33,8 +33,11 @@ pnpm add /path/to/repo/dsh-pha
 ```
 
 The `pha_*` tools and the `/pha/*` API are active straight after install. The **PHA view**
-additionally needs the client module built into the harness web bundle (the DSH `dev:web`
-client build compiles `dsh-pha/src/client/index.js` → `lib/client.js`) and a restart.
+ships self-contained: `dsh-pha/lib/client.js` is the already-built browser bundle, committed
+in the repo, so after install + restart the harness serves it (via its `dsh.client` →
+`./client` module) and the **PHA** tab appears in the conversation header — no `dev:web`
+build needed on the end-user machine. To rebuild it after editing the source, run
+`node dsh-pha/scripts/build-client.mjs` and commit `lib/client.js`.
 
 ## Caveats
 
