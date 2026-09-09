@@ -294,26 +294,38 @@ Exposed tools:
 
 ### Agent skills (SKILL files)
 
-Agents that search the archive through pha benefit from a bundled skill that
-fixes a common failure mode: answering from a search *snippet* instead of the
-full page/document it came from. The skill lives in the repo so it is versioned
-with pha and installed by anyone who sets up agents from the repo:
+Agents that operate the archive benefit from bundled skills that fix common
+failure modes. They live in the repo so they are versioned with pha and
+installed by anyone who sets up agents from the repo:
 
-- **Repo location:** [`skills/pha-search-context/SKILL.md`](skills/pha-search-context/SKILL.md)
-- **What it does:** after `pha search` / `pha_search`, present hits numbered;
-  retrieve the complete page text of each hit (raw transcription *and* the
-  edited variant when one exists) before answering; and when a hit is a page of
-  a document/item that started on an earlier page, read back to the
-  document/item start so answers have real context. It branches by capability:
-  MCP-tools-only agents vs agents with CLI + library file access.
-- **Installing it for your agents:** copy the folder into the user-level skills
-  directory used by agent runtimes on this machine
-  (`~/.agents/skills/` — where DSH and other agent tools pick skills up from):
-  ```bash
-  cp -R skills/pha-search-context ~/.agents/skills/
-  ```
-  (Re-copy to update after pulling a newer repo version. The skill's front
-  matter `name` must match the folder name, so keep the folder name unchanged.)
+- **Search context** — [`skills/pha-search-context/SKILL.md`](skills/pha-search-context/SKILL.md):
+  after `pha search` / `pha_search`, present hits numbered; retrieve the
+  complete page text of each hit (raw transcription *and* the edited variant
+  when one exists) before answering; and when a hit is a page of a
+  document/item that started on an earlier page, read back to the
+  document/item start so answers have real context.
+- **Document operations** — [`skills/pha-document-operations/SKILL.md`](skills/pha-document-operations/SKILL.md):
+  re-run the pipeline on an *already ingested* document or collection — the
+  common "rescan / re-edit / re-encode this document" request. Teaches how to
+  find a document's dropbox-relative path, how to *force* the pass
+  (`pha scan` skips an unchanged document as `unchanged` unless you pass
+  `--reprocess`), how to re-run just the editor on one page
+  (`pha edit --path … --page N`), and how to verify with `pha status` /
+  `pha page`. It branches by capability: CLI+files agents, dsh-pha plugin
+  `pha_*` tools, and FastMCP tools (which lack a per-document re-scan).
+
+Both branch by capability: MCP-tools-only agents vs agents with CLI + library
+file access. **Installing them for your agents:** copy the folders into the
+user-level skills directory used by agent runtimes on this machine
+(`~/.agents/skills/` — where DSH and other agent tools pick skills up from):
+
+```bash
+cp -R skills/pha-search-context ~/.agents/skills/
+cp -R skills/pha-document-operations ~/.agents/skills/
+```
+
+(Re-copy to update after pulling a newer repo version. A skill's front matter
+`name` must match its folder name, so keep the folder names unchanged.)
 
 ## DeepSeek Harness plugin (dsh-pha)
 

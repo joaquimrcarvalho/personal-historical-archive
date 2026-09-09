@@ -183,6 +183,15 @@ Run `pha help` (or `pha help <readme|mcp|historians|agents>`) for an
 orientation that points at this file, README.md, MCP_CLIENTS.md and
 HISTORIANS_README.md — it always works, even before an archive is configured.
 
+Bundled **skills** (`skills/*/SKILL.md`, installable to `~/.agents/skills/`)
+cover two common agent mistakes: `pha-search-context` (don't answer from a
+search snippet — recover the full page/document) and `pha-document-operations`
+(re-run the pipeline on an already-ingested document: `pha scan --path …`,
+`--reprocess` to force it, `pha edit --path … --page N`, `pha test`). An
+archive created with `pha init-archive` carries its own `AGENTS.md`/`README.md`
+with the same re-run-one-document guidance, so an agent working only from the
+archive directory does not need the source.
+
 ### DeepSeek Harness plugin (dsh-pha)
 
 A Harness agent on a machine with pha + a Harness install can expose the archive through the

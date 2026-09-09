@@ -114,6 +114,24 @@ pha help                         # full command list
 pha help agents                  # agent conventions
 ```
 
+## Re-running one document
+
+`pha scan` skips documents that are already transcribed and unchanged, so to
+work on a document you've already processed you must target it and force it:
+
+```bash
+pha status                       # find a document's collection / dropbox path
+pha scan --path collections/COLX                 # re-scan one collection or doc
+pha scan --path collections/COLX --reprocess     # re-extract pages already done
+pha edit --path collections/COLX --page 3        # re-run the editor on one page
+pha test collections/COLX --pages 3              # dry-run a config on a sample
+pha page <doc> <page>                            # read one page's full text
+```
+
+A document is a dropbox-relative subpath: `collections/COLX`, `documents/`
+(individual files), or a directory-of-images document (`documents/ms123`).
+`pha scan`/`pha edit`/`pha test` share the single-model lock — run one at a time.
+
 ## Operating discipline
 
 - **Never edit `renders/`, `archive.db`, or other generated files directly.**
@@ -186,8 +204,51 @@ root.
   `pha review` to import it, then `pha reindex`.
 - Only ONE local-model job at a time; check `pha status` before starting a
   scan/edit on this machine.
+- To change how a collection/document is processed (its palaeographer /
+  editor / encoders / prompt), inspect what is already set first:
+  `pha palaeographer <file>`, `pha editor <file>`, `pha prompts <file>`,
+  `pha encoder [file]`. A collection selects its models with a `pha.yaml`
+  sidecar next to the documents; the legacy plain-text `palaeographer` /
+  `editor` files are the fallback.
 - Full usage: see the pha README (in the source repository linked above, or
   the README.md in this directory).
+
+## Re-running / re-scanning a specific document
+
+`pha scan` only processes NEW or CHANGED files: an already-transcribed
+document whose source is unchanged is skipped as `unchanged`. To make pha
+work on a document you have already processed, target it and force it.
+
+- Find the path: `pha status` shows the collection tree. A document is a
+  dropbox-relative subpath — a collection (`collections/COLX`), a
+  directory-of-images document (`documents/ms123`), or a single file
+  (`documents/myfile.pdf`).
+- Rescan one collection / document (extracts + indexes its files):
+  ```bash
+  pha scan --path collections/COLX
+  ```
+- Force it to re-extract pages that are already done (without `--reprocess`
+  an unchanged document is skipped as `unchanged`):
+  ```bash
+  pha scan --path collections/COLX --reprocess
+  ```
+- Re-run only the editor pass on ONE page of one document:
+  ```bash
+  pha edit --path collections/COLX --page 3
+  ```
+- Try a configuration on a sample before a full pass:
+  ```bash
+  pha test collections/COLX --pages 3
+  ```
+- Read one page's full text to verify a re-scan:
+  ```bash
+  pha page <document-id-or-substring> <page>
+  ```
+
+The same single-local-model rule applies: `pha scan`, `pha edit` and
+`pha test` share the lock, so never start one while another is running on
+this machine. After a re-scan confirm with `pha status` (and `pha page` for
+the page text).
 """
 
 ARCHIVE_GITIGNORE = """# pha archive — keep user-facing data, exclude generated/temp files
