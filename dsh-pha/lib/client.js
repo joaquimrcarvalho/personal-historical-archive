@@ -1,10 +1,34 @@
+window.__ModuleLoader__.load({
+	id: "@personal-historical-archive/dsh-pha",
+	factory: (require) => {
+		var module = { exports: {} };
+		var exports = module.exports;
+		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+let __create = Object.create;
+let __defProp = Object.defineProperty;
+let __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+let __getOwnPropNames = Object.getOwnPropertyNames;
+let __getProtoOf = Object.getPrototypeOf;
+let __hasOwnProp = Object.prototype.hasOwnProperty;
+let __copyProps = (to, from, except, desc) => {
+	if (from && (typeof from === "object" || typeof from === "function"))
+		for (let keys = __getOwnPropNames(from), i = 0, n = keys.length, key; i < n; i++) {
+			key = keys[i];
+			if (!__hasOwnProp.call(to, key) && key !== except)
+				__defProp(to, key, { get: ((k) => from[k]).bind(null, key), enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+		}
+	return to;
+};
+let __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target, mod));
+
+let React = require("react");
+React = __toESM(React, 1);
+
 // dsh-pha client module — the PHA conversation view.
 //
 // SOURCE. The deployment's `dev:web` client build bundles this into `lib/client.js`
 // (discovered via the package.json `dsh.client` block). Data comes from the same-origin
 // `/pha/*` JSON endpoints registered by the host half (lib/index.js).
-import React from 'react'
-
 async function get(path) {
   const res = await fetch(path)
   return await res.json()
@@ -458,7 +482,7 @@ function PhaView() {
   )
 }
 
-export const apply = (ctx) => {
+const apply =  (ctx) => {
     const slots = ctx.get('slots')
     if (!slots) return
     const disposeCss = ctx.effect(() => {
@@ -477,3 +501,8 @@ export const apply = (ctx) => {
       PhaView,
     ))
 }
+
+		exports.apply = apply;
+		return module.exports;
+	}
+});

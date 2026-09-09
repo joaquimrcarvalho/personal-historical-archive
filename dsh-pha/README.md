@@ -99,24 +99,23 @@ The graphical **PHA view** is preserved in this package as:
   draggable splitter), registered into `conversation.view`, fetching `/pha/*`.
 
 `package.json` already declares the module (`dsh.client` → `./client`) and the `dsh.client`
-inject list. The view is **not built into the harness web bundle here** — the DSH
-`dev:web` client build compiles `src/client/` into `lib/client.js`, which is registered into
-the browser on the next app start. So after install + restart the PHA view appears in the
-conversation header (labelled **PHA**), alongside the `pha_*` tools.
+inject list. The view ships **self-contained**: the browser bundle `lib/client.js` is
+committed in this repo, so after install + restart the PHA view appears in the conversation
+header (labelled **PHA**), alongside the `pha_*` tools — no harness client build needed on
+the end-user machine.
 
-Steps to render it on a machine with the harness build toolchain:
+Install + compose + restart (as above), and the harness's `dsh-client-modules` head half
+reads `exports["./client"]` → `lib/client.js` and serves it to the browser.
+
+To rebuild the bundle after editing `src/client/index.js` (packaged as
+`dsh-pha/scripts/build-client.mjs`, which compiles the module into the harness client
+bundle format that calls `window.__ModuleLoader__.load({ id, factory })`):
 
 ```sh
-# 1. Build the client module (run from the harness repo's web build)
-pnpm --filter <web> build:client        # or `pnpm dev:web` — the deployment's client build
-#    outputs lib/client.js in dsh-pha (and re-runs the client module scan)
-
-# 2. Install + compose (as above)
-pnpm add /path/to/repo/dsh-pha          # into the profile workspace
-# add the row to cordis.patch.yml (see cordis.patch.example.yml)
-
-# 3. Restart the harness profile
+node dsh-pha/scripts/build-client.mjs   # -> lib/client.js
 ```
+
+then commit `lib/client.js` so the change ships.
 
 > The `dsh.client.inject` list is a best-effort guess against the installed version's
 > client module contract (`@deepseek-ai/dsh-client-ui-slots`). If the view doesn't mount,
@@ -126,6 +125,10 @@ pnpm add /path/to/repo/dsh-pha          # into the profile workspace
 ## Development
 
 - `lib/index.js` is the host plugin (`export { apply, inject, name }`), ESM, no build step.
+- `src/client/index.js` is the client module source; it is compiled to `lib/client.js` by
+  `scripts/build-client.mjs` (the harness reads the built bundle, not the source). Keep the
+  source using a **named** `export const apply`, and edit `src/client/index.js` then re-run
+  the script + commit `lib/client.js`.
 - The tool bodies mirror the logic proven in the session-scoped prototype; keep the same
   read-only `immutable=1` DB open and the same pha-CLI mutation path.
 

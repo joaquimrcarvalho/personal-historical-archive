@@ -4,6 +4,9 @@
   "description": "DeepSeek Harness plugin: pha_* model tools + archive runner for personal-historical-archive (pha).",
   "type": "module",
   "main": "lib/index.js",
+  "scripts": {
+    "build:client": "node scripts/build-client.mjs"
+  },
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
