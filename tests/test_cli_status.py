@@ -15,6 +15,7 @@ def _make_cfg(tmp_path) -> Config:
     (root / "config.yaml").write_text(
         f"paths:\n  archive_dir: {root / 'archive'}\n"
         "  dropbox: dropbox\n  inbox: inbox\n  library: library\n  renders: renders\n"
+        "  notes: notes\n"
         "  palaeographers: palaeographers\n  editors: editors\n  encoders: encoders\n"
         "  models: models\n  prompts: prompts\n  db: archive.db\n"
     )

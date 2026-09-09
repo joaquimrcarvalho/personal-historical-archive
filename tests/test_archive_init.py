@@ -12,8 +12,12 @@ def test_init_archive_creates_structure(tmp_path):
     out = init_archive(p)
     assert out == p.resolve()
     for sub in ("dropbox/documents", "dropbox/collections", "library",
-                "renders", "palaeographers", "editors", "encoders"):
+                "renders", "notes", "palaeographers", "editors", "encoders"):
         assert (p / sub).is_dir(), f"missing {sub}"
+    # notes folder carries the Obsidian-compatible human/agent instructions
+    notes_readme = (p / "notes" / "README.md").read_text(encoding="utf-8")
+    for marker in ("Obsidian", "[[wikilinks]]", "Malaca", "[^1]"):
+        assert marker in notes_readme, f"notes/README.md missing {marker!r}"
     # zero-config defaults seeded
     assert (p / "palaeographers" / "default.md").exists()
     assert (p / "editors" / "default.md").exists()
@@ -28,6 +32,13 @@ def test_init_archive_creates_structure(tmp_path):
     for text in (agents, readme):
         assert "uv tool install --editable" in text
         assert "pha set archive-dir" in text
+    # both must guide an agent to re-run ONE document/collection without
+    # needing the source: find the path, target it, and force the pass.
+    for text in (agents, readme):
+        assert "--path" in text, "must document targeting one doc/collection"
+        assert "reprocess" in text, "must warn that unchanged docs are skipped without --reprocess"
+        assert "pha page" in text, "must show how to read a page to verify"
+        assert "pha test" in text, "must show the config dry-run command"
     gitignore = (p / ".gitignore").read_text(encoding="utf-8")
     assert "archive.db" in gitignore
     assert "renders/" in gitignore

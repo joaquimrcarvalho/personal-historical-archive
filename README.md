@@ -832,6 +832,15 @@ is available, offers to install it:
   --ff-only` and the new version is active immediately; otherwise it is
   reinstalled from the repository.
 
+> **Archive agent docs refresh automatically.** An archive created with
+> `pha init-archive` carries its own `README.md` + `AGENTS.md`. Each `pha`
+> run refreshes them in your archive to the current templates, so after a pha
+> update the agent-facing docs pick up new guidance without you doing anything.
+> It only rewrites a doc when that doc is still exactly what pha wrote (a
+> pristine generated file): if you have edited an archive's `README.md` or
+> `AGENTS.md`, pha leaves your version alone. The project checkout's own docs
+> are never touched.
+
 The **first `pha` run of each day** also performs a lightweight, best-effort
 check and prints a one-line notice when an update is pending. This never
 blocks or fails a command and can be turned off in `config.yaml`:
@@ -893,6 +902,8 @@ archive_dir/
         transcription-qwen-local/   ← one folder per palaeographer
           502V.md                   ← one file per page, named after the source
                                     ←   scan (dir-of-images) or page-NNN.md (PDF)
+  notes/                    ← Obsidian-compatible markdown notes generated from
+                              ←   queries to this archive (see notes/README.md)
   renders/<sha>/            ← cached page JPEGs fed to the VLM
   archive.db                ← documents / pages / chunks + FTS5 + embeddings
 ```

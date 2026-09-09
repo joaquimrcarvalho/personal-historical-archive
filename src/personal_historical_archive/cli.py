@@ -936,19 +936,19 @@ def cmd_init_archive(cfg: Config, args) -> None:
     """`pha init-archive <PATH>` — create a new self-contained pha archive.
 
     Creates the default structure (dropbox/documents, dropbox/collections,
-    library, renders, palaeographers/editors/encoders with zero-config
+    library, renders, notes, palaeographers/editors/encoders with zero-config
     defaults) plus a README.md, AGENTS.md and a .gitignore. If PATH does not
     exist it is created; if it exists it must be empty (never touches an
     existing archive)."""
     from .archive_init import init_archive
     try:
-        p = init_archive(args.path)
+        p = init_archive(args.path, project_root=cfg.root)
     except (FileExistsError, NotADirectoryError) as e:
         print(f"error: {e}", file=sys.stderr)
         return
     print(f"created archive at {p}")
     print("  dropbox/documents/  dropbox/collections/   (drop your sources here)")
-    print("  library/  renders/  palaeographers/  editors/  encoders/")
+    print("  library/  renders/  notes/  palaeographers/  editors/  encoders/")
     print("  README.md + AGENTS.md + .gitignore written")
     print("point pha at it with:  pha set archive-dir " + str(p))
 
@@ -1184,6 +1184,8 @@ def cmd_update(cfg: Config, args) -> None:
         sys.exit(2)
     print(msg)
     print("restart pha to use the new version.")
+    print("On the next pha command the agent docs (AGENTS.md / README.md) in your "
+          "archive are refreshed if they are outdated.")
 
 
 def cmd_help(cfg: Config, args) -> None:
@@ -1303,7 +1305,7 @@ def _create_and_set(cfg: Config, path: Path) -> None:
     """Create a new archive at `path` and point pha at it (persist PHA_ARCHIVE_DIR)."""
     from .archive_init import init_archive
     try:
-        p = init_archive(str(path))
+        p = init_archive(str(path), project_root=cfg.root)
     except (FileExistsError, NotADirectoryError) as e:
         print(f"error: {e}", file=sys.stderr)
         return

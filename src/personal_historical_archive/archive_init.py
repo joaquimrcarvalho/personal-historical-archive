@@ -2,7 +2,7 @@
 
 Creates the default structure at `<path>`:
   dropbox/documents/  dropbox/collections/
-  library/  renders/
+  library/  renders/  notes/
   palaeographers/  editors/  encoders/   (seeded with zero-config defaults)
 plus a README.md + AGENTS.md (the first files an agent reads: they explain
 what this dir is and how to install `pha` and point it at this archive) and a
@@ -13,11 +13,13 @@ otherwise init fails (never touches an existing archive).
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from .config import (
     _DEFAULT_ED, _DEFAULT_ENC, _DEFAULT_PAL, _ED_SAMPLE, _ENC_SAMPLE,
-    _PAL_SAMPLE, _seed_default, _seed_sample,
+    _PAL_SAMPLE, find_project_root, notes_readme_template, _seed_default,
+    _seed_sample,
 )
 
 PHA_GITHUB = "https://github.com/joaquimrcarvalho/personal-historical-archive"
@@ -99,6 +101,7 @@ missing (or the path is wrong): run `pha set archive-dir` with this directory.
 | `inbox/` | documents parked ON HOLD — never scanned; `pha status` reports them, `pha inbox --move` puts them in the dropbox |
 | `palaeographers/`, `editors/`, `encoders/` | model/prompt definitions (one file each; `_sample.md` = template) |
 | `library/` | generated per-page transcriptions and edited text — the human review surface |
+| `notes/` | Obsidian-compatible markdown notes generated from queries to this archive (see `notes/README.md`) |
 | `renders/`, `archive.db` | generated cache and index (do not edit) |
 
 ## Everyday commands
@@ -194,6 +197,8 @@ root.
 - `palaeographers/`, `editors/`, `encoders/` — model/prompt definitions.
 - `library/` — generated per-page transcriptions and edited text (the
   human-readable review surface).
+- `notes/` — Obsidian-compatible markdown notes generated from queries to this
+  archive (see `notes/README.md`).
 - `renders/`, `archive.db` — generated cache and index (do not edit).
 
 ## How an agent should operate
@@ -266,14 +271,112 @@ scan.lock
 # OS cruft
 .DS_Store
 
-# NOTE: dropbox/, library/, palaeographers/, editors/, encoders/ are kept
-# (they are the user-facing documents, transcriptions and definitions).
+# NOTE: dropbox/, library/, palaeographers/, editors/, encoders/, notes/ are
+# kept (they are the user-facing documents, transcriptions, definitions and
+# research notes).
 """
 
+# --- archive agent docs: seeding, and refreshing them on pha updates ---------
+#
+# An archive's README.md and AGENTS.md are pha-generated guidance (the first
+# files an agent reads). They are written at init-archive time, but pha can be
+# updated later, so we also refresh them into an existing dedicated archive on
+# every run (see Config.ensure_dirs). To avoid destroying a user's edits we
+# stamp each managed file with a marker that records a hash of its body: a file
+# that still carries a matching hash is pristine and is safely refreshed; a file
+# whose body no longer matches (or that lost the marker entirely) is treated as
+# user-customized and left alone.
 
-def init_archive(path: str | Path) -> Path:
+_DOC_MARKER = "<!-- pha-docs-template: sha256:"
+_DOC_MARKER_END = " -->"
+
+# The archive-facing docs and their canonical opening line. The opening line is
+# the fallback used to recognise a LEGACY generated file (written before the
+# marker existed) so existing archives still get refreshed once.
+_DOC_FILES = (
+    ("README.md", "# pha archive"),
+    ("AGENTS.md", "# This directory is a pha archive"),
+)
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _stamp(body: str, project_root: Path | None = None) -> str:
+    """Prepend the template marker (a hash of `body`) to a doc template."""
+    # fresh archives seed notes/README.md from the project root template; here we
+    # only stamp the two agent-facing docs, which carry no project_root param.
+    return f"{_DOC_MARKER}{_sha256(body)}{_DOC_MARKER_END}\n\n{body}"
+
+
+def _split_marker(text: str) -> tuple[str | None, str | None]:
+    """Return (body, recorded_hash) if `text` is a marked pha doc, else (None, None)."""
+    if not text.startswith(_DOC_MARKER):
+        return None, None
+    end = text.find(_DOC_MARKER_END)
+    if end == -1:
+        return None, None
+    recorded = text[len(_DOC_MARKER):end]
+    body = text[end + len(_DOC_MARKER_END):].lstrip("\n")
+    return body, recorded
+
+
+def _should_refresh(path: Path, template: str, opening_line: str) -> bool:
+    """Should pha (re)write this archive doc with the current template?"""
+    if not path.exists():
+        return True  # missing -> seed it
+    cur = path.read_text(encoding="utf-8")
+    if cur == _stamp(template):
+        return False  # already the current marked template -> no-op
+    body, recorded = _split_marker(cur)
+    if body is not None:
+        # a managed (marked) file: refresh only when it is pristine
+        return _sha256(body) == recorded
+    # no marker -> either a legacy generated file or a user replacement. Refresh
+    # only when it still begins like the template (legacy generated).
+    return cur.lstrip().startswith(opening_line)
+
+
+def refresh_archive_agent_docs(archive_dir: str | Path) -> list[tuple[str, str]]:
+    """Refresh the archive's agent-facing docs (README.md, AGENTS.md) to the
+    current pha templates.
+
+    Creates a doc when missing, refreshes a pristine (unmodified) doc, and
+    leaves a user-customised doc alone. Never touches notes/README.md (that is
+    seeded once and never overwritten). Returns [(filename, action)] where
+    action is one of 'created' | 'updated' | 'kept' for callers that want to
+    report it.
+    """
+    archive_dir = Path(archive_dir)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    results: list[tuple[str, str]] = []
+    # Look the templates up by name so a bump in one place takes effect here.
+    templates = {
+        "README.md": ARCHIVE_README_MD,
+        "AGENTS.md": ARCHIVE_AGENTS_MD,
+    }
+    for name, opening_line in _DOC_FILES:
+        template = templates[name]
+        path = archive_dir / name
+        if not path.exists():
+            path.write_text(_stamp(template), encoding="utf-8")
+            results.append((name, "created"))
+            continue
+        if _should_refresh(path, template, opening_line):
+            path.write_text(_stamp(template), encoding="utf-8")
+            results.append((name, "updated"))
+        else:
+            results.append((name, "kept"))
+    return results
+
+
+def init_archive(path: str | Path, project_root: Path | None = None) -> Path:
     """Create the default archive structure at `path`. Raises FileExistsError
-    if the directory exists and is not empty."""
+    if the directory exists and is not empty.
+
+    `project_root` is where the canonical `notes/README.md` lives (defaults to
+    the pha project root); new archives seed their `notes/README.md` from it."""
     p = Path(path).expanduser().resolve()
     if p.exists():
         if not p.is_dir():
@@ -293,6 +396,11 @@ def init_archive(path: str | Path) -> Path:
     (p / "inbox").mkdir(exist_ok=True)
     (p / "library").mkdir(exist_ok=True)
     (p / "renders").mkdir(exist_ok=True)
+    notes = p / "notes"
+    notes.mkdir(exist_ok=True)
+    (notes / "README.md").write_text(
+        notes_readme_template(project_root or find_project_root()), encoding="utf-8"
+    )
     pal = p / "palaeographers"
     ed = p / "editors"
     enc = p / "encoders"
@@ -309,8 +417,9 @@ def init_archive(path: str | Path) -> Path:
     _seed_default(ed, _DEFAULT_ED)
     _seed_default(enc, _DEFAULT_ENC)
 
-    # agent guidance + git hygiene
-    (p / "README.md").write_text(ARCHIVE_README_MD, encoding="utf-8")
-    (p / "AGENTS.md").write_text(ARCHIVE_AGENTS_MD, encoding="utf-8")
+    # agent guidance + git hygiene (stamped so later pha updates can refresh
+    # a pristine generated doc without clobbering a user's edits)
+    (p / "README.md").write_text(_stamp(ARCHIVE_README_MD), encoding="utf-8")
+    (p / "AGENTS.md").write_text(_stamp(ARCHIVE_AGENTS_MD), encoding="utf-8")
     (p / ".gitignore").write_text(ARCHIVE_GITIGNORE, encoding="utf-8")
     return p

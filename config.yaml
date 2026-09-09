@@ -2,9 +2,10 @@
 #
 # archive_dir is the single SELF-CONTAINED data root. Everything the archive
 # owns lives under it: the input documents, the model/prompt definitions
-# (palaeographers / editors / encoders) and everything the pipeline generates
-# (library, renders, db). The project dir holds only code, engine-level
-# prompts (prompts/) and the _sample.md templates.
+# (palaeographers / editors / encoders), the generated pipeline output
+# (library, renders, db) and user-facing research notes (notes). The project
+# dir holds only code, engine-level prompts (prompts/) and the _sample.md
+# templates.
 #
 # archive_dir precedence: PHA_ARCHIVE_DIR env var > PHA_ARCHIVE_DIR in the
 # gitignored .env (set via `pha set archive-dir`) > paths.archive_dir >
@@ -26,6 +27,9 @@ paths:
                           #   Keep it OUTSIDE dropbox (a sibling of it).
   library: library        # generated: human-readable extracted markdown per document
   renders: renders        # generated: cached page images fed to the vision model
+  notes: notes            # user-facing Obsidian-compatible markdown notes
+                          #   generated from queries to this archive (never scanned;
+                          #   see notes/README.md for the format + agents' workflow)
   models: models          # model-interface definitions (endpoint/api key/limits)
   palaeographers: palaeographers   # content-only transcription rules (reference a model)
   editors: editors        # content-only editing rules (reference a model)
@@ -68,7 +72,7 @@ vision:
 embeddings:
   backend: lmstudio
   base_url: http://127.0.0.1:1234/v1
-  model: text-embedding-nomic-embed-text-v1.5@q4_k_m
+  model: text-embedding-nomic-embed-text-v1.5@q4_k_s
   timeout_s: 120
   batch_size: 100        # embed at most this many chunks per request (endpoint limit)
 

@@ -31,6 +31,7 @@
 - **archive_dir is the self-contained data root.** Everything the archive
   owns lives under it: `dropbox/` (documents), `models/` (model-interface
   definitions), `palaeographers/`, `editors/`, `encoders/` (content rules),
+  `notes/` (Obsidian-compatible research notes generated from archive queries),
   `library/`, `renders/`, `archive.db` (generated). The project dir holds only
   code, `prompts/`, `schema/` and the `_sample.md` templates. Precedence:
   `PHA_ARCHIVE_DIR` env > `PHA_ARCHIVE_DIR` in `.env` (`pha set archive-dir`)
@@ -191,6 +192,33 @@ search snippet — recover the full page/document) and `pha-document-operations`
 archive created with `pha init-archive` carries its own `AGENTS.md`/`README.md`
 with the same re-run-one-document guidance, so an agent working only from the
 archive directory does not need the source.
+
+### Notes (research notes generated from archive queries)
+
+- **`notes/` is a top-level archive folder** (a sibling of `dropbox/`,
+  `library/`, `renders/`) holding **Obsidian-compatible markdown notes**
+  generated from queries to the archive. It is user-facing research output,
+  **not pipeline output**: `pha scan`/`edit`/`encode` never read or write it,
+  and `notes/README.md` (seeded automatically, never overwritten) documents the
+  format for humans and agents. `pha` creates `notes/` + README in any archive
+  that lacks it on its next run (`ensure_dirs`).
+- **Agent workflow**: when asked to write a note (e.g. "search the archive for
+  'Malaca' and summarize in a note"), search (`pha search`), read each hit's
+  full page with `pha page <doc> <page>` (and `--edited` when available) —
+  never summarize from a snippet alone — then synthesize into one
+  `lowercase-hyphenated.md` in `notes/`, citing every fact to its source.
+- **Format**: `[[wikilinks]]` connect notes; `[^n]` footnotes hold citations;
+  YAML front matter (`title`, `created`, `tags`, `sources`) is recommended.
+  Otherwise keep it plain Markdown so the files render in any viewer.
+- **Citations are pointers, not links.** A citation footnote names the source
+  document + page + variant (e.g. `[^1]: *DocHist do Padroado do Oriente*
+  vol04 (doc 22), p. 437, edited — \`pha page 22 437 --edited\`.`). Resolve it
+  on request (e.g. "show the page referred to in footnote 12") by running that
+  `pha page` command. Do **not** embed a `library/` file path or wikilink into
+  those footnotes: library paths carry the document's version date and go stale
+  when a document is re-processed.
+- Full instructions: see `notes/README.md` in the archive (or the repo's
+  top-level `notes/README.md`, the seed template).
 
 ### DeepSeek Harness plugin (dsh-pha)
 
