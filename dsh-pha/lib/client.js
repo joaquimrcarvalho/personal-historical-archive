@@ -353,11 +353,13 @@ function PhaView() {
       const key = hit.collection || '(search)'
       ;(byColl[key] = byColl[key] || {})[hit.document_id] = { id: hit.document_id, filename: hit.filename, count: ((byColl[key][hit.document_id] && byColl[key][hit.document_id].count) || 0) + 1 }
     }
-    for (const key of Object.keys(byColl).sort()) groups.push({ key, docs: Object.values(byColl[key]) })
+    const byName = (a, b) => String(a.filename || '').localeCompare(String(b.filename || ''), undefined, { sensitivity: 'base' })
+    for (const key of Object.keys(byColl).sort()) groups.push({ key, docs: Object.values(byColl[key]).sort(byName) })
   } else if (s.docs) {
     const map = {}
     for (const d of s.docs) { const key = d.dir_path || '(root)'; (map[key] = map[key] || []).push(d) }
-    for (const key of Object.keys(map).sort()) groups.push({ key, docs: map[key] })
+    const byName = (a, b) => String(a.filename || '').localeCompare(String(b.filename || ''), undefined, { sensitivity: 'base' })
+    for (const key of Object.keys(map).sort()) groups.push({ key, docs: map[key].sort(byName) })
   }
   if (s.detail && s.detail.edits) { const seen = {}; for (const e of s.detail.edits) if (!seen[e.editor]) { seen[e.editor] = true; editors.push(e.editor) } }
 
