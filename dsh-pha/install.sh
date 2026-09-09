@@ -32,16 +32,35 @@ else
 fi
 
 PATCH="$PROF/cordis.patch.yml"
-if [ -f "$PATCH" ] && grep -q "dsh-pha" "$PATCH"; then
+ROW_ID="dsh-pha"
+ROW_NAME="@personal-historical-archive/dsh-pha"
+if [ -f "$PATCH" ] && grep -q "id: $ROW_ID\|name: '$ROW_NAME'" "$PATCH"; then
   echo ">> row for dsh-pha already present in $PATCH"
 else
-  echo ">> appending composition row to $PATCH"
-  {
-    echo ""
-    echo "- insert:"
-    echo "    - id: dsh-pha"
-    echo "      name: '@personal-historical-archive/dsh-pha'"
-  } >> "$PATCH"
+  # The harness patch file is a top-level YAML ARRAY. The stock file is an
+  # empty flow array `[]`; appending a block `- insert:` item AFTER that `[]`
+  # would leave two document constructs and crash the profile on load. So: if
+  # the file's substantive body is just `[]`, replace it with a block array;
+  # otherwise append a new item to the existing block array.
+  BODY="$(sed -e 's/#.*$//' -e '/^[[:space:]]*$/d' "$PATCH" 2>/dev/null | tr -d '[:space:]')"
+  if [ "$BODY" = "[]" ] || [ -z "$BODY" ]; then
+    echo ">> converting empty flow-array patch to a block sequence"
+    cat > "$PATCH" <<YAML
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; \`!!js\` expressions allowed).
+
+- insert:
+    - id: dsh-pha
+      name: '@personal-historical-archive/dsh-pha'
+YAML
+  else
+    echo ">> appending composition row to $PATCH"
+    printf '\n' >> "$PATCH"
+    echo "- insert:" >> "$PATCH"
+    echo "    - id: dsh-pha" >> "$PATCH"
+    echo "      name: '@personal-historical-archive/dsh-pha'" >> "$PATCH"
+  fi
 fi
 
 echo ""
