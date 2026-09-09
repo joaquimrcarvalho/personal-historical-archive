@@ -264,6 +264,7 @@ function PhaView() {
   const [leftPct, setLeftPct] = React.useState(38)
   const [dragging, setDragging] = React.useState(false)
   const [showImg, setShowImg] = React.useState(false)
+  const [textOn, setTextOn] = React.useState(true)
   const [imgData, setImgData] = React.useState(null)
   const [plainShow, setPlainShow] = React.useState(false)
   const [rootEl, setRootEl] = React.useState(null)
@@ -458,12 +459,19 @@ function PhaView() {
     const effRange = (curPage && curPage >= 1 && curPage <= totalPages) ? curPage : range
     const pv = s.page
     const listPages = s.detail.pages || []
-    const textBlock = pv ? h('div', { className: 'pha-text' },
-      h('div', { className: 'pha-muted' }, 'page ' + (s.pageReq ? s.pageReq.page : '') + ' · ' + (pv.variant || '') + (pv.reviewed ? ' · reviewed' : '')),
-      h('div', { className: 'pha-muted' }, pv.page_file || ''),
-      plainShow ? h('pre', { className: 'pha-pre' }, pv.text || '(empty)') : h('div', { className: 'pha-md' }, renderMd(pv.text || '')),
-    ) : (s.pageLoading ? h('div', { className: 'pha-empty' }, 'Loading page…') : h('div', { className: 'pha-empty' }, 'Select a page to read its text.'))
-    const mediaBlock = showImg ? h('div', { className: 'pha-media' }, imgData ? h('img', { className: 'pha-img', src: imgData, alt: 'page' }) : h('div', { className: 'pha-empty' }, 'No render image')) : null
+    // image-only mode: let the render fill the pane instead of sharing half with text
+    const mediaBlock = showImg
+      ? h('div', { className: 'pha-media', style: textOn ? null : { flex: '0 0 auto', maxWidth: '94%' } },
+          imgData ? h('img', { className: 'pha-img', src: imgData, alt: 'page' }) : h('div', { className: 'pha-empty' }, 'No render image'))
+      : null
+    let textBlock = null
+    if (textOn) {
+      textBlock = pv ? h('div', { className: 'pha-text' },
+        h('div', { className: 'pha-muted' }, 'page ' + (s.pageReq ? s.pageReq.page : '') + ' · ' + (pv.variant || '') + (pv.reviewed ? ' · reviewed' : '')),
+        h('div', { className: 'pha-muted' }, pv.page_file || ''),
+        plainShow ? h('pre', { className: 'pha-pre' }, pv.text || '(empty)') : h('div', { className: 'pha-md' }, renderMd(pv.text || '')),
+      ) : (s.pageLoading ? h('div', { className: 'pha-empty' }, 'Loading page…') : h('div', { className: 'pha-empty' }, 'Select a page to read its text.'))
+    }
     right = h('div', { className: 'pha-right' },
       h('div', null, h('strong', null, '#' + d.id + ' ' + d.filename), h('div', { className: 'pha-muted' }, (d.path || '') + ' · ' + (d.kind || ''))),
       h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
@@ -483,15 +491,20 @@ function PhaView() {
           return h('span', { className: 'pha-page' + (curPage === p.page_no ? ' sel' : ''), key: p.id, title: 'status: ' + (p.status || '?'), onClick: () => { openPage(p.page_no, dv); setRange(p.page_no) } }, p.page_no)
         })) : h('div', { className: 'pha-muted' }, searchMode ? 'No matched pages…' : 'No pages…'),
       ),
-      h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
-        h('button', { className: 'pha-btn small' + (selIsEdited ? '' : ' primary'), onClick: () => { if (s.pageReq) openPage(s.pageReq.page, false) } }, 'raw'),
-        h('button', { className: 'pha-btn small' + (selIsEdited ? ' primary' : ''), onClick: () => { if (editors.length && s.pageReq) openPage(s.pageReq.page, true) } }, editors.length ? 'edited (' + editors.join(',') + ')' : 'edited'),
+      h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
+        h('button', { className: 'pha-btn small' + (showImg ? ' on' : ''), title: 'show/hide the page image', onClick: () => setShowImg(!showImg) }, 'image'),
+        h('button', { className: 'pha-btn small' + (textOn ? ' on' : ''), title: 'show/hide the text pane', onClick: () => setTextOn(!textOn) }, 'text'),
+        textOn ? h('button', { className: 'pha-btn small' + (selIsEdited ? '' : ' primary'), onClick: () => { if (s.pageReq) openPage(s.pageReq.page, false) } }, 'raw') : null,
+        textOn ? h('button', { className: 'pha-btn small' + (selIsEdited ? ' primary' : ''), onClick: () => { if (editors.length && s.pageReq) openPage(s.pageReq.page, true) } }, editors.length ? 'edited (' + editors.join(',') + ')' : 'edited') : null,
+        textOn ? h('button', { className: 'pha-btn small' + (plainShow ? ' on' : ''), onClick: () => setPlainShow(!plainShow) }, plainShow ? 'md' : 'txt') : null,
         h('button', { className: 'pha-btn small', title: 'Open this page in your default markdown editor (the OS picks the app)', onClick: editOpen }, 'Edit'),
-        h('button', { className: 'pha-btn small' + (showImg ? ' on' : ''), onClick: () => setShowImg(!showImg) }, 'image'),
-        h('button', { className: 'pha-btn small' + (plainShow ? ' on' : ''), onClick: () => setPlainShow(!plainShow) }, plainShow ? 'md' : 'txt'),
       ),
       s.editMsg ? h('div', { className: 'pha-muted', style: { fontSize: 12 } }, s.editMsg) : null,
-      h('div', { className: 'pha-content' }, mediaBlock, textBlock),
+      h('div', { className: 'pha-content' },
+        mediaBlock,
+        textBlock,
+        (!mediaBlock && !textBlock) ? h('div', { className: 'pha-empty' }, 'Nothing to show — toggle image or text.') : null,
+      ),
     )
   }
 
