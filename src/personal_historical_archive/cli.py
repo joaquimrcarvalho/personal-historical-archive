@@ -206,6 +206,94 @@ def cmd_page(cfg: Config, args) -> None:
         conn.close()
 
 
+def cmd_open(cfg: Config, args) -> None:
+    """Open a page or archive file in the OS-default application.
+
+    `pha open <doc> <page> [--edited]` resolves a page exactly like `pha page`
+    and opens its library .md; `pha open <path>` opens an existing markdown
+    file anywhere under the archive (a library page, a note, ...). The OS
+    decides which app handles the file — e.g. your markdown editor. pha never
+    edits the text itself; the human edits and `pha review` imports."""
+    from .ingest import library_page_path
+
+    conn = None
+    try:
+        if args.page is None:
+            path = Path(args.doc).expanduser()
+            if not path.is_absolute():
+                path = Path.cwd() / path
+        else:
+            conn = db.connect(cfg.db_path)
+            doc, matches = _resolve_doc_for_page(conn, args.doc)
+            if doc is None:
+                if matches:
+                    names = ", ".join(f"#{d['id']} {d['filename']}" for d in matches[:8])
+                    print(f"ambiguous document {args.doc!r} — matches: {names}", file=sys.stderr)
+                else:
+                    print(f"no document matching {args.doc!r}", file=sys.stderr)
+                sys.exit(1)
+            page = conn.execute(
+                "SELECT * FROM pages WHERE document_id=? AND page_no=?",
+                (doc["id"], args.page)).fetchone()
+            if page is None:
+                print(f"document #{doc['id']} ({doc['filename']}) has no page {args.page}",
+                      file=sys.stderr)
+                sys.exit(1)
+            edited = bool(getattr(args, "edited", False))
+            editor_id = getattr(args, "editor", None) or (doc["editor"] if edited else None)
+            path = library_page_path(cfg, doc, args.page,
+                                     variant="edited" if edited else "raw",
+                                     source_name=page["source_name"], editor_id=editor_id)
+            if path is None:
+                print(f"no library file on disk for {doc['filename']} page {args.page}"
+                      + (" (edited)" if edited else "")
+                      + " — run `pha scan`/`pha export` first", file=sys.stderr)
+                sys.exit(1)
+        target = path.resolve()
+        arc = Path(cfg.archive_dir).resolve()
+        try:
+            target.relative_to(arc)
+        except ValueError:
+            print(f"{target} is not inside the archive ({arc})", file=sys.stderr)
+            sys.exit(1)
+        if not target.is_file():
+            print(f"no such file: {target}", file=sys.stderr)
+            sys.exit(1)
+        if target.suffix.lower() != ".md":
+            print(f"can only open markdown files in the archive: {target}", file=sys.stderr)
+            sys.exit(1)
+        _open_with_os_default(target)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _open_with_os_default(path: Path) -> None:
+    """Open `path` with the OS-default application (fire and forget).
+
+    macOS uses `open`, Linux `xdg-open`, Windows `os.startfile`; the OS
+    decides which app handles the file (e.g. a markdown editor for .md).
+    Exits non-zero with a message when no opener is available (headless or
+    remote runs) or the opener fails."""
+    if os.name == "nt":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+        return
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    try:
+        r = subprocess.run([opener, str(path)], capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        print(f"no '{opener}' opener on this system — open {path} yourself", file=sys.stderr)
+        sys.exit(1)
+    except subprocess.TimeoutExpired:
+        print(f"'{opener}' did not return — open {path} yourself", file=sys.stderr)
+        sys.exit(1)
+    if r.returncode != 0:
+        print(f"could not open {path}: {(r.stderr or r.stdout or '').strip() or 'opener failed'}",
+              file=sys.stderr)
+        sys.exit(1)
+    print(f"opened: {path}")
+
+
 def _pending_summary_lines(pending: list[dict], get_doc) -> list[str]:
     """Build the 'corrections not yet imported' section of `pha status`.
 
@@ -1396,6 +1484,18 @@ def main(argv: list[str] | None = None) -> None:
     pg.add_argument("--editor", default=None, help="editor id when --edited (default: the document's editor)")
     pg.add_argument("--json", action="store_true", help="structured output for agents")
     pg.set_defaults(fn=cmd_page)
+
+    op = sub.add_parser(
+        "open",
+        help="open an archive page or markdown file in the OS-default app (e.g. your markdown editor)")
+    op.add_argument("doc", help="document id or filename substring, or a path to an archive .md file")
+    op.add_argument("page", type=int, nargs="?", default=None,
+                    help="page number — omit to treat <doc> as a file path instead")
+    op.add_argument("--edited", action="store_true",
+                    help="open the edited variant instead of the raw reading")
+    op.add_argument("--editor", default=None,
+                    help="editor id when --edited (default: the document's editor)")
+    op.set_defaults(fn=cmd_open)
 
     m = sub.add_parser("mcp", help="run the MCP server (stdio or sse)")
     m.add_argument("--transport", choices=["stdio", "sse"], default="stdio")
