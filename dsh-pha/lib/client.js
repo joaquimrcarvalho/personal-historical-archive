@@ -363,7 +363,11 @@ function PhaView() {
 
   function startDrag(e) { e.currentTarget.setPointerCapture(e.pointerId); setDragging(true) }
   function dragMove(e) {
-    if (!dragging) return
+    // Only resize while a mouse/pen button is actually held. Hovering the splitter
+    // fires pointermove with buttons===0; without this guard a stuck `dragging`
+    // (e.g. a pointer-capture that never saw its up event) would keep growing the
+    // left pane just from moving the cursor over it.
+    if (!dragging || e.buttons === 0) return
     const par = e.currentTarget.parentElement
     const rect = par ? par.getBoundingClientRect() : null
     if (!rect || rect.width === 0) return
@@ -477,7 +481,7 @@ function PhaView() {
     top,
     h('div', { className: 'pha-main' },
       left,
-      h('div', { className: 'pha-split' + (dragging ? ' drag' : ''), onPointerDown: startDrag, onPointerMove: dragMove, onPointerUp: endDrag, onPointerCancel: endDrag }),
+      h('div', { className: 'pha-split' + (dragging ? ' drag' : ''), onPointerDown: startDrag, onPointerMove: dragMove, onPointerUp: endDrag, onPointerCancel: endDrag, onLostPointerCapture: endDrag }),
       right,
     ),
   )
