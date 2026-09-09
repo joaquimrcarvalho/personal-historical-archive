@@ -429,6 +429,7 @@ function PhaView() {
       renderNote(s.selectedNote.content, openNote),
     )
   } else if (!s.detail) right = h('div', { className: 'pha-empty' }, searchMode ? 'Select a matching document to see its matched pages.' : 'Select a document or note to read it.')
+  else if (!s.detail.doc) right = h('div', { className: 'pha-empty' }, 'Document not found in the archive.')
   else {
     const d = s.detail.doc
     const totalPages = d.page_count || Math.max(1, (s.detail.pages || []).length)
