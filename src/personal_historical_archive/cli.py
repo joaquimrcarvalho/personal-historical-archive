@@ -335,6 +335,33 @@ def cmd_pending(cfg: Config, args) -> None:
         conn.close()
 
 
+def cmd_info(cfg: Config, args) -> None:
+    """Print the archive's resolved paths (read-only and fast).
+
+    Config only — it opens no database and probes no engines. That matters for
+    callers that just need to LOCATE the archive (the PHA view, an agent):
+    `pha status` walks every library page file (minutes on a large archive) and
+    `pha doctor` probes the engine binaries, while this is just config loading.
+    """
+    info = {
+        "archive_dir": str(cfg.archive_dir),
+        "db_path": str(cfg.db_path),
+        "dropbox": str(cfg.dropbox),
+        "library": str(cfg.library),
+        "renders": str(cfg.renders),
+        "notes": str(cfg.notes),
+        "models": str(cfg.models_dir),
+        "palaeographers": str(cfg.palaeographers_dir),
+        "editors": str(cfg.editors_dir),
+        "encoders": str(cfg.encoders_dir),
+    }
+    if getattr(args, "json", False):
+        print(json.dumps(info, ensure_ascii=False, indent=2))
+        return
+    for key, value in info.items():
+        print(f"{key}: {value}")
+
+
 def cmd_config(cfg: Config, args) -> None:
     """Show (and if needed generate) how a document/collection is processed.
 
@@ -1614,6 +1641,12 @@ def main(argv: list[str] | None = None) -> None:
 
     st = sub.add_parser("status", help="archive summary")
     st.set_defaults(fn=cmd_status)
+
+    inf = sub.add_parser(
+        "info",
+        help="print the archive's resolved paths (fast, read-only: no DB, no engine probing)")
+    inf.add_argument("--json", action="store_true", help="structured output")
+    inf.set_defaults(fn=cmd_info)
 
     ib = sub.add_parser("inbox", help="list documents on hold, or move them into the dropbox")
     ib.add_argument("--move", action="store_true",
