@@ -335,6 +335,102 @@ def cmd_pending(cfg: Config, args) -> None:
         conn.close()
 
 
+def cmd_config(cfg: Config, args) -> None:
+    """Show (and if needed generate) how a document/collection is processed.
+
+    Resolves the effective palaeographer / editor / prompt, preferring a `pha.yaml`
+    sidecar over the legacy `palaeographer` / `editor` selection files. With
+    `--write` — or automatically when no pha.yaml exists or legacy selection files
+    are still present — it generates the pha.yaml from the resolved configuration,
+    so the collection stops relying on the legacy layout.
+
+    Encoders are deliberately not written: leaving them out keeps the current
+    directory-discovery behaviour for the encoder stage.
+    """
+    import yaml
+
+    from .migrate import _SCHEMA_MODELINE
+    from .sidecar import resolve_stages
+
+    conn = None
+    try:
+        if getattr(args, "path", None):
+            p = (cfg.dropbox / args.path).resolve()
+            is_dir = p.is_dir()
+            sel_dir, stem = (p, None) if is_dir else (p.parent, p.stem)
+            label = args.path
+        else:
+            if not getattr(args, "doc", None):
+                print("give --doc <id|filename substring> or --path <dropbox-relative path>",
+                      file=sys.stderr)
+                sys.exit(2)
+            conn = db.connect(cfg.db_path)
+            doc, matches = _resolve_doc_for_page(conn, args.doc)
+            if doc is None:
+                if matches:
+                    names = ", ".join(f"#{d['id']} {d['filename']}" for d in matches[:8])
+                    print(f"ambiguous document {args.doc!r} — matches: {names}", file=sys.stderr)
+                else:
+                    print(f"no document matching {args.doc!r}", file=sys.stderr)
+                sys.exit(1)
+            p = Path(doc["path"]).resolve()
+            sel_dir, stem = p.parent, p.stem
+            label = doc["filename"]
+
+        resolved = resolve_stages(cfg, sel_dir, stem=stem, sidecar_stem=stem)
+        sc = resolved.pop("sidecar")
+
+        # the legacy layout: a `palaeographer` / `editor` file next to the documents
+        legacy = [f.name for f in
+                  [sel_dir / n for n in ("palaeographer", "palaeographer.txt", "palaeographer.md",
+                                         "editor", "editor.txt", "editor.md")]
+                  if f.is_file()]
+        target = sc.source if sc.source is not None else (sel_dir / "pha.yaml")
+
+        generated = False
+        # Generate only when the collection has no pha.yaml anywhere on its chain.
+        # Regenerating whenever the legacy files merely still exist would clobber a
+        # pha.yaml the historian has since edited (the sidecar already wins over
+        # them), so the write is idempotent.
+        if getattr(args, "write", False) and sc.source is None:
+            body: dict = {}
+            # `model:` in pha.yaml is the model ID (the file stem in models/), which
+            # is `model_ref` — not the server-side model name in `model`.
+            if resolved["palaeographer"]["id"]:
+                body["palaeographer"] = {
+                    "rules": resolved["palaeographer"]["id"],
+                    "model": (resolved["palaeographer"]["model_ref"]
+                              or resolved["palaeographer"]["model"]),
+                }
+            if resolved["editor"]["id"]:
+                body["editor"] = {
+                    "rules": resolved["editor"]["id"],
+                    "model": (resolved["editor"]["model_ref"] or resolved["editor"]["model"]),
+                }
+            text = _SCHEMA_MODELINE + "\n" + yaml.safe_dump(
+                body, sort_keys=False, default_flow_style=False, allow_unicode=True)
+            target = sel_dir / "pha.yaml"
+            target.write_text(text, encoding="utf-8")
+            generated = True
+
+        content = target.read_text(encoding="utf-8") if target.is_file() else None
+        if getattr(args, "json", False):
+            print(json.dumps({
+                "ok": True, "target": label, "path": str(target),
+                "generated": generated, "legacy_files": legacy,
+                "resolved": resolved, "content": content,
+            }, ensure_ascii=False, indent=2))
+            return
+        print(("generated: " if generated else "config: ") + str(target))
+        if legacy and not generated:
+            print(f"  (note: legacy selection file(s) present: {', '.join(legacy)})")
+        print("")
+        print(content or "(no pha.yaml — run `pha config --doc … --write` to generate it)")
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _pending_summary_lines(pending: list[dict], get_doc) -> list[str]:
     """Build the 'corrections not yet imported' section of `pha status`.
 
@@ -1544,6 +1640,16 @@ def main(argv: list[str] | None = None) -> None:
     pd.add_argument("--doc", type=int, default=None, help="limit to one document id")
     pd.add_argument("--json", action="store_true", help="structured output for agents")
     pd.set_defaults(fn=cmd_pending)
+
+    cf = sub.add_parser(
+        "config",
+        help="show how a document/collection is processed (pha.yaml), generating it from the legacy selection files when needed")
+    cf.add_argument("--doc", default=None, help="document id (number) or a filename substring")
+    cf.add_argument("--path", default=None, help="dropbox-relative path to a document or collection dir")
+    cf.add_argument("--write", action="store_true",
+                    help="generate pha.yaml when it is missing or legacy selection files are still present")
+    cf.add_argument("--json", action="store_true", help="structured output for the PHA view / agents")
+    cf.set_defaults(fn=cmd_config)
 
     m = sub.add_parser("mcp", help="run the MCP server (stdio or sse)")
     m.add_argument("--transport", choices=["stdio", "sse"], default="stdio")
