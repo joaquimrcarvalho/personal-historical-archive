@@ -982,14 +982,103 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
 
 # --------------------------------------------------------------------------- review round-trip
 
-def pending_review_files(cfg: Config, conn) -> list[dict]:
+def _library_doc_dir(cfg: Config, doc) -> Path | None:
+    """The library folder holding a document's versions (`<dir_path>/<stem>_<date>`)."""
+    if not doc:
+        return None
+    if not isinstance(doc, dict):  # accept sqlite3.Row too
+        try:
+            doc = dict(doc)
+        except (TypeError, ValueError):
+            return None
+    base = cfg.library / Path(doc["dir_path"] or "")
+    doc_dir = base / _doc_slug(doc)
+    if doc_dir.exists():
+        return doc_dir
+    stem = Path(doc["path"]).stem
+    folders = sorted(base.glob(f"{stem}_*"),
+                     key=lambda p: p.stat().st_mtime if p.is_dir() else 0.0)
+    return folders[-1] if folders else None
+
+
+def _pending_in_doc_dir(cfg: Config, conn, doc_id: int, doc_dir: Path) -> list[dict]:
+    """Fast, document-scoped pending check.
+
+    Derives the page from the file name (`page-NNN.md`, or the source name for a
+    directory-of-images document) and the variant from the parent folder, using a
+    single `pages` query — so no page file has to be read. Only legacy rows
+    (exported_at NULL, which need a body comparison) read the file.
+
+    The full-library `pending_review_files` walk stays authoritative; this exists
+    so the PHA view can ask about one document cheaply — a large document can hold
+    thousands of page files.
+    """
+    import re as _re
+
+    rows = conn.execute(
+        "SELECT id, page_no, source_name, raw_text, exported_at FROM pages WHERE document_id=?",
+        (doc_id,)).fetchall()
+    by_page = {int(r["page_no"]): r for r in rows}
+    by_source = {(r["source_name"] or ""): r for r in rows if r["source_name"]}
+
+    def file_body(path: Path) -> str:
+        parsed = _parse_library_file(path)
+        return parsed[1] if parsed else ""
+
+    out: list[dict] = []
+    for vdir in sorted(d for d in doc_dir.iterdir() if d.is_dir()):
+        variant = vdir.name
+        if not (variant.startswith("transcription-") or variant.startswith("edited-")):
+            continue
+        is_edited = variant.startswith("edited-")
+        editor = variant[len("edited-"):].split("@", 1)[0] if is_edited else None
+        for f in sorted(vdir.glob("*.md")):
+            m = _re.fullmatch(r"page-(\d+)", f.stem)
+            row = by_page.get(int(m.group(1))) if m else by_source.get(f.stem)
+            if row is None:
+                continue
+            try:
+                mtime = f.stat().st_mtime
+            except OSError:
+                continue
+            if is_edited:
+                edit = db.get_page_edit(conn, row["id"], editor)
+                if edit is not None and edit["exported_at"] is not None:
+                    pending = mtime > edit["exported_at"]
+                else:
+                    current = ((edit["text"] if edit else "") or "*waiting*").strip()
+                    pending = file_body(f).strip() != current
+                if pending:
+                    out.append({"path": str(f), "document_id": doc_id,
+                                "page_no": int(row["page_no"]), "variant": variant,
+                                "editor": editor})
+            else:
+                if row["exported_at"] is not None:
+                    pending = mtime > row["exported_at"]
+                else:
+                    raw = (row["raw_text"] or "").strip()
+                    current = format_notes(raw) if raw else "*waiting*"
+                    pending = file_body(f).strip() != current.strip()
+                if pending:
+                    out.append({"path": str(f), "document_id": doc_id,
+                                "page_no": int(row["page_no"]), "variant": variant})
+    return out
+
+
+def pending_review_files(cfg: Config, conn, doc_id: int | None = None) -> list[dict]:
     """Find library page files a human edited since pha last wrote/imported them.
 
     Timestamp-based: a file is pending if its filesystem mtime is NEWER than
     the page/edit's `exported_at` (when pha last wrote that file). For legacy
     rows with exported_at NULL we fall back to comparing the file body to the
     DB text. Returns {path, document_id, page_no, variant, editor}.
+
+    `doc_id` limits the check to one document via the fast path above; without it
+    every library page file is read and checked (the authoritative walk).
     """
+    if doc_id is not None:
+        doc_dir = _library_doc_dir(cfg, db.get_document(conn, int(doc_id)))
+        return _pending_in_doc_dir(cfg, conn, int(doc_id), doc_dir) if doc_dir is not None else []
     pending: list[dict] = []
     for p in sorted(cfg.library.rglob("*.md")):
         rel_parts = p.relative_to(cfg.library).parts

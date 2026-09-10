@@ -294,6 +294,47 @@ def _open_with_os_default(path: Path) -> None:
     print(f"opened: {path}")
 
 
+def cmd_pending(cfg: Config, args) -> None:
+    """List library page files a human edited that are not yet imported into the DB.
+
+    This is where the database is out of sync with the library files on disk: the
+    file was edited (in an external editor, say) but `pha review` has not imported
+    the correction. `--doc N` limits the walk to one document (cheap); otherwise
+    every library page file is checked. The `--json` form is what the PHA view
+    uses to mark pages that need attention.
+    """
+    from .ingest import pending_review_files
+
+    conn = db.connect(cfg.db_path)
+    try:
+        pending = pending_review_files(cfg, conn, doc_id=getattr(args, "doc", None))
+        needs_edit = any(x["variant"].startswith("transcription-") for x in pending)
+        if getattr(args, "json", False):
+            print(json.dumps({
+                "ok": True,
+                "count": len(pending),
+                # the pha passes that bring the DB back in sync, in order
+                "needs": {"review": bool(pending), "edit": needs_edit, "reindex": bool(pending)},
+                "pending": [
+                    {"document_id": x["document_id"], "page_no": x["page_no"],
+                     "variant": x["variant"], **({"editor": x["editor"]} if "editor" in x else {})}
+                    for x in pending
+                ],
+            }, ensure_ascii=False, indent=2))
+            return
+        if not pending:
+            print("up to date: no library corrections are waiting to be imported")
+            return
+
+        def get_doc(d_id):
+            return conn.execute(
+                "SELECT filename, dir_path FROM documents WHERE id=?", (d_id,)).fetchone()
+
+        print("\n".join(_pending_summary_lines(pending, get_doc)))
+    finally:
+        conn.close()
+
+
 def _pending_summary_lines(pending: list[dict], get_doc) -> list[str]:
     """Build the 'corrections not yet imported' section of `pha status`.
 
@@ -1496,6 +1537,13 @@ def main(argv: list[str] | None = None) -> None:
     op.add_argument("--editor", default=None,
                     help="editor id when --edited (default: the document's editor)")
     op.set_defaults(fn=cmd_open)
+
+    pd = sub.add_parser(
+        "pending",
+        help="list library page files edited but not yet imported into the DB (DB out of sync with the library)")
+    pd.add_argument("--doc", type=int, default=None, help="limit to one document id")
+    pd.add_argument("--json", action="store_true", help="structured output for agents")
+    pd.set_defaults(fn=cmd_pending)
 
     m = sub.add_parser("mcp", help="run the MCP server (stdio or sse)")
     m.add_argument("--transport", choices=["stdio", "sse"], default="stdio")
