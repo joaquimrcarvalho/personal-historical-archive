@@ -277,8 +277,32 @@ function apply(ctx) {
   ].join('\n')
   function defPathAllowed(p) {
     if (!p.endsWith('.md')) return false
-    return DEF_KINDS.some((k) => p.startsWith(archiveDir + '/' + k + '/'))
+    if (DEF_KINDS.some((k) => p.startsWith(archiveDir + '/' + k + '/'))) return true
+    // collection-local encoders travel with the documents:
+    // dropbox/<...>/encoders/<name>.md
+    const m = p.match(/^(.*)\/encoders\/([^/]+)\.md$/)
+    return !!m && m[1].startsWith(archiveDir + '/dropbox')
   }
+
+  // Every collection-local encoder (dropbox/.../encoders/*.md), grouped by the
+  // collection that owns it, so the view can surface them next to their documents.
+  const LIST_COLLECTION_ENCODERS = [
+    'import os,sys,json',
+    'root=sys.argv[1]',
+    'out=[]',
+    'for dirpath, dirnames, filenames in os.walk(root):',
+    "    if os.path.basename(dirpath) != 'encoders': continue",
+    '    dirnames[:] = []',
+    '    rel = os.path.relpath(dirpath, root)',
+    "    collection = os.path.dirname(rel) or '.'",
+    '    for f in sorted(filenames):',
+    "        if not f.endswith('.md') or f.startswith('_'): continue",
+    "        if f.endswith('.prompt.md') or f.endswith('.langextract.md'): continue",
+    "        out.append({'kind':'encoders','name':f[:-3],'file':f,",
+    "                    'collection':collection.replace(os.sep,'/'),",
+    "                    'path':os.path.join(dirpath,f)})",
+    'print(json.dumps(out, ensure_ascii=False))',
+  ].join('\n')
 
   // Report library page files a human edited but that are not yet imported into
   // the DB for one document (`pha pending --doc N`) — the DB is out of sync with
@@ -475,6 +499,14 @@ function apply(ctx) {
       let defs
       try { defs = JSON.parse(String(r.out).trim()) } catch (e) { defs = [] }
       return { ok: true, archive: archiveDir, defs }
+    })],
+    ['/pha/collectionEncoders', json(async () => {
+      await discover()
+      const r = await pyRun(LIST_COLLECTION_ENCODERS, [archiveDir + '/dropbox'])
+      if (r.code !== 0) return { ok: true, encoders: [] }
+      let encoders
+      try { encoders = JSON.parse(String(r.out).trim()) } catch (e) { encoders = [] }
+      return { ok: true, encoders }
     })],
     ['/pha/def', json(async (p) => {
       if (!p.path) throw new Error('path required')

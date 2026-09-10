@@ -245,7 +245,7 @@ function relPath(doc) {
 
 function PhaView() {
   const h = React.createElement
-  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null })
+  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null })
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -268,6 +268,7 @@ function PhaView() {
       .then(() => {
         get('/pha/notes').then((r) => setState((s) => ({ ...s, notes: r && r.ok ? r.notes : [] }))).catch(() => {})
         get('/pha/defs').then((r) => setState((s) => ({ ...s, defs: r && r.ok ? r.defs : [] }))).catch(() => {})
+        get('/pha/collectionEncoders').then((r) => setState((s) => ({ ...s, collEncoders: r && r.ok ? r.encoders : [] }))).catch(() => {})
       })
   }, [])
 
@@ -365,6 +366,15 @@ function PhaView() {
       setState((s) => ({ ...s, configMsg: (r && r.ok) ? ('opened: ' + (r.path || c.path) + ' — save in your editor, then Refresh') : ((r && r.error) || 'open failed') }))
     } catch (e) { setState((s) => ({ ...s, configMsg: String((e && e.message) || e) })) }
   }
+  async function openFilePath(p) {
+    if (!p) return
+    let msg
+    try {
+      const r = await get('/pha/open?path=' + encodeURIComponent(p))
+      msg = (r && r.ok) ? ('opened: ' + (r.path || p)) : ((r && r.error) || 'open failed')
+    } catch (e) { msg = String((e && e.message) || e) }
+    setState((s) => ({ ...s, configMsg: msg, defMsg: msg }))
+  }
   async function openNote(name) {
     setState((s) => ({ ...s, noteMode: true, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, configMode: false, config: null, configMsg: null }))
     const r = await get('/pha/note?name=' + encodeURIComponent(name))
@@ -443,7 +453,7 @@ function PhaView() {
     h('span', { className: 'pha-title' }, 'pha archive'),
     h('span', { className: 'pha-muted' }, s.archive || '…'),
     h('span', { className: 'pha-spacer' }),
-    h('button', { className: 'pha-btn', onClick: () => { if (s.searchMode) clearSearch(); get('/pha/documents').then((r) => setState((x) => ({ ...x, docs: r && r.ok ? r.documents : null }))); get('/pha/notes').then((r) => setState((x) => ({ ...x, notes: r && r.ok ? r.notes : [] }))) } }, '⟳ Refresh'),
+    h('button', { className: 'pha-btn', onClick: () => { if (s.searchMode) clearSearch(); get('/pha/documents').then((r) => setState((x) => ({ ...x, docs: r && r.ok ? r.documents : null }))); get('/pha/notes').then((r) => setState((x) => ({ ...x, notes: r && r.ok ? r.notes : [] }))); get('/pha/defs').then((r) => setState((x) => ({ ...x, defs: r && r.ok ? r.defs : [] }))); get('/pha/collectionEncoders').then((r) => setState((x) => ({ ...x, collEncoders: r && r.ok ? r.encoders : [] }))) } }, '⟳ Refresh'),
   )
 
   const searchHeader = h('div', { className: 'pha-search' },
@@ -478,6 +488,20 @@ function PhaView() {
     )
   }).filter(Boolean)
 
+  // Collection-local encoders travel with the documents; group them under the
+  // collection that owns them so they sit next to their documents.
+  const collEncGroups = (() => {
+    const by = {}
+    for (const e of (s.collEncoders || [])) (by[e.collection] = by[e.collection] || []).push(e)
+    return Object.keys(by).sort().map((coll) => h('div', { className: 'pha-group', key: 'collenc-' + coll },
+      h('div', { className: 'pha-group-h' }, 'encoders · ' + coll.replace(/^collections\//, '') + '  (' + by[coll].length + ')'),
+      by[coll].slice().sort((a, b) => String(a.name).localeCompare(String(b.name))).map((e) => h('div', { className: 'pha-doc' + (s.selectedDef && s.selectedDef.path === e.path ? ' sel' : ''), key: e.path, onClick: () => openDef(e) },
+        h('span', { className: 'pha-chip dim' }, 'encoder'),
+        h('span', { className: 'pha-doc-name', title: e.path }, e.name),
+      )),
+    ))
+  })()
+
   let body
   if (searchMode) {
     body = (s.hits && s.hits.length) ? groups.map((g) => h('div', { className: 'pha-group', key: g.key },
@@ -499,6 +523,7 @@ function PhaView() {
       )),
       noteList,
       defGroups,
+      collEncGroups,
     ) : h('div', { className: 'pha-empty' }, 'Loading documents…'))
   }
   const left = h('div', { className: 'pha-left', style: { width: leftPct + '%' } }, searchHeader, body)
@@ -532,6 +557,15 @@ function PhaView() {
           + (res.editor.model ? ' · ' + res.editor.model : '')
           + (res.editor.source ? '  ← ' + res.editor.source : '')),
         (res.problems && res.problems.length) ? h('div', { className: 'pha-err' }, 'problems: ' + res.problems.join('; ')) : null,
+        (res.encoders && res.encoders.length)
+          ? h('div', { className: 'pha-muted' }, 'encoders (' + res.encoders.length + '):')
+          : h('div', { className: 'pha-muted' }, 'encoders: none'),
+        (res.encoders || []).map((e) => h('div', { className: 'pha-doc', key: 'enc-' + e.id + (e.path || ''), style: { cursor: 'default' } },
+          h('span', { className: 'pha-chip dim' }, 'encoder'),
+          h('span', { className: 'pha-doc-name', title: e.path || '' },
+            e.id + (e.model ? ' · ' + e.model : '') + (e.pages ? ' · pages ' + e.pages : '')),
+          e.path ? h('button', { className: 'pha-btn small', title: 'Open this encoder in your default editor', onClick: () => openFilePath(e.path) }, 'Edit') : null,
+        )),
       ) : null,
       (c && c.content) ? h('pre', { className: 'pha-pre' }, c.content)
         : h('div', { className: 'pha-empty' }, s.configMsg || 'Loading configuration…'),
