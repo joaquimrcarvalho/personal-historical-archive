@@ -224,16 +224,42 @@ function apply(ctx) {
 
   // Open a page's library file in the OS-default app via `pha open <doc> <page>`.
   // pha resolves doc/page to the .md under the archive and validates it, so the
-  // caller never hands us an arbitrary path.
+  // caller never hands us an arbitrary path. A definition file (model /
+  // palaeographer / editor) is opened with the explicit-path form, which pha also
+  // validates (must be an existing .md inside the archive).
   async function runOpen(a) {
-    if (!a.doc || !a.page) throw new Error('doc and page required')
-    const argv = ['open', String(a.doc), String(a.page)]
-    if (a.edited) argv.push('--edited')
+    const argv = ['open']
+    if (a.path) {
+      argv.push(String(a.path))
+    } else {
+      if (!a.doc || !a.page) throw new Error('doc and page required (or path)')
+      argv.push(String(a.doc), String(a.page))
+      if (a.edited) argv.push('--edited')
+    }
     const r = await phaRun(argv)
     if (r.code !== 0) throw new Error('pha open failed: ' + String(r.err || r.out).slice(0, 400))
     const out = String(r.out || '').trim()
     const m = out.match(/^opened:\s*(.+)$/m)
     return { ok: true, output: out, path: m ? m[1].trim() : null }
+  }
+
+  // Definition folders at the archive root, browsable + editable in the view.
+  const DEF_KINDS = ['models', 'palaeographers', 'editors']
+  const LIST_DEFS = [
+    'import os,sys,json',
+    'root=sys.argv[1]; kinds=json.loads(sys.argv[2])',
+    'out=[]',
+    'for k in kinds:',
+    '    d=os.path.join(root,k)',
+    '    if not os.path.isdir(d): continue',
+    '    for f in sorted(os.listdir(d)):',
+    "        if f.endswith('.md'):",
+    "            out.append({'kind':k,'name':f[:-3],'file':f,'path':os.path.join(d,f)})",
+    'print(json.dumps(out, ensure_ascii=False))',
+  ].join('\n')
+  function defPathAllowed(p) {
+    if (!p.endsWith('.md')) return false
+    return DEF_KINDS.some((k) => p.startsWith(archiveDir + '/' + k + '/'))
   }
 
   // Report library page files a human edited but that are not yet imported into
@@ -394,8 +420,29 @@ function apply(ctx) {
       return { ok: true, page: parseJson(r.out) }
     })],
     ['/pha/open', json(async (p) => {
-      if (!p.doc || !p.page) throw new Error('doc and page required')
+      if (p.path) return await runOpen({ path: p.path })
+      if (!p.doc || !p.page) throw new Error('doc and page required (or path)')
       return await runOpen({ doc: p.doc, page: p.page, edited: (p.edited === '1' || p.edited === 'true') })
+    })],
+    ['/pha/defs', json(async () => {
+      await discover()
+      const r = await pyRun(LIST_DEFS, [archiveDir, JSON.stringify(DEF_KINDS)])
+      if (r.code !== 0) return { ok: true, defs: [] }
+      let defs
+      try { defs = JSON.parse(String(r.out).trim()) } catch (e) { defs = [] }
+      return { ok: true, archive: archiveDir, defs }
+    })],
+    ['/pha/def', json(async (p) => {
+      if (!p.path) throw new Error('path required')
+      await discover()
+      const path = String(p.path)
+      // only the archive's own definition folders (never an arbitrary path)
+      if (!defPathAllowed(path)) throw new Error('not a model/palaeographer/editor .md in this archive')
+      const r = await pyRun(READ_NOTE, [path])
+      if (r.code !== 0) throw new Error('definition file not found')
+      const name = path.split('/').pop().replace(/\.md$/, '')
+      const kind = DEF_KINDS.find((k) => path.startsWith(archiveDir + '/' + k + '/')) || null
+      return { ok: true, path, name, kind, content: String(r.out) }
     })],
     ['/pha/pending', json(async (p) => {
       if (!p.doc) throw new Error('doc required')

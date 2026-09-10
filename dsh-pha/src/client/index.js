@@ -143,6 +143,16 @@ function renderMd(text, opts) {
   return blocks
 }
 
+// Split a definition file into its YAML front matter (the interface/config keys)
+// and its markdown body, so the view can show the config verbatim and render the
+// prose (palaeographer / editor rules are markdown).
+function splitFront(text) {
+  const m = String(text || '').match(/^---\n([\s\S]*?)\n---\n?/)
+  return m
+    ? { front: m[1], body: String(text).slice(m[0].length) }
+    : { front: null, body: String(text || '') }
+}
+
 function renderNote(content, onNote) {
   const o = { onNote, footnotes: {}, renderFootnotes: true }
   let body = String(content || '')
@@ -235,7 +245,7 @@ function relPath(doc) {
 
 function PhaView() {
   const h = React.createElement
-  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, editMsg: null, pendingPages: null, pendingNeeds: null })
+  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null })
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -250,6 +260,7 @@ function PhaView() {
   React.useEffect(() => {
     get('/pha/documents').then((r) => setState((s) => ({ ...s, docs: r && r.ok ? r.documents : null, docsErr: r && r.ok ? null : ((r && r.error) || 'documents call failed'), archive: (r && r.archive) || s.archive }))).catch((e) => setState((s) => ({ ...s, docsErr: String((e && e.message) || e) })))
     get('/pha/notes').then((r) => setState((s) => ({ ...s, notes: r && r.ok ? r.notes : [] }))).catch(() => {})
+    get('/pha/defs').then((r) => setState((s) => ({ ...s, defs: r && r.ok ? r.defs : [] }))).catch(() => {})
   }, [])
 
   const pageNo = state.pageReq ? state.pageReq.page : null
@@ -313,6 +324,21 @@ function PhaView() {
     const pages = r && r.ok && r.pages ? r.pages.filter((p) => vmap[p.page_no] !== undefined) : []
     setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pendingPages: null, pendingNeeds: null }))
     loadPending(id)
+  }
+  async function openDef(d) {
+    setState((s) => ({ ...s, defMode: true, selectedDef: null, defMsg: null, noteMode: false, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, pendingPages: null, pendingNeeds: null }))
+    try {
+      const r = await get('/pha/def?path=' + encodeURIComponent(d.path))
+      setState((s) => ({ ...s, selectedDef: (r && r.ok) ? { kind: r.kind, name: r.name, path: r.path, content: r.content } : null, defMsg: (r && !r.ok) ? ((r && r.error) || 'load failed') : null }))
+    } catch (e) { setState((s) => ({ ...s, defMsg: String((e && e.message) || e) })) }
+  }
+  async function defEdit() {
+    const d = state.selectedDef
+    if (!d) return
+    try {
+      const r = await get('/pha/open?path=' + encodeURIComponent(d.path))
+      setState((s) => ({ ...s, defMsg: (r && r.ok) ? ('opened: ' + (r.path || d.path) + ' — save in your editor, then Refresh') : ((r && r.error) || 'open failed') }))
+    } catch (e) { setState((s) => ({ ...s, defMsg: String((e && e.message) || e) })) }
   }
   async function openNote(name) {
     setState((s) => ({ ...s, noteMode: true, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null }))
@@ -409,6 +435,21 @@ function PhaView() {
     )),
   ) : null
 
+  // Archive definition folders (models / palaeographers / editors) — pick one to
+  // read it; Edit opens it in the OS-default editor via `pha open <path>`.
+  const DEF_LABEL = { models: 'model', palaeographers: 'palaeographer', editors: 'editor' }
+  const defGroups = ['models', 'palaeographers', 'editors'].map((kind) => {
+    const items = (s.defs || []).filter((d) => d.kind === kind)
+    if (!items.length) return null
+    return h('div', { className: 'pha-group', key: 'def-' + kind },
+      h('div', { className: 'pha-group-h' }, kind + '  (' + items.length + ')'),
+      items.map((d) => h('div', { className: 'pha-doc' + (s.selectedDef && s.selectedDef.path === d.path ? ' sel' : ''), key: d.path, onClick: () => openDef(d) },
+        h('span', { className: 'pha-chip dim' }, DEF_LABEL[kind]),
+        h('span', { className: 'pha-doc-name', title: d.path }, d.name),
+      )),
+    )
+  }).filter(Boolean)
+
   let body
   if (searchMode) {
     body = (s.hits && s.hits.length) ? groups.map((g) => h('div', { className: 'pha-group', key: g.key },
@@ -429,12 +470,29 @@ function PhaView() {
         )),
       )),
       noteList,
+      defGroups,
     ) : h('div', { className: 'pha-empty' }, 'Loading documents…'))
   }
   const left = h('div', { className: 'pha-left', style: { width: leftPct + '%' } }, searchHeader, body)
 
   let right
-  if (s.noteMode && s.selectedNote) {
+  if (s.defMode && s.selectedDef) {
+    const fd = splitFront(s.selectedDef.content)
+    right = h('div', { className: 'pha-right' },
+      h('div', null,
+        h('strong', null, s.selectedDef.kind + ' / ' + s.selectedDef.name),
+        h('div', { className: 'pha-muted' }, s.selectedDef.path),
+      ),
+      h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+        h('button', { className: 'pha-btn small', title: 'Open this file in your default editor (the OS picks the app)', onClick: defEdit }, 'Edit'),
+      ),
+      s.defMsg ? h('div', { className: 'pha-muted', style: { fontSize: 12 } }, s.defMsg) : null,
+      fd.front ? h('pre', { className: 'pha-pre', style: { maxHeight: '30vh' } }, fd.front) : null,
+      h('div', { className: 'pha-md' }, renderMd(fd.body)),
+    )
+  } else if (s.defMode && !s.selectedDef) {
+    right = h('div', { className: 'pha-empty' }, s.defMsg || 'Loading definition…')
+  } else if (s.noteMode && s.selectedNote) {
     right = h('div', { className: 'pha-right' },
       h('div', null, h('strong', null, s.selectedNote.name), h('div', { className: 'pha-muted' }, s.selectedNote.path)),
       renderNote(s.selectedNote.content, openNote),
