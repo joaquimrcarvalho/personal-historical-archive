@@ -241,6 +241,8 @@ const CSS = [
   '.pha-page{min-width:30px;text-align:center;padding:2px 4px;border-radius:5px;border:1px solid var(--dsw-alias-border-l2,#666);cursor:pointer;font-size:11px}',
   '.pha-page:hover{background:var(--dsw-alias-bg-layer-2,#e8e8e8)}',
   '.pha-page.sel{background:var(--dsw-alias-brand-primary,#0b5fff);color:#fff;border-color:transparent}',
+  '.pha-page.pending{border-color:var(--dsw-alias-state-warn-primary,#e8890c);color:var(--dsw-alias-state-warn-primary,#e8890c);font-weight:600}',
+  '.pha-page.pending.sel{background:var(--dsw-alias-state-warn-primary,#e8890c);color:#fff;border-color:transparent}',
   '.pha-empty{padding:20px;text-align:center;opacity:.5}',
 ].join('')
 
@@ -257,7 +259,7 @@ function relPath(doc) {
 
 function PhaView() {
   const h = React.createElement
-  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, editMsg: null })
+  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, editMsg: null, pendingPages: null, pendingNeeds: null })
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -311,10 +313,21 @@ function PhaView() {
     return () => clearInterval(iv)
   }, [rootEl])
 
+  // Which library page files of this document were edited but not imported yet
+  // (DB out of sync with disk). Kept separate from the detail fetch so the page
+  // renders first — the check can take a moment on a large document.
+  async function loadPending(docId) {
+    setState((s) => ({ ...s, pendingPages: null, pendingNeeds: null }))
+    try {
+      const r = await get('/pha/pending?doc=' + encodeURIComponent(String(docId)))
+      setState((s) => ({ ...s, pendingPages: (r && r.ok) ? (r.pending || []) : null, pendingNeeds: (r && r.ok) ? r.needs : null }))
+    } catch (e) { setState((s) => ({ ...s, pendingPages: null, pendingNeeds: null })) }
+  }
   async function openDoc(id) {
-    setState((s) => ({ ...s, selectedId: id, noteMode: false, selectedNote: null, page: null, pageReq: null }))
+    setState((s) => ({ ...s, selectedId: id, noteMode: false, selectedNote: null, page: null, pageReq: null, pendingPages: null, pendingNeeds: null }))
     const r = await get('/pha/document?doc=' + encodeURIComponent(id))
     setState((s) => ({ ...s, detail: r && r.ok ? { doc: r.doc, pages: r.pages || [], edits: r.edits || [], matched: false } : null }))
+    loadPending(id)
   }
   async function openSearchDoc(id) {
     const r = await get('/pha/document?doc=' + encodeURIComponent(id))
@@ -322,7 +335,8 @@ function PhaView() {
     const vmap = {}
     matched.forEach((hit) => { vmap[hit.page_no] = hit.variant })
     const pages = r && r.ok && r.pages ? r.pages.filter((p) => vmap[p.page_no] !== undefined) : []
-    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null }))
+    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pendingPages: null, pendingNeeds: null }))
+    loadPending(id)
   }
   async function openNote(name) {
     setState((s) => ({ ...s, noteMode: true, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null }))
@@ -459,6 +473,8 @@ function PhaView() {
     const effRange = (curPage && curPage >= 1 && curPage <= totalPages) ? curPage : range
     const pv = s.page
     const listPages = s.detail.pages || []
+    const pendingSet = new Set((s.pendingPages || []).map((x) => x.page_no))
+    const pendingCount = (s.pendingPages || []).length
     // image-only mode: let the render fill the pane instead of sharing half with text
     const mediaBlock = showImg
       ? h('div', { className: 'pha-media', style: textOn ? null : { flex: '0 0 auto', maxWidth: '94%' } },
@@ -488,7 +504,8 @@ function PhaView() {
         ),
         listPages.length ? h('div', { className: 'pha-strip' }, listPages.map((p) => {
           const dv = (searchMode && s.searchPageVariant) ? (s.searchPageVariant[p.page_no] === 'edited') : selIsEdited
-          return h('span', { className: 'pha-page' + (curPage === p.page_no ? ' sel' : ''), key: p.id, title: 'status: ' + (p.status || '?'), onClick: () => { openPage(p.page_no, dv); setRange(p.page_no) } }, p.page_no)
+          const pend = pendingSet.has(p.page_no)
+          return h('span', { className: 'pha-page' + (curPage === p.page_no ? ' sel' : '') + (pend ? ' pending' : ''), key: p.id, title: (pend ? 'edited in the library — not imported yet (pha review)\n' : '') + 'status: ' + (p.status || '?'), onClick: () => { openPage(p.page_no, dv); setRange(p.page_no) } }, p.page_no)
         })) : h('div', { className: 'pha-muted' }, searchMode ? 'No matched pages…' : 'No pages…'),
       ),
       h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
@@ -499,6 +516,10 @@ function PhaView() {
         textOn ? h('button', { className: 'pha-btn small' + (plainShow ? ' on' : ''), onClick: () => setPlainShow(!plainShow) }, plainShow ? 'md' : 'txt') : null,
         h('button', { className: 'pha-btn small', title: 'Open this page in your default markdown editor (the OS picks the app)', onClick: editOpen }, 'Edit'),
       ),
+      pendingCount ? h('div', { className: 'pha-muted', style: { fontSize: 12, color: 'var(--dsw-alias-state-warn-primary,#e8890c)' } },
+        '✏️ ' + pendingCount + ' page(s) edited in the library — not imported into the archive yet. '
+        + 'Run: pha review' + ((s.pendingNeeds && s.pendingNeeds.edit) ? ' · pha edit · pha reindex' : ' · pha reindex')
+        + ' (page numbers in amber)') : null,
       s.editMsg ? h('div', { className: 'pha-muted', style: { fontSize: 12 } }, s.editMsg) : null,
       h('div', { className: 'pha-content' },
         mediaBlock,

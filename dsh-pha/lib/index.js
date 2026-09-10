@@ -236,6 +236,36 @@ function apply(ctx) {
     return { ok: true, output: out, path: m ? m[1].trim() : null }
   }
 
+  // Report library page files a human edited but that are not yet imported into
+  // the DB for one document (`pha pending --doc N`) — the DB is out of sync with
+  // the library files on disk. Cached briefly: the check stats every page file of
+  // the document, so the view must not re-run it on every render.
+  const pendingCache = new Map()
+  async function runPending(doc) {
+    const key = String(doc)
+    const hit = pendingCache.get(key)
+    const now = Date.now()
+    if (hit && (now - hit.at) < 30000) return hit.data
+    const r = await phaRun(['pending', '--doc', key, '--json'])
+    if (r.code !== 0) throw new Error('pha pending failed: ' + String(r.err || r.out).slice(0, 400))
+    const data = parseJson(r.out)
+    const pages = (data.pending || []).map((x) => ({
+      document_id: x.document_id, page_no: x.page_no, variant: x.variant, editor: x.editor || null,
+    }))
+    const out = {
+      ok: true,
+      count: typeof data.count === 'number' ? data.count : pages.length,
+      needs: data.needs || {
+        review: pages.length > 0,
+        edit: pages.some((x) => String(x.variant || '').startsWith('transcription-')),
+        reindex: pages.length > 0,
+      },
+      pending: pages,
+    }
+    pendingCache.set(key, { at: now, data: out })
+    return out
+  }
+
   const tools = [
     ['pha_status', 'Run `pha status` on the configured archive and return its text report (documents, pages, chunks, new and on-hold files).', {}, [], async () => {
       const r = await phaRun(['status'])
@@ -269,6 +299,7 @@ function apply(ctx) {
       return { ok: true, query: q, mode: data.mode || 'keyword', results }
     }],
     ['pha_open', 'Open one page of a document in the OS-default application (e.g. a markdown editor) so a human can review/edit the library file on the archive machine. The OS decides which app handles the .md; pha never edits the text (a human edits, then pha review imports).', { doc: { type: 'string', description: 'document id or filename substring' }, page: { type: 'integer', description: 'page number (1-based)' }, edited: { type: 'boolean', description: 'open the edited variant instead of raw' } }, ['doc', 'page'], async (a) => runOpen(a)],
+    ['pha_pending', 'List the library page files a human edited but that are not yet imported into the DB for one document (numeric document id) — i.e. the DB is out of sync with the library files on disk. Returns the pages plus which pha passes (review / edit / reindex) are needed to bring it back in sync.', { doc: { type: 'string', description: 'document id (number)' } }, ['doc'], async (a) => runPending(a.doc)],
     ['pha_archive', 'Show the configured archive directory and engine health (pha doctor). Broken optional engines are reported as data, not an error.', {}, [], async () => {
       const r = await phaRun(['doctor', '--json'])
       let data
@@ -365,6 +396,10 @@ function apply(ctx) {
     ['/pha/open', json(async (p) => {
       if (!p.doc || !p.page) throw new Error('doc and page required')
       return await runOpen({ doc: p.doc, page: p.page, edited: (p.edited === '1' || p.edited === 'true') })
+    })],
+    ['/pha/pending', json(async (p) => {
+      if (!p.doc) throw new Error('doc required')
+      return await runPending(p.doc)
     })],
     ['/pha/search', json(async (p) => {
       const q = String(p.q || '').trim()
