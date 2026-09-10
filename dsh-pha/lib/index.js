@@ -262,7 +262,7 @@ function apply(ctx) {
   // Definition folders at the archive root, browsable + editable in the view.
   // listed palaeographers -> editors -> models (the reading rules, then the models
   // they pair with); the order is what the view's left pane shows
-  const DEF_KINDS = ['palaeographers', 'editors', 'models']
+  const DEF_KINDS = ['palaeographers', 'editors', 'encoders', 'models']
   const LIST_DEFS = [
     'import os,sys,json',
     'root=sys.argv[1]; kinds=json.loads(sys.argv[2])',
