@@ -259,8 +259,8 @@ def cmd_open(cfg: Config, args) -> None:
         if not target.is_file():
             print(f"no such file: {target}", file=sys.stderr)
             sys.exit(1)
-        if target.suffix.lower() != ".md":
-            print(f"can only open markdown files in the archive: {target}", file=sys.stderr)
+        if target.suffix.lower() not in (".md", ".yaml", ".yml"):
+            print(f"can only open markdown or yaml files in the archive: {target}", file=sys.stderr)
             sys.exit(1)
         _open_with_os_default(target)
     finally:
@@ -414,14 +414,23 @@ def cmd_config(cfg: Config, args) -> None:
             generated = True
 
         content = target.read_text(encoding="utf-8") if target.is_file() else None
+        # A document/collection that inherits its pha.yaml from an upper folder is
+        # NEVER given one of its own: that would freeze the inherited values locally
+        # and shadow later changes to the parent. `inherited` tells the reader the
+        # file shown is in scope from above, not owned by this directory.
+        inherited = (sc.source is not None
+                     and sc.source.parent.resolve() != sel_dir.resolve())
         if getattr(args, "json", False):
             print(json.dumps({
                 "ok": True, "target": label, "path": str(target),
+                "document_dir": str(sel_dir), "inherited": inherited,
                 "generated": generated, "legacy_files": legacy,
                 "resolved": resolved, "content": content,
             }, ensure_ascii=False, indent=2))
             return
         print(("generated: " if generated else "config: ") + str(target))
+        if inherited:
+            print(f"  (inherited from an upper folder — this directory has no pha.yaml of its own)")
         if legacy and not generated:
             print(f"  (note: legacy selection file(s) present: {', '.join(legacy)})")
         print("")

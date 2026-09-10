@@ -168,3 +168,15 @@ def test_open_builds_opener_argv(tmp_path, monkeypatch):
     argv = captured["argv"]
     assert argv[0] in ("open", "xdg-open")  # darwin -> open, linux -> xdg-open
     assert argv[1] == str(target.resolve())
+
+
+def test_open_path_allows_archive_yaml(tmp_path, monkeypatch):
+    """pha.yaml (a collection config) opens too — the config button edits it."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    target = cfg.dropbox / "collections" / "COLX" / "pha.yaml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("palaeographer:\n  rules: default\n  model: default\n")
+    calls = _record_open(monkeypatch)
+    cli.cmd_open(cfg, SimpleNamespace(doc=str(target), page=None, edited=False, editor=None))
+    assert calls == [target.resolve()]

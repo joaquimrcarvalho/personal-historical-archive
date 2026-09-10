@@ -85,3 +85,37 @@ def test_config_human_output(tmp_path, capsys):
     cli.cmd_config(cfg, SimpleNamespace(doc=None, path="collections/COLX", write=True, json=False))
     out = capsys.readouterr().out
     assert "generated:" in out and "pha.yaml" in out
+
+
+def test_config_never_creates_a_sidecar_when_one_is_inherited(tmp_path, capsys):
+    """A collection that inherits its pha.yaml from an upper folder gets NO local
+    sidecar — the inherited file is shown, flagged as inherited."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    upper = cfg.dropbox / "collections"
+    upper.mkdir(parents=True, exist_ok=True)
+    upper.joinpath("pha.yaml").write_text(
+        "palaeographer:\n  rules: default\n  model: default\n", encoding="utf-8")
+    d = upper / "COLX"
+    d.mkdir(parents=True)
+
+    cli.cmd_config(cfg, SimpleNamespace(doc=None, path="collections/COLX", write=True, json=True))
+    data = json.loads(capsys.readouterr().out)
+
+    assert not (d / "pha.yaml").exists()          # nothing generated here
+    assert data["generated"] is False
+    assert data["inherited"] is True
+    assert data["path"].endswith("collections/pha.yaml")   # the in-scope file
+    assert "rules: default" in data["content"]
+
+
+def test_config_own_sidecar_is_not_flagged_inherited(tmp_path, capsys):
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    d = cfg.dropbox / "collections" / "COLX"
+    d.mkdir(parents=True)
+    d.joinpath("pha.yaml").write_text("palaeographer:\n  rules: default\n  model: default\n",
+                                      encoding="utf-8")
+    cli.cmd_config(cfg, SimpleNamespace(doc=None, path="collections/COLX", write=False, json=True))
+    data = json.loads(capsys.readouterr().out)
+    assert data["inherited"] is False
