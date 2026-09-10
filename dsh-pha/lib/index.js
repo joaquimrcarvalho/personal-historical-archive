@@ -292,6 +292,31 @@ function apply(ctx) {
     return out
   }
 
+  // Resolve how a document/collection is processed and return its pha.yaml.
+  // `--write` generates the pha.yaml from the resolved configuration when the
+  // collection has none on its chain (idempotent: an existing pha.yaml is shown,
+  // never rewritten), so the view can surface a collection still configured only
+  // by the legacy palaeographer/editor selection files.
+  async function runConfig(doc) {
+    const r = await phaRun(['config', '--doc', String(doc), '--json', '--write'])
+    if (r.code !== 0) throw new Error('pha config failed: ' + String(r.err || r.out).slice(0, 400))
+    const d = parseJson(r.out)
+    return {
+      ok: true,
+      target: d.target || null,
+      path: d.path || null,
+      document_dir: d.document_dir || null,
+      // true when the pha.yaml shown is inherited from an upper folder (this
+      // directory has none of its own — and none is created for it)
+      inherited: !!d.inherited,
+      generated: !!d.generated,
+      legacy_files: d.legacy_files || [],
+      resolved: d.resolved || null,
+      problems: (d.resolved && d.resolved.problems) || [],
+      content: d.content || null,
+    }
+  }
+
   const tools = [
     ['pha_status', 'Run `pha status` on the configured archive and return its text report (documents, pages, chunks, new and on-hold files).', {}, [], async () => {
       const r = await phaRun(['status'])
@@ -360,8 +385,9 @@ function apply(ctx) {
   // ---- durable browser data layer (same-origin /pha/* JSON routes) --------
   // Read-only: browsing, page text + render image, search. Mutations go through
   // the pha_* tools / the agent, so do the pha lock + staleness semantics.
-  // `/pha/open` is the exception: it launches the OS-default app on a page
-  // file (doc/page resolved + validated by `pha open`).
+  // Two exceptions: `/pha/open` launches the OS-default app on a page file
+  // (doc/page resolved + validated by `pha open`), and `/pha/config` may write a
+  // collection's pha.yaml from the resolved configuration (only when it has none).
   function json(handler) {
     return (req, res) => {
       (async () => {
@@ -447,6 +473,10 @@ function apply(ctx) {
     ['/pha/pending', json(async (p) => {
       if (!p.doc) throw new Error('doc required')
       return await runPending(p.doc)
+    })],
+    ['/pha/config', json(async (p) => {
+      if (!p.doc) throw new Error('doc required')
+      return await runConfig(p.doc)
     })],
     ['/pha/search', json(async (p) => {
       const q = String(p.q || '').trim()

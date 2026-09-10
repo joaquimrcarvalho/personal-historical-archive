@@ -245,7 +245,7 @@ function relPath(doc) {
 
 function PhaView() {
   const h = React.createElement
-  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null })
+  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null })
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -311,7 +311,7 @@ function PhaView() {
     } catch (e) { setState((s) => ({ ...s, pendingPages: null, pendingNeeds: null })) }
   }
   async function openDoc(id) {
-    setState((s) => ({ ...s, selectedId: id, noteMode: false, selectedNote: null, page: null, pageReq: null, pendingPages: null, pendingNeeds: null }))
+    setState((s) => ({ ...s, selectedId: id, noteMode: false, selectedNote: null, page: null, pageReq: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null }))
     const r = await get('/pha/document?doc=' + encodeURIComponent(id))
     setState((s) => ({ ...s, detail: r && r.ok ? { doc: r.doc, pages: r.pages || [], edits: r.edits || [], matched: false } : null }))
     loadPending(id)
@@ -322,11 +322,11 @@ function PhaView() {
     const vmap = {}
     matched.forEach((hit) => { vmap[hit.page_no] = hit.variant })
     const pages = r && r.ok && r.pages ? r.pages.filter((p) => vmap[p.page_no] !== undefined) : []
-    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pendingPages: null, pendingNeeds: null }))
+    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null }))
     loadPending(id)
   }
   async function openDef(d) {
-    setState((s) => ({ ...s, defMode: true, selectedDef: null, defMsg: null, noteMode: false, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, pendingPages: null, pendingNeeds: null }))
+    setState((s) => ({ ...s, defMode: true, selectedDef: null, defMsg: null, noteMode: false, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null }))
     try {
       const r = await get('/pha/def?path=' + encodeURIComponent(d.path))
       setState((s) => ({ ...s, selectedDef: (r && r.ok) ? { kind: r.kind, name: r.name, path: r.path, content: r.content } : null, defMsg: (r && !r.ok) ? ((r && r.error) || 'load failed') : null }))
@@ -340,8 +340,25 @@ function PhaView() {
       setState((s) => ({ ...s, defMsg: (r && r.ok) ? ('opened: ' + (r.path || d.path) + ' — save in your editor, then Refresh') : ((r && r.error) || 'open failed') }))
     } catch (e) { setState((s) => ({ ...s, defMsg: String((e && e.message) || e) })) }
   }
+  async function openConfig() {
+    const sel = state.selectedId
+    if (!sel) return
+    setState((s) => ({ ...s, configMode: true, config: null, configMsg: null }))
+    try {
+      const r = await get('/pha/config?doc=' + encodeURIComponent(String(sel)))
+      setState((s) => ({ ...s, config: (r && r.ok) ? r : null, configMsg: (r && !r.ok) ? ((r && r.error) || 'config failed') : null }))
+    } catch (e) { setState((s) => ({ ...s, configMsg: String((e && e.message) || e) })) }
+  }
+  async function configEdit() {
+    const c = state.config
+    if (!c || !c.path) return
+    try {
+      const r = await get('/pha/open?path=' + encodeURIComponent(c.path))
+      setState((s) => ({ ...s, configMsg: (r && r.ok) ? ('opened: ' + (r.path || c.path) + ' — save in your editor, then Refresh') : ((r && r.error) || 'open failed') }))
+    } catch (e) { setState((s) => ({ ...s, configMsg: String((e && e.message) || e) })) }
+  }
   async function openNote(name) {
-    setState((s) => ({ ...s, noteMode: true, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null }))
+    setState((s) => ({ ...s, noteMode: true, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, configMode: false, config: null, configMsg: null }))
     const r = await get('/pha/note?name=' + encodeURIComponent(name))
     setState((s) => ({ ...s, selectedNote: r && r.ok ? { name: r.name, content: r.content, path: r.path } : null }))
   }
@@ -476,7 +493,39 @@ function PhaView() {
   const left = h('div', { className: 'pha-left', style: { width: leftPct + '%' } }, searchHeader, body)
 
   let right
-  if (s.defMode && s.selectedDef) {
+  if (s.configMode) {
+    const c = s.config
+    const res = c && c.resolved
+    right = h('div', { className: 'pha-right' },
+      h('div', null,
+        h('strong', null, 'collection config' + (c && c.target ? ' — ' + c.target : '')),
+        // the path of the pha.yaml actually in scope, above its content
+        h('div', { className: 'pha-muted' }, (c && c.path) || '…'),
+      ),
+      (c && c.inherited) ? h('div', { className: 'pha-muted' },
+        'inherited from an upper folder — this directory has no pha.yaml of its own (none is created)') : null,
+      (c && c.generated) ? h('div', { className: 'pha-muted', style: { color: 'var(--dsw-alias-state-warn-primary,#e8890c)' } },
+        'generated pha.yaml from the legacy configuration — review it') : null,
+      (c && c.legacy_files && c.legacy_files.length) ? h('div', { className: 'pha-muted' },
+        'legacy selection file(s) still present: ' + c.legacy_files.join(', ')) : null,
+      h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
+        h('button', { className: 'pha-btn small', disabled: !(c && c.path), title: 'Open this pha.yaml in your default editor', onClick: configEdit }, 'Edit'),
+        h('button', { className: 'pha-btn small', onClick: () => setState((x) => ({ ...x, configMode: false })) }, '← back to page'),
+      ),
+      s.configMsg ? h('div', { className: 'pha-muted', style: { fontSize: 12 } }, s.configMsg) : null,
+      res ? h('div', null,
+        h('div', { className: 'pha-muted' }, 'palaeographer: ' + (res.palaeographer.id || '—')
+          + (res.palaeographer.model ? ' · ' + res.palaeographer.model : '')
+          + (res.palaeographer.source ? '  ← ' + res.palaeographer.source : '')),
+        h('div', { className: 'pha-muted' }, 'editor: ' + (res.editor.id || 'none')
+          + (res.editor.model ? ' · ' + res.editor.model : '')
+          + (res.editor.source ? '  ← ' + res.editor.source : '')),
+        (res.problems && res.problems.length) ? h('div', { className: 'pha-err' }, 'problems: ' + res.problems.join('; ')) : null,
+      ) : null,
+      (c && c.content) ? h('pre', { className: 'pha-pre' }, c.content)
+        : h('div', { className: 'pha-empty' }, s.configMsg || 'Loading configuration…'),
+    )
+  } else if (s.defMode && s.selectedDef) {
     const fd = splitFront(s.selectedDef.content)
     right = h('div', { className: 'pha-right' },
       h('div', null,
@@ -527,6 +576,7 @@ function PhaView() {
       h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
         h('span', { className: 'pha-chip ' + statusClass(d.status) }, d.status || '?'),
         h('span', { className: 'pha-chip' }, (d.page_count || 0) + ' pages'),
+        h('button', { className: 'pha-btn small', title: "Show this collection's pha.yaml configuration (resolved, generating it only when none is in scope)", onClick: openConfig }, 'config'),
       ),
       h('div', { className: 'pha-pages' },
         h('div', { className: 'pha-jump' },
