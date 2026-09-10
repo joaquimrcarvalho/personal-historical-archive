@@ -119,3 +119,23 @@ def test_config_own_sidecar_is_not_flagged_inherited(tmp_path, capsys):
     cli.cmd_config(cfg, SimpleNamespace(doc=None, path="collections/COLX", write=False, json=True))
     data = json.loads(capsys.readouterr().out)
     assert data["inherited"] is False
+
+
+def test_config_resolves_collection_encoders(tmp_path, capsys):
+    """The resolved config reports the encoders that actually run for the
+    document — here discovered from the collection's encoders/ folder."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    col = cfg.dropbox / "collections" / "COLX"
+    (col / "encoders").mkdir(parents=True)
+    (col / "encoders" / "table.md").write_text(
+        "---\nid: table\ndescription: tabular records\n---\n\nrules here\n", encoding="utf-8")
+    (col / "encoders" / "_sample.md").write_text("ignored\n", encoding="utf-8")
+
+    cli.cmd_config(cfg, SimpleNamespace(doc=None, path="collections/COLX", write=False, json=True))
+    data = json.loads(capsys.readouterr().out)
+
+    encs = data["resolved"]["encoders"]
+    assert [e["id"] for e in encs] == ["table"]          # _sample.md ignored
+    assert encs[0]["path"].endswith("encoders/table.md")
+    assert encs[0]["source"] == "directory"

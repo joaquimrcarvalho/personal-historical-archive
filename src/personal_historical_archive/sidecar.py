@@ -181,6 +181,30 @@ def resolve_stages(cfg, sel_dir: Path, stem: str | None = None,
     else:
         ed_id, ed_src = resolve_editor_id(stem, sel_dir, cfg.dropbox)
     prompt_txt, prompt_src = resolve_prompt(stem, sel_dir, cfg.dropbox, cfg.prompts)
+    # Encoders: a pha.yaml `encoders:` list wins (rules + model, run in page
+    # order); otherwise the collection's encoders/ files are discovered next to
+    # the documents. Either way the answer is "what actually runs".
+    from .extract import encoder_file_named, encoder_files_for
+
+    encoders: list[dict] = []
+    if sc.encoders:
+        for spec in sc.encoders:
+            f = encoder_file_named(spec.rules, sel_dir, cfg.dropbox)
+            e = cfg.encoder_from_file(f) if f else None
+            encoders.append({
+                "id": spec.rules, "model": spec.model,
+                "path": str(f) if f else None,
+                "pages": (e.pages if e else None),
+                "source": (f"{sc.source} (pha.yaml)" if sc.source else "pha.yaml"),
+            })
+    else:
+        for f in encoder_files_for(stem or "", sel_dir, cfg.dropbox):
+            e = cfg.encoder_from_file(f)
+            encoders.append({
+                "id": f.stem, "model": (e.model if e else None),
+                "path": str(f), "source": "directory",
+                "pages": (e.pages if e else None),
+            })
     # An unknown id in pha.yaml (a typo, or a definition file that was removed) is
     # reported as a problem instead of raising — the view shows the misconfiguration
     # rather than a traceback.
@@ -219,6 +243,7 @@ def resolve_stages(cfg, sel_dir: Path, stem: str | None = None,
                    "source": ed_src},
         "prompt_source": prompt_src,
         "prompt": (prompt_txt or ""),
+        "encoders": encoders,
         "problems": problems,
         "sidecar": sc,
     }
