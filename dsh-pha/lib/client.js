@@ -479,7 +479,9 @@ function PhaView() {
   // Archive definition folders (models / palaeographers / editors) — pick one to
   // read it; Edit opens it in the OS-default editor via `pha open <path>`.
   const DEF_LABEL = { models: 'model', palaeographers: 'palaeographer', editors: 'editor' }
-  const defGroups = ['models', 'palaeographers', 'editors'].map((kind) => {
+  // order the sections the way the archive's config is layered: the reading
+  // rules (palaeographer, editor) come before the model interfaces they pair with
+  const defGroups = ['palaeographers', 'editors', 'models'].map((kind) => {
     const items = (s.defs || []).filter((d) => d.kind === kind)
     if (!items.length) return null
     return h('div', { className: 'pha-group', key: 'def-' + kind },
