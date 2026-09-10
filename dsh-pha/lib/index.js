@@ -437,11 +437,18 @@ function apply(ctx) {
     ['/pha/status', json(async () => ({ ok: true, text: String((await phaRun(['status'])).out || '') }))],
     ['/pha/archive', json(async () => ({ ok: true, archive: await discover().then(() => archiveDir) }))],
   ]
-  for (const [path, handler] of routes) {
-    const ws = ctx.get('webServer')
-    if (!ws) break
-    ctx.effect(() => ws.register({ kind: 'exact', path, handler }))
-  }
+  // Register the routes once a webserver exists. `ctx.inject` (not this plugin's
+  // inject list) is deliberate: a profile without a webserver must still get the
+  // pha_* tools, so the whole plugin must not wait on webServer. The old
+  // ctx.get('webServer') + break silently registered nothing when the service
+  // was not up yet at apply time.
+  ctx.inject(['webServer'], (wsCtx) => {
+    const ws = wsCtx.webServer || wsCtx.get('webServer')
+    if (!ws) return
+    for (const [path, handler] of routes) {
+      wsCtx.effect(() => ws.register({ kind: 'exact', path, handler }))
+    }
+  })
 
   return { dispose() { jobs.forEach((rec) => { if (rec.handle && rec.state === 'running') { try { rec.handle.terminate() } catch (e) {} } }) } }
 }
