@@ -106,22 +106,38 @@ function apply(ctx) {
     if (dbPath) return Promise.resolve(dbPath)
     if (!discoverPromise) {
       discoverPromise = (async () => {
+        // 1) cheapest and always correct: `pha info` reads only the config (~3s).
+        //    This must come first — the view's initial load waits on discovery, and
+        //    `pha status` (below) walks every library page file.
         try {
-          const r = await phaRun(['status'])
-          const m = String(r.out || '').match(/^archive:\s*(\S+archive\.db)\s*$/m)
-          if (m && m[1]) {
-            dbPath = m[1]
-            archiveDir = dbPath.replace(/archive\.db$/, '').replace(/\/+$/, '')
+          const r = await phaRun(['info', '--json'])
+          const data = parseJson(r.out)
+          if (data && data.archive_dir) {
+            archiveDir = String(data.archive_dir).replace(/\/+$/, '')
+            dbPath = data.db_path ? String(data.db_path) : archiveDir + '/archive.db'
             return dbPath
           }
+        } catch (e) { /* fall through to the slower probes */ }
+        // 2) `pha doctor --json` reports the archive but probes the engine binaries
+        //    (tens of seconds when it queries the login-shell PATH).
+        try {
+          const r2 = await phaRun(['doctor', '--json'])
+          const mm = String(r2.out || '').match(/\{[\s\S]*\}/)
+          if (mm) {
+            const data = JSON.parse(mm[0])
+            if (data && data.archive) {
+              archiveDir = data.archive
+              dbPath = archiveDir + '/archive.db'
+              return dbPath
+            }
+          }
         } catch (e) { /* fall through */ }
-        const r2 = await phaRun(['doctor', '--json'])
-        const mm = String(r2.out || '').match(/\{[\s\S]*\}/)
-        if (!mm) throw new Error('cannot discover archive (pha status and doctor both unparsable)')
-        const data = JSON.parse(mm[0])
-        if (!data || !data.archive) throw new Error('pha reported no archive')
-        archiveDir = data.archive
-        dbPath = archiveDir + '/archive.db'
+        // 3) last resort: `pha status` (slowest) — its first line names the db.
+        const r3 = await phaRun(['status'])
+        const m = String(r3.out || '').match(/^archive:\s*(\S+archive\.db)\s*$/m)
+        if (!m || !m[1]) throw new Error('cannot discover archive')
+        dbPath = m[1]
+        archiveDir = dbPath.replace(/archive\.db$/, '').replace(/\/+$/, '')
         return dbPath
       })().catch((e) => { discoverPromise = null; throw e })
     }

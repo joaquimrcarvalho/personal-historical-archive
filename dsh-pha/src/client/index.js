@@ -258,9 +258,17 @@ function PhaView() {
   const [rootEl, setRootEl] = React.useState(null)
 
   React.useEffect(() => {
-    get('/pha/documents').then((r) => setState((s) => ({ ...s, docs: r && r.ok ? r.documents : null, docsErr: r && r.ok ? null : ((r && r.error) || 'documents call failed'), archive: (r && r.archive) || s.archive }))).catch((e) => setState((s) => ({ ...s, docsErr: String((e && e.message) || e) })))
-    get('/pha/notes').then((r) => setState((s) => ({ ...s, notes: r && r.ok ? r.notes : [] }))).catch(() => {})
-    get('/pha/defs').then((r) => setState((s) => ({ ...s, defs: r && r.ok ? r.defs : [] }))).catch(() => {})
+    // The document list first — it is what the user waits for. Notes and the
+    // definition folders follow once it has landed: all of these share a single
+    // archive discovery in the host, so loading them in parallel only makes the
+    // list wait on work it does not need.
+    get('/pha/documents')
+      .then((r) => setState((s) => ({ ...s, docs: r && r.ok ? r.documents : null, docsErr: r && r.ok ? null : ((r && r.error) || 'documents call failed'), archive: (r && r.archive) || s.archive })))
+      .catch((e) => setState((s) => ({ ...s, docsErr: String((e && e.message) || e) })))
+      .then(() => {
+        get('/pha/notes').then((r) => setState((s) => ({ ...s, notes: r && r.ok ? r.notes : [] }))).catch(() => {})
+        get('/pha/defs').then((r) => setState((s) => ({ ...s, defs: r && r.ok ? r.defs : [] }))).catch(() => {})
+      })
   }, [])
 
   const pageNo = state.pageReq ? state.pageReq.page : null
