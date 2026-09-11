@@ -113,13 +113,16 @@ agent: `list the documents`, `show document 1 page 2`, `search for missão`. Mut
 (`pha scan/edit/encode/reindex/review/inbox`) can be started with `pha_job_start` and polled
 with `pha_job_status`; pha's own lock prevents overlapping local-model jobs.
 
-To confirm the host half is live, ask for the route instead of guessing:
+To confirm the host half is live, ask the agent for `pha_status` — the `pha_*` tools exist only
+while the row is active. The same-origin routes answer on the instance's own port (`DSH_WEB_URL`):
 
 ```sh
-curl -s -H "Origin: http://127.0.0.1:3080" http://127.0.0.1:3080/pha/documents
+curl -s "$DSH_WEB_URL/pha/documents"
 ```
 
-A JSON body means the row activated; a `404` means it did not (wrong profile, or no restart).
+A JSON body means the row activated. `404` means it did not (wrong profile, or no restart since the
+row was added). `403` means the route exists but that instance requires its session credentials —
+not a plugin problem; use the tool call instead. The port differs per launch, so never hard-code it.
 
 ## GUI (conversation) view
 
