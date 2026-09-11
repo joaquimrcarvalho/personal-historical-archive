@@ -36,6 +36,9 @@ if (leftoverImport) {
 // Named-export apply -> plain const so the factory closes over it.
 body = body.replace(/^export\s+const\s+apply\s*=/m, 'const apply = ')
 body = body.replace(/^export\s+function\s+apply\b/m, 'function apply ')
+// Named-export inject -> plain const (cordis reads the plugin's static inject
+// to know which services must exist before apply runs).
+body = body.replace(/^export\s+const\s+inject\s*=/m, 'const inject = ')
 // A stray default export (old style) would not be the named face the loader reads.
 body = body.replace(/^export\s+default\b/m, '/* build-client: default export dropped (named apply expected) */')
 body = body.replace(/\s+$/, '\n')
@@ -75,6 +78,7 @@ const out = [
   runtime,
   body,
   `\t\texports.apply = apply;`,
+  `\t\tif (typeof inject !== "undefined") exports.inject = inject;`,
   `\t\treturn module.exports;`,
   `\t}`,
   `});`,

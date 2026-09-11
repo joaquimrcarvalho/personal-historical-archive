@@ -719,6 +719,13 @@ function PhaView() {
   )
 }
 
+// Cordis service inject. The `slots` service (provided by the harness's
+// client-ui-renderer) must be present BEFORE `apply` runs, or `ctx.get('slots')`
+// returns undefined and the PHA tab silently never registers. This static inject
+// list is a DIFFERENT mechanism from the package.json `dsh.client.inject` array
+// (which only orders bundle arrival) — cordis waits for the services listed here.
+const inject =  ['slots']
+
 const apply =  (ctx) => {
     const slots = ctx.get('slots')
     if (!slots) return
@@ -740,6 +747,7 @@ const apply =  (ctx) => {
 }
 
 		exports.apply = apply;
+		if (typeof inject !== "undefined") exports.inject = inject;
 		return module.exports;
 	}
 });

@@ -87,6 +87,8 @@ for (const path of EXPECTED_ROUTES) check(routes.includes(path), 'route ' + path
 const bundle = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
 check(bundle.includes('__ModuleLoader__'), 'client bundle uses the harness module loader')
 check(/exports\.apply\s*=/.test(bundle), 'client bundle exports a named apply')
+check(/exports\.inject\s*=/.test(bundle), 'client bundle exports a named inject')
+check(/inject\s*=\s*\[\s*["']slots["']/.test(bundle), 'client bundle injects the slots service')
 check(bundle.includes('conversation.view'), 'client bundle registers conversation.view')
 check(/require\(["']react["']\)/.test(bundle), 'client bundle keeps react external')
 
