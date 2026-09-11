@@ -1,12 +1,17 @@
 # Implementation plan — pha encoders with bundled tools (phases A + B: tool runner + built-in markdown-from-records)
 
-Design doc for the enhancement proposal
-`<archive_dir>/.writing/pha-encoder-tools-enhancement-request.md`
-("pha encoders with bundled tools, e.g. write one Markdown file per extracted
-record"). Written before any code. Validated against current pha: the
-reference encoder files (`documenta-indica/encoders/{documents,apparatus}.md`
-+ `*.tools/`, `_tools/`, `prescan/doca_prescan.py`) load cleanly today and
-the proposal's layout is inert for the current loader.
+Design doc for the enhancement proposal, tracked in this repo at
+`enhancements/pha-encoder-tools-enhancement-request.md` (byte-identical to
+the archive's `<archive_dir>/.writing/` copy; see also
+`enhancements/pha-enhancement-requests-INDEX.md`). Written before any code
+and **re-verified against pha 0.16.1** (2026-09): the reference encoder files
+(`documenta-indica/encoders/{documents,apparatus}.md` + `*.tools/`,
+`_tools/`, `prescan/doca_prescan.py`) load cleanly and the proposal's layout
+is inert for the current loader.
+
+Anchors below name **functions/regions, not line numbers**, so they cannot
+rot as the code moves; the current positions are listed once in §2 as an
+informational map.
 
 Scope of THIS plan = **phase A (the tool runner) + phase B (the built-in
 `markdown-from-records` tool), implemented together** (proposal §2.1–2.4).
@@ -49,6 +54,17 @@ encoder-stage changes, listed for reference only.
   `pha bundle` keeps carrying the whole `encoders/` tree (payloads included)
   while collection-sibling script dirs (`prescan/`) travel only once phase C
   lands. The record JSON format stays unchanged (proposal §4 non-goal).
+
+### Relationship to the other enhancement requests
+
+The repo's `enhancements/pha-enhancement-requests-INDEX.md` groups this with
+**stage filters** (`pre`/`post` text filters around a stage's model) and
+**`extends`** (base-rules + delta prompt composition), suggested order
+filters → extends → encoder tools. They are independent and can land in any
+order. The one interaction worth noting: a filter that rewrites edited pages
+is exactly the kind of change DEC-6's edited-page mtime tracking detects, so
+tools re-materialise after a filter change with no extra work; if filters
+land first, tools simply consume the already-filtered edited pages.
 
 ## 1. What we build
 
@@ -131,6 +147,13 @@ dict for forward compatibility. A tool dir with **no** `tool.md` and no
 
 ## 2. File-by-file changes
 
+Current code anchors (pha 0.16.1, informational only): `_encoder_from_frontmatter`
+config.py:944 · `library_page_path` ingest.py:553 · `_encode_needed` 1531 ·
+`write_concatenated_file` 1659 · `write_records_file` 1676 · `_page_filter`
+1700 · `encode_document` 1724 (records written at its tail; the "records up to
+date" early return near its top) · `encode_all` 1924 · `cmd_encoder`
+cli.py:1232 · `cmd_encode` 1265 · testrun encoder stage ~440-480.
+
 ### New module `src/personal_historical_archive/encoder_tools.py`
 
 Keeps the runner out of the already-large `ingest.py`. Imports only
@@ -168,7 +191,7 @@ library-dir resolution helpers live in `ingest` and results are *passed in*).
 ### `src/personal_historical_archive/config.py`
 
 - `Encoder` dataclass: add `tools: list[dict] = field(default_factory=list)`.
-- `_encoder_from_frontmatter` (line ~922): after `pages`, parse
+- `_encoder_from_frontmatter` (config.py): after `pages`, parse
   `fm.get("tools")` — must be a list of dicts each with a string `name`;
   anything else → warning and empty list (D8). Items are stored **raw**
   (params + possible future `model:` key survive untouched).
@@ -180,49 +203,63 @@ library-dir resolution helpers live in `ingest` and results are *passed in*).
 ### `src/personal_historical_archive/ingest.py`
 
 - Add `library_variant_dir(cfg, doc, variant, editor_id=None) -> Path | None`
-  next to `library_page_path` (line ~553): like that helper's prefix logic
+  next to `library_page_path`: like that helper's prefix logic
   but returns the **directory**; when several match (e.g. a legacy
   `edited-<editor>` and `edited-<editor>@<model>`), prefer the one ending
   `@…` (newest run-folder convention, commit "Name library run folders
   rules@model"), else the newest by mtime. Raw variant dir =
   `transcription-<pal>` with the same rule. Returns `None` when the doc has
   no such folder (raw should always exist for a done doc; edited may not).
-- `encode_document` (after `write_records_file`/`write_concatenated_file`,
-  line ~1817): build the four paths from the doc record + resolved editor
-  and call `run_encoder_tools(..., force=True)`; add the results to the
-  returned dict as `"tools"`.
-- `encode_document` **skip path** ("records up to date", line ~1686):
-  instead of returning immediately, resolve the variant dirs and call
-  `run_encoder_tools(..., force=False)`; include `"tools"` in the returned
-  skipped dict. This is the D2 tool-only re-run path.
+- `encode_document` (after the `write_records_file` /
+  `write_concatenated_file` calls): build the four paths from the doc record +
+  resolved editor and call `run_encoder_tools(..., force=True)`; add the
+  results to the returned dict as `"tools"`.
+- `encode_document` **skip path** (the early return with reason "records up
+  to date"): instead of returning immediately, resolve the variant dirs and
+  call `run_encoder_tools(..., force=False)`; include `"tools"` in the
+  returned skipped dict. This is the D2 tool-only re-run path.
 - Import `run_encoder_tools` lazily inside `encode_document` (module
   import at top is fine too — `encoder_tools` does not import `ingest`).
 - Leave `_encode_needed`, `_parse_json_array`, chunking untouched (phase A).
 
 ### `src/personal_historical_archive/cli.py`
 
-- `cmd_encode` (line ~999): after printing per-document encode results,
+- `cmd_encode`: after printing per-document encode results,
   print each result's tool lines — `tool <name>: ok` / `failed (rc N)` /
   `skipped (stale-unconfigured)` — and a summary count of tool failures.
-- `cmd_encoder` (line ~966): when listing a document's resolved encoders or
+- `cmd_encoder`: when listing a document's resolved encoders or
   the collection encoders, show `tools: <names>` from
   `cfg.encoder_from_file(f).tools` when non-empty.
 
 ### `src/personal_historical_archive/testrun.py`
 
-- In the encoder stage (line ~432-480), after the test records are written
-  to the scratch dir, run the encoder's tools with the scratch dir standing
-  in for `library_dir` and the scratch page folders for
-  `pages_dir_edited`/`pages_dir_raw` (testrun already mirrors the library
-  layout under `.pha-test/<doc>-<ts>/`). Tools failing must not abort the
-  report — record per-tool lines in `report.md` and continue. Add
-  `--no-tools` to the parser (line ~730 region) and thread it through.
+- In the encoder stage (the loop that writes `records-<eid>.json` /
+  `concatenated-<eid>.md`), after the test records are written, run the
+  encoder's tools with the scratch subdirectory
+  (`.pha-test/<doc>-<ts>/<doc-slug>/`) standing in for `library_dir`.
+- **The scratch does NOT currently mirror the library page layout** (verified
+  in 0.16.1): it writes flat `page-NNN-transcription.md` /
+  `page-NNN-edited.md` preview files, while tools read the library contract
+  (`transcription-<pal>[@model]/page-NNN.md`,
+  `edited-<editor>[@model]/page-NNN.md`). So `pha test` must additionally
+  materialise the sampled pages in library layout inside the scratch (variant
+  dirs + `page-NNN.md` names) and pass those as `pages_dir_raw` /
+  `pages_dir_edited`; the existing flat preview files stay as they are. This
+  also gives the historian a preview of the real segment files. (Rejected
+  alternatives: a flat-layout adapter mode in the runner, or skipping tools in
+  `pha test`.)
+- Tools failing must not abort the report — record per-tool lines in
+  `report.md` and continue. Add `--no-tools` to the parser and thread it
+  through.
 
-### `src/personal_historical_archive/mcp_server.py` (cheap, optional)
+### `src/personal_historical_archive/mcp_server.py` + `dsh-pha` (cheap, optional)
 
-- `pha_encoders` (line ~295): include `"tools": [names]` per encoder by
+- `pha_encoders`: include `"tools": [names]` per encoder by
   parsing the file with `cfg.encoder_from_file` when available. Nice-to-have
   for remote config checks; can land with phase A or later.
+- The **dsh-pha plugin** (`dsh-pha/`) has its own same-origin `/pha/*` API and
+  surfaces encoders in its view; if tools are exposed over MCP, mirror the
+  same `tools` list there for parity (see `DSH_PLUGIN.md`).
 
 ### Docs
 
@@ -233,7 +270,10 @@ library-dir resolution helpers live in `ingest` and results are *passed in*).
   copies the whole `encoders/` tree).
 - `AGENTS.md`: short conventions bullets — encoder tool dirs are inert for
   the loader; tools are archive-owner code (no sandbox); tool edits re-run
-  only the tool (not the model pass).
+  only the tool (not the model pass); tool artifacts are **not** indexed and
+  are not `notes/` (that folder is the research-note surface).
+- `skills/pha-document-operations`: note that a tool-payload edit is picked
+  up by `pha encode` (re-runs only the stale tool).
 - `encoders/_sample.md` (`_ENC_SAMPLE` above).
 
 ## 3. Behavior contract (what a tool author gets)
@@ -260,7 +300,8 @@ Context JSON passed via `--context <file>` (exact proposal §2.3 fields):
   own choice — pha does not restrict writes, D6), prints progress to stdout,
   exits 0 on success. pha never parses the tool's output; the exit code is
   the contract.
-- Out-dir overwrite policy is the tool's (phase-A built-ins are phase B).
+- Out-dir overwrite policy is the tool's; the shipped built-in (phase B)
+  overwrites in place per DEC-5.
 
 ## 4. Staleness rules (D2, precise)
 
@@ -299,8 +340,11 @@ cheap: `library_variant_dir` + stat comparisons + (at most) the stale tools.
    encode success (D8).
 7. No edited variant dir → context `pages_dir_edited: null`, tool that
    ignores it exits 0.
-8. `pha test`: tools run into the scratch dir (or are skipped with
-   `--no-tools`); failing tool does not break `report.md`.
+8. `pha test`: the scratch gets library-layout pages for the sampled pages;
+   tools run against them into the scratch (or are skipped with
+   `--no-tools`); a failing tool does not break `report.md`. Tool fixtures
+   must respect the current `_parse_json_array` semantics (a valid empty
+   array is `[]`, not an error — commit 09219c2).
 9. DEC-6 staleness: records fresh + a page file under `pages_dir_edited`
    touched → tool re-runs on the next `pha encode`; untouched → skips.
 10. Back-compat sweep: existing fixtures with encoder front matter lacking
@@ -360,7 +404,8 @@ final page, (iv) two records sharing one page, (v) records with no
 - **Run-folder ambiguity**: several `edited-*` folders may exist for one
   document (legacy + `@model`); `library_variant_dir`'s preference rule
   must match what `write_edited_pages` actually produced last
-  (ingest.py:937) or tools read stale pages. Covered by tests 5 + 8.
+  (`ingest.write_edited_pages`) or tools read stale pages. Covered by tests
+  5 + 8.
 - **Tool payload size / bundle**: `pha bundle` copies whole `encoders/`
   trees already → payloads travel; no change needed in phase A.
 - **Windows**: no stdin piping, no shell interpolation (`subprocess.run`
