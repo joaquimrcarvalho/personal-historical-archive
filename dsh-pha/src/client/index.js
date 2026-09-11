@@ -473,10 +473,7 @@ function PhaView() {
   // Archive definition folders (models / palaeographers / editors) — pick one to
   // read it; Edit opens it in the OS-default editor via `pha open <path>`.
   const DEF_LABEL = { palaeographers: 'palaeographer', editors: 'editor', encoders: 'encoder', models: 'model' }
-  // order the sections the way the archive's config is layered: the reading and
-  // extraction rules (palaeographer, editor, encoder) come before the model
-  // interfaces they pair with
-  const defGroups = ['palaeographers', 'editors', 'encoders', 'models'].map((kind) => {
+  const defGroupFor = (kind) => {
     const items = (s.defs || []).filter((d) => d.kind === kind)
     if (!items.length) return null
     return h('div', { className: 'pha-group', key: 'def-' + kind },
@@ -486,7 +483,12 @@ function PhaView() {
         h('span', { className: 'pha-doc-name', title: d.path }, d.name),
       )),
     )
-  }).filter(Boolean)
+  }
+  // Reading/extraction rules first — palaeographer, editor, encoders — and the
+  // per-collection encoders render right after the top-level encoders/ section so
+  // the encoders read as one block. The model interfaces they pair with come last.
+  const defGroups = ['palaeographers', 'editors', 'encoders'].map(defGroupFor).filter(Boolean)
+  const modelGroups = ['models'].map(defGroupFor).filter(Boolean)
 
   // Collection-local encoders travel with the documents; group them under the
   // collection that owns them so they sit next to their documents.
@@ -524,6 +526,7 @@ function PhaView() {
       noteList,
       defGroups,
       collEncGroups,
+      modelGroups,
     ) : h('div', { className: 'pha-empty' }, 'Loading documents…'))
   }
   const left = h('div', { className: 'pha-left', style: { width: leftPct + '%' } }, searchHeader, body)
