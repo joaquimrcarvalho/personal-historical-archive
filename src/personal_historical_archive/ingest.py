@@ -1474,12 +1474,17 @@ def make_encoder_client(cfg: Config, encoder_id: str | None = None,
                        api_style=encoder.api_style), encoder
 
 
-def _parse_json_array(text: str) -> list:
-    """Extract the first balanced JSON array from a model response. Also
-    accepts a JSON object wrapping an array under a list-valued key
+def _parse_json_array(text: str) -> list | None:
+    """Extract the first balanced JSON array from a model response, or None
+    when no valid JSON array is present.
+
+    A valid-but-EMPTY array returns ``[]`` (falsy but NOT None), so callers
+    can tell the model's honest "nothing to extract" answer apart from an
+    unparseable response and stop retrying instead of insisting. Also accepts
+    a JSON object wrapping an array under a list-valued key
     (e.g. {"records": [...]})."""
     if not text:
-        return []
+        return None
     stripped = text.strip()
     if stripped.startswith("["):
         start = 0
@@ -1495,7 +1500,7 @@ def _parse_json_array(text: str) -> list:
                             return v
             except json.JSONDecodeError:
                 pass
-            return []
+            return None
     depth = 0
     in_str = False
     esc = False
@@ -1519,8 +1524,8 @@ def _parse_json_array(text: str) -> list:
                 try:
                     return json.loads(text[start : i + 1])
                 except json.JSONDecodeError:
-                    return []
-    return []
+                    return None
+    return None
 
 
 def _encode_needed(cfg: Config, conn, doc_id: int, encoder: Encoder, resolved: str,
@@ -1851,29 +1856,37 @@ def encode_document(
                 # reasoning models emit a <think> block even with thinking
                 # disabled, and a tight cap makes them return [] rather than
                 # risk truncating their answer.
-                parsed: list = []
+                #
+                # NOTE: a valid-but-EMPTY array ([]) is an honest answer — the
+                # model used the "not really an entry, return []" escape hatch —
+                # and MUST break the loop. `_parse_json_array` returns None only
+                # when there is genuinely no parseable array, so `parsed is not
+                # None` (rather than truthiness) is what distinguishes success.
+                parsed: list | None = None
                 for attempt in range(3):
                     out = client.chat_text(encoder.model, prompt, encoder.temperature,
                                            max(8192, encoder.max_tokens),
                                            thinking=encoder.thinking)
                     parsed = _parse_json_array(out)
-                    if parsed or not out.strip():
+                    if parsed is not None or not out.strip():
                         break
                     if verbose:
                         print(f"    (retry {attempt + 1}: response {len(out)} chars not parseable, "
                               f"head: {out[:120]!r})", flush=True)
                     if start_page and attempt >= 1:
                         # The detector flagged this page; drop the escape
-                        # hatch and insist, in case the model is being overly
-                        # conservative (returning [] instead of extracting).
+                        # hatch and insist only when the model returned prose
+                        # (not a valid JSON array) — a valid [] above would
+                        # already have broken the loop, so insisting here can
+                        # no longer override an honest "no entry" answer.
                         prompt = prompt.replace(
                             "If page {0} is not really an entry after all, return [].".format(start_page),
                             "A detector flagged page {0} as an entry start. Extract it.".format(start_page),
                         )
-                if verbose and not parsed and out.strip():
+                if verbose and parsed is None and out.strip():
                     print(f"    (model returned no parseable JSON array; "
                           f"response {len(out)} chars, head: {out[:160]!r})", flush=True)
-                for rec in _expand_records(parsed):
+                for rec in _expand_records(parsed or []):
                     key = _record_key(rec)
                     if key in seen:
                         continue

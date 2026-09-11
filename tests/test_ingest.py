@@ -86,7 +86,18 @@ def test_parse_json_array_prose_prefix():
 
 
 def test_parse_json_array_empty():
-    assert _parse_json_array("no json here") == []
+    assert _parse_json_array("no json here") is None
+
+
+def test_parse_json_array_valid_empty_array():
+    """A valid-but-empty array (the model's honest 'nothing to extract') is
+    distinct from 'no JSON found': it returns [] (falsy but not None), so the
+    encode retry loop can stop instead of insisting and hallucinating."""
+    assert _parse_json_array("[]") == []
+
+
+def test_parse_json_array_prose_only_is_none():
+    assert _parse_json_array("just prose, no array") is None
 
 
 def test_expand_records_multi_class():

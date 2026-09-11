@@ -465,14 +465,14 @@ def _test_doc(
         eclient = ModelClient(enc.base_url, timeout_s=enc.timeout_s, api_key=enc.api_key,
                               api_style=enc.api_style)
         try:
-            parsed: list = []
+            parsed: list | None = None
             for attempt in range(3):
                 out = eclient.chat_text(enc.model, prompt_txt, enc.temperature,
                                         max(8192, enc.max_tokens), thinking=enc.thinking)
                 parsed = _parse_json_array(out)
-                if parsed or not out.strip():
+                if parsed is not None or not out.strip():
                     break
-            records = _expand_records(parsed)
+            records = _expand_records(parsed or [])
             _write(out_dir / f"records-{eid}.json",
                    json.dumps({"document": str(path), "encoder": eid,
                                "records": records}, ensure_ascii=False, indent=2))
