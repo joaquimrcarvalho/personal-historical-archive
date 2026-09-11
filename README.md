@@ -790,6 +790,16 @@ pha help [topic]              # orientation + pointers to README/MCP_CLIENTS/HIS
 pha scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--path COLLECTION] [--reprocess]
 pha search QUERY [--mode hybrid|keyword|semantic] [--collection COLX] [--limit N] [--json]
 pha page DOC PAGE [--edited]    # print the FULL text of one page (doc = id or filename substring)
+                                #   --edited reads the edited/translated variant; when there is
+                                #   none it names the pass that produces it (`pha edit --path …`)
+pha open DOC PAGE [--edited]    # open that page's library .md in the OS-default editor
+pha open FILE.md                # …or any archive .md/.yaml (notes, definitions, pha.yaml)
+pha pending [--doc N] [--json]  # library page files edited by a human but not imported yet
+pha config [--doc DOC] [--json] [--write]
+                                # show the pha.yaml in scope for a document (its path, whether it
+                                #   is inherited, resolved stages/encoders); --write generates one
+                                #   from the legacy configuration, but only when none is in scope
+pha info [--json]               # archive paths + versions, without walking the library
 pha status
 pha export
 pha reindex

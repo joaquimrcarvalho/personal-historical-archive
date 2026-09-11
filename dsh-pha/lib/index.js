@@ -159,6 +159,15 @@ function apply(ctx) {
     return JSON.parse(m[0])
   }
 
+  // `pha page <doc> <page> --edited` exits 1 with a human message on stderr when there
+  // is no edited text yet (and `pha edit`/`pha scan` messages read the same way). Show
+  // that message verbatim — the GUI puts it in the text pane — instead of a JSON error.
+  function cliFailure(r, fallback) {
+    const first = String((r && (r.err || r.out)) || '')
+      .split('\n').map((l) => l.trim()).filter(Boolean)[0]
+    return first ? first.slice(0, 400) : fallback
+  }
+
   const ACTIONS = ['scan', 'edit', 'encode', 'reindex', 'review', 'inbox']
   const PATH_RE = /^[\w./ -]+$/
   function buildArgv(action, a) {
@@ -374,7 +383,7 @@ function apply(ctx) {
       const argv = ['page', String(a.doc), String(a.page), '--json']
       if (a.edited) argv.push('--edited')
       const r = await phaRun(argv)
-      if (r.code !== 0) throw new Error('pha page failed: ' + String(r.err || r.out).slice(0, 400))
+      if (r.code !== 0) throw new Error(cliFailure(r, 'pha page failed'))
       return { ok: true, page: parseJson(r.out) }
     }],
     ['pha_search', 'Full-text search across the archive (keyword / phrase match). Returns structured hits with document id, page number, variant and snippet text — only pages that actually contain the query terms.', { query: { type: 'string', description: 'search terms' }, limit: { type: 'integer', description: 'max hits (default 5, max 20)' } }, ['query'], async (a) => {
@@ -484,7 +493,7 @@ function apply(ctx) {
       const argv = ['page', String(p.doc), String(p.page), '--json']
       if (p.edited === '1' || p.edited === 'true') argv.push('--edited')
       const r = await phaRun(argv)
-      if (r.code !== 0) throw new Error('pha page failed: ' + String(r.err || r.out).slice(0, 400))
+      if (r.code !== 0) throw new Error(cliFailure(r, 'pha page failed'))
       return { ok: true, page: parseJson(r.out) }
     })],
     ['/pha/open', json(async (p) => {

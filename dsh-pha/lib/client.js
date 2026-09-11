@@ -220,6 +220,9 @@ const CSS = [
   '.pha-btn.primary{border-color:transparent;background:var(--dsw-alias-brand-primary,#0b5fff);color:#fff}',
   '.pha-btn.on{border-color:transparent;background:var(--dsw-alias-state-warn-primary,#e8890c);color:#fff}',
   '.pha-btn.small{padding:1px 7px;font-size:11px}',
+  '.pha-btn[disabled]{opacity:.45;cursor:not-allowed}',
+  '.pha-spacer{flex:1 1 auto}',
+  '.pha-err{color:var(--dsw-alias-state-error-primary,#e03131);font-size:12px;line-height:1.45}',
   '.pha-input{font:inherit;font-size:12px;padding:3px 8px;border-radius:6px;border:1px solid var(--dsw-alias-border-l2,#666);background:var(--dsw-alias-bg-layer-1,#fff);color:inherit;flex:1;min-width:120px}',
   '.pha-pre{white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.5;padding:10px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1,#333);background:var(--dsw-alias-bg-layer-1,#0f1216);max-height:60vh;overflow:auto}',
   '.pha-md{font-size:13px;line-height:1.55;color:var(--dsw-alias-label-primary,inherit)}',
@@ -269,7 +272,7 @@ function relPath(doc) {
 
 function PhaView() {
   const h = React.createElement
-  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null })
+  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false })
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -343,7 +346,7 @@ function PhaView() {
     } catch (e) { setState((s) => ({ ...s, pendingPages: null, pendingNeeds: null })) }
   }
   async function openDoc(id) {
-    setState((s) => ({ ...s, selectedId: id, noteMode: false, selectedNote: null, page: null, pageReq: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null }))
+    setState((s) => ({ ...s, selectedId: id, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null }))
     const r = await get('/pha/document?doc=' + encodeURIComponent(id))
     setState((s) => ({ ...s, detail: r && r.ok ? { doc: r.doc, pages: r.pages || [], edits: r.edits || [], matched: false } : null }))
     loadPending(id)
@@ -354,11 +357,11 @@ function PhaView() {
     const vmap = {}
     matched.forEach((hit) => { vmap[hit.page_no] = hit.variant })
     const pages = r && r.ok && r.pages ? r.pages.filter((p) => vmap[p.page_no] !== undefined) : []
-    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null }))
+    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null }))
     loadPending(id)
   }
   async function openDef(d) {
-    setState((s) => ({ ...s, defMode: true, selectedDef: null, defMsg: null, noteMode: false, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null }))
+    setState((s) => ({ ...s, defMode: true, selectedDef: null, defMsg: null, noteMode: false, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null }))
     try {
       const r = await get('/pha/def?path=' + encodeURIComponent(d.path))
       setState((s) => ({ ...s, selectedDef: (r && r.ok) ? { kind: r.kind, name: r.name, path: r.path, content: r.content } : null, defMsg: (r && !r.ok) ? ((r && r.error) || 'load failed') : null }))
@@ -399,7 +402,7 @@ function PhaView() {
     setState((s) => ({ ...s, configMsg: msg, defMsg: msg }))
   }
   async function openNote(name) {
-    setState((s) => ({ ...s, noteMode: true, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, configMode: false, config: null, configMsg: null }))
+    setState((s) => ({ ...s, noteMode: true, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, configMode: false, config: null, configMsg: null }))
     const r = await get('/pha/note?name=' + encodeURIComponent(name))
     setState((s) => ({ ...s, selectedNote: r && r.ok ? { name: r.name, content: r.content, path: r.path } : null }))
   }
@@ -408,14 +411,20 @@ function PhaView() {
     // Re-arm the per-variant default: the raw transcription shows as plain text, the
     // edited variant as markdown. An explicit txt/md choice applies to the page on
     // screen only and is dropped when another page is opened.
-    setState((s) => ({ ...s, pageReq: { doc, page: pageNo, edited: !!edited }, plainOverride: null }))
-    const r = await get('/pha/page?doc=' + encodeURIComponent(doc) + '&page=' + pageNo + (edited ? '&edited=1' : ''))
-    setState((s) => ({ ...s, page: r && r.ok ? r.page : null }))
+    setState((s) => ({ ...s, pageReq: { doc, page: pageNo, edited: !!edited }, plainOverride: null, pageLoading: true, pageErr: null }))
+    try {
+      const r = await get('/pha/page?doc=' + encodeURIComponent(doc) + '&page=' + pageNo + (edited ? '&edited=1' : ''))
+      // A failed page request used to blank the pane silently (e.g. --edited with no
+      // edited text yet). Keep the message: it names the pass that produces the text.
+      setState((s) => ({ ...s, page: r && r.ok ? r.page : null, pageLoading: false, pageErr: (r && !r.ok) ? ((r && r.error) || 'page load failed') : null }))
+    } catch (e) {
+      setState((s) => ({ ...s, page: null, pageLoading: false, pageErr: String((e && e.message) || e) }))
+    }
   }
   async function doSearch() {
     const q = searchText.trim()
     if (!q) return
-    setState((s) => ({ ...s, searchMode: true, hits: null, selectedId: null, detail: null, page: null, pageReq: null, noteMode: false, selectedNote: null }))
+    setState((s) => ({ ...s, searchMode: true, hits: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, noteMode: false, selectedNote: null }))
     const r = await get('/pha/search?q=' + encodeURIComponent(q) + '&limit=20')
     setState((s) => ({ ...s, hits: r && r.ok ? r.results : null }))
   }
@@ -633,6 +642,7 @@ function PhaView() {
     // Raw transcription reads best as plain text (a faithful transcript whose incidental
     // markup should stay visible); the edited variant as rendered markdown.
     const plain = s.plainOverride === null ? !selIsEdited : s.plainOverride
+    const hasEdited = editors.length > 0
     const pendingSet = new Set((s.pendingPages || []).map((x) => x.page_no))
     const pendingCount = (s.pendingPages || []).length
     // image-only mode: let the render fill the pane instead of sharing half with text
@@ -642,7 +652,11 @@ function PhaView() {
       : null
     let textBlock = null
     if (textOn) {
-      textBlock = pv ? h('div', { className: 'pha-text' },
+      textBlock = s.pageErr ? h('div', { className: 'pha-text' },
+        h('div', { className: 'pha-err' }, s.pageErr),
+        (s.pageReq && s.pageReq.edited && !hasEdited) ? h('div', { className: 'pha-muted' },
+          'this document has no edited text in the archive yet — run that pass, then Refresh.') : null,
+      ) : pv ? h('div', { className: 'pha-text' },
         h('div', { className: 'pha-muted' }, 'page ' + (s.pageReq ? s.pageReq.page : '') + ' · ' + (pv.variant || '') + (pv.reviewed ? ' · reviewed' : '')),
         h('div', { className: 'pha-muted' }, pv.page_file || ''),
         plain ? h('pre', { className: 'pha-pre' }, pv.text || '(empty)') : h('div', { className: 'pha-md' }, renderMd(pv.text || '')),
@@ -653,7 +667,7 @@ function PhaView() {
       h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
         h('span', { className: 'pha-chip ' + statusClass(d.status) }, d.status || '?'),
         h('span', { className: 'pha-chip' }, (d.page_count || 0) + ' pages'),
-        h('button', { className: 'pha-btn small', title: "Show this collection's pha.yaml configuration (resolved, generating it only when none is in scope)", onClick: openConfig }, 'config'),
+        h('button', { className: 'pha-btn small', title: "Show this collection's pha.yaml configuration (resolved, generating it only when none is in scope)", onClick: openConfig }, 'Config'),
       ),
       h('div', { className: 'pha-pages' },
         h('div', { className: 'pha-jump' },
@@ -670,13 +684,18 @@ function PhaView() {
         })) : h('div', { className: 'pha-muted' }, searchMode ? 'No matched pages…' : 'No pages…'),
       ),
       h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
-        h('button', { className: 'pha-btn small' + (showImg ? ' on' : ''), title: 'show/hide the page image', onClick: () => setShowImg(!showImg) }, 'image'),
-        h('button', { className: 'pha-btn small' + (textOn ? ' on' : ''), title: 'show/hide the text pane', onClick: () => setTextOn(!textOn) }, 'text'),
-        textOn ? h('button', { className: 'pha-btn small' + (selIsEdited ? '' : ' primary'), onClick: () => { if (s.pageReq) openPage(s.pageReq.page, false) } }, 'raw') : null,
-        textOn ? h('button', { className: 'pha-btn small' + (selIsEdited ? ' primary' : ''), onClick: () => { if (editors.length && s.pageReq) openPage(s.pageReq.page, true) } }, editors.length ? 'edited (' + editors.join(',') + ')' : 'edited') : null,
-        textOn ? h('button', { className: 'pha-btn small' + (plain ? ' on' : ''), onClick: () => setState((x) => ({ ...x, plainOverride: !plain })) }, plain ? 'md' : 'txt') : null,
+        h('button', { className: 'pha-btn small' + (showImg ? ' on' : ''), title: 'show/hide the page image', onClick: () => setShowImg(!showImg) }, 'Image'),
+        h('button', { className: 'pha-btn small' + (textOn ? ' on' : ''), title: 'show/hide the text pane', onClick: () => setTextOn(!textOn) }, 'Text'),
+        textOn ? h('button', { className: 'pha-btn small' + (selIsEdited ? '' : ' primary'), title: 'the raw transcription of this page', onClick: () => { if (s.pageReq) openPage(s.pageReq.page, false) } }, 'Raw') : null,
+        textOn ? h('button', { className: 'pha-btn small' + (selIsEdited ? ' primary' : ''), disabled: !hasEdited, title: hasEdited ? ('the edited text of this page (editor: ' + editors.join(', ') + ')') : 'this document has no edited text yet — run: pha edit', onClick: () => { if (s.pageReq) openPage(s.pageReq.page, true) } }, hasEdited ? ('Edited (' + editors.join(', ') + ')') : 'Edited') : null,
+        textOn ? h('button', { className: 'pha-btn small' + (plain ? ' on' : ''), title: plain ? 'shown as plain text — click to render it as markdown' : 'shown as rendered markdown — click for plain text', onClick: () => setState((x) => ({ ...x, plainOverride: !plain })) }, plain ? 'MD' : 'TXT') : null,
+        h('span', { className: 'pha-spacer' }),
         h('button', { className: 'pha-btn small', title: 'Open this page in your default markdown editor (the OS picks the app)', onClick: editOpen }, 'Edit'),
       ),
+      (!hasEdited && textOn) ? h('div', { className: 'pha-muted', style: { fontSize: 12 } },
+        'no edited text in the archive for this document yet'
+        + (d.editor ? ' (editor ' + d.editor + ')' : ' (no editor configured)')
+        + ' — the Edited button has nothing to show until the edit pass has run.') : null,
       pendingCount ? h('div', { className: 'pha-muted', style: { fontSize: 12, color: 'var(--dsw-alias-state-warn-primary,#e8890c)' } },
         '✏️ ' + pendingCount + ' page(s) edited in the library — not imported into the archive yet. '
         + 'Run: pha review' + ((s.pendingNeeds && s.pendingNeeds.edit) ? ' · pha edit · pha reindex' : ' · pha reindex')

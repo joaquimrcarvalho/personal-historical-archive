@@ -167,15 +167,20 @@ def cmd_page(cfg: Config, args) -> None:
         text = page["raw_text"] or ""
         if edited:
             editor_id = args.editor or doc["editor"]
+            # A missing edited variant is a config/state problem, not a crash: name the
+            # pass that produces it. Callers (the GUI, MCP clients) show this verbatim.
+            edit_hint = (f"pha edit --path {doc['dir_path']}" if doc["dir_path"] else "pha edit")
             if not editor_id:
-                print("this document has no editor configured; nothing to show for --edited",
+                print("this document has no editor configured; nothing to show for --edited"
+                      " — set an editor in the collection's pha.yaml",
                       file=sys.stderr)
                 sys.exit(1)
             e = db.get_page_edit(conn, page["id"], editor_id)
             if e is not None and e["text"]:
                 text = e["text"]
             else:
-                print(f"no edited text for page {args.page} (editor {editor_id})",
+                print(f"no edited text for page {args.page} (editor {editor_id})"
+                      f" — run: {edit_hint}",
                       file=sys.stderr)
                 sys.exit(1)
         pf = library_page_path(cfg, doc, args.page,
