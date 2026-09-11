@@ -5,7 +5,8 @@
   "type": "module",
   "main": "lib/index.js",
   "scripts": {
-    "build:client": "node scripts/build-client.mjs"
+    "build:client": "node scripts/build-client.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "exports": {
     ".": {
@@ -32,9 +33,6 @@
       ],
       "platform": "web"
     }
-  },
-  "peerDependencies": {
-    "@deepseek-ai/dsh-tools": "*"
   },
   "dependencies": {},
   "publishConfig": {

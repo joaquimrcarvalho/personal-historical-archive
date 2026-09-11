@@ -1,4 +1,10 @@
-import { defineTool } from '@deepseek-ai/dsh-tools'
+// This plugin deliberately imports NOTHING. A profile install links the package
+// (pnpm `link:`), so the ESM loader resolves it to this real path and any bare
+// import of a harness package (`@deepseek-ai/dsh-tools`) would be looked up from
+// here — outside the profile's node_modules — and fail, which makes the whole
+// harness refuse to start ("plugin(s) failed to load"). Tool definitions are
+// therefore built as plain objects, exactly the raw JSON Schema `defineTool`
+// compiles to, and registered on the `tools` service.
 
 const name = 'dsh-pha'
 const inject = ['subprocess', 'tools']
@@ -236,14 +242,29 @@ function apply(ctx) {
     return [{ type: 'text', text }]
   }
 
+  // `properties` is the per-property map (type/description/enum) and `required`
+  // names the mandatory ones; the published definition carries the object-rooted
+  // JSON Schema the tool registry validates against.
   function mkTool(tname, description, props, required, run) {
-    const def = defineTool({
+    const properties = {}
+    const requiredNames = []
+    for (const key of Object.keys(props || {})) {
+      properties[key] = props[key]
+      if ((required || []).indexOf(key) >= 0) requiredNames.push(key)
+    }
+    const def = {
       name: tname,
       description,
-      parameters: { type: 'object', properties: props, required: required || [] },
-      output: { schema: { type: 'object', additionalProperties: true }, render: textRender },
+      parameters: Object.assign(
+        { type: 'object', properties },
+        requiredNames.length ? { required: requiredNames } : {},
+      ),
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render: textRender,
+      },
       execute: run,
-    })
+    }
     ctx.effect(() => ctx.tools.register(def))
   }
 

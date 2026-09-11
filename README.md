@@ -331,7 +331,7 @@ cp -R skills/pha-document-operations ~/.agents/skills/
 
 This repo also ships a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
 host plugin, [`dsh-pha/`](dsh-pha/), that lets a Harness agent drive pha from chat on any
-machine with both installed. It provides the nine `pha_*` model tools, a read-only archive
+machine with both installed. It provides the eleven `pha_*` model tools, a read-only archive
 accessor (`immutable=1` sqlite open), a background job runner, a same-origin `/pha/*` JSON
 API, and a PHA conversation view (client module).
 

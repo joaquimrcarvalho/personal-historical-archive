@@ -62,8 +62,12 @@ mkdir -p "$DSH_HOME/profiles/<name>/node_modules/@personal-historical-archive"
 ln -s /path/to/repo/dsh-pha "$DSH_HOME/profiles/<name>/node_modules/@personal-historical-archive/dsh-pha"
 ```
 
-> `@deepseek-ai/dsh-tools` (the plugin's only dependency) is already present in the harness
-> deployment, so it does not need a separate install.
+> The plugin has **no dependencies** and imports nothing, on purpose: a linked install is
+> resolved to this repository, so a bare import of a harness package would be looked up here
+> — outside the profile's `node_modules` — and fail. Since one unloadable row makes the whole
+> harness refuse to start, the host half builds its tool definitions itself (the same raw JSON
+> Schema the registry validates) instead of importing `@deepseek-ai/dsh-tools`. `npm run smoke`
+> checks that invariant, the eleven tool definitions and the routes offline.
 
 ### 2. Add a composition row to the profile
 
@@ -75,17 +79,47 @@ Append to the profile's `cordis.patch.yml` (see `cordis.patch.example.yml` in th
       name: '@personal-historical-archive/dsh-pha'
 ```
 
+If the file is the stock empty flow array `[]`, replace that `[]` with the block sequence
+above instead of appending after it — a patch file is a single top-level YAML array, and
+adding a second one there makes the profile fail to load.
+
 ### 3. Restart the harness profile
 
 ```sh
 dsh --profile <name> --help   # confirm it boots; then start the app as you normally do
 ```
 
-After the profile starts, the nine `pha_*` tools are registered in the host `tools`
+**Which profile?** The one your app actually runs — `install.sh` with no argument picks it
+from a running harness process, and prints the choice:
+
+```sh
+./install.sh          # detects the running profile (e.g. `web` for DSH Desktop)
+./install.sh web      # …or name it explicitly
+```
+
+DSH Desktop and `dsh web` run the **`web`** profile. Installing into `desktop` while the app
+runs `web` looks successful and does nothing: the plugin is only ever composed from the
+profile the process booted.
+
+A patch-layer change needs that restart. A profile may set `dsh.profile.patchReload: "live"`
+(the `web` profile does), but the live reload is driven by the Cordis HMR service, which a
+packaged app does not compose — so inserted rows land at the next profile start. Rebuilt
+*client* bundles are different: the running app stat-polls them and reloads the view without
+a restart.
+
+After the profile starts, the eleven `pha_*` tools are registered in the host `tools`
 registry and appear in every session's tool catalog. Trigger them like any tool, e.g. ask the
 agent: `list the documents`, `show document 1 page 2`, `search for missão`. Mutating actions
 (`pha scan/edit/encode/reindex/review/inbox`) can be started with `pha_job_start` and polled
 with `pha_job_status`; pha's own lock prevents overlapping local-model jobs.
+
+To confirm the host half is live, ask for the route instead of guessing:
+
+```sh
+curl -s -H "Origin: http://127.0.0.1:3080" http://127.0.0.1:3080/pha/documents
+```
+
+A JSON body means the row activated; a `404` means it did not (wrong profile, or no restart).
 
 ## GUI (conversation) view
 
