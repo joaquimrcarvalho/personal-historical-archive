@@ -278,7 +278,7 @@ function PhaView() {
   const [showImg, setShowImg] = React.useState(false)
   const [textOn, setTextOn] = React.useState(true)
   const [imgData, setImgData] = React.useState(null)
-  const [plainShow, setPlainShow] = React.useState(false)
+  const [plainShow, setPlainShow] = React.useState(true)
   const [rootEl, setRootEl] = React.useState(null)
 
   React.useEffect(() => {
@@ -406,6 +406,10 @@ function PhaView() {
   }
   async function openPage(pageNo, edited) {
     const doc = state.selectedId
+    // Show each variant the way it reads best: the raw transcription as plain text
+    // (a faithful transcript, its markup is incidental), the edited variant rendered
+    // as markdown. The txt/md button still overrides this for the page on screen.
+    setPlainShow(!edited)
     setState((s) => ({ ...s, pageReq: { doc, page: pageNo, edited: !!edited } }))
     const r = await get('/pha/page?doc=' + encodeURIComponent(doc) + '&page=' + pageNo + (edited ? '&edited=1' : ''))
     setState((s) => ({ ...s, page: r && r.ok ? r.page : null }))
