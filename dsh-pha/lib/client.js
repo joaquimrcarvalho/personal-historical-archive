@@ -269,7 +269,7 @@ function relPath(doc) {
 
 function PhaView() {
   const h = React.createElement
-  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null })
+  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null })
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -278,7 +278,6 @@ function PhaView() {
   const [showImg, setShowImg] = React.useState(false)
   const [textOn, setTextOn] = React.useState(true)
   const [imgData, setImgData] = React.useState(null)
-  const [plainShow, setPlainShow] = React.useState(true)
   const [rootEl, setRootEl] = React.useState(null)
 
   React.useEffect(() => {
@@ -406,11 +405,10 @@ function PhaView() {
   }
   async function openPage(pageNo, edited) {
     const doc = state.selectedId
-    // Show each variant the way it reads best: the raw transcription as plain text
-    // (a faithful transcript, its markup is incidental), the edited variant rendered
-    // as markdown. The txt/md button still overrides this for the page on screen.
-    setPlainShow(!edited)
-    setState((s) => ({ ...s, pageReq: { doc, page: pageNo, edited: !!edited } }))
+    // Re-arm the per-variant default: the raw transcription shows as plain text, the
+    // edited variant as markdown. An explicit txt/md choice applies to the page on
+    // screen only and is dropped when another page is opened.
+    setState((s) => ({ ...s, pageReq: { doc, page: pageNo, edited: !!edited }, plainOverride: null }))
     const r = await get('/pha/page?doc=' + encodeURIComponent(doc) + '&page=' + pageNo + (edited ? '&edited=1' : ''))
     setState((s) => ({ ...s, page: r && r.ok ? r.page : null }))
   }
@@ -632,6 +630,9 @@ function PhaView() {
     const effRange = (curPage && curPage >= 1 && curPage <= totalPages) ? curPage : range
     const pv = s.page
     const listPages = s.detail.pages || []
+    // Raw transcription reads best as plain text (a faithful transcript whose incidental
+    // markup should stay visible); the edited variant as rendered markdown.
+    const plain = s.plainOverride === null ? !selIsEdited : s.plainOverride
     const pendingSet = new Set((s.pendingPages || []).map((x) => x.page_no))
     const pendingCount = (s.pendingPages || []).length
     // image-only mode: let the render fill the pane instead of sharing half with text
@@ -644,7 +645,7 @@ function PhaView() {
       textBlock = pv ? h('div', { className: 'pha-text' },
         h('div', { className: 'pha-muted' }, 'page ' + (s.pageReq ? s.pageReq.page : '') + ' · ' + (pv.variant || '') + (pv.reviewed ? ' · reviewed' : '')),
         h('div', { className: 'pha-muted' }, pv.page_file || ''),
-        plainShow ? h('pre', { className: 'pha-pre' }, pv.text || '(empty)') : h('div', { className: 'pha-md' }, renderMd(pv.text || '')),
+        plain ? h('pre', { className: 'pha-pre' }, pv.text || '(empty)') : h('div', { className: 'pha-md' }, renderMd(pv.text || '')),
       ) : (s.pageLoading ? h('div', { className: 'pha-empty' }, 'Loading page…') : h('div', { className: 'pha-empty' }, 'Select a page to read its text.'))
     }
     right = h('div', { className: 'pha-right' },
@@ -673,7 +674,7 @@ function PhaView() {
         h('button', { className: 'pha-btn small' + (textOn ? ' on' : ''), title: 'show/hide the text pane', onClick: () => setTextOn(!textOn) }, 'text'),
         textOn ? h('button', { className: 'pha-btn small' + (selIsEdited ? '' : ' primary'), onClick: () => { if (s.pageReq) openPage(s.pageReq.page, false) } }, 'raw') : null,
         textOn ? h('button', { className: 'pha-btn small' + (selIsEdited ? ' primary' : ''), onClick: () => { if (editors.length && s.pageReq) openPage(s.pageReq.page, true) } }, editors.length ? 'edited (' + editors.join(',') + ')' : 'edited') : null,
-        textOn ? h('button', { className: 'pha-btn small' + (plainShow ? ' on' : ''), onClick: () => setPlainShow(!plainShow) }, plainShow ? 'md' : 'txt') : null,
+        textOn ? h('button', { className: 'pha-btn small' + (plain ? ' on' : ''), onClick: () => setState((x) => ({ ...x, plainOverride: !plain })) }, plain ? 'md' : 'txt') : null,
         h('button', { className: 'pha-btn small', title: 'Open this page in your default markdown editor (the OS picks the app)', onClick: editOpen }, 'Edit'),
       ),
       pendingCount ? h('div', { className: 'pha-muted', style: { fontSize: 12, color: 'var(--dsw-alias-state-warn-primary,#e8890c)' } },
