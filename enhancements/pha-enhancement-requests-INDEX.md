@@ -7,6 +7,12 @@ and meant to be read together; the first three are not implemented yet. The
 independent of the others and **is implemented**; **notes search** is a new draft
 that builds on it.
 
+One **bug report** (not an enhancement request) is filed in the section below the
+table: `pha-review-scope-bug-report.md` — **fixed in 0.18.0** (scoped `pha
+review`, plus `--all` and `--unset`). With that unblocked, the stage filters
+are next in line; they were partly gated on re-running stages over
+human-reviewed pages.
+
 | doc | feature | one-line summary |
 |---|---|---|
 | `pha-filters-enhancement-request.md` | **Stage filters** | `pre`/`post` text filters around a stage's model — a stage becomes `input → pre filters → rules model → post filters → output`. Deterministic, chainable scripts (repo ships generic ones; collections add their own). `line-numbers`, OCR-separator stripping, whitespace/footnote-marker cleanup, hyphen joining. Per-stage scope table + `editor.pre` vs `palaeographer.post` guidance. |
@@ -14,6 +20,12 @@ that builds on it.
 | `pha-encoder-tools-enhancement-request.md` | **Encoder tools** | After an encode, pha runs collection-bundled *tools* that materialise artifacts from the records (e.g. `markdown-from-records`: one markdown file per document/section). Also documents the model-assisted entry detection, character-aware chunking, and the collection **structure prescan** (§3.4: per-document layout register deriving page filters/prompt blocks per volume). **Merged**: the artifact/`markdown-from-records` part is planned as an `encoder.post` **artifact filter** in `FILTERS_PLAN.md`; the prescan part is not yet planned. |
 | `pha-stable-page-addresses-enhancement-request.md` | **Stable page addresses & render serving** | A re-scan-proof way to *link to* a page from outside pha. One canonical `slug` derived from the dropbox-relative path (no date, no hash, unlike `documents.id` / the dated library folder / `renders/<sha256>/`); `pha cite` naming the exact *filled* variant; `pha page --json` gaining `slug`/`rel_path`/`sha256`/`render`/`variants`; and `pha serve` — a read-only loopback endpoint with stable `/doc/{slug}/p{page}.jpg` URLs that resolves the current sha per request. Motivated by Obsidian footnotes; complements `WEB_INTERFACE_PLAN.md` (whose API surface has no render route) and would let `dsh-pha`'s `/pha/pageImage` return bytes instead of a data URL. **Implemented**: `addresses.py` (slug/rel path/render/variants), `pha cite`, `pha serve`, the new `pha page --json` fields, plus tests. |
 | `pha-notes-search-enhancement-request.md` | **Search the notes folder** | Make `pha search` cover `notes/`: a separate `notes` + `notes_fts` + embeddings index (notes are NOT `documents` rows, so `pha status`/`export`/bundles/review stay clean), mtime-based reindex from `pha scan`/`reindex`, `--source archive\|notes\|all`, and a `kind` discriminator in results so the PHA view opens a note hit through its existing `openNote`. Rejects modelling notes as documents and rejects indexing the whole Obsidian vault. |
+
+## Bug reports
+
+| doc | area | one-line summary |
+|---|---|---|
+| `pha-review-scope-bug-report.md` | **`pha review`** | **FIXED (0.18.0).** `pha review` stamped the *whole* library as **reviewed** instead of only the pending files, so one run froze the archive against any later `pha scan`/`pha edit` — **even `--reprocess`**. Now imports only the pending set; `--all` keeps the blanket behaviour as an opt-in; `--unset [--doc N [--page P]]` lifts the stamp (text kept) so a frozen archive is recoverable. Reproduced on 0.17.0: 14 572 pages stamped after `pha status` had reported **5** pending. |
 
 ## Implementation plans
 

@@ -814,7 +814,11 @@ pha info [--json]               # archive paths + versions, without walking the 
 pha status
 pha export
 pha reindex [--path collections/COLX]
-pha review [--doc N]      # import human corrections from library .md files into the DB
+pha review [--doc N] [--all] [--unset [--page N]]
+                          # import human corrections from library .md files into the DB
+                          #   only files CHANGED since pha last wrote them are imported;
+                          #   --all imports+stamps every file (deliberate blanket review);
+                          #   --unset clears the reviewed stamp instead (undo a review)
 pha edit [--reprocess] [--path collections/COLX] [--page N]
 pha rm ID|NAME            # remove document(s) from the index
 pha prune [--dry-run]     # delete orphaned render image caches (no registered document)
@@ -1013,6 +1017,25 @@ document has **two page variants**, and correcting them behaves differently:
 3. `pha reindex`.
 
 Reviewed pages show `reviewed: true` in their front matter.
+
+**Review scope and undoing a review.** `pha review` imports and stamps **only
+the files you actually changed** since pha last wrote them — the same set
+`pha status` reports. It never touches the rest of the library. (An earlier
+version stamped every file it walked, which froze the whole archive against
+`pha scan`/`pha edit` — even `--reprocess`.) Two escape hatches:
+
+- `pha review --all` — the deliberate blanket import: reads and stamps every
+  library page file, changed or not. Use it when you want the whole library
+  declared "human-checked"; it is off by default for exactly that reason.
+- `pha review --unset [--doc N [--page P]]` — lifts the **reviewed**
+  protection (undo). The text is kept; the pages simply become eligible for
+  `pha scan`/`pha edit` again. Scope it to one document, or one page of one
+  document, to undo a mistaken review without disturbing the rest.
+
+Because a `reviewed` page outranks `--reprocess`, `--unset` is the way to
+re-run a stage over text a human already touched, and it is also what you
+need before applying a new palaeographer/editor (or the planned stage
+filters) to an already-reviewed document.
 
 ### Moving / sharing collections between archives (`pha bundle` / `pha unbundle`)
 

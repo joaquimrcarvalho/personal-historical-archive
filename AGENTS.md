@@ -164,13 +164,19 @@
   files are the human review surface. A historian edits a page body; `pha
   status` reports un-imported corrections (timestamp-based: file mtime newer
   than the page's `exported_at`); `pha review [--doc N]` imports them into the
-  DB. Correcting a `transcription-*` page fixes the palaeographer's reading:
+  DB — **only the changed files**, which is the same pending set `pha status`
+  reports. (`--all` is the opt-in blanket import that stamps every file;
+  `--unset [--doc N [--page P]]` clears the stamp again and keeps the text.)
+  Correcting a `transcription-*` page fixes the palaeographer's reading:
   the page is stamped `reviewed` (`reviewed_at`), so `pha scan` never re-reads
   it, and `pha edit` must then run so the editor re-processes JUST that page
   from the corrected text (it detects the raw changed). Correcting an
   `edited-*` page fixes the final output: that edit is stamped `reviewed` and
   is never overwritten by `pha scan`/`pha edit`. Either way, follow with
-  `pha reindex`. Reviewed pages show `reviewed: true` in front matter.
+  `pha reindex`. Reviewed pages show `reviewed: true` in front matter. A
+  `reviewed` row outranks `--reprocess`, so **`pha review --unset` is the only
+  way to re-run a stage over human-touched text** — required before applying a
+  new palaeographer/editor (or the planned stage filters) to those pages.
 - Full usage: README.md; planned web UI: WEB_INTERFACE_PLAN.md.
 
 ## Usage — how agents operate the archive (not just develop it)

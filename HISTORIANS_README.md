@@ -522,6 +522,13 @@ variants**, and which one you correct changes what happens next:
 
 Reviewed pages show `reviewed: true` in their header.
 
+`pha review` imports **only the pages you actually changed** since pha last
+wrote them — the ones the ✏️ message counts — and leaves every other page
+alone. If you ever need to hand a page back to the machine (for example before
+re-running a new reading model over it), run `pha review --unset`; your text
+stays exactly as you wrote it and only the *reviewed* protection is removed.
+Ask the archive operator to do that, since it is a deliberate step.
+
 ---
 
 ## Troubleshooting (quick)

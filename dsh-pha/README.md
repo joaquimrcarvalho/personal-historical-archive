@@ -37,7 +37,8 @@ single-model lock, staleness, and review round-trip semantics are respected.
   (the Desktop/`web` profile, or a custom one).
 - The `personal-historical-archive` package installed and its CLI on PATH (`pha`), with an
   archive configured (`pha set archive-dir <path>` or `PHA_ARCHIVE_DIR`). The plugin
-  discovers the archive from `pha status`/`pha doctor` at runtime.
+  discovers the archive from `pha info --json` at runtime (falling back to
+  `pha doctor --json`, then `pha status`).
 
 ## Install (per machine / per harness)
 

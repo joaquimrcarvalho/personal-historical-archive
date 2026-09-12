@@ -43,7 +43,8 @@ build needed on the end-user machine. To rebuild it after editing the source, ru
 
 - Requires `pha` on PATH (or at `~/.local/bin/pha`, `/usr/local/bin/pha`, `/opt/homebrew/bin/pha`)
   and an archive configured (`pha set archive-dir <path>` or `PHA_ARCHIVE_DIR`). The plugin
-  discovers the archive from `pha status`/`pha doctor` at runtime.
+  discovers the archive from `pha info --json` at runtime (falling back to
+  `pha doctor --json`, then `pha status`).
 - The `dsh.client.inject` list in `dsh-pha/package.json` is a best-effort guess against the
   installed client-module contract; if the view doesn't mount, adjust it. The host tools and
   `/pha/*` API are independent of it.

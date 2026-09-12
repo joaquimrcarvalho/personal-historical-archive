@@ -112,9 +112,9 @@ function apply(ctx) {
     if (dbPath) return Promise.resolve(dbPath)
     if (!discoverPromise) {
       discoverPromise = (async () => {
-        // 1) cheapest and always correct: `pha info` reads only the config (~3s).
-        //    This must come first — the view's initial load waits on discovery, and
-        //    `pha status` (below) walks every library page file.
+        // 1) cheapest and always correct: `pha info` reads only the config, opens
+        //    no DB and probes no engine. This must come first — the view's initial
+        //    load waits on discovery, and `pha doctor` queries the login shell.
         try {
           const r = await phaRun(['info', '--json'])
           const data = parseJson(r.out)
