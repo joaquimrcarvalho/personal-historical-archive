@@ -125,12 +125,114 @@ records an error — pha never stores partially-filtered output silently.
 | id | pre/post | does |
 |---|---|---|
 | `strip-ocr-page-separator` | pre | removes the engine's synthetic `--- Page N ---` line |
-| `collapse-whitespace` | pre | collapses justified-print runs of spaces to single spaces (keeps blank lines / `[3v]` foliation) |
+| `collapse-whitespace` | pre | collapses justified-print runs of spaces to single spaces (keeps blank lines / `[3v]` foliation) **and reduces a run of spaced dots — the dotted leaders an index prints between an entry and its page number (`. . . . .`) — to a single space; a real ellipsis (`...`, no spaces) is preserved** |
 | `footnote-marker-residue` | pre | removes stray floating `*`/`**`/`*^`/`°`/`º` superscript residue after words; keeps footnote blocks and legible digit references |
 | `line-numbers` | pre | recognises MHSI margin line-numbers (even pages: leading column-0 multiple of 5; odd pages: trailing; whole-document-aware so odd-page numbers are confirmed by the ascending 5-step sequence) and stamps `[l. N]` |
-| `join-hyphenated-words` | post | re-joins a word split by a soft hyphen across a line break (line ending in `-` + next line starting lowercase) |
+| `join-hyphenated-words` | post | re-joins a word split across a line break: (a) a line ending in `-` continued in lowercase on the next line → drop the hyphen (`gover-`/`nador` → `governador`); (b) a hyphen at BOTH the end of one line and the start of the next (`X-`/`-Y`) → one word keeping ONE internal hyphen (`Dizer-`/`-vos` → `Dizer-vos`, `del-`/`-rei` → `del-rei`); (c) Portuguese enclitic/mesoclitic pronouns keep their single hyphen (`encarecer-vo-`/`s` → `encarecer-vos`) |
 
 Collections/agents write more for their own sources.
+
+### 4.1 Worked example — OCR cleanup of a printed critical edition (this archive)
+
+This is the case that motivated the request, with real measurements. It is the
+reference acceptance case for the first batch, and enough to implement the four
+filters without further context.
+
+**Sources.** Three printed critical editions transcribed with the local OCR
+engine (`engine: liteparse`, Tesseract under the hood):
+
+| collection | languages | model sheet | page character |
+|---|---|---|---|
+| `documenta-indica` | Latin apparatus + Portuguese/Italian documents | `models/liteparse.md` (`por+lat`) | dense 16th-c. print, MHSI margin line numbers, bibliographic index pages |
+| `pfister-notices` | French prose + Latin quotations + CJK | `models/liteparse-fra.md` (`fra`) | justified prose, running head + entry number, footnote blocks, index tables |
+| `medina-docs-japon` | Spanish apparatus + Latin passages + romanized Japanese | `models/liteparse-spa.md` (`spa+lat`) | low-resolution scans (≈1027 px wide native) |
+
+**What the engine returns (verbatim).** A local OCR engine reproduces the
+PRINTED LAYOUT, so every page carries artifacts that are not content:
+
+```
+--- Page 1 ---                                          ← synthetic separator
+afin   de  lui    donner plus      de      loisir       ← justified space runs
+INDEX OPERUM IMPRESSORUM . . . . . . . . . . . . . . XV ← dotted leaders
+von-                                                    ← soft-hyphen split
+tade divina achou o viso-rrei
+Dizer-                                                  ← double hyphen
+-vos a maneira com que isto dizia
+liberavit8*                                             ← footnote residue
+```
+
+**The deterministic repairs.** Each is a filter; the four named ones are the
+first batch:
+
+| artifact | filter | before → after |
+|---|---|---|
+| `--- Page N ---` | `strip-ocr-page-separator` | `--- Page 1 ---` → *(removed)* |
+| justified space runs | `collapse-whitespace` | `afin   de  lui    donner` → `afin de lui donner` |
+| dotted leaders | `collapse-whitespace` (amended in §4) | `INDEX OPERUM IMPRESSORUM . . . . . . XV` → `INDEX OPERUM IMPRESSORUM  XV` |
+| soft-hyphen split | `join-hyphenated-words` (a) | `von-`/`tade` → `vontade` |
+| double hyphen | `join-hyphenated-words` (b) | `Dizer-`/`-vos` → `Dizer-vos` |
+| superscript residue | `footnote-marker-residue` | `liberavit8*` → `liberavit8` |
+
+**Why filters and not the prompt — the measurement.** These same rules were
+carried in the editor prompts and applied by an LLM, on the same pages:
+
+- `deepseek-v4-flash` cleaned some pages and left others **with the raw OCR
+  spacing** (pfister tome t2, pages 262 and 368: 41 and 36 lines containing a
+  double space — identical before and after the prompt was rewritten and
+  compacted);
+- the hyphenation rule was ignored by `deepseek-v4-flash` **and** by
+  `minimax-m2-5` (the latter re-broke words that had already been joined);
+- the vision palaeographers tried on the same page were worse:
+  `qwen3-vl-4b` degenerated into a repetition loop (`INDEX OPERUM IMPRESSORUM`
+  followed by thousands of dots) and `gemma-4-12b-it-mlx` produced substantive
+  errors (`STREIT` → `STREET`, `M. D. LXXVI` → `LXXXVI`).
+
+Deterministic code has none of these failure modes: milliseconds per page
+(against ≈2 s for the OCR itself), reproducible, and unit-testable.
+
+**Configuration — the hook choice (§2.1).** Recommended here: `editor.pre`, so
+the stored raw transcription stays faithful and only the edited stream is
+mechanically cleaned before the model:
+
+```yaml
+# dropbox/collections/documenta-indica/pha.yaml
+palaeographer:
+  rules: ocr
+  model: liteparse
+editor:
+  rules: latin-to-english        # plain rules: the OCR cleanup moved out
+  model: deepseek-v4-flash
+  pre:
+    - strip-ocr-page-separator
+    - collapse-whitespace
+    - join-hyphenated-words
+    - footnote-marker-residue
+```
+
+If the stored raw text (and the raw search variant) must also be clean, move
+the same list to `palaeographer.post` and leave `editor.pre` empty — never both.
+
+**Limits to record in the manifests.**
+- A genuinely hyphenated compound breaking exactly at its hyphen
+  (`peut-`/`être`, `c'est-à-`/`dire`) is indistinguishable from a split word, so
+  the join drops the hyphen (`peutêtre`). The doubled form (b) is unambiguous and
+  always keeps the hyphen. Known limitation, documented.
+- An ellipsis (`...`, no spaces) must survive `collapse-whitespace`; only
+  space-separated dot runs are leaders.
+- `collapse-whitespace` must not touch blank lines (paragraph breaks) or
+  bracketed foliation (`[3v]`, `[l. 10]`).
+
+**Acceptance vectors** (unit tests for the built-ins; see §7):
+
+```python
+assert collapse_whitespace("afin   de  lui    donner") == "afin de lui donner"
+assert collapse_whitespace("INDEX . . . . . . XV")     == "INDEX  XV"
+assert collapse_whitespace("adieu... mon ami")         == "adieu... mon ami"
+assert join_hyphenated("gover-\nnador")                == "governador"
+assert join_hyphenated("Dizer-\n-vos")                 == "Dizer-vos"
+assert join_hyphenated("encarecer-vo-\ns")             == "encarecer-vos"
+assert strip_separator("--- Page 1 ---\ntext")         == "text"
+```
 
 ## 5. Interaction with existing pieces
 

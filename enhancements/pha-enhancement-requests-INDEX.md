@@ -8,7 +8,15 @@ and meant to be read together; none is implemented yet.
 |---|---|---|
 | `pha-filters-enhancement-request.md` | **Stage filters** | `pre`/`post` text filters around a stage's model — a stage becomes `input → pre filters → rules model → post filters → output`. Deterministic, chainable scripts (repo ships generic ones; collections add their own). `line-numbers`, OCR-separator stripping, whitespace/footnote-marker cleanup, hyphen joining. Per-stage scope table + `editor.pre` vs `palaeographer.post` guidance. |
 | `pha-stage-extends-enhancement-request.md` | **Prompt composition (`extends`)** | Let a rules file be "base rules + delta" (`extends:`/`include:` front matter), composed at load time so shared editor/palaeographer/encoder bodies live in one place (e.g. `latin-to-english-ocr` extends `latin-to-english`). Covers ordering, settings cascade, model-not-inherited, and base-file re-edit invalidation. |
-| `pha-encoder-tools-enhancement-request.md` | **Encoder tools** | After an encode, pha runs collection-bundled *tools* that materialise artifacts from the records (e.g. `markdown-from-records`: one markdown file per document/section). Also documents the model-assisted entry detection, character-aware chunking, and the collection **structure prescan** (§3.4: per-document layout register deriving page filters/prompt blocks per volume). |
+| `pha-encoder-tools-enhancement-request.md` | **Encoder tools** | After an encode, pha runs collection-bundled *tools* that materialise artifacts from the records (e.g. `markdown-from-records`: one markdown file per document/section). Also documents the model-assisted entry detection, character-aware chunking, and the collection **structure prescan** (§3.4: per-document layout register deriving page filters/prompt blocks per volume). **Merged**: the artifact/`markdown-from-records` part is planned as an `encoder.post` **artifact filter** in `FILTERS_PLAN.md`; the prescan part is not yet planned. |
+
+## Implementation plans
+
+- [`FILTERS_PLAN.md`](../FILTERS_PLAN.md) — the stage-filter framework,
+  including **artifact filters** (records→markdown) and the reference filter
+  set. Absorbs the encoder-tools runner (owner ruling: one mechanism).
+- [`ENCODER_TOOLS_PLAN.md`](../ENCODER_TOOLS_PLAN.md) — **superseded** by
+  `FILTERS_PLAN.md` (kept for history).
 
 ## How they fit together
 
@@ -20,10 +28,11 @@ The three features are complementary and can land independently:
 2. **`extends`** — avoids duplicating the shared model-prompt body when a
    variant still needs different *prompt* rules (the judgment layer), after
    the mechanical bits have moved into filters.
-3. **Encoder tools + prescan** — make `pha encode`'s JSON records usable
-   (per-document markdown) and make multi-volume layout data-driven.
+3. **Artifact filters + prescan** — make `pha encode`'s JSON records usable
+   (per-document markdown, as an `encoder.post` artifact filter once filters
+   exist) and make multi-volume layout data-driven.
 
-Suggested reading order: filters → extends → encoder tools/prescan, since
+Suggested reading order: filters → extends → artifact filters/prescan, since
 filters subsume the OCR-cleanup that `extends` and the tools were partly
 motivated by. Any collection can adopt a subset.
 

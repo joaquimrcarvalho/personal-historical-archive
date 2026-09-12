@@ -1,5 +1,13 @@
 # Implementation plan — pha encoders with bundled tools (phases A + B: tool runner + built-in markdown-from-records)
 
+> **SUPERSEDED (2026-09).** This plan was merged into
+> [`FILTERS_PLAN.md`](FILTERS_PLAN.md): the "bundled tools" runner is absorbed
+> by the stage-filter framework, and `markdown-from-records` becomes its first
+> **artifact filter** (`encoder.post`). Kept for history. The context
+> contract, the stamp staleness design (incl. edited-page tracking) and the
+> overwrite-in-place policy live on in the filters plan; the prescan/`pages:`
+> part of the original request is not yet planned.
+
 Design doc for the enhancement proposal, tracked in this repo at
 `enhancements/pha-encoder-tools-enhancement-request.md` (byte-identical to
 the archive's `<archive_dir>/.writing/` copy; see also
