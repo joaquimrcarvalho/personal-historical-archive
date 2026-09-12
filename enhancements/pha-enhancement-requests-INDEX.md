@@ -2,9 +2,10 @@
 
 These are design/spec docs (drafts) for additions to pha, written while
 working on the **Documenta Indica** collection. They are grouped by feature
-and meant to be read together; the first three are not implemented yet. The last
-row is from a separate workstream (Jesuit archive / Obsidian vault integration),
-is independent of the other three, and **is implemented**.
+and meant to be read together; the first three are not implemented yet. The
+**stable page addresses** request (Jesuit archive / Obsidian vault workstream) is
+independent of the others and **is implemented**; **notes search** is a new draft
+that builds on it.
 
 | doc | feature | one-line summary |
 |---|---|---|
@@ -12,6 +13,7 @@ is independent of the other three, and **is implemented**.
 | `pha-stage-extends-enhancement-request.md` | **Prompt composition (`extends`)** | Let a rules file be "base rules + delta" (`extends:`/`include:` front matter), composed at load time so shared editor/palaeographer/encoder bodies live in one place (e.g. `latin-to-english-ocr` extends `latin-to-english`). Covers ordering, settings cascade, model-not-inherited, and base-file re-edit invalidation. |
 | `pha-encoder-tools-enhancement-request.md` | **Encoder tools** | After an encode, pha runs collection-bundled *tools* that materialise artifacts from the records (e.g. `markdown-from-records`: one markdown file per document/section). Also documents the model-assisted entry detection, character-aware chunking, and the collection **structure prescan** (§3.4: per-document layout register deriving page filters/prompt blocks per volume). **Merged**: the artifact/`markdown-from-records` part is planned as an `encoder.post` **artifact filter** in `FILTERS_PLAN.md`; the prescan part is not yet planned. |
 | `pha-stable-page-addresses-enhancement-request.md` | **Stable page addresses & render serving** | A re-scan-proof way to *link to* a page from outside pha. One canonical `slug` derived from the dropbox-relative path (no date, no hash, unlike `documents.id` / the dated library folder / `renders/<sha256>/`); `pha cite` naming the exact *filled* variant; `pha page --json` gaining `slug`/`rel_path`/`sha256`/`render`/`variants`; and `pha serve` — a read-only loopback endpoint with stable `/doc/{slug}/p{page}.jpg` URLs that resolves the current sha per request. Motivated by Obsidian footnotes; complements `WEB_INTERFACE_PLAN.md` (whose API surface has no render route) and would let `dsh-pha`'s `/pha/pageImage` return bytes instead of a data URL. **Implemented**: `addresses.py` (slug/rel path/render/variants), `pha cite`, `pha serve`, the new `pha page --json` fields, plus tests. |
+| `pha-notes-search-enhancement-request.md` | **Search the notes folder** | Make `pha search` cover `notes/`: a separate `notes` + `notes_fts` + embeddings index (notes are NOT `documents` rows, so `pha status`/`export`/bundles/review stay clean), mtime-based reindex from `pha scan`/`reindex`, `--source archive\|notes\|all`, and a `kind` discriminator in results so the PHA view opens a note hit through its existing `openNote`. Rejects modelling notes as documents and rejects indexing the whole Obsidian vault. |
 
 ## Implementation plans
 
@@ -38,6 +40,11 @@ The three features are complementary and can land independently:
 Suggested reading order: filters → extends → artifact filters/prescan, since
 filters subsume the OCR-cleanup that `extends` and the tools were partly
 motivated by. Any collection can adopt a subset.
+
+**Notes search** is independent of those three: it reuses the existing
+chunk/FTS/embedding machinery but adds a new *source* (the `notes/` folder), and
+it pairs with the stable-page-addresses work — notes cite the slug and can embed
+the render URL.
 
 ## Reference implementation notes (in the archive, not the pha repo)
 
