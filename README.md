@@ -178,6 +178,13 @@ pha --help
 #    palaeographers/, editors/ and encoders/ are seeded with a default that
 #    uses qwen/qwen3-vl-8b on LM Studio.
 #    (If you chose the dev-venv fallback above, replace `pha` with `$PHA`.)
+#
+#    WHICH ARCHIVE AM I USING? `pha info --json` prints the resolved archive
+#    and db paths — check it before a long background job. A .env in the
+#    checkout can win over the shell's PHA_ARCHIVE_DIR, and a wrong archive
+#    does not fail loudly: commands just operate on the other archive (an
+#    empty one reports "0 documents" and exits 0). Run archive maintenance
+#    from the archive directory to avoid ambiguity.
 
 # 4. start LM Studio, load qwen/qwen3-vl-8b (or your palaeo model), and the
 #    embedding model; start the local server on port 1234
