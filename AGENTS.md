@@ -48,6 +48,15 @@
   rename, edit, save. The file stem is the id. Legacy files that still inline
   their interface keep working (treated as an inline model); run
   `pha migrate-config` to split them.
+- **Builtin `_sample*.md` catalogue** (seeded into the project AND into a
+  fresh `pha init-archive`; never loaded — the `_` prefix means "copy me to a
+  real id"): the how-to-create `_sample.md` per stage; local engines
+  `_sample.tesseract.md`, `_sample.liteparse.md`, `_sample.liteparse.fra.md`,
+  `_sample.liteparse.spa.md`; local LM Studio models
+  `_sample.local-qwen3-vl.md`, `_sample.local-gemma4.md`; printed-book rules
+  `_sample.printed-books.md`, `_sample.printed-critical-edition.md`; and
+  `_sample.generic.md` (general-purpose editor). `config.builtin_samples()` is
+  the single source of truth; a test asserts the committed files match it.
 - **Staleness by mtime**: editing a palaeographer / editor / encoder / prompt
   file triggers re-extraction / re-editing / re-encoding of affected documents
   on the next scan/run. A document also re-extracts when the resolved

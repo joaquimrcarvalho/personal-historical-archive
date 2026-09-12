@@ -4,7 +4,7 @@
 #      and add one file per STRUCTURE TYPE in the document (e.g. table.md for
 #      the chronological table, biographies.md for the person notices). The
 #      encoder files travel with the source PDFs.
-#   2. Set `model:` to the text model to use (models/<id>.md).
+#   2. This file is CONTENT ONLY — the model is chosen in pha.yaml.
 #   3. `pages: "1-15"` limits this encoder to those PDF page numbers (the
 #      number in the PDF, NOT the number printed on the page — e.g. Pfister's
 #      chronological table is printed as i–xv but occupies PDF pages 1-15).
@@ -34,7 +34,6 @@
 #   batch_pages / overlap_pages / extraction_passes: chunking + recall knobs.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example encoder — edit me
-model: default
 temperature: 0.0
 max_tokens: 4096
 timeout_s: 300

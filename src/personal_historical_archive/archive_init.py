@@ -17,8 +17,8 @@ import hashlib
 from pathlib import Path
 
 from .config import (
-    _DEFAULT_ED, _DEFAULT_ENC, _DEFAULT_PAL, _ED_SAMPLE, _ENC_SAMPLE,
-    _PAL_SAMPLE, find_project_root, notes_readme_template, _seed_default,
+    _DEFAULT_ED, _DEFAULT_ENC, _DEFAULT_PAL, builtin_samples,
+    find_project_root, notes_readme_template, _seed_default,
     _seed_sample,
 )
 
@@ -409,10 +409,14 @@ def init_archive(path: str | Path, project_root: Path | None = None) -> Path:
     ed.mkdir(exist_ok=True)
     enc.mkdir(exist_ok=True)
 
-    # seed the _sample.md templates (the "how to create new" starting points)
-    _seed_sample(pal, "_sample.md", _PAL_SAMPLE)
-    _seed_sample(ed, "_sample.md", _ED_SAMPLE)
-    _seed_sample(enc, "_sample.md", _ENC_SAMPLE)
+    # seed the BUILTIN samples ("how to create new" templates + the
+    # ready-to-duplicate catalogue: OCR/parse engines, local LM Studio models,
+    # generic printed-book palaeographers and a generic editor). Never loaded
+    # as definitions themselves — every name starts with '_'.
+    for sub, fname, content in builtin_samples():
+        d = p / sub
+        d.mkdir(parents=True, exist_ok=True)
+        _seed_sample(d, fname, content)
     # seed zero-config defaults so the archive works immediately
     _seed_default(pal, _DEFAULT_PAL)
     _seed_default(ed, _DEFAULT_ED)

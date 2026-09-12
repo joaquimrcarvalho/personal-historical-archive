@@ -620,24 +620,13 @@ class Config:
         # documents/ for individual documents, collections/COLX/ for collections.
         for sub in ("documents", "collections"):
             (self.dropbox / sub).mkdir(parents=True, exist_ok=True)
-        # seed the _sample.md TEMPLATES into the PROJECT (code side): these
-        # are the starting point for creating new definitions.
-        for name, content in (("models", _MODEL_SAMPLE),
-                              ("palaeographers", _PAL_SAMPLE),
-                              ("editors", _ED_SAMPLE),
-                              ("encoders", _ENC_SAMPLE)):
-            d = self.root / name
+        # seed the BUILTIN samples into the PROJECT (code side): they are both
+        # the how-to-create templates and the ready-to-duplicate catalogue of
+        # what pha supports out of the box (never loaded; names start with '_').
+        for sub, fname, content in builtin_samples():
+            d = self.root / sub
             d.mkdir(parents=True, exist_ok=True)
-            _seed_sample(d, "_sample.md", content)
-        # ready-to-duplicate OCR engine model samples (never loaded themselves)
-        d = self.root / "models"
-        d.mkdir(parents=True, exist_ok=True)
-        _seed_sample(d, "_sample.tesseract.md", _MODEL_TESSERACT_SAMPLE)
-        _seed_sample(d, "_sample.liteparse.md", _MODEL_LITEPARSE_SAMPLE)
-        # OCR palaeographer rules sample (pairs with the OCR model samples)
-        d = self.root / "palaeographers"
-        d.mkdir(parents=True, exist_ok=True)
-        _seed_sample(d, "_sample.ocr.md", _PAL_OCR_SAMPLE)
+            _seed_sample(d, fname, content)
         # keep the archive's agent-facing docs (README.md / AGENTS.md) current
         # with the installed pha version: create them when missing and refresh a
         # pristine generated doc when a pha update changed the template. Never
@@ -1004,10 +993,11 @@ def _seed_default(directory: Path, content: str) -> None:
 
 
 def _seed_default_model(directory: Path, content: str) -> None:
-    """Ensure a `default` model exists (seeded stage files reference
-    `model: default`), without overwriting a user's model. Unlike
-    `_seed_default`, this seeds even when OTHER models exist — `default` is a
-    well-known referenced id, not just a fallback."""
+    """Ensure a `default` model exists (it is the global fallback bound to a
+    rules-only stage when pha.yaml/selection files name no model), without
+    overwriting a user's model. Unlike `_seed_default`, this seeds even when
+    OTHER models exist — `default` is a well-known referenced id, not just a
+    fallback."""
     if not directory.exists():
         directory.mkdir(parents=True, exist_ok=True)
     has_default = any(
@@ -1258,6 +1248,104 @@ liteparse_format: text       # text (default) | markdown | json
 """
 
 
+_MODEL_LITEPARSE_FRA_SAMPLE = """---
+# SAMPLE LiteParse model configured for printed FRENCH — never loaded (name
+# starts with '_'). To USE it: copy this file to models/liteparse-fra.md (drop
+# the leading '_') and pair it with a content-only palaeographer rules file in
+# pha.yaml:  palaeographer: {rules: ocr, model: liteparse-fra}
+# The `fra` Tesseract language data must be installed on the archive machine
+# (mac: `brew install tesseract-lang`). See models/_sample.liteparse.md for the
+# full explanation of liteparse_ocr / liteparse_format.
+description: LiteParse (local OCR) — printed French
+engine: liteparse
+liteparse_lang: fra           # --ocr-language (Tesseract format: "fra")
+liteparse_dpi: 300            # optional --dpi render resolution (300 = quality)
+liteparse_ocr: fresh          # OCR the rendered raster ("embedded" only when
+                              # the PDF's own text layer is good)
+liteparse_format: text        # layout-preserved plain text
+---
+
+
+"""
+
+
+_MODEL_LITEPARSE_SPA_SAMPLE = """---
+# SAMPLE LiteParse model configured for printed SPANISH (+ Latin) — never
+# loaded (name starts with '_'). To USE it: copy this file to
+# models/liteparse-spa.md (drop the leading '_') and pair it with a content-only
+# palaeographer rules file in pha.yaml:
+#   palaeographer: {rules: ocr, model: liteparse-spa}
+# The `spa` (+ `lat`) Tesseract language data must be installed on the archive
+# machine. See models/_sample.liteparse.md for liteparse_ocr / liteparse_format.
+description: LiteParse (local OCR) — printed Spanish (+ Latin)
+engine: liteparse
+liteparse_lang: spa+lat       # --ocr-language (Tesseract: "spa+lat")
+liteparse_dpi: 300            # optional --dpi render resolution (300 = quality)
+liteparse_ocr: fresh          # OCR the rendered raster
+liteparse_format: text        # layout-preserved plain text
+---
+
+
+"""
+
+
+_MODEL_QWEN3_LOCAL_SAMPLE = """---
+# SAMPLE local vision model — qwen3-vl served by LM Studio — never loaded (name
+# starts with '_'). To USE it: copy this file to models/qwen3-vision-local.md
+# (drop the leading '_'), set the server-side model name, and select it per
+# document/collection in pha.yaml:
+#   palaeographer: {rules: <rules-id>, model: qwen3-vision-local}
+# This is the MODEL INTERFACE only (endpoint + limits); the transcription rules
+# live in a content-only palaeographer file.
+#   context_tokens MUST match the model's real window — it drives encoder
+#     chunking (the Model default, 200000, is far too large for a local model).
+#   thinking: disabled skips reasoning blocks (some builds leak
+#     `<|channel>thought` into the transcript) — faster and cleaner.
+#   timeout_s is NOT a model field: the stage timeout lives in the
+#     palaeographer/editor rules file front matter.
+description: qwen3-vl via LM Studio (local) — vision + text
+base_url: http://127.0.0.1:1234/v1
+model: qwen/qwen3-vl-8b
+api_key: ""
+api_style: openai
+max_vision_px: 1800
+vision_jpeg_quality: 88
+context_tokens: 32768
+thinking: disabled
+---
+
+
+"""
+
+
+_MODEL_GEMMA4_LOCAL_SAMPLE = """---
+# SAMPLE local vision model — gemma-4 served by LM Studio — never loaded (name
+# starts with '_'). To USE it: copy this file to models/gemma4-vision-local.md
+# (drop the leading '_'), set the server-side model name (e.g.
+# `google/gemma-4-e4b`, or the `-mlx` build on Apple Silicon), and select it per
+# document/collection in pha.yaml:
+#   palaeographer: {rules: <rules-id>, model: gemma4-vision-local}
+# This is the MODEL INTERFACE only (endpoint + limits); the transcription rules
+# live in a content-only palaeographer file.
+#   max_vision_px 3000 keeps dense printed pages legible (the page only reaches
+#     that size when the collection's render setting allows it).
+#   thinking: disabled avoids the `<|channel>thought` blocks gemma-4 can emit.
+#   timeout_s is NOT a model field: set it in the stage rules file.
+description: gemma-4 via LM Studio (local) — vision + text
+base_url: http://127.0.0.1:1234/v1
+model: google/gemma-4-e4b
+api_key: ""
+api_style: openai
+max_vision_px: 3000
+vision_jpeg_quality: 88
+context_tokens: 32768
+thinking: disabled
+---
+
+
+"""
+
+
 _PAL_SAMPLE = """---
 # HOW TO CREATE A NEW PALAEOGRAPHER (transcription rules)
 #   1. Duplicate this file and give it a new name (the file name, without the
@@ -1318,6 +1406,79 @@ correct obvious OCR slips later in the editor pass or by review.
 """
 
 
+_PAL_PRINTED_BOOKS_SAMPLE = """---
+# SAMPLE palaeographer — generic printed books, 19th-20th century — never
+# loaded (name starts with '_'). CONTENT ONLY: pair it with a model in pha.yaml,
+# e.g.  palaeographer: {rules: printed-books, model: qwen3-vision-local}
+description: generic transcription of 19th-20th-century printed books
+temperature: 0.1
+max_tokens: 4096
+timeout_s: 900
+---
+You are an expert paleographer in printed books 19-20 centuries. Analyse the attached file and provide:
+
+Transcription: Provide a verbatim transcription of the text, keeping the original line breaks.
+
+Uncertainties: Use brackets [?] for words you aren't 100% sure about based on the context.
+
+After the transcription, add `## Notes` (in English) with only READING NOTES:
+
+Language: ... (the language of the page)
+Script: ... (19th-20th-century printed type)
+Difficult words: ... (any words you had to work out)
+
+Do not add any comments other than those above.
+"""
+
+
+_PAL_PRINTED_CRITICAL_SAMPLE = """---
+# SAMPLE palaeographer — generic modern printed critical editions — never loaded
+# (name starts with '_'). CONTENT ONLY: pair it with a model in pha.yaml, e.g.
+#   palaeographer: {rules: printed-critical-edition, model: qwen3-vision-local}
+description: Generic printed historical-document transcription (Latin/Portuguese/Spanish,
+  modern critical editions)
+temperature: 0.1
+max_tokens: 8000
+timeout_s: 1800
+---
+You are an expert palaeographer transcribing ONE page of a printed historical
+document (Latin, Portuguese, Spanish, or another Western European language).
+This is a modern printed critical edition, NOT a manuscript: clean modern
+Roman/italic type, black on white.
+
+Transcribe the page verbatim exactly as it appears, keeping the original line
+breaks and paragraph structure. Transcribe only what is visible on this one
+page; do not look ahead to neighbouring pages.
+
+TRANSCRIPTION RULES
+
+1. Preserve the exact original spelling, diacritics (ã, õ, ç, á, é, í, ó, ú, à,
+   â, ê, ô, ü, and macrons) and punctuation. Do NOT modernise, translate, or
+   expand abbreviations. Expansion belongs to the editor pass.
+2. Transcribe the RUNNING HEAD, printed PAGE NUMBER, section/document headings,
+   body, and any FOOTNOTE block at the bottom.
+3. Keep editorial square brackets [ ] exactly, and superscript footnote-marker
+   numerals exactly where they appear (e.g. "mittere jubebatur8").
+4. Mark anything you cannot read as `[illegible]`; mark uncertain words with
+   `[?]`.
+5. NEVER repeat a word, phrase, list, or clause. If a page (or part of it) is
+   faded, blurred, bleed-through, or unreadable, output `[illegible]` for it and
+   STOP immediately. Do NOT guess, enumerate, or invent text.
+6. Do NOT translate, and do NOT produce named-entity lists or content
+   summaries — those belong to the editor/encoder passes.
+
+After the transcription, add `## Notes` (in English) with only READING NOTES:
+
+Language: ... (the language(s) of the page)
+Script: ... (20th-century printed Roman/italic type)
+Document / heading: ... (the document/heading and running head, if legible)
+Page: ... (the printed page number)
+Difficult words: ... (any words you had to work out)
+
+Do not add any commentary beyond the Transcription and Notes.
+"""
+
+
 _ED_SAMPLE = """---
 # HOW TO CREATE A NEW EDITOR (transform rules)
 #   1. Duplicate this file and give it a new name (the file name, without the
@@ -1341,6 +1502,50 @@ timeout_s: 300
 You are a scholarly editor. Transform the transcription as requested by these
 instructions. Keep the content faithful: do not add, remove or reorder
 information. Keep the document structure. Output only the edited text.
+"""
+
+
+_ED_GENERIC_SAMPLE = """---
+# SAMPLE editor — general-purpose scholarly editing of printed/historical texts
+# — never loaded (name starts with '_'). CONTENT ONLY: pair it with a text model
+# in pha.yaml, e.g.  editor: {rules: generic, model: qwen3-vision-local}
+description: "General-purpose editor — expand abbreviations, extract named entities, preserve non-Latin scripts"
+temperature: 0.0
+max_tokens: 4096
+timeout_s: 300
+---
+You are a scholarly editor of transcribed historical texts.
+
+Work from the transcription provided. Two tasks:
+
+1. **Expansion and clean-up** — expand abbreviations into their full words
+   using the conventions of the period and language, WITHOUT needing an
+   exhaustive list: expand any contracted form you recognise (e.g. "q" ->
+   "que", "dñs" -> "Dominus", "St" -> "Saint", "N." -> "natus/né"). When an
+   expansion is uncertain, keep the abbreviation and add the hypothesis in
+   square brackets, e.g. "p[adre]". Do not modernize orthography beyond
+   expanding abbreviations — keep the rest as transcribed. Do not reorder or
+   remove content. Keep line breaks, paragraph structure and any footnotes.
+
+2. **Named entities** — extract the named entities present in the text and
+   list them in a `## Notes` section at the end:
+
+   ## Notes
+
+   ### Named entities
+
+   - one entity per line, ALWAYS a bullet "- Name (role, place or context)"
+   - people (with role/occupation), places, and institutions
+   - use the name as it appears (or its common form if clearly identifiable)
+   - NEVER join several entities on one line
+   - if there are none, write exactly: - none
+
+CRITICAL — preserve NON-LATIN characters exactly: any Greek, Hebrew, or
+Chinese characters (and other non-Latin scripts) in the transcription must
+be reproduced unchanged, not romanized, translated, or dropped.
+
+Output the edited transcription followed by the ## Notes section, with no
+preamble or commentary.
 """
 
 
@@ -1410,6 +1615,38 @@ Q: <paste one sample passage from your material>
 A:
 [{"<class>": "<exact text>", "<class>_attributes": {<attribute>: <value>}}]
 """
+
+
+def builtin_samples() -> tuple[tuple[str, str, str], ...]:
+    """The ready-to-duplicate BUILTIN samples shipped with pha, as
+    (subdir, filename, content).
+
+    These are the starting points for new definitions (and the discoverable
+    catalogue of what pha supports out of the box). Every name starts with '_',
+    so the loader ignores them: they are copied to a real id to be used.
+    Shared by Config.ensure_dirs (project side) and archive_init.init_archive
+    (archive side) so the two lists can never drift apart.
+    """
+    return (
+        # how-to-create templates
+        ("models", "_sample.md", _MODEL_SAMPLE),
+        ("palaeographers", "_sample.md", _PAL_SAMPLE),
+        ("editors", "_sample.md", _ED_SAMPLE),
+        ("encoders", "_sample.md", _ENC_SAMPLE),
+        # local OCR/parse engines (not LLMs)
+        ("models", "_sample.tesseract.md", _MODEL_TESSERACT_SAMPLE),
+        ("models", "_sample.liteparse.md", _MODEL_LITEPARSE_SAMPLE),
+        ("models", "_sample.liteparse.fra.md", _MODEL_LITEPARSE_FRA_SAMPLE),
+        ("models", "_sample.liteparse.spa.md", _MODEL_LITEPARSE_SPA_SAMPLE),
+        ("palaeographers", "_sample.ocr.md", _PAL_OCR_SAMPLE),
+        # local vision/text models served by LM Studio
+        ("models", "_sample.local-qwen3-vl.md", _MODEL_QWEN3_LOCAL_SAMPLE),
+        ("models", "_sample.local-gemma4.md", _MODEL_GEMMA4_LOCAL_SAMPLE),
+        # generic printed-book content rules
+        ("palaeographers", "_sample.printed-books.md", _PAL_PRINTED_BOOKS_SAMPLE),
+        ("palaeographers", "_sample.printed-critical-edition.md", _PAL_PRINTED_CRITICAL_SAMPLE),
+        ("editors", "_sample.generic.md", _ED_GENERIC_SAMPLE),
+    )
 
 
 # Seeds `notes/README.md` in an archive (created once, never overwritten). The

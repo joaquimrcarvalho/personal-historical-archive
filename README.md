@@ -481,6 +481,13 @@ a **model**, duplicate `models/_sample.md`. Invalid files are skipped with a
 warning — a typo never breaks the load. `pha palaeographer` lists the
 configured palaeographers.
 
+Ready-to-duplicate palaeographer samples also ship as **builtins** (names start
+with `_`, so they are never loaded until you copy one):
+`_sample.printed-books.md` (generic 19th–20th-century printed books) and
+`_sample.printed-critical-edition.md` (modern printed critical editions —
+Latin/Portuguese/Spanish: running head, apparatus, footnote blocks). Both are
+content-only: copy, rename, pair with a model in `pha.yaml`.
+
 > **A palaeographer doesn't have to be an LLM — local OCR/parse engines.** A
 > model interface with an `engine` replaces the vision call with a **local**
 > OCR/parse tool (not an LLM, no endpoint/api key). Supported engines:
@@ -544,10 +551,13 @@ configured palaeographers.
 >   later model/encoder stage can reason over, at the cost of the raw page not
 >   being clean prose.
 >
-> Ready-to-duplicate samples ship in the project's `models/` folder:
-> `_sample.tesseract.md` and `_sample.liteparse.md` (also seeded on first run;
-> names starting with `_` are never loaded). Copy one to `models/tesseract.md`
-> or `models/liteparse.md`, edit, and select it via `pha.yaml`.
+> Ready-to-duplicate samples ship in the project's `models/` folder (also
+> seeded on first run; names starting with `_` are never loaded):
+> `_sample.tesseract.md`, `_sample.liteparse.md` and the language presets
+> `_sample.liteparse.fra.md` / `_sample.liteparse.spa.md`; plus the local
+> LM Studio interfaces `_sample.local-qwen3-vl.md` and
+> `_sample.local-gemma4.md`. Copy one to `models/<id>.md`, edit, and select it
+> via `pha.yaml`.
 >
 > **Pairing them with a palaeographer.** An OCR engine ignores the palaeographer
 > prompt (there is no prompt), so one content file serves both engines — copy
@@ -629,7 +639,10 @@ destroyed — the edited version is a derivative.
 
 Each editor is **one file** in the `editors/` directory (same convention as
 palaeographers: content-only rules, no model). To add one, duplicate
-`editors/_sample.md`, rename, edit, save:
+`editors/_sample.md`, rename, edit, save. A ready-to-duplicate builtin also
+ships as `editors/_sample.generic.md` — a general-purpose editor that expands
+abbreviations, extracts named entities into `## Notes`, and preserves
+non-Latin scripts:
 
 ```markdown
 # editors/modern-portuguese.md   (content rules)
@@ -994,9 +1007,10 @@ archive_dir/
 
 The PROJECT dir (code, versioned) holds only `src/`, `config.yaml`,
 `prompts/default_prompt.md`, `prompts/encoder-helper.md`,
-`prompts/model-helper.md`, `schema/`, and the
-`models/_sample.md`, `palaeographers/_sample.md`, `editors/_sample.md`,
-`encoders/_sample.md` templates. A fresh archive is seeded with `default.md`
+`prompts/model-helper.md`, `schema/`, and the builtin `_sample*.md` templates
+(the how-to-create `_sample.md` for each stage, plus the ready-to-duplicate
+models/palaeographers/editors listed in the sections above). A fresh archive
+(`pha init-archive`) is seeded with those samples AND with `default.md`
 model/palaeographer/editor/encoder pointing at `qwen/qwen3-vl-8b` (LM Studio),
 so it works with zero configuration; refine by adding sidecar `pha.yaml` files
 next to documents or collections. Existing installs with the old bundled

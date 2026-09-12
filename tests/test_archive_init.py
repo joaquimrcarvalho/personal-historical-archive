@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from personal_historical_archive.archive_init import init_archive
+from personal_historical_archive.config import builtin_samples
 
 
 def test_init_archive_creates_structure(tmp_path):
@@ -12,7 +13,7 @@ def test_init_archive_creates_structure(tmp_path):
     out = init_archive(p)
     assert out == p.resolve()
     for sub in ("dropbox/documents", "dropbox/collections", "library",
-                "renders", "notes", "palaeographers", "editors", "encoders"):
+                "renders", "notes", "models", "palaeographers", "editors", "encoders"):
         assert (p / sub).is_dir(), f"missing {sub}"
     # notes folder carries the Obsidian-compatible human/agent instructions
     notes_readme = (p / "notes" / "README.md").read_text(encoding="utf-8")
@@ -22,6 +23,9 @@ def test_init_archive_creates_structure(tmp_path):
     assert (p / "palaeographers" / "default.md").exists()
     assert (p / "editors" / "default.md").exists()
     assert (p / "encoders" / "default.md").exists()
+    # the builtin samples ship into a fresh archive too (never loaded: '_')
+    for sub, fname, _content in builtin_samples():
+        assert (p / sub / fname).exists(), f"missing builtin sample {sub}/{fname}"
     # agent guidance + gitignore
     agents = (p / "AGENTS.md").read_text(encoding="utf-8")
     assert "pha" in agents and "github.com" in agents

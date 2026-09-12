@@ -373,3 +373,92 @@ def test_ensure_dirs_seeds_ocr_palaeographer_sample(tmp_path):
     assert (root / "palaeographers" / "_sample.ocr.md").exists()
     # underscore sample is not loaded as a real palaeographer
     assert list(cfg.palaeographers) == ["default"]
+
+
+def test_local_model_samples_parse():
+    """The local LM Studio model samples load into valid model interfaces."""
+    q = c._model_from_frontmatter("qwen3-vision-local", c._MODEL_QWEN3_LOCAL_SAMPLE,
+                                  Path("/tmp/_sample.local-qwen3-vl.md"))
+    assert q.base_url == "http://127.0.0.1:1234/v1"
+    assert q.model == "qwen/qwen3-vl-8b"
+    assert q.context_tokens == 32768          # NOT the 200000 Model default
+    assert q.thinking is False
+    assert q.max_vision_px == 1800
+
+    g = c._model_from_frontmatter("gemma4-vision-local", c._MODEL_GEMMA4_LOCAL_SAMPLE,
+                                  Path("/tmp/_sample.local-gemma4.md"))
+    assert g.model == "google/gemma-4-e4b"
+    assert g.context_tokens == 32768
+    assert g.thinking is False
+    assert g.max_vision_px == 3000
+
+
+def test_liteparse_language_samples_parse():
+    """The French/Spanish LiteParse presets are OCR-engine interfaces."""
+    fra = c._model_from_frontmatter("liteparse-fra", c._MODEL_LITEPARSE_FRA_SAMPLE,
+                                    Path("/tmp/_sample.liteparse.fra.md"))
+    assert fra.engine == "liteparse"
+    assert fra.liteparse_lang == "fra"
+    assert fra.liteparse_format == "text"
+    assert fra.liteparse_ocr == "fresh"
+
+    spa = c._model_from_frontmatter("liteparse-spa", c._MODEL_LITEPARSE_SPA_SAMPLE,
+                                    Path("/tmp/_sample.liteparse.spa.md"))
+    assert spa.engine == "liteparse"
+    assert spa.liteparse_lang == "spa+lat"
+
+
+def test_printed_book_palaeographer_samples_are_content_only():
+    """Both generic printed-book palaeographers carry rules but NO model."""
+    books = c._palaeographer_from_frontmatter(
+        "printed-books", c._PAL_PRINTED_BOOKS_SAMPLE, Path("/tmp/_sample.printed-books.md"))
+    assert "printed books" in books.description
+    assert books.prompt_text.strip()
+    assert books.base_url == "" and books.model == "" and books.model_ref == ""
+    assert books.temperature == 0.1 and books.timeout_s == 900
+
+    crit = c._palaeographer_from_frontmatter(
+        "printed-critical-edition", c._PAL_PRINTED_CRITICAL_SAMPLE,
+        Path("/tmp/_sample.printed-critical-edition.md"))
+    assert "critical edition" in crit.description.lower()
+    assert crit.prompt_text.strip()
+    assert crit.base_url == "" and crit.model == "" and crit.model_ref == ""
+    assert crit.max_tokens == 8000
+
+
+def test_generic_editor_sample_is_content_only():
+    """The generic editor sample carries rules but NO model."""
+    ed = c._editor_from_frontmatter("generic", c._ED_GENERIC_SAMPLE, Path("/tmp/_sample.generic.md"))
+    assert ed.base_url == "" and ed.model == "" and ed.model_ref == ""
+    assert "Named entities" in ed.prompt_text
+    assert ed.temperature == 0.0
+
+
+def test_ensure_dirs_seeds_builtin_samples(tmp_path):
+    """Every builtin sample is seeded, and none is loaded as a definition."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    cfg.ensure_dirs()
+    for sub, fname, _content in c.builtin_samples():
+        assert (root / sub / fname).exists(), f"missing builtin sample {sub}/{fname}"
+    # underscore-prefixed samples are ignored by every loader
+    assert list(cfg.models) == ["default"]
+    assert list(cfg.palaeographers) == ["default"]
+    assert list(cfg.editors) == ["default"]
+    assert list(cfg.encoders) == ["default"]
+
+
+def test_repo_sample_files_match_builtin_constants():
+    """The committed `_sample*.md` files are exactly the constants pha seeds.
+
+    A git checkout (and therefore a user's project dir) actually contains these
+    files — `_seed_sample` never overwrites — so any divergence would ship a
+    different template than the code documents. This guards that drift.
+    """
+    root = Path(__file__).resolve().parents[1]
+    for sub, fname, content in c.builtin_samples():
+        p = root / sub / fname
+        assert p.exists(), f"missing committed sample {sub}/{fname}"
+        assert p.read_text(encoding="utf-8") == content, f"{sub}/{fname} drifted from its constant"
