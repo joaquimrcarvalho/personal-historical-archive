@@ -797,7 +797,7 @@ def cmd_inbox(cfg: Config, args) -> None:
 def cmd_reindex(cfg: Config, args) -> None:
     client = _client(cfg, cfg.embed_base_url, cfg.embed_timeout_s)
     try:
-        res = reindex_all(cfg, client)
+        res = reindex_all(cfg, client, path=args.path)
     finally:
         client.close()
     print(f"reindexed {res['reindexed']} document(s)")
@@ -1721,7 +1721,10 @@ def main(argv: list[str] | None = None) -> None:
     h.add_argument("topic", nargs="?", help="readme | mcp | historians | agents")
     h.set_defaults(fn=cmd_help)
 
-    r = sub.add_parser("reindex", help="re-embed all chunks")
+    r = sub.add_parser("reindex", help="re-embed chunks (all documents, or only a subpath)")
+    r.add_argument("--path", "--collection", default=None,
+                   help="only reindex the document or collection at this dropbox subpath "
+                        "(e.g. collections/COLX or collections/COLX/doc.pdf); default: every document")
     r.set_defaults(fn=cmd_reindex)
 
     e = sub.add_parser("export", help="regenerate per-page transcription files from the DB")

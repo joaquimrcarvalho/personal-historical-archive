@@ -802,7 +802,7 @@ pha config [--doc DOC] [--json] [--write]
 pha info [--json]               # archive paths + versions, without walking the library
 pha status
 pha export
-pha reindex
+pha reindex [--path collections/COLX]
 pha review [--doc N]      # import human corrections from library .md files into the DB
 pha edit [--reprocess] [--path collections/COLX] [--page N]
 pha rm ID|NAME            # remove document(s) from the index

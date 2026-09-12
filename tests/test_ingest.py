@@ -679,6 +679,124 @@ def test_edit_document_blank_page_skips_model(tmp_path, monkeypatch):
     conn.close()
 
 
+def test_reindex_all_path_selects_only_docs_under(monkeypatch, tmp_path):
+    """`pha reindex --path collections/COLA` reindexes only the documents under
+    that subpath, leaving other collections untouched."""
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        "paths:\n  dropbox: dropbox\n  library: library\n  renders: renders\n"
+        "  palaeographers: palaeographers\n  editors: editors\n  encoders: encoders\n"
+        "  prompts: prompts\n  db: archive.db\n"
+    )
+    cfg = Config.load(root)
+    col_a = cfg.dropbox / "collections" / "COLA"
+    col_b = cfg.dropbox / "collections" / "COLB"
+    col_a.mkdir(parents=True)
+    col_b.mkdir(parents=True)
+    (col_a / "a.pdf").write_bytes(b"%PDF-1.4 a")
+    (col_b / "b.pdf").write_bytes(b"%PDF-1.4 b")
+    conn = _db.connect(cfg.db_path)
+    da = _db.add_document(conn, filename="a.pdf", path=str((col_a / "a.pdf").resolve()),
+                          sha256="a", size_bytes=10, mtime=1, kind="pdf",
+                          dir_path="collections/COLA", now="2026-01-01")
+    db_b = _db.add_document(conn, filename="b.pdf", path=str((col_b / "b.pdf").resolve()),
+                            sha256="b", size_bytes=10, mtime=1, kind="pdf",
+                            dir_path="collections/COLB", now="2026-01-01")
+    _db.set_document_status(conn, da, "done")
+    _db.set_document_status(conn, db_b, "done")
+    conn.commit()
+    conn.close()
+
+    reindexed = []
+    monkeypatch.setattr(ingest, "index_document",
+                        lambda cfg_, conn_, doc_id, embed_client=None, verbose=True:
+                        reindexed.append(doc_id) or 0)
+
+    res = ingest.reindex_all(cfg, None, path="collections/COLA")
+    assert reindexed == [da]
+    assert res == {"reindexed": 1, "chunks": {da: 0}}
+
+
+def test_reindex_all_path_to_single_file(monkeypatch, tmp_path):
+    """`pha reindex --path collections/COLA/a.pdf` reindexes that one document."""
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        "paths:\n  dropbox: dropbox\n  library: library\n  renders: renders\n"
+        "  palaeographers: palaeographers\n  editors: editors\n  encoders: encoders\n"
+        "  prompts: prompts\n  db: archive.db\n"
+    )
+    cfg = Config.load(root)
+    col_a = cfg.dropbox / "collections" / "COLA"
+    col_a.mkdir(parents=True)
+    (col_a / "a.pdf").write_bytes(b"%PDF-1.4 a")
+    (col_a / "b.pdf").write_bytes(b"%PDF-1.4 b")
+    conn = _db.connect(cfg.db_path)
+    da = _db.add_document(conn, filename="a.pdf", path=str((col_a / "a.pdf").resolve()),
+                          sha256="a", size_bytes=10, mtime=1, kind="pdf",
+                          dir_path="collections/COLA", now="2026-01-01")
+    db_b = _db.add_document(conn, filename="b.pdf", path=str((col_a / "b.pdf").resolve()),
+                            sha256="b", size_bytes=10, mtime=1, kind="pdf",
+                            dir_path="collections/COLA", now="2026-01-01")
+    _db.set_document_status(conn, da, "done")
+    _db.set_document_status(conn, db_b, "done")
+    conn.commit()
+    conn.close()
+
+    reindexed = []
+    monkeypatch.setattr(ingest, "index_document",
+                        lambda cfg_, conn_, doc_id, embed_client=None, verbose=True:
+                        reindexed.append(doc_id) or 0)
+
+    res = ingest.reindex_all(cfg, None, path="collections/COLA/a.pdf")
+    assert reindexed == [da]
+    assert res == {"reindexed": 1, "chunks": {da: 0}}
+
+
+def test_reindex_all_no_path_reindexes_everything(monkeypatch, tmp_path):
+    """Without --path, reindex_all still covers every 'done' document."""
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        "paths:\n  dropbox: dropbox\n  library: library\n  renders: renders\n"
+        "  palaeographers: palaeographers\n  editors: editors\n  encoders: encoders\n"
+        "  prompts: prompts\n  db: archive.db\n"
+    )
+    cfg = Config.load(root)
+    col = cfg.dropbox / "collections" / "COLA"
+    col.mkdir(parents=True)
+    (col / "a.pdf").write_bytes(b"%PDF-1.4 a")
+    conn = _db.connect(cfg.db_path)
+    da = _db.add_document(conn, filename="a.pdf", path=str((col / "a.pdf").resolve()),
+                          sha256="a", size_bytes=10, mtime=1, kind="pdf",
+                          dir_path="collections/COLA", now="2026-01-01")
+    _db.set_document_status(conn, da, "done")
+    conn.commit()
+    conn.close()
+
+    reindexed = []
+    monkeypatch.setattr(ingest, "index_document",
+                        lambda cfg_, conn_, doc_id, embed_client=None, verbose=True:
+                        reindexed.append(doc_id) or 0)
+
+    res = ingest.reindex_all(cfg, None)
+    assert reindexed == [da]
+    assert res == {"reindexed": 1, "chunks": {da: 0}}
+
+
 def test_library_page_path_resolves_raw_and_edited(tmp_path):
     from personal_historical_archive.ingest import library_page_path
 

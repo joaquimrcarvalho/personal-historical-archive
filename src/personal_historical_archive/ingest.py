@@ -2057,17 +2057,59 @@ def scan_once(
                 c.close()
 
 
-def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True) -> dict:
+def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
+                path: str | None = None) -> dict:
+    """Re-embed chunks for every ingested document, or only those under a
+    dropbox subpath (`pha reindex --path collections/COLX`, a document folder,
+    or a single document file). Documents whose status is not 'done' are
+    skipped — their transcription is not final yet."""
     conn = db.connect(cfg.db_path)
     try:
         db.backfill_dir_path(conn, cfg.dropbox)
-        docs = [d for d in db.list_documents(conn, limit=10000) if d["status"] == "done"]
+        if path:
+            docs = _documents_under(cfg, conn, path)
+            if docs is None:
+                return {"reindexed": 0, "chunks": {}}
+        else:
+            docs = db.list_documents(conn, limit=10000)
         counts = {}
         for d in docs:
+            if d["status"] != "done":
+                continue
             counts[d["id"]] = index_document(cfg, conn, d["id"], embed_client=client, verbose=verbose)
-        return {"reindexed": len(docs), "chunks": counts}
+        return {"reindexed": len(counts), "chunks": counts}
     finally:
         conn.close()
+
+
+def _documents_under(cfg: Config, conn, path: str) -> list | None:
+    """Resolve a dropbox-relative subpath to the ingested documents under it.
+
+    Mirrors the `--path` semantics of `pha scan` / `pha edit`, extended to a
+    single document file: the target may be a collection dir, a single document
+    file, or a directory-of-images. Returns None when the target does not exist
+    (the caller reports it and returns an empty result)."""
+    root = Path(path)
+    if not root.is_absolute():
+        root = cfg.dropbox / root
+    root = root.resolve()
+    if root != cfg.dropbox.resolve() and cfg.dropbox.resolve() not in root.parents:
+        if not root.exists():
+            print(f"  target path does not exist: {path}", flush=True)
+            return None
+    if root.is_file():
+        units = [root] if is_supported(root.name) else []
+    else:
+        units = discover(cfg.dropbox, cfg.dir_documents, root=root, exclude=[cfg.inbox])
+    docs: list = []
+    seen: set[int] = set()
+    for f in units:
+        d = db.get_document_by_path(conn, str(f))
+        if d is None or d["id"] in seen:
+            continue
+        seen.add(d["id"])
+        docs.append(d)
+    return docs
 
 
 class _WatchHandler(FileSystemEventHandler):

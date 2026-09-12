@@ -112,7 +112,7 @@ pha inbox [--move]               # list / move documents parked in the inbox
 pha scan                         # extract + index new/changed dropbox files
 pha search "query"               # search the extracted text
 pha review [--doc N]             # import human corrections from library/
-pha reindex                      # rebuild the index
+pha reindex [--path collections/COLX]  # rebuild the index (or one collection/doc)
 pha help                         # full command list
 pha help agents                  # agent conventions
 ```
@@ -127,6 +127,7 @@ pha status                       # find a document's collection / dropbox path
 pha scan --path collections/COLX                 # re-scan one collection or doc
 pha scan --path collections/COLX --reprocess     # re-extract pages already done
 pha edit --path collections/COLX --page 3        # re-run the editor on one page
+pha reindex --path collections/COLX               # re-embed one collection or doc
 pha test collections/COLX --pages 3              # dry-run a config on a sample
 pha page <doc> <page>                            # read one page's full text
 ```
