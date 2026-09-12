@@ -2,16 +2,25 @@
 
 These are design/spec docs (drafts) for additions to pha, written while
 working on the **Documenta Indica** collection. They are grouped by feature
-and meant to be read together; the first three are not implemented yet. The
-**stable page addresses** request (Jesuit archive / Obsidian vault workstream) is
-independent of the others and **is implemented**; **notes search** is a new draft
-that builds on it.
+and meant to be read together. Implemented so far: **stable page addresses**
+(`pha cite` / `pha serve`) and both **bug reports** below (review scope, embed
+loss — 0.19.0). Still to do: **stage filters** (the front-runner), **notes
+search**, the `extends` composition directive, and the encoder structure
+prescan.
 
-One **bug report** (not an enhancement request) is filed in the section below the
-table: `pha-review-scope-bug-report.md` — **fixed in 0.18.0** (scoped `pha
-review`, plus `--all` and `--unset`). With that unblocked, the stage filters
-are next in line; they were partly gated on re-running stages over
-human-reviewed pages.
+Both bug reports were blocking prerequisites for the remaining work, which is
+why they went first:
+
+- **review scope** — `pha review` stamped the whole library, freezing any
+  document against re-processing. `FILTERS_PLAN.md` §8 assumes a filter change
+  can re-run a stage over reviewed pages, so this had to land first; `pha
+  review --unset` is now the supported way to do that.
+- **embed loss** — a failed embed destroyed stored vectors and re-indexed
+  text-only, which made *every* pipeline re-run quietly destructive — for
+  filters as much as for reindex. Fixing it is also what made it safe to give
+  `pha reindex` the single-model lock.
+
+The remaining items are independent and can land in any order.
 
 | doc | feature | one-line summary |
 |---|---|---|
