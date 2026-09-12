@@ -33,15 +33,18 @@ from .config import Config
 _PAGE_RE = re.compile(r"^(?P<slug>.+)/p(?P<page>\d+)\.(?:jpg|jpeg)$")
 
 
-def _connect_ro(db_path: Path) -> sqlite3.Connection:
-    """Open the archive DB read-only.
+def _connect_ro(db_path: Path) -> tuple[sqlite3.Connection, bool]:
+    """Open the archive DB read-only, returning ``(conn, degraded)``.
 
-    ``mode=ro`` reads the live WAL (so the newest committed pages are visible);
+    ``mode=ro`` reads the live WAL, so the newest committed rows are visible.
     ``immutable=1`` is the fallback for a filesystem where ``-shm``/``-wal``
-    cannot be opened, and is what ``dsh-pha`` already uses on this database.
+    cannot be opened (e.g. a sandboxed launch) — but it reads ONLY the main DB
+    file and IGNORES a live ``-wal``, so an empty or stale result from it is not
+    trustworthy while the archive is being written. ``degraded`` reports that
+    fallback to the caller, which must not treat its answer as authoritative.
     """
     base = Path(db_path).as_posix()
-    for query in ("mode=ro", "immutable=1"):
+    for query, degraded in (("mode=ro", False), ("immutable=1", True)):
         try:
             conn = sqlite3.connect(f"file:{base}?{query}", uri=True, timeout=5)
         except sqlite3.OperationalError:
@@ -50,7 +53,7 @@ def _connect_ro(db_path: Path) -> sqlite3.Connection:
         try:
             conn.execute("PRAGMA query_only=ON")
             conn.execute("PRAGMA busy_timeout=5000")
-            return conn
+            return conn, degraded
         except sqlite3.OperationalError:
             conn.close()
     raise sqlite3.OperationalError(f"cannot open {db_path} read-only")
@@ -65,6 +68,8 @@ class _Index:
         self._key: tuple[float, ...] | None = None
         self._by_slug: dict[str, dict] = {}
         self._mtime = 0.0
+        self._degraded = False
+        self._last_error: str | None = None
 
     def _db_key(self) -> tuple[float, ...]:
         db = Path(self.cfg.db_path)
@@ -76,22 +81,52 @@ class _Index:
                 key.append(0.0)
         return tuple(key)
 
+    def _set_state(self, degraded: bool, error: str | None, kept: int | None = None) -> None:
+        """Record read health; log only on a change so requests don't spam."""
+        self._last_error = error
+        if degraded != self._degraded:
+            if degraded:
+                extra = f"; serving the last good index of {kept} document(s)" if kept else ""
+                sys.stderr.write(f"pha serve: warning: DB read degraded ({error}){extra}\n")
+            else:
+                sys.stderr.write("pha serve: DB read recovered\n")
+        self._degraded = degraded
+
     def reload(self) -> None:
-        rows = []
+        """Rebuild the slug -> document map, never trusting a bad read.
+
+        A failed or degraded read must not REPLACE a good index with an empty
+        one. ``immutable=1`` ignores a live WAL, so while the archive is being
+        written it can legitimately come back with nothing even though documents
+        exist — publishing that would turn every stable URL into a 404. When the
+        read is untrustworthy and we already hold an index, keep serving it and
+        retry on the next request (``_key`` is left stale on purpose). An empty
+        result is only accepted when we have nothing to lose.
+        """
+        rows: list = []
+        degraded = False
+        error: str | None = None
         try:
-            conn = _connect_ro(self.cfg.db_path)
-        except sqlite3.Error:
-            conn = None
+            conn, degraded = _connect_ro(self.cfg.db_path)
+        except sqlite3.Error as exc:
+            conn, degraded, error = None, True, str(exc)
         if conn is not None:
             try:
                 rows = conn.execute(
                     "SELECT id, filename, path, dir_path, sha256, page_count, status, "
                     "created_at FROM documents"
                 ).fetchall()
-            except sqlite3.Error:
-                rows = []  # archive not initialised yet: serve an empty index
+            except sqlite3.Error as exc:
+                rows, degraded, error = [], True, str(exc)
             finally:
                 conn.close()
+        if degraded and not rows and self._by_slug:
+            self._set_state(
+                True,
+                error or "read back no documents (immutable fallback ignores a live WAL)",
+                kept=len(self._by_slug),
+            )
+            return
         by_slug: dict[str, dict] = {}
         for r in rows:
             d = dict(r)
@@ -101,6 +136,7 @@ class _Index:
         self._by_slug = by_slug
         self._mtime = max(self._db_key())
         self._key = self._db_key()
+        self._set_state(degraded, error)
 
     def get(self, slug: str) -> dict | None:
         with self._lock:
@@ -117,6 +153,14 @@ class _Index:
     def last_db_mtime(self) -> float:
         with self._lock:
             return self._mtime
+
+    def degraded(self) -> bool:
+        with self._lock:
+            return self._degraded
+
+    def last_error(self) -> str | None:
+        with self._lock:
+            return self._last_error
 
 
 def _document_variants(cfg: Config, doc: dict) -> list[str]:
@@ -170,6 +214,10 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                     "archive": str(cfg.archive_dir),
                     "docs": index.count(),
                     "last_db_mtime": index.last_db_mtime(),
+                    # A degraded read means the DB could only be opened with the
+                    # immutable fallback (no live WAL): the index may be stale.
+                    "degraded": index.degraded(),
+                    "last_error": index.last_error(),
                 })
                 return
             if not path.startswith("/doc/"):
@@ -214,7 +262,7 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                 return
             source_name = None
             try:
-                conn = _connect_ro(cfg.db_path)
+                conn, _ = _connect_ro(cfg.db_path)
                 try:
                     row = conn.execute(
                         "SELECT source_name FROM pages WHERE document_id=? AND page_no=?",

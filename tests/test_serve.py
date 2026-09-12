@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import threading
 import time
 import urllib.error
@@ -148,3 +149,49 @@ def test_cmd_serve_passes_its_options(cfg, monkeypatch):
     cli.cmd_serve(cfg, SimpleNamespace(host="0.0.0.0", port=9999, quiet=True))
     assert seen == {"host": "0.0.0.0", "port": 9999, "quiet": True,
                     "archive": cfg.archive_dir}
+
+
+def test_degraded_read_keeps_the_last_good_index(cfg, add_document, monkeypatch):
+    """Regression: a failed/degraded DB read must not wipe a good index.
+
+    The `immutable=1` fallback ignores a live WAL, so it can come back with no
+    documents while the archive is being written. Publishing that would turn
+    every stable URL into a 404 — the index must survive and retry instead.
+    """
+    add_document()
+    srv = _Server(cfg)
+    try:
+        assert json.loads(srv.get("/health")[2])["docs"] == 1
+
+        def boom(path):
+            raise sqlite3.OperationalError("unable to open database file")
+
+        monkeypatch.setattr("personal_historical_archive.serve._connect_ro", boom)
+        later = time.time() + 5  # force the index to consider itself stale
+        os.utime(cfg.db_path, (later, later))
+
+        status, _, body = srv.get("/doc/colx-d/meta.json")
+        assert status == 200, body
+        assert json.loads(body)["slug"] == "colx-d"
+
+        health = json.loads(srv.get("/health")[2])
+        assert health["docs"] == 1
+        assert health["degraded"] is True
+        assert "unable to open" in (health["last_error"] or "")
+    finally:
+        srv.close()
+
+
+def test_empty_archive_serves_an_empty_index(cfg):
+    """An empty result is fine when there is nothing to lose: 404, not 500."""
+    _db.connect(cfg.db_path).close()
+    srv = _Server(cfg)
+    try:
+        health = json.loads(srv.get("/health")[2])
+        assert health["docs"] == 0
+        status, ctype, body = srv.get("/doc/nope/meta.json")
+        assert status == 404
+        assert ctype.startswith("application/json")
+        assert "unknown slug" in json.loads(body)["error"]
+    finally:
+        srv.close()
