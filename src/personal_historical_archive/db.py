@@ -68,6 +68,24 @@ CREATE INDEX IF NOT EXISTS idx_edits_page ON page_edits(page_id);
 CREATE INDEX IF NOT EXISTS idx_records_doc ON records(document_id);
 """
 
+# Performance-only index, kept OUT of SCHEMA so it can be created best-effort:
+# counting embedded chunks (`embedding IS NOT NULL`) otherwise scans the whole
+# chunks table, i.e. every embedding blob — the most expensive part of
+# `pha status` on a large archive. A read-only archive simply keeps the slower
+# plan instead of failing to open.
+_OPTIONAL_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_chunks_embedded "
+    "ON chunks(document_id) WHERE embedding IS NOT NULL",
+)
+
+
+def _ensure_optional_indexes(conn: sqlite3.Connection) -> None:
+    for ddl in _OPTIONAL_INDEXES:
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass  # read-only / no space: fall back to the slow plan
+
 
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,6 +96,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
     migrate(conn)
+    _ensure_optional_indexes(conn)
     conn.commit()
     return conn
 
@@ -276,11 +295,24 @@ def list_documents(
     return conn.execute(sql, params).fetchall()
 
 
-def summary(conn: sqlite3.Connection) -> dict:
+def summary(conn: sqlite3.Connection, chunk_stats: dict | None = None) -> dict:
+    """Archive-wide totals for `pha status` / `pha_extraction_status`.
+
+    `chunk_stats` is the result of `chunk_stats(conn)` when the caller already
+    has it: the chunk totals are then derived from that one grouped scan
+    instead of counting `chunks` again. Either way the embedded count is served
+    by the partial `idx_chunks_embedded` index, never a scan of the blobs.
+    """
     docs = conn.execute("SELECT status, COUNT(*) n FROM documents GROUP BY status").fetchall()
     pages = conn.execute("SELECT COUNT(*) n FROM pages WHERE status = 'done'").fetchone()["n"]
-    chunks = conn.execute("SELECT COUNT(*) n FROM chunks").fetchone()["n"]
-    embedded = conn.execute("SELECT COUNT(*) n FROM chunks WHERE embedding IS NOT NULL").fetchone()["n"]
+    if chunk_stats is None:
+        chunks = conn.execute("SELECT COUNT(*) n FROM chunks").fetchone()["n"]
+        embedded = conn.execute(
+            "SELECT COUNT(*) n FROM chunks WHERE embedding IS NOT NULL").fetchone()["n"]
+    else:
+        # chunks.document_id is NOT NULL, so the per-document sums are exact.
+        chunks = sum(v["chunks"] for v in chunk_stats.values())
+        embedded = sum(v["embedded"] for v in chunk_stats.values())
     return {
         "documents": {r["status"]: r["n"] for r in docs},
         "pages_done": pages,
@@ -474,16 +506,18 @@ def chunk_stats(conn: sqlite3.Connection, doc_id: int | None = None) -> dict:
     A document whose `embedded` < `chunks` is indexed text-only (the embed
     endpoint was unreachable when it was indexed) and needs `pha reindex` to
     gain semantic search. With `doc_id` given, only that document is included.
+
+    Counted in two index-only passes (all chunks; embedded chunks via the
+    partial `idx_chunks_embedded`) rather than one grouped scan that has to
+    read every embedding blob.
     """
-    if doc_id is not None:
-        rows = conn.execute(
-            "SELECT document_id, COUNT(*) n, SUM(embedding IS NOT NULL) e "
-            "FROM chunks WHERE document_id = ? GROUP BY document_id", (doc_id,)).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT document_id, COUNT(*) n, SUM(embedding IS NOT NULL) e "
-            "FROM chunks GROUP BY document_id").fetchall()
-    return {r["document_id"]: {"chunks": r["n"], "embedded": r["e"] or 0} for r in rows}
+    where, params = (" WHERE document_id = ?", (doc_id,)) if doc_id is not None else ("", ())
+    totals = {r["document_id"]: r["n"] for r in conn.execute(
+        "SELECT document_id, COUNT(*) n FROM chunks" + where + " GROUP BY document_id", params)}
+    embedded = {r["document_id"]: r["e"] for r in conn.execute(
+        "SELECT document_id, COUNT(*) e FROM chunks" + where
+        + (" AND " if where else " WHERE ") + "embedding IS NOT NULL GROUP BY document_id", params)}
+    return {d: {"chunks": n, "embedded": embedded.get(d, 0)} for d, n in totals.items()}
 
 
 def all_embeddings(

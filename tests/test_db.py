@@ -108,3 +108,28 @@ def test_summary(tmp_path):
     s = db.summary(conn)
     assert s["documents"] == {"pending": 1}
     conn.close()
+
+
+def test_summary_reuses_chunk_stats_and_embedded_count_is_indexed(tmp_path):
+    """`pha status` passes its chunk_stats in (one chunks scan) and the
+    embedded-chunk count must not fall back to a full table scan of blobs."""
+    conn = db.connect(tmp_path / "archive.db")
+    now = time.time()
+    d1 = db.add_document(conn, filename="a.pdf", path=str(tmp_path / "a.pdf"),
+                         sha256="a", size_bytes=1, mtime=now, kind="pdf", now=now, dir_path="")
+    p1 = db.add_page(conn, d1, 1)
+    db.add_chunk(conn, d1, p1, 0, "text only", None)
+    db.add_chunk(conn, d1, p1, 1, "embedded", b"\x00\x01vec")
+    conn.commit()
+
+    plain = db.summary(conn)
+    stats = db.chunk_stats(conn)
+    assert db.summary(conn, chunk_stats=stats) == plain
+    assert plain["chunks"] == 2 and plain["chunks_embedded"] == 1
+    assert stats[d1] == {"chunks": 2, "embedded": 1}
+
+    plan = [r[-1] for r in conn.execute(
+        "EXPLAIN QUERY PLAN SELECT document_id, COUNT(*) e FROM chunks "
+        "WHERE embedding IS NOT NULL GROUP BY document_id")]
+    assert any("idx_chunks_embedded" in p for p in plan), plan
+    conn.close()

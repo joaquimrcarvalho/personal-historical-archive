@@ -704,7 +704,11 @@ def cmd_status(cfg: Config, args) -> None:
         width = _term_width()
 
         # ---- gather everything up front so rendering stays simple --------
-        s = db.summary(conn)
+        # One grouped scan of `chunks` feeds both the per-document lines and the
+        # overview totals (the chunks table carries the embeddings, so every
+        # extra pass over it is expensive).
+        stats = db.chunk_stats(conn)
+        s = db.summary(conn, chunk_stats=stats)
         docs_status = s["documents"] or {}
         total_docs = sum(docs_status.values())
 
@@ -742,7 +746,6 @@ def cmd_status(cfg: Config, args) -> None:
         total_hold = sum(len(v) for v in holds.values())
 
         docs = db.list_documents(conn, limit=10000)
-        stats = db.chunk_stats(conn)
         stat_w = max((len(str(d["status"])) for d in docs), default=0)
         stat_w = max(stat_w, len("processing"))
         docs_by_key: dict[str, list] = {}
