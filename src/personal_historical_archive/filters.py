@@ -21,12 +21,12 @@ stored (the caller keeps the original value).
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import os
 import shlex
 import subprocess
 import sys
+import types
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -244,28 +244,47 @@ def parse_result(raw, *, expected_kind: str, name: str) -> tuple[bool, object]:
 
 # --------------------------------------------------------------------------- running
 
-def _module_name(f: Filter) -> str:
-    h = hashlib.sha256(str(f.path).encode("utf-8")).hexdigest()[:12]
-    return f"_pha_filter_{f.name}_{h}"
-
-
 def _load_module(f: Filter):
-    """Import a Python filter module in-process (see the plan's §8 note)."""
+    """Import a Python filter module in-process (see the plan's §8 note).
+
+    The cache is content-checked, not just name-checked: a module is reused
+    only when the bytes it was loaded from still match the file on disk.
+    Editing a filter therefore takes effect on the NEXT call in the same
+    process (a long `pha scan` must not keep running a filter it has already
+    superseded), and the cache name carries the content digest so two
+    different filters can never share an entry.
+    """
     script = f.script
     if script is None:
         raise FilterError(f"filter {f.name!r} has no filter.py to import")
-    name = _module_name(f)
+    try:
+        digest = hashlib.sha256(script.read_bytes()).hexdigest()
+    except OSError as e:
+        raise FilterError(f"filter {f.name!r}: cannot read {script}: {e}") from e
+    name = f"_pha_filter_{f.name}_{digest[:12]}"
     mod = sys.modules.get(name)
-    if mod is not None:
+    if mod is not None and getattr(mod, "__pha_source_digest__", None) == digest:
         return mod
-    spec = importlib.util.spec_from_file_location(name, script)
-    if spec is None or spec.loader is None:
-        raise FilterError(f"cannot import filter {f.name!r} from {script}")
-    mod = importlib.util.module_from_spec(spec)
+    if mod is not None:
+        # same name, different bytes (a rewritten file): reload rather than
+        # run stale code
+        sys.modules.pop(name, None)
+    # Compile the SOURCE we just read instead of going through the import
+    # machinery: a filter.py edited twice within one filesystem timestamp tick,
+    # to the same size, leaves a stale __pycache__ .pyc whose (mtime, size)
+    # still matches, and Python would happily execute the OLD code. Loading the
+    # bytes removes that whole class of surprise.
+    try:
+        code = compile(script.read_bytes(), str(script), "exec")
+    except (OSError, SyntaxError) as e:
+        raise FilterError(f"filter {f.name!r} failed to load ({script}): {e}") from e
+    mod = types.ModuleType(name)
+    mod.__file__ = str(script)
+    mod.__pha_source_digest__ = digest
     sys.modules[name] = mod
     try:
-        spec.loader.exec_module(mod)
-    except Exception as e:  # noqa: BLE001 - report a filter's import error clearly
+        exec(code, mod.__dict__)
+    except Exception as e:  # noqa: BLE001 - report a filter's error clearly
         sys.modules.pop(name, None)
         raise FilterError(f"filter {f.name!r} failed to import ({script}): {e}") from e
     return mod
@@ -473,6 +492,40 @@ def newest_mtime(paths) -> float:
         except OSError:
             continue
     return newest
+
+
+def filters_signature(ran) -> str:
+    """A stable string for the filter chain that produced a value.
+
+    Stored on the page/edit (`filters` column) and compared against the chain
+    configured NOW: a changed script hash, changed params or a removed/added
+    filter all change the signature, so that stage re-runs. Returns "" for an
+    empty chain (no filters), which is distinct from any real chain.
+    """
+    if not ran:
+        return ""
+    parts = []
+    for r in ran:
+        name = r.get("name") if isinstance(r, dict) else str(r)
+        sha = r.get("sha", "") if isinstance(r, dict) else ""
+        params = r.get("params") or {} if isinstance(r, dict) else {}
+        try:
+            ps = json.dumps(params, sort_keys=True, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            ps = str(params)
+        parts.append(f"{name}:{sha}:{ps}")
+    return "|".join(parts)
+
+
+def filters_changed(recorded: str | None, current) -> bool:
+    """Has the filter chain changed since this value was produced?
+
+    `recorded` is the page/edit's stored signature; `current` is either the
+    chain just applied or its signature. A page that never ran a filter
+    (recorded NULL/"") and is configured with none is unchanged.
+    """
+    sig = current if isinstance(current, str) else filters_signature(current)
+    return (recorded or "") != sig
 
 
 # --------------------------------------------------------------------------- artifact stamps

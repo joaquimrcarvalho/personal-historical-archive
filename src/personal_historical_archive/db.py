@@ -163,6 +163,19 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE page_edits ADD COLUMN reviewed_at REAL")
     if "exported_at" not in ecols:
         conn.execute("ALTER TABLE page_edits ADD COLUMN exported_at REAL")
+    # filters: JSON list of the stage filters that produced this page/edit
+    # ({name, params, sha}). Staleness compares it to the filters configured
+    # NOW, so editing a filter's script/manifest or its params (or removing the
+    # filter) re-runs exactly that stage — no mtime guesswork.
+    if "filters" not in pcols:
+        conn.execute("ALTER TABLE pages ADD COLUMN filters TEXT")
+    if "filters" not in ecols:
+        conn.execute("ALTER TABLE page_edits ADD COLUMN filters TEXT")
+    rcols = [r[1] for r in conn.execute("PRAGMA table_info(records)")]
+    if "filters" not in rcols:
+        # the filter chain that produced this encoder run (same signature as
+        # pages/page_edits), so editing an encoder filter re-encodes
+        conn.execute("ALTER TABLE records ADD COLUMN filters TEXT")
     # page status vocabulary: failed pages are 'waiting' (retried on next scan).
     # Only writes when rows need converting, so normal connections stay read-only.
     if conn.execute("SELECT COUNT(*) AS n FROM pages WHERE status = 'error'").fetchone()["n"]:
@@ -371,33 +384,45 @@ def add_page(conn: sqlite3.Connection, doc_id: int, page_no: int, source_name: s
 
 
 def set_page_result(
-    conn: sqlite3.Connection, page_id: int, raw_text: str | None = None, error: str | None = None
+    conn: sqlite3.Connection, page_id: int, raw_text: str | None = None, error: str | None = None,
+    filters: str | None = None,
 ) -> None:
     if error is not None:
         # 'waiting': the page will be retried on the next scan; the message
         # stays in the error column for diagnostics only.
         _write(conn, "UPDATE pages SET error = ?, status = 'waiting' WHERE id = ?", (error, page_id))
     else:
-        _write(conn, "UPDATE pages SET raw_text = ?, error = NULL, status = 'done' WHERE id = ?", (raw_text, page_id))
+        _write(
+            conn,
+            "UPDATE pages SET raw_text = ?, error = NULL, status = 'done', filters = ? WHERE id = ?",
+            (raw_text, filters, page_id),
+        )
 
 
 def mark_page_reviewed(conn: sqlite3.Connection, page_id: int, raw_text: str) -> None:
     """A human corrected this page's transcription; store it and stamp it as
-    reviewed so later re-scans do not silently overwrite it."""
+    reviewed so later re-scans do not silently overwrite it.
+
+    The `filters` provenance is cleared: the stored text is now the human's,
+    not the output of the configured filter chain.
+    """
     _write(
         conn,
-        "UPDATE pages SET raw_text = ?, status = 'done', reviewed_at = ?, exported_at = ? WHERE id = ?",
+        "UPDATE pages SET raw_text = ?, status = 'done', reviewed_at = ?, exported_at = ?, "
+        "filters = NULL WHERE id = ?",
         (raw_text, _now(), _now(), page_id),
     )
 
 
 def mark_edit_reviewed(conn: sqlite3.Connection, page_id: int, editor: str, text: str) -> None:
     """A human corrected this page's edited text; store it and stamp it as
-    reviewed so later edit passes do not silently overwrite it."""
+    reviewed so later edit passes do not silently overwrite it. Like
+    `mark_page_reviewed`, the filter provenance is cleared (the text is now
+    the human's)."""
     _write(
         conn,
-        "UPDATE page_edits SET text = ?, status = 'done', reviewed_at = ?, exported_at = ?, updated_at = ? "
-        "WHERE page_id = ? AND editor = ?",
+        "UPDATE page_edits SET text = ?, status = 'done', reviewed_at = ?, exported_at = ?, "
+        "updated_at = ?, filters = NULL WHERE page_id = ? AND editor = ?",
         (text, _now(), _now(), _now(), page_id, editor),
     )
 
@@ -472,26 +497,29 @@ def set_page_edit(
     text: str | None = None,
     error: str | None = None,
     raw_sha: str | None = None,
+    filters: str | None = None,
 ) -> None:
     import time as _t
 
     if error is not None:
         _write(
             conn,
-            """INSERT INTO page_edits (page_id, editor, text, raw_sha, status, error, updated_at)
-               VALUES (?, ?, NULL, ?, 'waiting', ?, ?)
+            """INSERT INTO page_edits (page_id, editor, text, raw_sha, status, error, updated_at, filters)
+               VALUES (?, ?, NULL, ?, 'waiting', ?, ?, ?)
                ON CONFLICT(page_id, editor) DO UPDATE SET
-                 text = NULL, raw_sha = ?, status = 'waiting', error = ?, updated_at = ?""",
-            (page_id, editor, raw_sha, error, _t.time(), raw_sha, error, _t.time()),
+                 text = NULL, raw_sha = ?, status = 'waiting', error = ?, updated_at = ?, filters = ?""",
+            (page_id, editor, raw_sha, error, _t.time(), filters,
+             raw_sha, error, _t.time(), filters),
         )
     else:
         _write(
             conn,
-            """INSERT INTO page_edits (page_id, editor, text, raw_sha, status, error, updated_at)
-               VALUES (?, ?, ?, ?, 'done', NULL, ?)
+            """INSERT INTO page_edits (page_id, editor, text, raw_sha, status, error, updated_at, filters)
+               VALUES (?, ?, ?, ?, 'done', NULL, ?, ?)
                ON CONFLICT(page_id, editor) DO UPDATE SET
-                 text = ?, raw_sha = ?, status = 'done', error = NULL, updated_at = ?""",
-            (page_id, editor, text, raw_sha, _t.time(), text, raw_sha, _t.time()),
+                 text = ?, raw_sha = ?, status = 'done', error = NULL, updated_at = ?, filters = ?""",
+            (page_id, editor, text, raw_sha, _t.time(), filters,
+             text, raw_sha, _t.time(), filters),
         )
 
 
@@ -654,13 +682,15 @@ def add_record(
     kind: str | None,
     data: str,
     source: str | None = None,
+    filters: str | None = None,
 ) -> None:
     import time as _t
 
     _write(
         conn,
-        "INSERT INTO records (document_id, encoder, kind, data, source, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (doc_id, encoder, kind, data, source, _t.time()),
+        "INSERT INTO records (document_id, encoder, kind, data, source, created_at, filters) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (doc_id, encoder, kind, data, source, _t.time(), filters),
     )
 
 

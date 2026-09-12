@@ -842,12 +842,22 @@ records untouched).
 
 **Failure is safe.** A filter that raises, exits non-zero or times out fails
 that unit: nothing partially filtered is stored, the page/edit records the
-error, and the model call is skipped. Editing a filter re-runs its stage on the
-next pass (staleness by the filter's content hash). Artifact filters are
-stamped under `library/<slug>/.filter-stamps/`, so they re-run only when their
-own files, their declared `inputs:`, or the **edited pages** change — a
-historian's correction re-materialises the artifact without re-running the
-model.
+error, and the model call is skipped.
+
+**Editing a filter re-runs its stage.** Each page/edit/records run stores the
+chain that produced it (each filter's name, params and content hash) in a
+`filters` column; the next pass compares that to the chain configured *now* and
+re-extracts / re-edits / re-encodes when it differs — an edited `filter.py`,
+changed params, or a filter added or removed. No `--reprocess` needed, exactly
+like editing a rules or model file. It is also visible where you read the text:
+library pages carry `filters: <name>:<sha>:<params>` in their front matter and
+the records file gains a `"filters"` block. A page you corrected by hand has
+the field cleared (the text is yours, not the filter's).
+
+Artifact filters are stamped under `library/<slug>/.filter-stamps/`, so they
+re-run only when their own files, their declared `inputs:`, or the **edited
+pages** change — a historian's correction re-materialises the artifact without
+re-running the model.
 
 Authoring and trying one out:
 

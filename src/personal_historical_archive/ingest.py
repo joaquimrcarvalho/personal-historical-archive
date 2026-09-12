@@ -36,7 +36,7 @@ from .extract import (
     resolve_prompt,
 )
 from .model_client import ModelClient, ModelError, PAGE_ENGINES
-from .filters import FilterError, write_stamp
+from .filters import FilterError, filters_changed, filters_signature, write_stamp
 from .sidecar import Sidecar, effective_render, resolve_sidecar
 
 
@@ -646,7 +646,15 @@ def ingest_file(
                 existing["palaeographer"] is not None
                 and existing["palaeographer"] != palaeographer.id
             )
-            changed = prompt_newer or pal_changed
+            # A changed palaeographer FILTER chain re-runs pages whose stored
+            # signature differs (checked per page below). It must also clear
+            # this document-level early return, which happens before the loop.
+            filters_stale = (
+                _configured_filters_signature(
+                    cfg, sidecar.palaeographer.post if sidecar.palaeographer is not None else [])
+                != _stored_page_filters(conn, existing["id"], sample=1)
+            )
+            changed = prompt_newer or pal_changed or filters_stale
             if existing["status"] == "processing":
                 # Only skip if ANOTHER live scan owns this document right now;
                 # a stale 'processing' (killed by sleep/crash/reboot) is resumed.
@@ -737,13 +745,23 @@ def ingest_file(
 
     page_errors: list[tuple[int, str]] = []
     consecutive_failures = 0
+    # The filter chain this scan would apply, as a signature. A page whose
+    # stored signature differs was produced by a different chain (an edited
+    # filter, changed params, or a filter added/removed) and is re-extracted
+    # even without --reprocess — the same "editing rules re-runs the stage"
+    # rule the prompt/model files follow.
+    expected_filters = _configured_filters_signature(
+        cfg, sidecar.palaeographer.post if sidecar.palaeographer is not None else [])
     for i, img in enumerate(renders, start=1):
         page_id = db.add_page(conn, doc_id, i, source_name=source_names[i - 1] if i - 1 < len(source_names) else None)
         page = conn.execute("SELECT * FROM pages WHERE id = ?", (page_id,)).fetchone()
         if page["reviewed_at"]:
             continue  # a human corrected this page; never re-extract over it
         if page["status"] == "done" and not force:
-            continue  # resume: keep already-extracted pages
+            if not filters_changed(page["filters"], expected_filters):
+                continue  # resume: keep already-extracted pages
+            if verbose:
+                print(f"  page {i}/{total}: filters changed, re-extracting ...", flush=True)
         prompt_txt = build_page_prompt(prompt, path.name, i, total)
         if verbose:
             print(f"  page {i}/{total}: extracting ...", flush=True)
@@ -751,15 +769,18 @@ def ingest_file(
             text = transcribe_page(client, palaeographer, prompt_txt, img,
                                    source=path, page_no=i, total=total)
             # palaeographer.post filters shape the raw text BEFORE it is stored;
-            # a filter failure must not store a partially filtered page.
+            # a filter failure must not store a partially filtered page. The
+            # applied chain is recorded so editing a filter re-runs this page.
+            ran: list = []
             if sidecar.palaeographer is not None and sidecar.palaeographer.post:
-                text = _run_stage_filters(
+                text, ran = _run_stage_filters(
                     cfg, sidecar.palaeographer.post, hook="palaeographer.post",
                     value=text, conn=conn, path=path, doc_id=doc_id, stage="palaeographer",
                     page=i, source_name=source_names[i - 1] if i - 1 < len(source_names) else None,
-                    verbose=verbose,
+                    verbose=verbose, return_ran=True,
                 )
-            db.set_page_result(conn, page_id, raw_text=text)
+            db.set_page_result(conn, page_id, raw_text=text,
+                               filters=filters_signature(ran))
             consecutive_failures = 0
         except (ModelError, FilterError) as e:
             db.set_page_result(conn, page_id, error=str(e))
@@ -918,16 +939,17 @@ def _run_stage_filters(cfg: Config, specs, *, hook: str, value, conn, path: Path
                        records_file: Path | None = None,
                        concatenated_file: Path | None = None,
                        verbose: bool = True, return_ran: bool = False):
-    """Apply a stage's filter chain and return the new value.
+    """Apply a stage's filter chain; returns the new value (or `(value, ran)`).
 
     Builds the documented context object (FILTERS_PLAN.md §2.3) and delegates
     to `filters.apply_filters`. Raises `FilterError` on failure — the caller
     must then discard the unit, so nothing partially filtered is ever stored.
 
-    With `return_ran=True` returns ``(value, [Filter, ...])`` — the definitions
-    actually applied — so the caller can stamp artifacts it just materialised.
+    With `return_ran=True` returns ``(value, ran)`` where `ran` is the list of
+    applied filters ({name, params, sha}) for provenance/staleness; otherwise
+    just the value.
     """
-    from .filters import apply_filters, build_context, load_filter
+    from .filters import apply_filters, build_context
 
     raw_dir, edited_dir = _stage_filter_dirs(cfg, conn, doc_id)
     if pages_dir_edited is not None:
@@ -953,9 +975,47 @@ def _run_stage_filters(cfg: Config, specs, *, hook: str, value, conn, path: Path
     )
     value, ran = apply_filters(value, specs, hook=hook, ctx=ctx,
                                filters_dir=cfg.filters_dir, verbose=verbose)
-    if return_ran:
-        return value, [load_filter(cfg.filters_dir, r["name"]) for r in ran]
-    return value
+    return (value, ran) if return_ran else value
+
+
+def _configured_filters_signature(cfg: Config, specs) -> str:
+    """The signature of a filter chain as configured NOW, without running it.
+
+    Used for staleness: comparing this to the signature stored on a page/edit
+    detects an edited filter (content hash), changed params, or a filter that
+    was added/removed — including removing the whole chain, where nothing would
+    otherwise run to record the change.
+    """
+    from .filters import filter_sha, filters_signature, load_filter
+    ran = []
+    for spec in specs or []:
+        try:
+            f = load_filter(cfg.filters_dir, spec.name)
+        except FilterError:
+            # a broken/missing filter: fold its name in so the stage re-runs
+            # once it is fixed, instead of silently looking unchanged
+            ran.append({"name": spec.name, "sha": "missing", "params": spec.params})
+            continue
+        ran.append({"name": f.name, "sha": filter_sha(f), "params": dict(spec.params)})
+    return filters_signature(ran)
+
+
+def _stored_page_filters(conn, doc_id: int, sample: int = 1) -> str:
+    """The filter signature recorded on this document's pages ("" if none).
+
+    A document's pages are produced by one chain, so sampling a few rows is
+    enough to answer "does this document need re-extraction for a filter
+    change?" without walking every page row.
+    """
+    rows = conn.execute(
+        "SELECT filters FROM pages WHERE document_id = ? AND status = 'done' "
+        "ORDER BY page_no LIMIT ?", (doc_id, sample),
+    ).fetchall()
+    for r in rows:
+        sig = r["filters"]
+        if sig:
+            return sig
+    return ""
 
 
 def _is_artifact(cfg: Config, spec) -> bool:
@@ -1069,6 +1129,14 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
         fm["status"] = "done" if p["status"] == "done" else "waiting"
         if p["reviewed_at"]:
             fm["reviewed"] = True
+        # provenance: which stage filters shaped this page (name + short hash),
+        # so "why is this text like this" is answerable from the artifact
+        try:
+            sig = p["filters"]
+        except (IndexError, KeyError):
+            sig = None
+        if sig:
+            fm["filters"] = sig
         body = (p["raw_text"] or "").strip()
         body = format_notes(body) if body else "*waiting*"
         text = (
@@ -1104,6 +1172,7 @@ def _edit_needed(
     editor: Editor,
     reprocess: bool,
     model_files: tuple = (),
+    expected_filters: str = "",
 ) -> bool:
     """Does this page need (re-)editing?"""
     if edit_row is not None and edit_row["reviewed_at"]:
@@ -1114,6 +1183,14 @@ def _edit_needed(
         return True
     if edit_row["raw_sha"] != _raw_sha(page["raw_text"]):
         return True  # page was re-transcribed since the edit
+    # The editor's filter chain changed (script hash, params, added/removed):
+    # re-run this stage, exactly as a changed rules/model file does.
+    try:
+        recorded = edit_row["filters"]
+    except (IndexError, KeyError):
+        recorded = None
+    if filters_changed(recorded, expected_filters):
+        return True
     if editor.prompt_file:
         try:
             if editor.prompt_file.stat().st_mtime > (edit_row["updated_at"] or 0):
@@ -1634,6 +1711,13 @@ def edit_document(
     )
     force = reprocess or model_identity_changed
     pages = db.get_pages(conn, doc_id)
+    # The chain this pass would apply (pre + post), as a signature: a page whose
+    # stored signature differs is re-edited even without --reprocess.
+    expected_filters = _configured_filters_signature(
+        cfg,
+        (editor_stage.pre if editor_stage is not None else [])
+        + (editor_stage.post if editor_stage is not None else []),
+    )
     client = ModelClient(editor.base_url, timeout_s=editor.timeout_s, api_key=editor.api_key,
                          api_style=editor.api_style)
     edited = 0
@@ -1645,7 +1729,8 @@ def edit_document(
             if not raw:
                 continue
             edit_row = db.get_page_edit(conn, p["id"], resolved)
-            if not _edit_needed(p, edit_row, editor, force, model_files=tuple(model_files)):
+            if not _edit_needed(p, edit_row, editor, force, model_files=tuple(model_files),
+                                expected_filters=expected_filters):
                 continue
             if verbose:
                 print(f"  editing page {p['page_no']}/{doc['page_count']} ...", flush=True)
@@ -1654,21 +1739,25 @@ def edit_document(
                 # Deterministic blank page: no model call, so a page cannot be
                 # hallucinated into content when its transcription is empty, and
                 # real sparse text (any letters/digits) always reaches the model.
-                # Filters are skipped with the model call they wrap.
+                # Filters are skipped with the model call they wrap, but the
+                # configured chain is still recorded so the page is not
+                # re-edited on every pass.
                 db.set_page_edit(conn, p["id"], resolved, text=_BLANK_EDIT_TEXT,
-                                 raw_sha=_raw_sha(raw))
+                                 raw_sha=_raw_sha(raw), filters=expected_filters)
                 edited += 1
             else:
                 try:
                     # editor.pre shapes the transcription BEFORE the model sees
                     # it; editor.post cleans the model's output before storing.
+                    ran: list = []
                     stage_input = raw
                     if editor_stage is not None and editor_stage.pre:
-                        stage_input = _run_stage_filters(
+                        stage_input, ran = _run_stage_filters(
                             cfg, editor_stage.pre, hook="editor.pre", value=raw,
                             conn=conn, path=Path(doc["path"]), doc_id=doc_id,
                             stage="editor", page=p["page_no"],
                             source_name=p["source_name"], verbose=verbose,
+                            return_ran=True,
                         )
                     prompt = (
                         f"{editor.prompt_text}\n\n"
@@ -1678,13 +1767,16 @@ def edit_document(
                     out = client.chat_text(editor.model, prompt, editor.temperature, editor.max_tokens,
                                            thinking=editor.thinking)
                     if editor_stage is not None and editor_stage.post:
-                        out = _run_stage_filters(
+                        out, post_ran = _run_stage_filters(
                             cfg, editor_stage.post, hook="editor.post", value=out,
                             conn=conn, path=Path(doc["path"]), doc_id=doc_id,
                             stage="editor", page=p["page_no"],
                             source_name=p["source_name"], verbose=verbose,
+                            return_ran=True,
                         )
-                    db.set_page_edit(conn, p["id"], resolved, text=out, raw_sha=_raw_sha(raw))
+                        ran = ran + post_ran
+                    db.set_page_edit(conn, p["id"], resolved, text=out, raw_sha=_raw_sha(raw),
+                                     filters=filters_signature(ran))
                     edited += 1
                 except (ModelError, FilterError) as e:
                     db.set_page_edit(conn, p["id"], resolved, error=str(e), raw_sha=_raw_sha(raw))
@@ -1836,19 +1928,24 @@ def _parse_json_array(text: str) -> list | None:
 
 
 def _encode_needed(cfg: Config, conn, doc_id: int, encoder: Encoder, resolved: str,
-                   doc_path: Path, reprocess: bool, enc_file: Path | None = None) -> bool:
+                   doc_path: Path, reprocess: bool, enc_file: Path | None = None,
+                   expected_filters: str = "") -> bool:
     """Re-encode when no records yet, or the encoder file / the document's
     encoder.prompt.md / encoder-prompt-langextract.md / the source
-    transcription changed since the records were created."""
+    transcription changed since the records were created. A changed encoder
+    FILTER chain (`expected_filters`) re-encodes too."""
     if reprocess:
         return True
     row = conn.execute(
-        "SELECT MAX(created_at) AS m FROM records WHERE document_id = ? AND encoder = ?",
+        "SELECT MAX(created_at) AS m, MAX(filters) AS f FROM records "
+        "WHERE document_id = ? AND encoder = ?",
         (doc_id, resolved),
     ).fetchone()
     if not row or not row["m"]:
         return True
     latest = row["m"]
+    if filters_changed(row["f"], expected_filters):
+        return True  # an encoder filter was edited, retuned, added or removed
     candidates = []
     if encoder.prompt_file:
         candidates.append(encoder.prompt_file)
@@ -1999,6 +2096,13 @@ def write_records_file(cfg: Config, conn, doc_id: int, encoder_id: str) -> Path 
         "encoder": encoder_id,
         "records": by_kind,
     }
+    # provenance: the stage filters that shaped this encoder's input/output
+    try:
+        sig = rows[0]["filters"] if rows else None
+    except (IndexError, KeyError):
+        sig = None
+    if sig:
+        payload["filters"] = sig
     out = out_dir / f"records-{encoder_id}.json"
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return out
@@ -2084,18 +2188,28 @@ def encode_document(
     if not texts:
         return {"action": "skipped", "filename": doc["filename"], "reason": "no text"}
 
-    if not _encode_needed(cfg, conn, doc_id, encoder, resolved, doc_path, reprocess, enc_file):
+    enc_stage = _encoder_stage_for(cfg, doc_path, resolved, enc_file)
+    lib_dir = _library_dir_for(cfg, conn, doc_id)
+    _, edited_dir = _stage_filter_dirs(cfg, conn, doc_id)
+    records_file = (lib_dir / f"records-{resolved}.json") if lib_dir else None
+    concat_file = (lib_dir / f"concatenated-{resolved}.md") if lib_dir else None
+    # Only the value-shaping filters (pre + non-artifact post) affect WHAT is
+    # stored, so they alone drive re-encoding; an artifact filter is governed by
+    # its own stamp.
+    record_filters = _configured_filters_signature(
+        cfg,
+        (enc_stage.pre if enc_stage is not None else [])
+        + [F for F in (enc_stage.post if enc_stage is not None else [])
+           if not _is_artifact(cfg, F)],
+    )
+    if not _encode_needed(cfg, conn, doc_id, encoder, resolved, doc_path, reprocess,
+                          enc_file, expected_filters=record_filters):
         return {"action": "skipped", "filename": doc["filename"], "reason": "records up to date"}
 
     # The encoder's filter chain: `pre` normalises the whole-document text the
     # model will read (BEFORE any call is built), `post` sees the parsed records
     # (and is where artifact filters materialise files). An encoder file is
     # collection-local, so its stage comes from the sidecar when it names one.
-    enc_stage = _encoder_stage_for(cfg, doc_path, resolved, enc_file)
-    lib_dir = _library_dir_for(cfg, conn, doc_id)
-    _, edited_dir = _stage_filter_dirs(cfg, conn, doc_id)
-    records_file = (lib_dir / f"records-{resolved}.json") if lib_dir else None
-    concat_file = (lib_dir / f"concatenated-{resolved}.md") if lib_dir else None
     if enc_stage is not None and enc_stage.pre:
         whole = "\n\n".join(f"--- page {p} ---\n{t}" for p, t in texts)
         whole = _run_stage_filters(
@@ -2235,10 +2349,23 @@ def encode_document(
     finally:
         client.close()
 
+    # Store first, so an artifact filter can read the records file it consumes.
+    db.clear_records(conn, doc_id, resolved)
+    for rec in records:
+        db.add_record(conn, doc_id, resolved, str(rec.get("kind") or rec.get("type") or "record"),
+                      json.dumps(rec, ensure_ascii=False), str(rec.get("page") or ""),
+                      filters=record_filters)
+    if doc["encoder"] != resolved:
+        db.update_document(conn, doc_id, encoder=resolved)
+    conn.commit()
+    write_records_file(cfg, conn, doc_id, resolved)
+    write_concatenated_file(cfg, conn, doc_id, texts, resolved)
+
     # encoder.post: the parsed records, once per encoder (NOT per chunk/pass).
     # An artifact filter (returns: none) consumes this list, writes files and
     # leaves the records unchanged; it only re-runs when its stamp says its
     # sources changed, so a model pass does not rewrite unchanged artifacts.
+    # It runs after the records file is on disk, which is what it reads.
     if enc_stage is not None and enc_stage.post:
         due = [F for F in enc_stage.post
                if not _is_artifact(cfg, F) or _artifact_due(cfg, conn, doc_id, resolved, F, edited_dir)]
@@ -2250,19 +2377,18 @@ def encode_document(
                 records_file=records_file, concatenated_file=concat_file, verbose=verbose,
                 return_ran=True,
             )
-            for f in ran:
-                if _is_artifact(cfg, f) and lib_dir is not None:
-                    write_stamp(lib_dir, resolved, f)
+            # A successful artifact run is stamped, which is what stops it from
+            # re-running until its sources change.
+            for r in ran:
+                spec = next((F for F in due if F.name == r["name"]), None)
+                if spec is None or not _is_artifact(cfg, spec) or lib_dir is None:
+                    continue
+                try:
+                    from .filters import load_filter
+                    write_stamp(lib_dir, resolved, load_filter(cfg.filters_dir, r["name"]))
+                except FilterError:
+                    pass
 
-    db.clear_records(conn, doc_id, resolved)
-    for rec in records:
-        db.add_record(conn, doc_id, resolved, str(rec.get("kind") or rec.get("type") or "record"),
-                      json.dumps(rec, ensure_ascii=False), str(rec.get("page") or ""))
-    if doc["encoder"] != resolved:
-        db.update_document(conn, doc_id, encoder=resolved)
-    conn.commit()
-    write_records_file(cfg, conn, doc_id, resolved)
-    write_concatenated_file(cfg, conn, doc_id, texts, resolved)
     return {"action": "encoded", "filename": doc["filename"], "encoder": resolved, "records": len(records)}
 
 

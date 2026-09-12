@@ -45,16 +45,22 @@ def write_envelope(raw, path: str | None) -> None:
 def load_run(target: Path | None = None):
     """The filter's ``run(value, ctx)`` callable, for the in-process path.
 
-    Kept here so a filter can be executed the same way in either mode.
+    Kept here so a filter can be executed the same way in either mode. The
+    source is compiled directly (not imported) so a stale ``__pycache__``
+    entry can never shadow an edited filter — see ``filters._load_module``.
     """
-    import importlib.util
+    import types
 
     script = target or (Path.cwd() / "filter.py")
-    spec = importlib.util.spec_from_file_location("_pha_filter_entry", script)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot import filter from {script}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    try:
+        code = compile(script.read_bytes(), str(script), "exec")
+    except OSError as e:
+        raise RuntimeError(f"cannot read filter {script}: {e}") from e
+    except SyntaxError as e:
+        raise RuntimeError(f"cannot compile filter {script}: {e}") from e
+    mod = types.ModuleType("_pha_filter_entry")
+    mod.__file__ = str(script)
+    exec(code, mod.__dict__)
     run = getattr(mod, "run", None)
     if not callable(run):
         raise RuntimeError(f"{script} defines no run(value, ctx)")

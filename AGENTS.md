@@ -66,11 +66,16 @@
   text. Python filters run **in-process** (archive-owner code, same trust as a
   prompt file — there is NO sandbox); a manifest `command:` runs another
   executable with the same envelope. A filter failure fails that unit and
-  stores nothing. Editing a filter re-runs its stage (hash-based staleness);
-  an artifact filter (`returns: none`) is stamped under
-  `library/<slug>/.filter-stamps/` and re-runs only when its own files, its
-  declared `inputs:` or the EDITED pages change. Adopt one by editing
-  `pha.yaml`, not by moving files. Reference filters ship in the repo's
+  stores nothing. Editing a filter re-runs its stage: the applied chain (name +
+  params + content hash) is stored on each page/edit/records run and compared
+  to what is configured now, so an edited script, changed params or a filter
+  added/removed re-extracts/re-edits/re-encodes without `--reprocess` — the
+  same rule as a changed rules/model file. It is visible in the library page
+  front matter (`filters: <name>:<sha>:<params>`) and the records file; a
+  hand-corrected page has it cleared. An artifact filter (`returns: none`) is
+  stamped under `library/<slug>/.filter-stamps/` and re-runs only when its own
+  files, its declared `inputs:` or the EDITED pages change. Adopt one by
+  editing `pha.yaml`, not by moving files. Reference filters ship in the repo's
   `filters/` (copy into the archive to adopt). Full design:
   `FILTERS_PLAN.md`.
 - **Staleness by mtime**: editing a palaeographer / editor / encoder / prompt

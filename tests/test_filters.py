@@ -316,3 +316,30 @@ def test_no_filters_configured_is_a_noop():
                          filters_dir=REF_FILTERS, verbose=False)[0] == "text"
     assert apply_filters("text", None, hook="editor.pre", ctx=_ctx(),
                          filters_dir=REF_FILTERS, verbose=False)[0] == "text"
+
+
+def test_edited_filter_reloads_even_for_a_same_second_same_size_edit(tmp_path):
+    """A filter edited twice in one timestamp tick must not keep running the old code.
+
+    Regression: the import machinery keys its `__pycache__` on (mtime, size), so
+    two same-size edits within a second left a stale .pyc that Python executed
+    instead of the new source — a long scan would silently keep using a filter
+    the operator had already fixed.
+    """
+    d = tmp_path / "filters" / "tag"
+    d.mkdir(parents=True)
+    script = d / "filter.py"
+    script.write_text("def run(value, ctx):\n    return value + ' [V1]'\n")
+    assert run_ref("tag", "B", filters_dir=tmp_path / "filters") == "B [V1]"
+    # same size (V1 -> V2), written immediately: the pathological case
+    script.write_text("def run(value, ctx):\n    return value + ' [V2]'\n")
+    assert run_ref("tag", "B", filters_dir=tmp_path / "filters") == "B [V2]"
+
+
+def test_filter_with_syntax_error_reports_clearly(tmp_path):
+    d = tmp_path / "filters" / "broken"
+    d.mkdir(parents=True)
+    (d / "filter.py").write_text("def run(value, ctx)\n    return value\n")
+    with pytest.raises(FilterError) as e:
+        run_ref("broken", "x", filters_dir=tmp_path / "filters")
+    assert "broken" in str(e.value)
