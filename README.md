@@ -120,9 +120,13 @@ pha search "monastery donation charter" --mode semantic
 # every hit prints its library page file + a shortcut to read the full page:
 pha page 12 37              # full raw transcription of doc 12, page 37
 pha page 12 37 --edited     # the edited (modernized/translated) variant
-pha page NAME 37 --json     # structured output for agents
+pha page NAME 37 --json     # structured output for agents (adds slug/rel_path/render/variants)
 
-# 5. MCP server (stdio)
+# 5. cite a page durably (stable slug + the exact filled variant)
+pha cite 12 37 --edited     # paste-ready; survives a re-scan (no date, no hash)
+pha serve                   # read-only render server: /doc/<slug>/p037.jpg
+
+# 6. MCP server (stdio)
 pha mcp
 ```
 
@@ -792,6 +796,13 @@ pha search QUERY [--mode hybrid|keyword|semantic] [--collection COLX] [--limit N
 pha page DOC PAGE [--edited]    # print the FULL text of one page (doc = id or filename substring)
                                 #   --edited reads the edited/translated variant; when there is
                                 #   none it names the pass that produces it (`pha edit --path …`)
+pha cite DOC PAGE [--edited] [--editor ID|--palaeographer ID] [--json]
+                                # print a durable citation: the stable slug + the exact FILLED
+                                #   variant (never an empty/waiting stub). Exits non-zero when
+                                #   nothing is filled, and lists the candidates when several are
+pha serve [--host H] [--port 8765] [--quiet]
+                                # read-only HTTP endpoint with stable URLs that resolve the
+                                #   current render per request (a re-scan never changes the URL)
 pha open DOC PAGE [--edited]    # open that page's library .md in the OS-default editor
 pha open FILE.md                # …or any archive .md/.yaml (notes, definitions, pha.yaml)
 pha pending [--doc N] [--json]  # library page files edited by a human but not imported yet
@@ -828,6 +839,31 @@ pha bundle TARGET... [--out DIR] [--force] [--move]  # export collections/docs a
 pha unbundle BUNDLE [--force]                # import a bundle into THIS archive (no re-scan/edit)
 pha update [--check] [--yes]  # check GitHub for a newer pha and install it
 ```
+
+### Stable page addresses (`pha cite`, `pha serve`)
+
+A document's id, its dated library folder and its `renders/<sha256>/` directory
+all change when it is re-processed, so none of them can be linked to durably.
+The **slug** is the stable identity: it derives mechanically from the
+dropbox-relative path (drop a leading `collections/`, drop the extension,
+lowercase, non-alphanumerics to `-`), so it survives a re-scan and changes only
+on rename/move.
+
+```bash
+pha page 47 51 --json          # → "slug", "rel_path", "sha256", "render", "variants"
+pha cite 47 51 --edited        # → slug + the exact filled variant, in a footnote-ready block
+pha serve                      # → http://127.0.0.1:8765/doc/<slug>/p051.jpg
+```
+
+`pha cite` refuses to cite an empty variant: where a page has both a `*waiting*`
+stub and a filled reading it names the filled one, and when several filled
+variants exist it lists them and asks for `--editor` / `--palaeographer` instead
+of guessing. `pha serve` is read-only (the DB is opened read-only, no route
+writes), binds to loopback by default and warns on `--host 0.0.0.0`; it resolves
+`slug → current sha256` per request, so a re-scan is visible without a restart
+and without changing any URL a consumer embedded. The JSON/`--json` and MCP
+payloads carry the same fields, so an external tool never has to re-derive the
+render path or the `edited-<editor>[@model]` grammar.
 
 ### Self-update
 

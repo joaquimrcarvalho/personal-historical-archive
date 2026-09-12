@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 
+from . import addresses
 from . import db
 from . import doctor
 from .config import Config
@@ -81,6 +82,9 @@ def make_server(cfg: Config) -> FastMCP:
                 texts.append(f"… (truncated at {max_chars} chars; ask again with a larger max_chars)")
             out["text"] = "\n\n".join(texts)
             out["pages"] = len(pages)
+            rel_path = addresses.document_rel_path(cfg, doc)
+            out["slug"] = addresses.doc_slug(rel_path)
+            out["rel_path"] = rel_path
             return out
         finally:
             conn.close()
@@ -125,6 +129,14 @@ def make_server(cfg: Config) -> FastMCP:
                 "status": page["status"],
                 "transcribed": page["raw_text"] or None,
             }
+            # Stable public identity + the variant set: an external consumer (a
+            # note generator, a citation tool) must not re-derive the sha/render
+            # join or the `edited-<editor>[@model]` grammar itself.
+            rel_path = addresses.document_rel_path(cfg, doc)
+            out["slug"] = addresses.doc_slug(rel_path)
+            out["rel_path"] = rel_path
+            out["sha256"] = doc["sha256"]
+            out["variants"] = addresses.variant_files(cfg, doc, page_no, page["source_name"])
             # edited versions (all editors that produced one)
             edits = conn.execute(
                 "SELECT editor, text FROM page_edits WHERE page_id = ? AND status='done'",
@@ -143,17 +155,18 @@ def make_server(cfg: Config) -> FastMCP:
                     continue
             out["encoded"] = out["encoded"] or None
             # cached page render (the image the model actually read)
+            render = addresses.render_path(cfg, doc, page_no, page["source_name"])
+            out["render"] = str(render) if render else None
+            out["render_exists"] = render is not None
             if include_image:
-                render_dir = cfg.renders / doc["sha256"]
-                img = render_dir / f"p{page_no:03d}.jpg"
-                if img.exists():
-                    blob = img.read_bytes()
+                if render is not None:
+                    blob = render.read_bytes()
                     out["image_base64"] = base64.b64encode(blob).decode()
                     out["image_bytes"] = len(blob)
                 else:
                     out["image_base64"] = None
                     out["image_bytes"] = 0
-                    out["render_missing"] = str(render_dir)
+                    out["render_missing"] = str(cfg.renders / str(doc["sha256"]))
             return out
         finally:
             conn.close()
@@ -173,7 +186,12 @@ def make_server(cfg: Config) -> FastMCP:
         conn = db.connect(cfg.db_path)
         try:
             docs = db.list_documents(conn, status=status, limit=limit, collection=collection)
-            return [{k: d[k] for k in d.keys()} for d in docs]
+            out = []
+            for d in docs:
+                row = {k: d[k] for k in d.keys()}
+                row["slug"] = addresses.document_slug(cfg, d)
+                out.append(row)
+            return out
         finally:
             conn.close()
 

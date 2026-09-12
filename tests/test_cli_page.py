@@ -135,3 +135,38 @@ def test_cli_page_unknown_document_exits(tmp_path, capsys):
         cli.cmd_page(cfg, _page_args(doc="nope"))
     assert exc.value.code == 1
     assert "no document matching" in capsys.readouterr().err
+
+
+# ---- stable addresses (slug / rel_path / render / variants) ------------------
+
+def test_cli_page_json_carries_stable_address_fields(cfg, add_document, write_variant,
+                                                     write_render, capsys):
+    doc_id = add_document()
+    write_variant(doc_id, "edited-french-ocr@deepseek-v4-flash", 1, "real text")
+    write_render(doc_id, 1)
+    cli.cmd_page(cfg, _page_args(doc=doc_id))
+    data = json.loads(capsys.readouterr().out)
+    # every pre-existing key is kept (the change is additive)
+    for key in ("document_id", "filename", "collection", "source", "page_no",
+                "variant", "editor", "palaeographer", "reviewed", "page_file", "text"):
+        assert key in data
+    assert data["slug"] == "colx-d"
+    assert data["rel_path"] == "collections/COLX/d.pdf"
+    assert data["sha256"]
+    assert data["render_exists"] is True
+    assert data["render"].endswith("p001.jpg")
+    assert data["variants"]["edited-french-ocr@deepseek-v4-flash"]["filled"] is True
+
+
+def test_cli_page_text_output_shows_the_slug(cfg, add_document, capsys):
+    doc_id = add_document()
+    cli.cmd_page(cfg, _page_args(doc=doc_id, json=False))
+    assert "slug: colx-d" in capsys.readouterr().out
+
+
+def test_cite_and_serve_subcommands_are_registered(capsys):
+    for cmd in ("cite", "serve"):
+        with pytest.raises(SystemExit) as exc:
+            cli.main([cmd, "--help"])
+        assert exc.value.code == 0
+        assert cmd in capsys.readouterr().out

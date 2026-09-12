@@ -2,13 +2,16 @@
 
 These are design/spec docs (drafts) for additions to pha, written while
 working on the **Documenta Indica** collection. They are grouped by feature
-and meant to be read together; none is implemented yet.
+and meant to be read together; the first three are not implemented yet. The last
+row is from a separate workstream (Jesuit archive / Obsidian vault integration),
+is independent of the other three, and **is implemented**.
 
 | doc | feature | one-line summary |
 |---|---|---|
 | `pha-filters-enhancement-request.md` | **Stage filters** | `pre`/`post` text filters around a stage's model — a stage becomes `input → pre filters → rules model → post filters → output`. Deterministic, chainable scripts (repo ships generic ones; collections add their own). `line-numbers`, OCR-separator stripping, whitespace/footnote-marker cleanup, hyphen joining. Per-stage scope table + `editor.pre` vs `palaeographer.post` guidance. |
 | `pha-stage-extends-enhancement-request.md` | **Prompt composition (`extends`)** | Let a rules file be "base rules + delta" (`extends:`/`include:` front matter), composed at load time so shared editor/palaeographer/encoder bodies live in one place (e.g. `latin-to-english-ocr` extends `latin-to-english`). Covers ordering, settings cascade, model-not-inherited, and base-file re-edit invalidation. |
 | `pha-encoder-tools-enhancement-request.md` | **Encoder tools** | After an encode, pha runs collection-bundled *tools* that materialise artifacts from the records (e.g. `markdown-from-records`: one markdown file per document/section). Also documents the model-assisted entry detection, character-aware chunking, and the collection **structure prescan** (§3.4: per-document layout register deriving page filters/prompt blocks per volume). **Merged**: the artifact/`markdown-from-records` part is planned as an `encoder.post` **artifact filter** in `FILTERS_PLAN.md`; the prescan part is not yet planned. |
+| `pha-stable-page-addresses-enhancement-request.md` | **Stable page addresses & render serving** | A re-scan-proof way to *link to* a page from outside pha. One canonical `slug` derived from the dropbox-relative path (no date, no hash, unlike `documents.id` / the dated library folder / `renders/<sha256>/`); `pha cite` naming the exact *filled* variant; `pha page --json` gaining `slug`/`rel_path`/`sha256`/`render`/`variants`; and `pha serve` — a read-only loopback endpoint with stable `/doc/{slug}/p{page}.jpg` URLs that resolves the current sha per request. Motivated by Obsidian footnotes; complements `WEB_INTERFACE_PLAN.md` (whose API surface has no render route) and would let `dsh-pha`'s `/pha/pageImage` return bytes instead of a data URL. **Implemented**: `addresses.py` (slug/rel path/render/variants), `pha cite`, `pha serve`, the new `pha page --json` fields, plus tests. |
 
 ## Implementation plans
 

@@ -11,6 +11,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from . import addresses
 from . import db
 from .config import Config
 from .extract import is_supported, resolve_editor_id, resolve_encoder_id, resolve_palaeographer_id, resolve_prompt, encoder_files_for
@@ -186,6 +187,12 @@ def cmd_page(cfg: Config, args) -> None:
         pf = library_page_path(cfg, doc, args.page,
                                variant="edited" if edited else "raw",
                                source_name=page["source_name"], editor_id=editor_id)
+        # Stable identity + everything an external consumer needs (the render, and
+        # the full variant set) so it never re-derives the sha256 join or the
+        # `edited-<editor>[@model]` directory grammar itself.
+        rel_path = addresses.document_rel_path(cfg, doc)
+        slug = addresses.doc_slug(rel_path)
+        render = addresses.render_path(cfg, doc, args.page, page["source_name"])
         meta = {
             "document_id": doc["id"],
             "filename": doc["filename"],
@@ -197,16 +204,123 @@ def cmd_page(cfg: Config, args) -> None:
             "palaeographer": doc["palaeographer"],
             "reviewed": bool(page["reviewed_at"]),
             "page_file": str(pf) if pf else None,
+            "slug": slug,
+            "rel_path": rel_path,
+            "sha256": doc["sha256"],
+            "render": str(render) if render else None,
+            "render_exists": render is not None,
+            "variants": addresses.variant_files(cfg, doc, args.page, page["source_name"]),
         }
         if getattr(args, "json", False):
             print(json.dumps({**meta, "text": text}, ensure_ascii=False, indent=2))
             return
         print(f"== {doc['filename']} — page {args.page}"
               + (f" [{editor_id}]" if edited else " [raw]") + " ==")
+        print(f"   slug: {slug}")
         if pf:
             print(f"   file: {pf}")
         print("")
         print(text or "(no text)")
+    finally:
+        conn.close()
+
+
+def cmd_cite(cfg: Config, args) -> None:
+    """Print a durable citation for one page: `pha cite <doc> <page> [--edited]`.
+
+    The citation names the exact FILLED variant (never an empty `*waiting*`
+    stub) and carries the stable slug — so the footnote survives a re-scan and
+    still says which reading the claim rests on.
+    """
+    conn = db.connect(cfg.db_path)
+    try:
+        doc, matches = _resolve_doc_for_page(conn, args.doc)
+        if doc is None:
+            if matches:
+                names = ", ".join(f"#{d['id']} {d['filename']}" for d in matches[:8])
+                print(f"ambiguous document {args.doc!r} — matches: {names}", file=sys.stderr)
+            else:
+                print(f"no document matching {args.doc!r}", file=sys.stderr)
+            sys.exit(1)
+        if args.editor and args.palaeographer:
+            print("give only one of --editor / --palaeographer", file=sys.stderr)
+            sys.exit(2)
+        page = conn.execute(
+            "SELECT * FROM pages WHERE document_id=? AND page_no=?",
+            (doc["id"], args.page)).fetchone()
+        if page is None:
+            print(f"document #{doc['id']} ({doc['filename']}) has no page {args.page}",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        stage = "edited" if (args.edited or args.editor) else "transcription"
+        wanted_id = args.editor if stage == "edited" else args.palaeographer
+        variants = addresses.variant_files(cfg, doc, args.page, page["source_name"])
+        selected = {k: v for k, v in variants.items() if v["stage"] == stage}
+        if wanted_id:
+            selected = {k: v for k, v in selected.items() if v["id"] == wanted_id}
+        filled = {k: v for k, v in selected.items() if v["filled"]}
+
+        if not filled:
+            if selected:
+                names = ", ".join(sorted(selected))
+                print(f"the {stage} variant(s) for doc {doc['id']} p.{args.page} exist "
+                      f"but are empty (waiting): {names}\n"
+                      f"run the pass that fills them first "
+                      f"(`pha {'edit' if stage == 'edited' else 'scan'} --path {doc['dir_path'] or '.'}`).",
+                      file=sys.stderr)
+            else:
+                hint = f" (with id {wanted_id!r})" if wanted_id else ""
+                print(f"no {stage} variant{hint} for doc {doc['id']} p.{args.page}",
+                      file=sys.stderr)
+            sys.exit(1)
+
+        if len(filled) > 1:
+            # Prefer the document's configured id for the stage, but never guess
+            # between two filled readings: the caller must say which one.
+            preferred = (doc["editor"] if stage == "edited" else doc["palaeographer"]) or None
+            narrowed = {k: v for k, v in filled.items() if preferred and v["id"] == preferred}
+            if narrowed:
+                filled = narrowed
+            if len(filled) > 1:
+                listed = "\n".join(f"  {k}" for k in sorted(filled))
+                flag = "--editor" if stage == "edited" else "--palaeographer"
+                print(f"several filled {stage} variants for doc {doc['id']} "
+                      f"p.{args.page} — choose one:\n{listed}\n  re-run with {flag} <id>",
+                      file=sys.stderr)
+                sys.exit(2)
+
+        name = next(iter(filled))
+        variant = filled[name]
+        rel_path = addresses.document_rel_path(cfg, doc)
+        slug = addresses.doc_slug(rel_path)
+        label = addresses.variant_label(name)
+        render = addresses.render_path(cfg, doc, args.page, page["source_name"])
+        citation = f"{doc['filename']} — doc {doc['id']}, p. {args.page} ({label})"
+        payload = {
+            "ok": True,
+            "citation": citation,
+            "slug": slug,
+            "rel_path": rel_path,
+            "sha256": doc["sha256"],
+            "document_id": doc["id"],
+            "filename": doc["filename"],
+            "page": args.page,
+            "stage": stage,
+            "variant": name,
+            "label": label,
+            "filled": True,
+            "file": variant["file"],
+            "render": str(render) if render else None,
+            "render_exists": render is not None,
+        }
+        if getattr(args, "json", False):
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return
+        print(citation)
+        print(f"  slug:  {slug}")
+        print(f"  page:  {args.page}")
+        print(f"  file:  {variant['file']}")
     finally:
         conn.close()
 
@@ -385,6 +499,7 @@ def cmd_config(cfg: Config, args) -> None:
     from .sidecar import resolve_stages
 
     conn = None
+    document = None
     try:
         if getattr(args, "path", None):
             p = (cfg.dropbox / args.path).resolve()
@@ -408,6 +523,15 @@ def cmd_config(cfg: Config, args) -> None:
             p = Path(doc["path"]).resolve()
             sel_dir, stem = p.parent, p.stem
             label = doc["filename"]
+            rel_path = addresses.document_rel_path(cfg, doc)
+            document = {
+                "id": doc["id"],
+                "filename": doc["filename"],
+                "slug": addresses.doc_slug(rel_path),
+                "rel_path": rel_path,
+                "sha256": doc["sha256"],
+                "page_count": doc["page_count"],
+            }
 
         resolved = resolve_stages(cfg, sel_dir, stem=stem, sidecar_stem=stem)
         sc = resolved.pop("sidecar")
@@ -457,6 +581,7 @@ def cmd_config(cfg: Config, args) -> None:
                 "ok": True, "target": label, "path": str(target),
                 "document_dir": str(sel_dir), "inherited": inherited,
                 "generated": generated, "legacy_files": legacy,
+                "document": document,
                 "resolved": resolved, "content": content,
             }, ensure_ascii=False, indent=2))
             return
@@ -1375,6 +1500,18 @@ def cmd_mcp(cfg: Config, args) -> None:
     mcp_server.main(args.transport, args.host, args.port)
 
 
+def cmd_serve(cfg: Config, args) -> None:
+    """`pha serve` — a read-only HTTP endpoint with stable page-render URLs.
+
+    Loopback by default; `--host 0.0.0.0` is a deliberate opt-in (it exposes the
+    archive to the network) and logs a warning. Nothing here writes: mutations
+    stay behind the scan/edit lock.
+    """
+    from .serve import run_server
+
+    run_server(cfg, host=args.host, port=args.port, quiet=args.quiet)
+
+
 def cmd_doctor(cfg: Config, args) -> None:
     """`pha doctor` — are the local OCR/parse engines installed and usable?
 
@@ -1669,6 +1806,20 @@ def main(argv: list[str] | None = None) -> None:
     pg.add_argument("--json", action="store_true", help="structured output for agents")
     pg.set_defaults(fn=cmd_page)
 
+    ct = sub.add_parser(
+        "cite",
+        help="print a durable citation for one page (stable slug + the exact FILLED variant)")
+    ct.add_argument("doc", help="document id (number) or a filename substring")
+    ct.add_argument("page", type=int, help="page number")
+    ct.add_argument("--edited", action="store_true",
+                    help="cite the edited variant (default: the raw transcription)")
+    ct.add_argument("--editor", default=None,
+                    help="editor id to disambiguate when several edited variants are filled")
+    ct.add_argument("--palaeographer", default=None,
+                    help="palaeographer id to disambiguate when several transcriptions are filled")
+    ct.add_argument("--json", action="store_true", help="structured output for agents/note generators")
+    ct.set_defaults(fn=cmd_cite)
+
     op = sub.add_parser(
         "open",
         help="open an archive page or markdown file in the OS-default app (e.g. your markdown editor)")
@@ -1703,6 +1854,15 @@ def main(argv: list[str] | None = None) -> None:
     m.add_argument("--host", default="127.0.0.1")
     m.add_argument("--port", type=int, default=8000)
     m.set_defaults(fn=cmd_mcp)
+
+    sv = sub.add_parser(
+        "serve",
+        help="run the read-only render server (stable /doc/<slug>/p<NNN>.jpg URLs)")
+    sv.add_argument("--host", default="127.0.0.1",
+                    help="bind address (default loopback; 0.0.0.0 exposes the archive to the LAN)")
+    sv.add_argument("--port", type=int, default=8765)
+    sv.add_argument("--quiet", action="store_true", help="suppress per-request logging")
+    sv.set_defaults(fn=cmd_serve)
 
     up = sub.add_parser("update", help="check GitHub for a newer pha and install it")
     up.add_argument("--check", action="store_true",
