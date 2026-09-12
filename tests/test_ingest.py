@@ -881,6 +881,182 @@ def test_edit_document_blank_page_skips_model(tmp_path, monkeypatch):
     conn.close()
 
 
+def test_index_document_keeps_vectors_when_embed_fails(tmp_path):
+    """Regression: a failed embed must NEVER strip a document's embeddings.
+
+    `index_document` replaces a document's chunks wholesale. It used to
+    `clear_chunks()` FIRST and then fall back to text-only indexing when
+    `embed()` failed, so one endpoint timeout silently deleted every vector
+    while leaving status=done / error empty — the whole document then had to
+    be re-embedded (13 885 chunks lost this way on the jesuit archive).
+    """
+    import time as _t
+    import pytest
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import index_document
+    from personal_historical_archive.model_client import ModelError
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    src = cfg.dropbox / "collections" / "tcol" / "doc.pdf"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/tcol", now=_t.time())
+    pid = _db.add_page(conn, doc_id, 1)
+    _db.set_page_result(conn, pid, raw_text="INDEXED TEXT " * 40)
+    conn.commit()
+
+    # 1) first pass with a WORKING embedder -> the document has vectors
+    class GoodEmbed:
+        def embed(self, model, texts, batch_size):
+            return [[0.5, 0.25] for _ in texts]
+
+    n = index_document(cfg, conn, doc_id, embed_client=GoodEmbed(), verbose=False)
+    assert n > 0
+    before = conn.execute(
+        "SELECT COUNT(*) n, SUM(embedding IS NOT NULL) e FROM chunks WHERE document_id=?",
+        (doc_id,)).fetchone()
+    assert before["n"] == n and before["e"] == n, "setup: document must start fully embedded"
+
+    # 2) re-index while the endpoint is DOWN -> must refuse, not degrade
+    class DeadEmbed:
+        def embed(self, model, texts, batch_size):
+            raise ModelError("timeout after 120s")
+
+    with pytest.raises(ModelError) as exc:
+        index_document(cfg, conn, doc_id, embed_client=DeadEmbed(), verbose=False)
+    assert "left unchanged" in str(exc.value)
+
+    after = conn.execute(
+        "SELECT COUNT(*) n, SUM(embedding IS NOT NULL) e FROM chunks WHERE document_id=?",
+        (doc_id,)).fetchone()
+    assert after["n"] == before["n"], "chunks must not be cleared"
+    assert after["e"] == before["e"] == n, "every stored vector must survive"
+
+    # 3) a document with NO vectors yet still degrades to text-only (a fresh
+    #    ingest with the endpoint down keeps pha's zero-config behaviour)
+    pid2 = _db.add_page(conn, doc_id, 2)
+    _db.set_page_result(conn, pid2, raw_text="FRESH TEXT " * 40)
+    conn.commit()
+    conn.execute("DELETE FROM chunks WHERE document_id=?", (doc_id,))
+    conn.commit()
+    n2 = index_document(cfg, conn, doc_id, embed_client=DeadEmbed(), verbose=False)
+    assert n2 > 0
+    rows = conn.execute(
+        "SELECT COUNT(*) n, SUM(embedding IS NOT NULL) e FROM chunks WHERE document_id=?",
+        (doc_id,)).fetchone()
+    assert rows["n"] == n2 and rows["e"] == 0  # text-only, as before
+    conn.close()
+
+
+def test_reindex_all_reports_failed_documents_and_keeps_them(tmp_path):
+    """`pha reindex` reports a document it could not embed instead of
+    silently leaving it text-only, and does not touch its chunks."""
+    import time as _t
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import index_document, reindex_all
+    from personal_historical_archive.model_client import ModelError
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    cfg.ensure_dirs()
+    src = cfg.dropbox / "collections" / "tcol" / "doc.pdf"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/tcol", now=_t.time())
+    pid = _db.add_page(conn, doc_id, 1)
+    _db.set_page_result(conn, pid, raw_text="INDEXED TEXT " * 40)
+    _db.set_document_status(conn, doc_id, "done")
+    conn.commit()
+
+    class GoodEmbed:
+        def embed(self, model, texts, batch_size):
+            return [[1.0] * 4 for _ in texts]
+
+    index_document(cfg, conn, doc_id, embed_client=GoodEmbed(), verbose=False)
+    embedded = conn.execute(
+        "SELECT SUM(embedding IS NOT NULL) e FROM chunks WHERE document_id=?",
+        (doc_id,)).fetchone()["e"]
+    assert embedded > 0
+    conn.close()
+
+    class DeadEmbed:
+        def embed(self, model, texts, batch_size):
+            raise ModelError("connection refused")
+
+    res = reindex_all(cfg, DeadEmbed(), verbose=False)
+    assert res["reindexed"] == 0
+    assert len(res["failed"]) == 1
+    assert res["failed"][0]["id"] == doc_id
+    assert "left unchanged" in res["failed"][0]["error"]
+
+    conn = _db.connect(cfg.db_path)
+    kept = conn.execute(
+        "SELECT SUM(embedding IS NOT NULL) e FROM chunks WHERE document_id=?",
+        (doc_id,)).fetchone()["e"]
+    conn.close()
+    assert kept == embedded, "the failed reindex must leave the vectors alone"
+
+
+def test_reindex_all_holds_the_single_model_lock(tmp_path, monkeypatch):
+    """`pha reindex` embeds through the local model, so it must take the same
+    lock as scan/edit — running it concurrently is what caused the embed
+    timeouts (and the vector loss) in the first place."""
+    import time as _t
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+    from personal_historical_archive.ingest import reindex_all
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    cfg.ensure_dirs()
+    src = cfg.dropbox / "collections" / "tcol" / "doc.pdf"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/tcol", now=_t.time())
+    pid = _db.add_page(conn, doc_id, 1)
+    _db.set_page_result(conn, pid, raw_text="TEXT " * 40)
+    _db.set_document_status(conn, doc_id, "done")
+    conn.commit()
+    conn.close()
+
+    class Embed:
+        def embed(self, model, texts, batch_size):
+            return [[2.0] * 4 for _ in texts]
+
+    # a foreign job owns the lock: the test runner's parent is a live pid
+    # owned by this user (pid 1 is not signalable, so it would read as stale)
+    lock = ingest._scan_lock_path(cfg)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(str(os.getppid()), encoding="utf-8")
+    try:
+        res = reindex_all(cfg, Embed(), verbose=False)
+        assert res["reindexed"] == 0
+        assert "one local model at a time" in res["reason"]
+        # and it released nothing it did not own
+        assert lock.exists()
+    finally:
+        lock.unlink(missing_ok=True)
+
+
 def test_reindex_all_path_selects_only_docs_under(monkeypatch, tmp_path):
     """`pha reindex --path collections/COLA` reindexes only the documents under
     that subpath, leaving other collections untouched."""
@@ -921,7 +1097,7 @@ def test_reindex_all_path_selects_only_docs_under(monkeypatch, tmp_path):
 
     res = ingest.reindex_all(cfg, None, path="collections/COLA")
     assert reindexed == [da]
-    assert res == {"reindexed": 1, "chunks": {da: 0}}
+    assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": []}
 
 
 def test_reindex_all_path_to_single_file(monkeypatch, tmp_path):
@@ -961,7 +1137,7 @@ def test_reindex_all_path_to_single_file(monkeypatch, tmp_path):
 
     res = ingest.reindex_all(cfg, None, path="collections/COLA/a.pdf")
     assert reindexed == [da]
-    assert res == {"reindexed": 1, "chunks": {da: 0}}
+    assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": []}
 
 
 def test_reindex_all_no_path_reindexes_everything(monkeypatch, tmp_path):
@@ -996,7 +1172,7 @@ def test_reindex_all_no_path_reindexes_everything(monkeypatch, tmp_path):
 
     res = ingest.reindex_all(cfg, None)
     assert reindexed == [da]
-    assert res == {"reindexed": 1, "chunks": {da: 0}}
+    assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": []}
 
 
 def test_library_page_path_resolves_raw_and_edited(tmp_path):

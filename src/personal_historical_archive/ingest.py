@@ -783,14 +783,39 @@ def ingest_file(
     return {"action": "ingested", "filename": path.name, "pages": total, "prompt": prompt_source}
 
 
+def _has_embedded_chunks(conn, doc_id: int) -> bool:
+    """Would destroying this document's chunks also lose stored vectors?"""
+    row = conn.execute(
+        "SELECT 1 FROM chunks WHERE document_id = ? AND embedding IS NOT NULL LIMIT 1",
+        (doc_id,),
+    ).fetchone()
+    return row is not None
+
+
 def index_document(
     cfg: Config, conn, doc_id: int, embed_client: ModelClient | None = None, verbose: bool = True
 ) -> int:
     """Index BOTH variants when an editor is configured: the raw transcription
     (variant='raw') and the editor's output (variant='edited'), so searches
-    hit either the faithful or the modernized/translated text."""
+    hit either the faithful or the modernized/translated text.
+
+    **Embeddings are computed BEFORE the existing chunks are cleared.** A
+    re-index replaces a document's chunks wholesale (`clear_chunks` then
+    insert), so a failed embed used to leave the document with its vectors
+    silently deleted and only text-only chunks in their place — `status=done`
+    with no error, invisible except in the embedded-chunk count.
+
+    The rule now:
+
+    - a document that ALREADY has vectors, whose embed fails, is left
+      completely untouched: its chunks are not cleared and the `ModelError`
+      propagates, so the caller can report it and a retry can succeed. One
+      transient embed failure can no longer destroy a finished index.
+    - a document with no vectors yet (a fresh ingest indexed while the embed
+      endpoint is down) still degrades to text-only with a warning, so
+      `pha scan` keeps its zero-config behaviour.
+    """
     pages = db.get_pages(conn, doc_id)
-    db.clear_chunks(conn, doc_id)
     doc = db.get_document(conn, doc_id)
     edited: dict[int, str] = {}
     if doc and doc["editor"]:
@@ -806,8 +831,12 @@ def index_document(
                 items.append((p["id"], n, ch, "edited"))
                 n += 1
     if not items:
+        db.clear_chunks(conn, doc_id)
         conn.commit()
         return 0
+    # Loss is only possible when there are vectors to lose; deciding once also
+    # keeps the retry below from changing the fallback semantics.
+    strict = _has_embedded_chunks(conn, doc_id)
     if verbose:
         print(f"  indexing {n} chunks ...", flush=True)
     close_embed = False
@@ -821,12 +850,25 @@ def index_document(
             batch_size=cfg.embed_batch_size,
         )
     except ModelError as e:
+        if strict:
+            # There are vectors to lose: never trade a working index for a
+            # text-only one. Propagate so the caller reports it and the whole
+            # document is retried later (the chunks above are still intact).
+            raise ModelError(
+                f"embeddings unavailable ({e}); document #{doc_id} left unchanged "
+                "rather than dropping its stored vectors — re-run once the embed "
+                "model is available"
+            ) from e
+        # Nothing to lose yet (a fresh ingest with the endpoint down): keep
+        # `pha scan`'s zero-config behaviour and index text-only.
         vecs = [None] * len(items)
         if verbose:
             print(f"  warning: embeddings unavailable ({e}); indexing text-only")
     finally:
         if close_embed:
             embed_client.close()
+    # Only now is the old index replaced, with the new vectors already in hand.
+    db.clear_chunks(conn, doc_id)
     for (page_id, chunk_no, text, variant), v in zip(items, vecs):
         db.add_chunk(conn, doc_id, page_id, chunk_no, text, pack(v) if v else None, variant)
     conn.commit()
@@ -2146,24 +2188,46 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
     """Re-embed chunks for every ingested document, or only those under a
     dropbox subpath (`pha reindex --path collections/COLX`, a document folder,
     or a single document file). Documents whose status is not 'done' are
-    skipped — their transcription is not final yet."""
+    skipped — their transcription is not final yet.
+
+    A document whose embed fails is **reported and left untouched** (see
+    `index_document`): it keeps its existing chunks and vectors, so a failed
+    re-index can never quietly strip embeddings from a finished document. It
+    is counted in `failed`, not `reindexed`.
+
+    Takes the SAME lock as `scan_once`/`edit_all`: reindexing embeds through
+    the local embed model, so running it alongside a scan or edit is the
+    "two local models at once" swap that this lock exists to prevent — and
+    embed-endpoint contention is exactly what makes `embed()` time out."""
+    if not _acquire_scan_lock(cfg):
+        return {"reindexed": 0, "chunks": {}, "failed": [],
+                "reason": "another scan/edit/reindex job is running (one local model at a time)"}
+    cfg.ensure_dirs()
     conn = db.connect(cfg.db_path)
     try:
         db.backfill_dir_path(conn, cfg.dropbox)
         if path:
             docs = _documents_under(cfg, conn, path)
             if docs is None:
-                return {"reindexed": 0, "chunks": {}}
+                return {"reindexed": 0, "chunks": {}, "failed": []}
         else:
             docs = db.list_documents(conn, limit=10000)
         counts = {}
+        failed: list[dict] = []
         for d in docs:
             if d["status"] != "done":
                 continue
-            counts[d["id"]] = index_document(cfg, conn, d["id"], embed_client=client, verbose=verbose)
-        return {"reindexed": len(counts), "chunks": counts}
+            try:
+                counts[d["id"]] = index_document(cfg, conn, d["id"], embed_client=client,
+                                                 verbose=verbose)
+            except ModelError as e:
+                failed.append({"id": d["id"], "filename": d["filename"], "error": str(e)})
+                if verbose:
+                    print(f"  ! {d['filename']}: {e}", flush=True)
+        return {"reindexed": len(counts), "chunks": counts, "failed": failed}
     finally:
         conn.close()
+        _release_scan_lock(cfg)
 
 
 def _documents_under(cfg: Config, conn, path: str) -> list | None:

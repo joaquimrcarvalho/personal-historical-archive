@@ -92,11 +92,15 @@
 - **Only ONE local-model job at a time.** LM Studio holds a single model in
   memory — loading two local models (e.g. qwen vision + amalia editor)
   simultaneously causes swap/page-out that fills the disk and wedges the
-  server. `pha scan` and `pha edit` now share the SAME lock, so they cannot
-  run concurrently; if one runs while the other holds the lock it reports
-  "another scan/edit job is running" and exits. Remote models (MiniMax)
-  don't compete with LM Studio. A palaeographer and editor may use the SAME
-  local model (e.g. qwen for both on Pfister) to keep one slot loaded.
+  server. `pha scan`, `pha edit` and `pha reindex` now share the SAME lock, so
+  they cannot run concurrently; if one runs while another holds the lock it
+  reports "another scan/edit/reindex job is running" and exits. **`pha
+  reindex` belongs in that set because re-embedding loads the embed model** —
+  running it alongside a scan/edit is what times out `embed()` (see the
+  vector-loss incident in `enhancements/pha-embed-loss-bug-report.md`). Remote
+  models (MiniMax) don't compete with LM Studio. A palaeographer and editor
+  may use the SAME local model (e.g. qwen for both on Pfister) to keep one
+  slot loaded.
 - **Local OCR/parse engines (`engine: tesseract` / `engine: liteparse`) run
   WITHOUT LM Studio** — they are local executables, not LLMs, so an OCR scan
   loads no model (it still takes the pha scan lock). The engine + its settings
@@ -313,10 +317,11 @@ came from (a dropbox `editor` file, a config default, or nowhere).
 
 ### Operating discipline (avoid breaking the machine)
 
-- **One local-model job at a time.** `pha scan` and `pha edit` share a lock;
-  never start `pha_edit`/re-edit while a `pha_scan_now` is running on the same
-  machine (two local models → swap → disk fill → hang). Check
-  `pha_extraction_status` / the lock before starting a pass.
+- **One local-model job at a time.** `pha scan`, `pha edit` and `pha reindex`
+  share a lock; never start `pha edit`/re-edit/reindex while a `pha_scan_now`
+  is running on the same machine (two local models → swap → disk fill → hang,
+  and for reindex → `embed()` timeouts that can cost a document its vectors).
+  Check `pha_extraction_status` / the lock before starting a pass.
 - **Quit LM Studio when not ingesting** — its model page-out is what eats disk
   space. Do not leave a vision + editor model loaded at the same time.
 - **After changing config**: re-run the matching pass (`pha scan`, `pha edit`,

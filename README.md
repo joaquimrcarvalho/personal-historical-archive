@@ -814,6 +814,8 @@ pha info [--json]               # archive paths + versions, without walking the 
 pha status
 pha export
 pha reindex [--path collections/COLX]
+                          # re-embed; takes the single-model lock, and a document
+                          #   whose embed fails is left untouched + reported (exit 3)
 pha review [--doc N] [--all] [--unset [--page N]]
                           # import human corrections from library .md files into the DB
                           #   only files CHANGED since pha last wrote them are imported;
@@ -932,6 +934,31 @@ embeddings:
 ```
 
 After switching the embedding model run `pha reindex`.
+
+**Failure behaviour (why a reindex cannot break a working index).**
+`pha reindex` loads the local embed model, so it takes the same single-model
+lock as `pha scan`/`pha edit`: if another local-model job is running it refuses
+and exits rather than competing for the endpoint (that contention is what
+times out `embed()`).
+
+Re-indexing a document replaces its chunks, so pha embeds the new chunks
+**before** touching the stored ones. If the embed fails:
+
+- a document that **already has vectors** is left completely untouched — its
+  chunks and vectors survive, it is listed as failed (stderr) and `pha
+  reindex` exits **3**, so a background/scripted run can tell it apart from a
+  successful one. Re-run when the model is back; nothing needs repairing.
+- a document with **no vectors yet** (a fresh ingest while the endpoint is
+  down) is indexed text-only with a warning, so `pha scan` keeps working with
+  zero configuration.
+
+To audit, compare per-document chunk and embedded counts — a document with
+`embedded = 0` is searchable by keyword only:
+
+```sql
+SELECT c.document_id, COUNT(*) chunks, SUM(c.embedding IS NOT NULL) embedded
+FROM chunks c GROUP BY c.document_id HAVING embedded = 0;
+```
 
 ## Data layout
 

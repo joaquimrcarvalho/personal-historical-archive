@@ -26,6 +26,7 @@ human-reviewed pages.
 | doc | area | one-line summary |
 |---|---|---|
 | `pha-review-scope-bug-report.md` | **`pha review`** | **FIXED (0.18.0).** `pha review` stamped the *whole* library as **reviewed** instead of only the pending files, so one run froze the archive against any later `pha scan`/`pha edit` — **even `--reprocess`**. Now imports only the pending set; `--all` keeps the blanket behaviour as an opt-in; `--unset [--doc N [--page P]]` lifts the stamp (text kept) so a frozen archive is recoverable. Reproduced on 0.17.0: 14 572 pages stamped after `pha status` had reported **5** pending. |
+| `pha-embed-loss-bug-report.md` | **`pha reindex` / indexing** | **FIXED.** `index_document()` cleared a document's chunks *before* embedding, so a failed `embed()` (120 s batch timeout) fell back to text-only indexing having already deleted the stored vectors — `status=done`, no error, invisible except in the embedded count. **13 885 chunks** lost their vectors this way on `jesuit-archive` while two jobs overlapped. Now embeds first and leaves a document with vectors completely untouched on failure (reported; `pha reindex` exits 3), and `pha reindex` takes the single-model lock. Repair of the incident data = re-embedding 4 documents. |
 
 ## Implementation plans
 

@@ -928,7 +928,19 @@ def cmd_reindex(cfg: Config, args) -> None:
         res = reindex_all(cfg, client, path=args.path)
     finally:
         client.close()
+    failed = res.get("failed") or []
+    if res.get("reason"):
+        print(f"! {res['reason']}", file=sys.stderr)
+        sys.exit(2)
     print(f"reindexed {res['reindexed']} document(s)")
+    if failed:
+        # The documents are untouched (chunks and vectors intact) — this is the
+        # safe failure, not a degraded index.
+        print(f"! {len(failed)} document(s) NOT reindexed — left unchanged; "
+              f"re-run when the embed model is available:", file=sys.stderr)
+        for f in failed:
+            print(f"  # {f['id']} {f['filename']}: {f['error']}", file=sys.stderr)
+        sys.exit(3)
 
 
 def cmd_review(cfg: Config, args) -> None:
