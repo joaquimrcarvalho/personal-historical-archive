@@ -31,9 +31,15 @@ def _schema() -> dict:
 
 @dataclass
 class StageSpec:
-    """A stage pointer: the content-rules id plus its model (both required)."""
+    """A stage pointer: the content-rules id plus its model (both required).
+
+    ``pre``/``post`` are the stage's filter chains (see FILTERS_PLAN.md): they
+    shape the value flowing into/out of the model. Empty = no filters.
+    """
     rules: str
     model: str
+    pre: list = field(default_factory=list)
+    post: list = field(default_factory=list)
 
 
 @dataclass
@@ -47,6 +53,38 @@ class Sidecar:
     source: Path | None = None
 
 
+def _normalize_filter(value):
+    """One `pre:`/`post:` entry: a bare id, or {name, params}.
+
+    Returns a FilterSpec, or None for an entry that names no filter. A filter
+    that cannot be loaded is a run-time error (see filters.load_filter), not a
+    parse error here — the sidecar may legitimately be read by tools that do
+    not have the archive's filters/ directory to hand.
+    """
+    from .filters import FilterSpec
+
+    if isinstance(value, str):
+        name = value.strip()
+        return FilterSpec(name=name) if name else None
+    if isinstance(value, dict):
+        name = str(value.get("name") or value.get("filter") or "").strip()
+        if not name:
+            return None
+        params = value.get("params") or {}
+        return FilterSpec(name=name, params=dict(params) if isinstance(params, dict) else {})
+    return None
+
+
+def _normalize_filter_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, (str, dict)):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [f for f in (_normalize_filter(v) for v in value) if f is not None]
+
+
 def _normalize_stage(value) -> StageSpec | None:
     """Accept a {rules, model} mapping (both required) and return a StageSpec."""
     if value is None or not isinstance(value, dict):
@@ -55,7 +93,9 @@ def _normalize_stage(value) -> StageSpec | None:
     model = str(value.get("model", "") or "").strip()
     if not rules or not model:
         return None
-    return StageSpec(rules=rules, model=model)
+    return StageSpec(rules=rules, model=model,
+                     pre=_normalize_filter_list(value.get("pre")),
+                     post=_normalize_filter_list(value.get("post")))
 
 
 def _merge_keywise(merged: dict, data: dict) -> None:

@@ -58,6 +58,21 @@
   `_sample.printed-books.md`, `_sample.printed-critical-edition.md`; and
   `_sample.generic.md` (general-purpose editor). `config.builtin_samples()` is
   the single source of truth; a test asserts the committed files match it.
+- **Stage filters live in the ARCHIVE** (`<archive>/filters/<id>/`), not the
+  project: `filter.py` (`run(value, ctx)`) plus an optional `filter.md`
+  manifest, referenced from a stage's `pre:`/`post:` in `pha.yaml`
+  (`palaeographer.post`, `editor.pre`, `editor.post`, `encoder.pre`,
+  `encoder.post`). `pha filters` lists them; `pha filter <id>` runs one over
+  text. Python filters run **in-process** (archive-owner code, same trust as a
+  prompt file — there is NO sandbox); a manifest `command:` runs another
+  executable with the same envelope. A filter failure fails that unit and
+  stores nothing. Editing a filter re-runs its stage (hash-based staleness);
+  an artifact filter (`returns: none`) is stamped under
+  `library/<slug>/.filter-stamps/` and re-runs only when its own files, its
+  declared `inputs:` or the EDITED pages change. Adopt one by editing
+  `pha.yaml`, not by moving files. Reference filters ship in the repo's
+  `filters/` (copy into the archive to adopt). Full design:
+  `FILTERS_PLAN.md`.
 - **Staleness by mtime**: editing a palaeographer / editor / encoder / prompt
   file triggers re-extraction / re-editing / re-encoding of affected documents
   on the next scan/run. A document also re-extracts when the resolved

@@ -395,6 +395,8 @@ class Config:
     editors_dir: Path
     encoders_dir: Path
     models_dir: Path
+    # stage filters (<archive>/filters/<id>/); archive-level only (DEC-3)
+    filters_dir: Path
     db_path: Path
     # model interface registry (models/<id>.md); stage rules files carry no
     # model — the model is chosen per document in pha.yaml (or this default).
@@ -488,6 +490,12 @@ class Config:
         ed_dir = _p(archive_dir, paths.get("editors", "editors"))
         enc_dir = _p(archive_dir, paths.get("encoders", "encoders"))
         models_dir = _p(archive_dir, paths.get("models", "models"))
+        # Stage filters: one archive-level directory (a sibling of the other
+        # definition folders). A filter is a subprocess/helper unit that shapes
+        # the value flowing between pipeline stages; see FILTERS_PLAN.md and
+        # `pha filters`. Not per-collection: which filters run is configured in
+        # each pha.yaml (DEC-3).
+        filters_dir = _p(archive_dir, paths.get("filters", "filters"))
         # inbox: documents parked on hold. pha scan never touches them and
         # `pha status` reports them as 'on hold'; `pha inbox --move` relocates
         # them into the dropbox (preserving the relative layout) to be scanned.
@@ -524,6 +532,7 @@ class Config:
             editors_dir=ed_dir,
             encoders_dir=enc_dir,
             models_dir=models_dir,
+            filters_dir=filters_dir,
             db_path=_p(archive_dir, paths.get("db", "archive.db")),
             models=models,
             default_model=str(vis.get("model", "default")).strip() or "default",
@@ -625,10 +634,30 @@ class Config:
             print(f"warning: invalid encoder file {path}: {e}")
             return None
 
+    def _seed_filter_sample(self) -> None:
+        """Seed `filters/_sample/` (the how-to-write-a-filter template).
+
+        The archive-level filter template is written here rather than through
+        `builtin_samples()` (which seeds the project side) because a filter
+        operates on archive data and is adopted per collection. Never
+        overwrites a human's edits.
+        """
+        try:
+            from .filters import FILTER_SAMPLE_MD, FILTER_SAMPLE_PY
+        except Exception:  # noqa: BLE001 - a missing template must not break a command
+            return
+        sample = self.filters_dir / "_sample"
+        try:
+            sample.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
+        _seed_sample(sample, "filter.md", FILTER_SAMPLE_MD)
+        _seed_sample(sample, "filter.py", FILTER_SAMPLE_PY)
+
     def ensure_dirs(self) -> None:
         for d in (self.dropbox, self.inbox, self.library, self.data, self.renders, self.notes,
                   self.prompts, self.palaeographers_dir, self.editors_dir, self.encoders_dir,
-                  self.models_dir):
+                  self.models_dir, self.filters_dir):
             d.mkdir(parents=True, exist_ok=True)
         # user-facing notes folder: seed the instructions/format guide when it is
         # first created (never overwrite a human's edits to notes/README.md). The
@@ -645,6 +674,11 @@ class Config:
             d = self.root / sub
             d.mkdir(parents=True, exist_ok=True)
             _seed_sample(d, fname, content)
+        # stage filters live in the ARCHIVE (they shape archive data), so their
+        # template is seeded there rather than into the project like the stage
+        # definitions above. `filters/_sample/` is ignored by the loader (the
+        # '_' prefix) — copy it to `filters/<my-filter>/` to adopt one.
+        self._seed_filter_sample()
         # keep the archive's agent-facing docs (README.md / AGENTS.md) current
         # with the installed pha version: create them when missing and refresh a
         # pristine generated doc when a pha update changed the template. Never

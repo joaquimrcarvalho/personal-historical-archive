@@ -422,6 +422,17 @@ def init_archive(path: str | Path, project_root: Path | None = None) -> Path:
     _seed_default(ed, _DEFAULT_ED)
     _seed_default(enc, _DEFAULT_ENC)
 
+    # stage filters live in the ARCHIVE (they shape archive data): seed the
+    # how-to-write-one template, which `pha filters` points a new user at.
+    try:
+        from .filters import FILTER_SAMPLE_MD, FILTER_SAMPLE_PY
+        sample = p / "filters" / "_sample"
+        sample.mkdir(parents=True, exist_ok=True)
+        _seed_sample(sample, "filter.md", FILTER_SAMPLE_MD)
+        _seed_sample(sample, "filter.py", FILTER_SAMPLE_PY)
+    except Exception:  # noqa: BLE001 - a missing template must not break init
+        pass
+
     # agent guidance + git hygiene (stamped so later pha updates can refresh
     # a pristine generated doc without clobbering a user's edits)
     (p / "README.md").write_text(_stamp(ARCHIVE_README_MD), encoding="utf-8")

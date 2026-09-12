@@ -28,6 +28,7 @@ from .ingest import (
     write_document_pages,
 )
 from .model_client import ModelClient, ModelError
+from .filters import FilterError
 from .sidecar import resolve_sidecar
 from .doctor import ENGINES as DOCTOR_ENGINES
 
@@ -920,6 +921,121 @@ def cmd_inbox(cfg: Config, args) -> None:
         listing = _snip(names, width - len(prefix) - 1)
         print(_fit(prefix + listing + ")", width))
     print("  →  `pha inbox --move` to put them in the dropbox, then `pha scan`")
+
+
+def cmd_filters(cfg: Config, args) -> None:
+    """List the archive's stage filters (`filters/<id>/`)."""
+    from .filters import HOOK_KINDS, FilterError, discover_filters
+
+    try:
+        found = discover_filters(cfg.filters_dir)
+    except FilterError as e:
+        print(f"! {e}", file=sys.stderr)
+        sys.exit(2)
+    if not found:
+        print(f"no filters in {cfg.filters_dir}")
+        print("  add one by copying filters/_sample/ to filters/<my-filter>/")
+        return
+    if args.json:
+        print(json.dumps({
+            "filters_dir": str(cfg.filters_dir),
+            "filters": [
+                {"name": f.name, "accepts": f.accepts, "returns": f.returns,
+                 "timeout_s": f.timeout_s, "params": f.params, "inputs": f.inputs,
+                 "description": f.description, "path": str(f.path)}
+                for f in sorted(found.values(), key=lambda x: x.name)
+            ],
+        }, indent=2, ensure_ascii=False))
+        return
+    print(f"filters ({cfg.filters_dir})")
+    for f in sorted(found.values(), key=lambda x: x.name):
+        hooks = [h for h, k in HOOK_KINDS.items()
+                 if f.accepts in ("any", k) and f.returns in ("none", k)]
+        print(f"  {f.name}")
+        if f.description:
+            print(f"    {f.description}")
+        print(f"    accepts {f.accepts} · returns {f.returns} · hooks: {', '.join(hooks)}")
+        if f.params:
+            print(f"    params: {', '.join(sorted(f.params))}")
+        if f.inputs:
+            print(f"    inputs: {', '.join(f.inputs)}")
+    print()
+    print("adopt one in a document/collection pha.yaml:")
+    print("  editor: {rules: modernise, model: deepseek-v4-flash, pre: [<filter>]}")
+
+
+def cmd_filter(cfg: Config, args) -> None:
+    """Run ONE filter over text (or a file), for authoring and testing.
+
+    Writes the result to stdout; `--json` prints the result envelope (so a
+    filter that returns records, or nothing at all, is visible too).
+    """
+    from .filters import (HOOK_KINDS, FilterError, FilterSpec, apply_filters,
+                          build_context, load_filter)
+
+    if args.input:
+        try:
+            text = Path(args.input).read_text(encoding="utf-8")
+        except OSError as e:
+            print(f"! cannot read {args.input}: {e}", file=sys.stderr)
+            sys.exit(2)
+    else:
+        text = sys.stdin.read()
+    hook = args.hook
+    if hook not in HOOK_KINDS:
+        print(f"! unknown --hook {hook!r} (expected one of {', '.join(HOOK_KINDS)})",
+              file=sys.stderr)
+        sys.exit(2)
+    params: dict = {}
+    for kv in (args.params or []):
+        if "=" not in kv:
+            print(f"! --params expects key=value, got {kv!r}", file=sys.stderr)
+            sys.exit(2)
+        k, v = kv.split("=", 1)
+        params[k.strip()] = v.strip()
+    ctx_extra: dict = {}
+    for kv in (args.ctx or []):
+        if "=" in kv:
+            k, v = kv.split("=", 1)
+            ctx_extra[k.strip()] = v.strip()
+    try:
+        f = load_filter(cfg.filters_dir, args.name)
+    except FilterError as e:
+        print(f"! {e}", file=sys.stderr)
+        sys.exit(2)
+    doc = None
+    if args.doc is not None:
+        conn = db.connect(cfg.db_path)
+        try:
+            row = db.get_document(conn, int(args.doc))
+            doc = dict(row) if row else None
+        finally:
+            conn.close()
+    kind = HOOK_KINDS[hook]
+    value = text
+    if kind == "records" and text.strip().startswith(("[", "{")):
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError as e:
+            print(f"! --input is not valid JSON for a records hook: {e}", file=sys.stderr)
+            sys.exit(2)
+    ctx = build_context(cfg=cfg, document=doc, stage=hook.split(".")[0], hook=hook,
+                        kind=kind, params=params, inputs={})
+    ctx.update(ctx_extra)
+    try:
+        out, ran = apply_filters(value, [FilterSpec(name=f.name, params=params)],
+                                 hook=hook, ctx=ctx, filters_dir=cfg.filters_dir,
+                                 verbose=False)
+    except FilterError as e:
+        print(f"! {e}", file=sys.stderr)
+        sys.exit(1)
+    if args.json:
+        print(json.dumps({"kind": kind, "value": out, "ran": ran},
+                         indent=2, ensure_ascii=False))
+    elif isinstance(out, str):
+        sys.stdout.write(out if out.endswith("\n") else out + "\n")
+    else:
+        print(json.dumps(out, indent=2, ensure_ascii=False))
 
 
 def cmd_reindex(cfg: Config, args) -> None:
@@ -1925,6 +2041,25 @@ def main(argv: list[str] | None = None) -> None:
 
     e = sub.add_parser("export", help="regenerate per-page transcription files from the DB")
     e.set_defaults(fn=cmd_export)
+
+    fl = sub.add_parser("filters", help="list the archive's stage filters (filters/<id>/)")
+    fl.add_argument("--json", action="store_true", help="machine-readable output")
+    fl.set_defaults(fn=cmd_filters)
+
+    f1 = sub.add_parser("filter", help="run ONE stage filter over text (authoring/testing)")
+    f1.add_argument("name", help="filter id (filters/<id>/)")
+    f1.add_argument("--input", default=None, help="read text from this file (default: stdin)")
+    f1.add_argument("--hook", default="editor.pre",
+                    help="which hook's contract to use (default: editor.pre)")
+    f1.add_argument("--params", action="append", metavar="K=V",
+                    help="override a manifest param (repeatable)")
+    f1.add_argument("--ctx", action="append", metavar="K=V",
+                    help="add/replace a context key, e.g. page=12 (repeatable)")
+    f1.add_argument("--doc", type=int, default=None,
+                    help="populate the context from this document id")
+    f1.add_argument("--json", action="store_true",
+                    help="print the result envelope instead of the bare value")
+    f1.set_defaults(fn=cmd_filter)
 
     rv = sub.add_parser("review", help="import corrections from library .md files into the DB")
     rv.add_argument("--doc", type=int, default=None, help="only review this document id")

@@ -36,6 +36,7 @@ from .extract import (
     resolve_prompt,
 )
 from .model_client import ModelClient, ModelError, PAGE_ENGINES
+from .filters import FilterError, write_stamp
 from .sidecar import Sidecar, effective_render, resolve_sidecar
 
 
@@ -749,9 +750,18 @@ def ingest_file(
         try:
             text = transcribe_page(client, palaeographer, prompt_txt, img,
                                    source=path, page_no=i, total=total)
+            # palaeographer.post filters shape the raw text BEFORE it is stored;
+            # a filter failure must not store a partially filtered page.
+            if sidecar.palaeographer is not None and sidecar.palaeographer.post:
+                text = _run_stage_filters(
+                    cfg, sidecar.palaeographer.post, hook="palaeographer.post",
+                    value=text, conn=conn, path=path, doc_id=doc_id, stage="palaeographer",
+                    page=i, source_name=source_names[i - 1] if i - 1 < len(source_names) else None,
+                    verbose=verbose,
+                )
             db.set_page_result(conn, page_id, raw_text=text)
             consecutive_failures = 0
-        except ModelError as e:
+        except (ModelError, FilterError) as e:
             db.set_page_result(conn, page_id, error=str(e))
             page_errors.append((i, str(e)))
             consecutive_failures += 1
@@ -873,6 +883,157 @@ def index_document(
         db.add_chunk(conn, doc_id, page_id, chunk_no, text, pack(v) if v else None, variant)
     conn.commit()
     return n
+
+
+def _library_dir_for(cfg: Config, conn, doc_id: int) -> Path | None:
+    """The document's current library version folder (`library/<dir>/<slug>`)."""
+    doc = db.get_document(conn, doc_id)
+    if not doc:
+        return None
+    return cfg.library / Path(doc["dir_path"] or "") / _doc_slug(doc)
+
+
+def _stage_filter_dirs(cfg: Config, conn, doc_id: int) -> tuple[Path | None, Path | None]:
+    """(raw pages dir, edited pages dir) for a document, for the filter context.
+
+    Both are best-effort: a filter that does not need them sees null.
+    """
+    raw = edited = None
+    doc = db.get_document(conn, doc_id)
+    if not doc:
+        return None, None
+    pal = doc["palaeographer"] or "default"
+    raw = _pages_dir_for(cfg, doc, f"transcription-{pal}")
+    ed = doc["editor"]
+    if ed:
+        edited = _pages_dir_for(cfg, doc, f"edited-{ed}")
+    return raw, edited
+
+
+def _run_stage_filters(cfg: Config, specs, *, hook: str, value, conn, path: Path,
+                       doc_id: int, stage: str, page: int | None = None,
+                       source_name: str | None = None, encoder: str | None = None,
+                       library_dir: Path | None = None,
+                       pages_dir_edited: Path | None = None,
+                       records_file: Path | None = None,
+                       concatenated_file: Path | None = None,
+                       verbose: bool = True, return_ran: bool = False):
+    """Apply a stage's filter chain and return the new value.
+
+    Builds the documented context object (FILTERS_PLAN.md §2.3) and delegates
+    to `filters.apply_filters`. Raises `FilterError` on failure — the caller
+    must then discard the unit, so nothing partially filtered is ever stored.
+
+    With `return_ran=True` returns ``(value, [Filter, ...])`` — the definitions
+    actually applied — so the caller can stamp artifacts it just materialised.
+    """
+    from .filters import apply_filters, build_context, load_filter
+
+    raw_dir, edited_dir = _stage_filter_dirs(cfg, conn, doc_id)
+    if pages_dir_edited is not None:
+        edited_dir = pages_dir_edited
+    doc = db.get_document(conn, doc_id)
+    doc_dict = dict(doc) if doc else {}
+    if library_dir is None:
+        library_dir = _library_dir_for(cfg, conn, doc_id)
+    sidecar_file = None
+    try:
+        sc = resolve_sidecar(cfg.dropbox, path if path.is_dir() else path.parent,
+                             stem=None if path.is_dir() else path.stem)
+        sidecar_file = sc.source
+    except Exception:  # noqa: BLE001 - provenance only; never break a run for it
+        sidecar_file = None
+    ctx = build_context(
+        cfg=cfg, document=doc_dict, stage=stage, hook=hook,
+        kind="records" if hook == "encoder.post" else "text",
+        params={}, inputs={}, page=page, source_name=source_name, encoder=encoder,
+        library_dir=library_dir, pages_dir_raw=raw_dir, pages_dir_edited=edited_dir,
+        records_file=records_file, concatenated_file=concatenated_file,
+        sidecar=sidecar_file,
+    )
+    value, ran = apply_filters(value, specs, hook=hook, ctx=ctx,
+                               filters_dir=cfg.filters_dir, verbose=verbose)
+    if return_ran:
+        return value, [load_filter(cfg.filters_dir, r["name"]) for r in ran]
+    return value
+
+
+def _is_artifact(cfg: Config, spec) -> bool:
+    """Is this filter a pure side-effect (artifact) filter (`returns: none`)?"""
+    from .filters import load_filter
+    try:
+        return load_filter(cfg.filters_dir, spec.name).returns == "none"
+    except FilterError:
+        return False
+
+
+def _artifact_due(cfg: Config, conn, doc_id: int, encoder: str, spec,
+                  edited_dir: Path | None) -> bool:
+    """Should this artifact filter re-run? See filters.artifact_stale."""
+    from .filters import artifact_stale, load_filter
+    try:
+        f = load_filter(cfg.filters_dir, spec.name)
+    except FilterError:
+        return False
+    lib_dir = _library_dir_for(cfg, conn, doc_id)
+    if lib_dir is None:
+        return True
+    return artifact_stale(lib_dir, encoder, f, pages_dir_edited=edited_dir)
+
+
+def _encoder_stage_for(cfg: Config, doc_path: Path, resolved: str, enc_file: Path | None):
+    """The sidecar stage carrying this encoder's filter chains, if any.
+
+    Encoders are listed in `pha.yaml` with both `rules` and `model`; an
+    auto-discovered collection encoder (no sidecar entry) simply has no
+    filters.
+    """
+    try:
+        sc = _doc_sidecar(cfg, doc_path)
+    except Exception:  # noqa: BLE001 - no sidecar is not an error
+        return None
+    for st in (sc.encoders or []):
+        if st.rules == resolved:
+            return st
+    return None
+
+
+_PAGE_BLOCK_RE = re.compile(r"^--- page (\d+) ---$", re.MULTILINE)
+
+
+def _split_page_blocks(text: str) -> list[tuple[int, str]]:
+    """Re-split filtered whole-document text into (page_no, text) pairs.
+
+    Inverse of the `--- page N ---` join used to build the encoder input, so an
+    `encoder.pre` filter can work on the whole document and still leave the
+    encoder's per-page grounding (and `pages:` scoping) intact. Text before the
+    first marker is attached to the first page.
+    """
+    if not text:
+        return []
+    marks = list(_PAGE_BLOCK_RE.finditer(text))
+    if not marks:
+        return []
+    out: list[tuple[int, str]] = []
+    lead = text[:marks[0].start()].strip()
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        body = text[m.end():end].strip()
+        if i == 0 and lead:
+            body = f"{lead}\n{body}".strip()
+        out.append((int(m.group(1)), body))
+    return out
+
+
+def _pages_dir_for(cfg: Config, doc, variant: str) -> Path | None:
+    """The library folder for one variant (`transcription-<pal>` / `edited-<ed>`)."""
+    base = cfg.library / Path(doc["dir_path"] or "") / _doc_slug(doc)
+    exact = base / variant
+    if exact.is_dir():
+        return exact
+    # the folder may carry an @model suffix (transcription-x@model)
+    hits = sorted(p for p in base.glob(f"{variant}*") if p.is_dir()) if base.is_dir() else []
+    return hits[0] if hits else None
 
 
 def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
@@ -1435,6 +1596,7 @@ def edit_document(
     if not doc:
         return {"action": "skipped", "filename": "?", "reason": "no document"}
     editor_model = None
+    editor_stage = None  # the sidecar stage carrying this editor's filter chains
     if editor_id:
         resolved = editor_id
     else:
@@ -1446,6 +1608,7 @@ def edit_document(
             else:
                 resolved = sc.editor.rules
                 editor_model = sc.editor.model
+                editor_stage = sc.editor
         else:
             ed_id, _src = resolve_editor_id(
                 path.stem, path if path.is_dir() else path.parent, cfg.dropbox
@@ -1491,21 +1654,39 @@ def edit_document(
                 # Deterministic blank page: no model call, so a page cannot be
                 # hallucinated into content when its transcription is empty, and
                 # real sparse text (any letters/digits) always reaches the model.
+                # Filters are skipped with the model call they wrap.
                 db.set_page_edit(conn, p["id"], resolved, text=_BLANK_EDIT_TEXT,
                                  raw_sha=_raw_sha(raw))
                 edited += 1
             else:
-                prompt = (
-                    f"{editor.prompt_text}\n\n"
-                    f"Document: {doc['filename']}\nPage: {p['page_no']} of {doc['page_count']}\n\n"
-                    f"Transcription to edit:\n{raw}"
-                )
                 try:
+                    # editor.pre shapes the transcription BEFORE the model sees
+                    # it; editor.post cleans the model's output before storing.
+                    stage_input = raw
+                    if editor_stage is not None and editor_stage.pre:
+                        stage_input = _run_stage_filters(
+                            cfg, editor_stage.pre, hook="editor.pre", value=raw,
+                            conn=conn, path=Path(doc["path"]), doc_id=doc_id,
+                            stage="editor", page=p["page_no"],
+                            source_name=p["source_name"], verbose=verbose,
+                        )
+                    prompt = (
+                        f"{editor.prompt_text}\n\n"
+                        f"Document: {doc['filename']}\nPage: {p['page_no']} of {doc['page_count']}\n\n"
+                        f"Transcription to edit:\n{stage_input}"
+                    )
                     out = client.chat_text(editor.model, prompt, editor.temperature, editor.max_tokens,
                                            thinking=editor.thinking)
+                    if editor_stage is not None and editor_stage.post:
+                        out = _run_stage_filters(
+                            cfg, editor_stage.post, hook="editor.post", value=out,
+                            conn=conn, path=Path(doc["path"]), doc_id=doc_id,
+                            stage="editor", page=p["page_no"],
+                            source_name=p["source_name"], verbose=verbose,
+                        )
                     db.set_page_edit(conn, p["id"], resolved, text=out, raw_sha=_raw_sha(raw))
                     edited += 1
-                except ModelError as e:
+                except (ModelError, FilterError) as e:
                     db.set_page_edit(conn, p["id"], resolved, error=str(e), raw_sha=_raw_sha(raw))
             conn.commit()
             write_edited_pages(cfg, conn, doc_id, resolved)  # grow output page by page
@@ -1906,6 +2087,25 @@ def encode_document(
     if not _encode_needed(cfg, conn, doc_id, encoder, resolved, doc_path, reprocess, enc_file):
         return {"action": "skipped", "filename": doc["filename"], "reason": "records up to date"}
 
+    # The encoder's filter chain: `pre` normalises the whole-document text the
+    # model will read (BEFORE any call is built), `post` sees the parsed records
+    # (and is where artifact filters materialise files). An encoder file is
+    # collection-local, so its stage comes from the sidecar when it names one.
+    enc_stage = _encoder_stage_for(cfg, doc_path, resolved, enc_file)
+    lib_dir = _library_dir_for(cfg, conn, doc_id)
+    _, edited_dir = _stage_filter_dirs(cfg, conn, doc_id)
+    records_file = (lib_dir / f"records-{resolved}.json") if lib_dir else None
+    concat_file = (lib_dir / f"concatenated-{resolved}.md") if lib_dir else None
+    if enc_stage is not None and enc_stage.pre:
+        whole = "\n\n".join(f"--- page {p} ---\n{t}" for p, t in texts)
+        whole = _run_stage_filters(
+            cfg, enc_stage.pre, hook="encoder.pre", value=whole, conn=conn,
+            path=doc_path, doc_id=doc_id, stage="encoder", encoder=resolved,
+            library_dir=lib_dir, pages_dir_edited=edited_dir,
+            records_file=records_file, concatenated_file=concat_file, verbose=verbose,
+        )
+        texts = _split_page_blocks(whole)
+
     if enc_file is not None:
         from .extract import resolve_encoder_prompt
         doc_prompt, _src = resolve_encoder_prompt(enc_file, "encoder.prompt")
@@ -2034,6 +2234,25 @@ def encode_document(
                 conn.commit()
     finally:
         client.close()
+
+    # encoder.post: the parsed records, once per encoder (NOT per chunk/pass).
+    # An artifact filter (returns: none) consumes this list, writes files and
+    # leaves the records unchanged; it only re-runs when its stamp says its
+    # sources changed, so a model pass does not rewrite unchanged artifacts.
+    if enc_stage is not None and enc_stage.post:
+        due = [F for F in enc_stage.post
+               if not _is_artifact(cfg, F) or _artifact_due(cfg, conn, doc_id, resolved, F, edited_dir)]
+        if due:
+            records, ran = _run_stage_filters(
+                cfg, due, hook="encoder.post", value=records,
+                conn=conn, path=doc_path, doc_id=doc_id, stage="encoder",
+                encoder=resolved, library_dir=lib_dir, pages_dir_edited=edited_dir,
+                records_file=records_file, concatenated_file=concat_file, verbose=verbose,
+                return_ran=True,
+            )
+            for f in ran:
+                if _is_artifact(cfg, f) and lib_dir is not None:
+                    write_stamp(lib_dir, resolved, f)
 
     db.clear_records(conn, doc_id, resolved)
     for rec in records:

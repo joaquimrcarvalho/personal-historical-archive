@@ -11,7 +11,10 @@
       "description": "Which transcription rules and vision model to use.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["rules", "model"],
+      "required": [
+        "rules",
+        "model"
+      ],
       "properties": {
         "rules": {
           "type": "string",
@@ -20,6 +23,20 @@
         "model": {
           "type": "string",
           "description": "Vision model id (models/<id>.md)."
+        },
+        "pre": {
+          "type": "array",
+          "description": "Filters applied before/after this stage's model, in order. A bare id, or {name, params}. Empty/omitted = no filters.",
+          "items": {
+            "$ref": "#/$defs/filterRef"
+          }
+        },
+        "post": {
+          "type": "array",
+          "description": "Filters applied before/after this stage's model, in order. A bare id, or {name, params}. Empty/omitted = no filters.",
+          "items": {
+            "$ref": "#/$defs/filterRef"
+          }
         }
       }
     },
@@ -34,7 +51,10 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["rules", "model"],
+          "required": [
+            "rules",
+            "model"
+          ],
           "properties": {
             "rules": {
               "type": "string",
@@ -43,6 +63,20 @@
             "model": {
               "type": "string",
               "description": "Text model id (models/<id>.md)."
+            },
+            "pre": {
+              "type": "array",
+              "description": "Filters applied before/after this stage's model, in order. A bare id, or {name, params}. Empty/omitted = no filters.",
+              "items": {
+                "$ref": "#/$defs/filterRef"
+              }
+            },
+            "post": {
+              "type": "array",
+              "description": "Filters applied before/after this stage's model, in order. A bare id, or {name, params}. Empty/omitted = no filters.",
+              "items": {
+                "$ref": "#/$defs/filterRef"
+              }
             }
           }
         }
@@ -55,7 +89,10 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["rules", "model"],
+        "required": [
+          "rules",
+          "model"
+        ],
         "properties": {
           "rules": {
             "type": "string",
@@ -64,6 +101,20 @@
           "model": {
             "type": "string",
             "description": "Model id (models/<id>.md)."
+          },
+          "pre": {
+            "type": "array",
+            "description": "Filters applied before/after this stage's model, in order. A bare id, or {name, params}. Empty/omitted = no filters.",
+            "items": {
+              "$ref": "#/$defs/filterRef"
+            }
+          },
+          "post": {
+            "type": "array",
+            "description": "Filters applied before/after this stage's model, in order. A bare id, or {name, params}. Empty/omitted = no filters.",
+            "items": {
+              "$ref": "#/$defs/filterRef"
+            }
           }
         }
       }
@@ -92,6 +143,34 @@
           "description": "JPEG quality for rendered page images (default 88)."
         }
       }
+    }
+  },
+  "$defs": {
+    "filterRef": {
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Filter id (filters/<id>/ in the archive)."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Filter id (filters/<id>/)."
+            },
+            "params": {
+              "type": "object",
+              "description": "Per-use overrides of the manifest's params: defaults.",
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
     }
   }
 }

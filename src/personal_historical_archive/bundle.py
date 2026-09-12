@@ -73,6 +73,7 @@ from .ingest import (
     write_edited_pages,
     write_records_file,
 )
+from .sidecar import resolve_sidecar
 from .model_client import ModelClient
 
 BUNDLE_FORMAT = "pha-bundle"
@@ -90,6 +91,32 @@ def _copy_tree(src: Path, dst: Path) -> None:
     if dst.exists() and dst.is_dir():
         shutil.rmtree(dst)
     shutil.copytree(src, dst)
+
+
+def _filter_specs_for(cfg, doc_dir: Path) -> list:
+    """The filter references in the pha.yaml in scope for a directory.
+
+    Returns the specs from every stage (palaeographer/editor/encoders) so a
+    bundle carries the filters its sidecar names (they are archive-level and
+    otherwise would not travel).
+    """
+    try:
+        sc = resolve_sidecar(cfg.dropbox, doc_dir)
+    except Exception:  # noqa: BLE001 - no sidecar is not an error
+        return []
+    specs: list = []
+    for stage in (sc.palaeographer, sc.editor, *(sc.encoders or [])):
+        if stage is None:
+            continue
+        specs.extend(getattr(stage, "pre", []) or [])
+        specs.extend(getattr(stage, "post", []) or [])
+    seen: set[str] = set()
+    out: list = []
+    for s in specs:
+        if s.name and s.name not in seen:
+            seen.add(s.name)
+            out.append(s)
+    return out
 
 
 def _copy_stage_model(cfg, stage, bmodels: Path, used: list) -> None:
@@ -193,7 +220,8 @@ def export_bundle(
 
         copied: set[Path] = set()
         defs_used: dict[str, list[str]] = {"models": [], "palaeographers": [],
-                                           "editors": [], "encoders": [], "prompts": []}
+                                           "editors": [], "encoders": [], "prompts": [],
+                                           "filters": []}
         manifest_docs: list[dict] = []
         bundled: list[tuple] = []
         skipped: list[str] = []
@@ -296,6 +324,18 @@ def export_bundle(
                         and pp.name not in defs_used["prompts"]:
                     _copy2(pp, bdefs["prompts"] / pp.name)
                     defs_used["prompts"].append(pp.name)
+            # stage filters are archive-level and referenced by the sidecar, so
+            # they do NOT travel with a collection unless we copy them: a
+            # bundled collection whose editor has `pre: [x]` would otherwise
+            # fail on import.
+            for spec in _filter_specs_for(cfg, fdir):
+                if spec.name in defs_used["filters"]:
+                    continue
+                src = cfg.filters_dir / spec.name
+                if not src.is_dir():
+                    continue
+                _copytree(src, out / "defs" / "filters" / spec.name)
+                defs_used["filters"].append(spec.name)
 
             manifest_docs.append({
                 "relpath": str(rel),
@@ -425,6 +465,27 @@ def _install_defs(cfg, bundle_dir: Path, verbose: bool = True) -> dict:
         "encoders": cfg.encoders_dir,
         "prompts": cfg.prompts,
     }
+    # stage filters are directories (filter.py + filter.md), so they install
+    # wholesale rather than file-by-file like the definitions above.
+    fsrc = bundle_dir / "defs" / "filters"
+    if fsrc.is_dir():
+        got = []
+        for d in sorted(fsrc.iterdir()):
+            if not d.is_dir():
+                continue
+            dst = cfg.filters_dir / d.name
+            if dst.exists():
+                if verbose:
+                    print(f"  - def filters/{d.name}: already in this archive; keeping it",
+                          flush=True)
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(d, dst)
+            got.append(d.name)
+            if verbose:
+                print(f"  + def filters/{d.name} installed", flush=True)
+        if got:
+            installed["filters"] = got
     for kind, dst_dir in targets.items():
         src_dir = bundle_dir / "defs" / kind
         if not src_dir.is_dir():

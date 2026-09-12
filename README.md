@@ -778,6 +778,91 @@ printed i–xv but occupies PDF pages 1-15).
   - **few-shot `## Examples`** in the encoder file teach the model the exact
     classes/attributes/shapes with grounded Q/A pairs.
 
+## Stage filters (deterministic text shaping around a model)
+
+A **filter** is a small, deterministic program that shapes the value flowing
+between pipeline stages — before the model or after it. It is for mechanical,
+source-specific work that a prompt should not be asked to do: stripping an OCR
+page marker, collapsing justified-print spacing, turning margin line-numbers
+into `[l. N]`, re-joining a word split across a line break, or materialising
+files from the records.
+
+```
+palaeographer:  page image -> [model/engine] -> (post filters) -> raw text
+editor:         raw text -> (pre filters) -> [model] -> (post filters) -> edited
+encoder:        text -> (pre filters) -> [model] -> records -> (post filters)
+```
+
+| hook | value in | typical use |
+|---|---|---|
+| `palaeographer.post` | one page's raw text | OCR cleanup, separator strip, margin line-numbers |
+| `editor.pre` | one page's raw transcription | shape the text before the editor model |
+| `editor.post` | one page's edited text | clean the model's output before storing |
+| `encoder.pre` | whole-document text (`--- page N ---`) | normalise the concatenated input |
+| `encoder.post` | the parsed records | artifacts (markdown), record enrichment |
+
+**Where filters live.** One archive-level directory, `<archive>/filters/<id>/`,
+holding `filter.py` (a `run(value, ctx)` function) and an optional
+`filter.md` manifest (accepted/returned kind, `params:` defaults, `timeout_s`,
+declared `inputs:`). `filters/_sample/` is the template; `pha filters` lists
+what an archive has. Python filters run **in-process** — they are the archive
+owner's code, with the same trust level as a prompt file, and a per-page
+interpreter start would cost minutes on a real volume. A manifest `command:`
+runs any other executable instead, with the same JSON envelope on disk:
+
+```json
+{"kind": "text", "value": "…", "context": { … }}
+```
+
+**Adopting one** is a `pha.yaml` edit, per document or collection:
+
+```yaml
+palaeographer:
+  rules: ocr
+  model: liteparse
+  post: [strip-ocr-page-separator]
+editor:
+  rules: latin-to-english
+  model: deepseek-v4-flash
+  pre: [line-numbers, {name: collapse-whitespace, params: {keep_blank_lines: false}}]
+  post: [join-hyphenated-words]
+encoders:
+  - rules: documents
+    model: deepseek-v4-flash
+    post:
+      - {name: markdown-from-records, params: {out_dir: segments-documents}}
+```
+
+The reference filters that ship with pha (copy into `filters/` to adopt):
+`strip-ocr-page-separator`, `collapse-whitespace`, `footnote-marker-residue`,
+`line-numbers`, `join-hyphenated-words` (all text) and
+`markdown-from-records` (an **artifact** filter: `returns: none` — it writes
+one Markdown file per record under the document's library folder and leaves the
+records untouched).
+
+**Failure is safe.** A filter that raises, exits non-zero or times out fails
+that unit: nothing partially filtered is stored, the page/edit records the
+error, and the model call is skipped. Editing a filter re-runs its stage on the
+next pass (staleness by the filter's content hash). Artifact filters are
+stamped under `library/<slug>/.filter-stamps/`, so they re-run only when their
+own files, their declared `inputs:`, or the **edited pages** change — a
+historian's correction re-materialises the artifact without re-running the
+model.
+
+Authoring and trying one out:
+
+```bash
+pha filters                      # list the archive's filters (--json for machines)
+pha filters --json
+pha filter line-numbers < page.txt          # run one filter over text
+pha filter markdown-from-records --hook encoder.post --doc 22 --input records.json
+```
+
+Filters are arbitrary code the archive owner supplies: there is **no sandbox**.
+A file a filter reads without declaring under `inputs:` is not watched, so its
+output can go stale silently. Full contract and design:
+[`FILTERS_PLAN.md`](FILTERS_PLAN.md).
+
 ## Testing a configuration (`pha test`)
 
 `pha test` runs the WHOLE pipeline — transcription, editing and encoding — on a
@@ -849,6 +934,9 @@ pha export
 pha reindex [--path collections/COLX]
                           # re-embed; takes the single-model lock, and a document
                           #   whose embed fails is left untouched + reported (exit 3)
+pha filters [--json]      # list the archive's stage filters (filters/<id>/)
+pha filter ID [--input FILE] [--hook H] [--params K=V] [--ctx K=V] [--doc N] [--json]
+                          # run ONE stage filter over text (authoring/testing)
 pha review [--doc N] [--all] [--unset [--page N]]
                           # import human corrections from library .md files into the DB
                           #   only files CHANGED since pha last wrote them are imported;
