@@ -402,6 +402,49 @@ def mark_edit_reviewed(conn: sqlite3.Connection, page_id: int, editor: str, text
     )
 
 
+def clear_page_reviewed(conn: sqlite3.Connection, doc_id: int | None = None,
+                        page_no: int | None = None) -> int:
+    """Drop the `reviewed_at` stamp from transcription pages (undo a review).
+
+    The page text is KEPT — only the protection is lifted, so the page becomes
+    eligible for re-scan/re-edit again. `exported_at` is left alone: the stamp
+    records when pha last imported the file, so a corrected file does not read
+    as "pending" again after the undo. Scoped by document (and optionally one
+    page). Returns the number of stamps cleared.
+    """
+    where, params = ["reviewed_at IS NOT NULL"], []
+    if doc_id is not None:
+        where.append("document_id = ?")
+        params.append(int(doc_id))
+    if page_no is not None:
+        where.append("page_no = ?")
+        params.append(int(page_no))
+    cur = conn.execute(
+        f"UPDATE pages SET reviewed_at = NULL WHERE {' AND '.join(where)}", params)
+    return cur.rowcount or 0
+
+
+def clear_edit_reviewed(conn: sqlite3.Connection, doc_id: int | None = None,
+                        page_no: int | None = None) -> int:
+    """Drop the `reviewed_at` stamp from page edits (undo a review).
+
+    Scoped like `clear_page_reviewed`; joined through `pages` to reach the
+    document/page. All editors of a selected page are cleared.
+    """
+    where, params = ["pe.reviewed_at IS NOT NULL"], []
+    if doc_id is not None:
+        where.append("p.document_id = ?")
+        params.append(int(doc_id))
+    if page_no is not None:
+        where.append("p.page_no = ?")
+        params.append(int(page_no))
+    cur = conn.execute(
+        "UPDATE page_edits SET reviewed_at = NULL WHERE id IN "
+        f"(SELECT pe.id FROM page_edits pe JOIN pages p ON p.id = pe.page_id "
+        f"WHERE {' AND '.join(where)})", params)
+    return cur.rowcount or 0
+
+
 def get_pages(conn: sqlite3.Connection, doc_id: int) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM pages WHERE document_id = ? ORDER BY page_no", (doc_id,)

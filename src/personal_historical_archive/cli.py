@@ -938,6 +938,10 @@ def cmd_review(cfg: Config, args) -> None:
     edited-<editor>/<stem>.md; `pha review` reads those files back and updates
     pages.raw_text / page_edits.text, stamping them reviewed.
 
+    Only files actually changed since pha last wrote them are imported — the
+    same set `pha status` reports. Use `--all` for the deliberate blanket
+    import, and `--unset` to lift the reviewed protection again.
+
     Correcting a transcription-* page fixes the palaeographer's reading: that
     page is never re-read by `pha scan`, and you should then run `pha edit` so
     the editor re-processes just that page from your corrected text. Correcting
@@ -945,14 +949,31 @@ def cmd_review(cfg: Config, args) -> None:
     `pha edit` will overwrite. Run `pha reindex` afterwards so search uses the
     corrected text.
     """
-    from .ingest import review_import
+    from .ingest import review_import, unreview_import
+    if args.page is not None and args.doc is None:
+        print("--page requires --doc (refusing to touch every page in the archive)",
+              file=sys.stderr)
+        sys.exit(2)
     conn = db.connect(cfg.db_path)
     try:
-        res = review_import(cfg, conn, doc_id=args.doc, verbose=True)
+        if getattr(args, "unset", False):
+            if getattr(args, "all", False):
+                print("note: --all is ignored with --unset (nothing is imported)",
+                      file=sys.stderr)
+            res = unreview_import(cfg, conn, doc_id=args.doc, page_no=args.page,
+                                  verbose=True)
+            print(f"unreviewed: {res['pages']} transcription page(s), "
+                  f"{res['edits']} edit(s) — they can be re-scanned/re-edited now")
+            return
+        res = review_import(cfg, conn, doc_id=args.doc, verbose=True,
+                            include_all=getattr(args, "all", False))
     finally:
         conn.close()
+    scope = " (--all: every library file)" if getattr(args, "all", False) else ""
+    extra = f", {res['missing']} file(s) naming no page" if res.get("missing") else ""
     print(f"reviewed: {res['pages']} transcription page(s), {res['edits']} edit(s) "
-          f"(skipped {res['skipped']} unparsed files)")
+          f"from {res['scanned']} candidate file(s){scope} "
+          f"(skipped {res['skipped']} unparsed{extra})")
 
 
 def cmd_bundle(cfg: Config, args) -> None:
@@ -1895,6 +1916,14 @@ def main(argv: list[str] | None = None) -> None:
 
     rv = sub.add_parser("review", help="import corrections from library .md files into the DB")
     rv.add_argument("--doc", type=int, default=None, help="only review this document id")
+    rv.add_argument("--page", type=int, default=None,
+                    help="only review this page (with --doc; used by --unset)")
+    rv.add_argument("--all", action="store_true",
+                    help="import and stamp EVERY library page file, changed or not "
+                         "(the deliberate blanket review; off by default)")
+    rv.add_argument("--unset", action="store_true",
+                    help="clear the reviewed stamp instead of importing, so the pages "
+                         "can be re-scanned/re-edited (undoes a review; keeps the text)")
     rv.set_defaults(fn=cmd_review)
 
     rm = sub.add_parser("rm", help="remove document(s) from the index (by id or filename substring)")

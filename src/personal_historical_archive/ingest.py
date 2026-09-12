@@ -1001,67 +1001,129 @@ def _library_doc_dir(cfg: Config, doc) -> Path | None:
     return folders[-1] if folders else None
 
 
-def _pending_in_doc_dir(cfg: Config, conn, doc_id: int, doc_dir: Path) -> list[dict]:
-    """Fast, document-scoped pending check.
+def _pending_scan(conn, targets: list[tuple[int, Path]]) -> list[dict]:
+    """Fast library pending check for `(document_id, library doc dir)` targets.
 
-    Derives the page from the file name (`page-NNN.md`, or the source name for a
-    directory-of-images document) and the variant from the parent folder, using a
-    single `pages` query — so no page file has to be read. Only legacy rows
-    (exported_at NULL, which need a body comparison) read the file.
+    Same verdict as the historical `library/**` walk — a page file is pending
+    when its mtime is newer than the row's `exported_at`, or, for a legacy row
+    with `exported_at` NULL, when its body differs — but the page is derived
+    from the FILE NAME (`page-NNN.md`, or the source name for a
+    directory-of-images document) and the file is only READ for those legacy
+    rows. Reading every page body is what made `pha status` spend minutes on a
+    large archive; here only directory entries and their mtimes are touched
+    (`os.scandir` stats come for free on macOS/APFS).
 
-    The full-library `pending_review_files` walk stays authoritative; this exists
-    so the PHA view can ask about one document cheaply — a large document can hold
-    thousands of page files.
+    A file whose name matches no page falls back to its front matter, exactly
+    like the old walk, so hand-renamed files are still caught.
     """
-    import re as _re
+    targets = [(int(d), p) for d, p in targets if p is not None]
+    if not targets:
+        return []
+    doc_ids = [d for d, _ in targets]
+    by_no: dict[int, dict[int, object]] = {}
+    by_src: dict[int, dict[str, object]] = {}
+    edits: dict[tuple[int, str], object] = {}
+    # An archive can hold many documents, and SQLite caps bound parameters, so
+    # index them in batches.
+    for i in range(0, len(doc_ids), 500):
+        batch = doc_ids[i:i + 500]
+        marks = ",".join("?" * len(batch))
+        for r in conn.execute(
+            "SELECT id, document_id, page_no, source_name, exported_at FROM pages "
+            f"WHERE document_id IN ({marks})", batch,
+        ):
+            did = int(r["document_id"])
+            by_no.setdefault(did, {})[int(r["page_no"])] = r
+            if r["source_name"]:
+                by_src.setdefault(did, {})[r["source_name"]] = r
+        for r in conn.execute(
+            "SELECT pe.page_id, pe.editor, pe.exported_at FROM page_edits pe "
+            "JOIN pages p ON p.id = pe.page_id "
+            f"WHERE p.document_id IN ({marks})", batch,
+        ):
+            edits[(int(r["page_id"]), r["editor"] or "")] = r
 
-    rows = conn.execute(
-        "SELECT id, page_no, source_name, raw_text, exported_at FROM pages WHERE document_id=?",
-        (doc_id,)).fetchall()
-    by_page = {int(r["page_no"]): r for r in rows}
-    by_source = {(r["source_name"] or ""): r for r in rows if r["source_name"]}
-
-    def file_body(path: Path) -> str:
+    def read_body(path: Path) -> str:
         parsed = _parse_library_file(path)
-        return parsed[1] if parsed else ""
+        return (parsed[1] if parsed else "").strip()
+
+    def raw_body(row) -> str:
+        r = conn.execute("SELECT raw_text FROM pages WHERE id=?", (int(row["id"]),)).fetchone()
+        raw = ((r["raw_text"] if r else "") or "").strip()
+        return (format_notes(raw) if raw else "*waiting*").strip()
+
+    def edit_body(page_id: int, editor: str | None) -> str:
+        r = conn.execute("SELECT text FROM page_edits WHERE page_id=? AND editor=?",
+                         (page_id, editor)).fetchone()
+        return ((((r["text"] if r else "") or "") or "*waiting*")).strip()
 
     out: list[dict] = []
-    for vdir in sorted(d for d in doc_dir.iterdir() if d.is_dir()):
-        variant = vdir.name
-        if not (variant.startswith("transcription-") or variant.startswith("edited-")):
+    for doc_id, doc_dir in targets:
+        pages_no, pages_src = by_no.get(doc_id, {}), by_src.get(doc_id, {})
+        try:
+            with os.scandir(doc_dir) as it:
+                variants = sorted(it, key=lambda e: e.name)
+        except OSError:
             continue
-        is_edited = variant.startswith("edited-")
-        editor = variant[len("edited-"):].split("@", 1)[0] if is_edited else None
-        for f in sorted(vdir.glob("*.md")):
-            m = _re.fullmatch(r"page-(\d+)", f.stem)
-            row = by_page.get(int(m.group(1))) if m else by_source.get(f.stem)
-            if row is None:
+        for vdir in variants:
+            variant = vdir.name
+            if not vdir.is_dir():
                 continue
+            if not (variant.startswith("transcription-") or variant.startswith("edited-")):
+                continue
+            is_edited = variant.startswith("edited-")
+            editor = variant[len("edited-"):].split("@", 1)[0] if is_edited else None
             try:
-                mtime = f.stat().st_mtime
+                with os.scandir(vdir.path) as it:
+                    files = sorted(it, key=lambda e: e.name)
             except OSError:
                 continue
-            if is_edited:
-                edit = db.get_page_edit(conn, row["id"], editor)
-                if edit is not None and edit["exported_at"] is not None:
-                    pending = mtime > edit["exported_at"]
+            for f in files:
+                if not f.name.endswith(".md"):
+                    continue
+                stem = f.name[:-3]
+                row = pages_no.get(int(stem[5:])) if (
+                    stem.startswith("page-") and stem[5:].isdigit()) else pages_src.get(stem)
+                fm_body: str | None = None
+                if row is None:
+                    parsed = _parse_library_file(Path(f.path))
+                    if not parsed:
+                        continue
+                    fm, fm_body = parsed
+                    d_id, page_no = fm.get("document_id"), fm.get("page")
+                    if d_id is None or page_no is None:
+                        continue
+                    row = conn.execute(
+                        "SELECT id, document_id, page_no, source_name, exported_at FROM pages "
+                        "WHERE document_id=? AND page_no=?",
+                        (int(d_id), int(page_no))).fetchone()
+                    if row is None:
+                        continue
+                try:
+                    mtime = f.stat().st_mtime
+                except OSError:
+                    continue
+                did, page_no = int(row["document_id"]), int(row["page_no"])
+                if is_edited:
+                    edit = edits.get((int(row["id"]), editor or ""))
+                    if edit is not None and edit["exported_at"] is not None:
+                        pending = mtime > edit["exported_at"]
+                    else:
+                        body = fm_body if fm_body is not None else read_body(Path(f.path))
+                        pending = body != edit_body(int(row["id"]), editor)
+                    if pending:
+                        out.append({"path": f.path, "document_id": did, "page_no": page_no,
+                                    "variant": variant, "editor": editor})
                 else:
-                    current = ((edit["text"] if edit else "") or "*waiting*").strip()
-                    pending = file_body(f).strip() != current
-                if pending:
-                    out.append({"path": str(f), "document_id": doc_id,
-                                "page_no": int(row["page_no"]), "variant": variant,
-                                "editor": editor})
-            else:
-                if row["exported_at"] is not None:
-                    pending = mtime > row["exported_at"]
-                else:
-                    raw = (row["raw_text"] or "").strip()
-                    current = format_notes(raw) if raw else "*waiting*"
-                    pending = file_body(f).strip() != current.strip()
-                if pending:
-                    out.append({"path": str(f), "document_id": doc_id,
-                                "page_no": int(row["page_no"]), "variant": variant})
+                    if row["exported_at"] is not None:
+                        pending = mtime > row["exported_at"]
+                    else:
+                        body = fm_body if fm_body is not None else read_body(Path(f.path))
+                        pending = body != raw_body(row)
+                    if pending:
+                        out.append({"path": f.path, "document_id": did,
+                                    "page_no": page_no, "variant": variant})
+    out.sort(key=lambda r: r["path"])
     return out
 
 
@@ -1073,63 +1135,21 @@ def pending_review_files(cfg: Config, conn, doc_id: int | None = None) -> list[d
     rows with exported_at NULL we fall back to comparing the file body to the
     DB text. Returns {path, document_id, page_no, variant, editor}.
 
-    `doc_id` limits the check to one document via the fast path above; without it
-    every library page file is read and checked (the authoritative walk).
+    Both forms are DB-driven now (one `pages` + one `page_edits` query, then a
+    directory scan per document) — the old form walked every `library/**/*.md`
+    file and read each one, which cost minutes on an archive with tens of
+    thousands of page files. `doc_id` narrows the same scan to one document.
     """
     if doc_id is not None:
-        doc_dir = _library_doc_dir(cfg, db.get_document(conn, int(doc_id)))
-        return _pending_in_doc_dir(cfg, conn, int(doc_id), doc_dir) if doc_dir is not None else []
-    pending: list[dict] = []
-    for p in sorted(cfg.library.rglob("*.md")):
-        rel_parts = p.relative_to(cfg.library).parts
-        if len(rel_parts) < 3:
-            continue
-        variant = rel_parts[-2]
-        if not (variant.startswith("transcription-") or variant.startswith("edited-")):
-            continue
-        parsed = _parse_library_file(p)
-        if not parsed:
-            continue
-        fm, body = parsed
-        d_id, page_no = fm.get("document_id"), fm.get("page")
-        if d_id is None or page_no is None:
-            continue
-        doc = db.get_document(conn, int(d_id))
-        if not doc:
-            continue
-        page = conn.execute(
-            "SELECT id, raw_text, exported_at FROM pages WHERE document_id = ? AND page_no = ?",
-            (int(d_id), int(page_no))).fetchone()
-        if not page:
-            continue
-        try:
-            mtime = p.stat().st_mtime
-        except OSError:
-            continue
-        if variant.startswith("transcription-"):
-            if page["exported_at"] is not None:
-                edited = mtime > page["exported_at"]
-            else:
-                # legacy row: compare content, mirroring write_document_pages
-                raw = (page["raw_text"] or "").strip()
-                current = format_notes(raw) if raw else "*waiting*"
-                edited = body.strip() != current.strip()
-            if edited:
-                pending.append({"path": str(p), "document_id": int(d_id),
-                                "page_no": int(page_no), "variant": variant})
-        else:
-            editor = variant[len("edited-"):].split("@", 1)[0]
-            edit = db.get_page_edit(conn, page["id"], editor)
-            if edit is not None and edit["exported_at"] is not None:
-                edited = mtime > edit["exported_at"]
-            else:
-                current = ((edit["text"] if edit else "") or "*waiting*").strip()
-                edited = body.strip() != current
-            if edited:
-                pending.append({"path": str(p), "document_id": int(d_id),
-                                "page_no": int(page_no), "variant": variant,
-                                "editor": editor})
-    return pending
+        doc = db.get_document(conn, int(doc_id))
+        doc_dir = _library_doc_dir(cfg, doc) if doc else None
+        return _pending_scan(conn, [(int(doc_id), doc_dir)]) if doc_dir is not None else []
+    targets: list[tuple[int, Path]] = []
+    for doc in db.list_documents(conn, limit=100000):
+        doc_dir = _library_doc_dir(cfg, doc)
+        if doc_dir is not None:
+            targets.append((int(doc["id"]), doc_dir))
+    return _pending_scan(conn, targets)
 
 
 def _parse_library_file(path: Path) -> tuple[dict, str] | None:
@@ -1157,17 +1177,16 @@ def page_row_raw(conn, page_id: int) -> str:
     return row["raw_text"] or ""
 
 
-def review_import(cfg: Config, conn, doc_id: int | None = None, verbose: bool = True) -> dict:
-    """Import human corrections from the library markdown files back into the DB.
+def _all_review_files(cfg: Config, doc_id: int | None = None) -> list[dict]:
+    """Every importable library page file, pending or not (for `review --all`).
 
-    The historian edits `library/.../transcription-<pal>/<stem>.md` or
-    `library/.../edited-<editor>/<stem>.md`; this reads them back, updates
-    pages.raw_text / page_edits.text, and stamps them reviewed so later
-    scan/edit passes skip them. Returns counts.
+    The deliberate "import and stamp everything" path. A file that cannot be
+    parsed, or whose front matter names no document/page, counts as skipped;
+    the work of resolving a file to a DB page lives in `review_import`.
+    Returns the same `{path, document_id, page_no, variant, editor}` shape as
+    `pending_review_files`.
     """
-    updated_pages = 0
-    updated_edits = 0
-    skipped = 0
+    out: list[dict] = []
     for p in sorted(cfg.library.rglob("*.md")):
         rel_parts = p.relative_to(cfg.library).parts
         # library/<rel_dir>/<slug>/transcription-<pal>/<file>.md
@@ -1175,27 +1194,71 @@ def review_import(cfg: Config, conn, doc_id: int | None = None, verbose: bool = 
         if len(rel_parts) < 3:
             continue
         variant = rel_parts[-2]  # transcription-xxx or edited-xxx
+        if not (variant.startswith("transcription-") or variant.startswith("edited-")):
+            continue
+        parsed = _parse_library_file(p)
+        if not parsed:
+            out.append({"path": str(p), "unparsed": True})
+            continue
+        fm, _body = parsed
+        d_id, page_no = fm.get("document_id"), fm.get("page")
+        if d_id is None or page_no is None:
+            out.append({"path": str(p), "unparsed": True})
+            continue
+        if doc_id is not None and int(d_id) != int(doc_id):
+            continue
+        rec = {"path": str(p), "document_id": int(d_id), "page_no": int(page_no),
+               "variant": variant}
+        if variant.startswith("edited-"):
+            rec["editor"] = variant[len("edited-"):].split("@", 1)[0]
+        out.append(rec)
+    return out
+
+
+def review_import(cfg: Config, conn, doc_id: int | None = None, verbose: bool = True,
+                  include_all: bool = False) -> dict:
+    """Import human corrections from the library markdown files back into the DB.
+
+    The historian edits `library/.../transcription-<pal>/<stem>.md` or
+    `library/.../edited-<editor>/<stem>.md`; this reads them back, updates
+    pages.raw_text / page_edits.text, and stamps them reviewed so later
+    scan/edit passes skip them. Returns counts.
+
+    **Scope.** Only files a human actually changed since pha last wrote them
+    are imported and stamped — the same `pending_review_files()` set `pha
+    status` reports. Stamping every library file would freeze the archive:
+    a `reviewed` row is never re-processed, even by `--reprocess`. Pass
+    `include_all=True` (`pha review --all`) for the deliberate blanket import.
+    """
+    candidates = (
+        _all_review_files(cfg, doc_id) if include_all
+        else pending_review_files(cfg, conn, doc_id=doc_id)
+    )
+
+    updated_pages = 0
+    updated_edits = 0
+    skipped = 0
+    missing = 0
+    for rec in candidates:
+        if rec.get("unparsed"):
+            skipped += 1
+            continue
+        p = Path(rec["path"])
+        d_id, page_no = int(rec["document_id"]), int(rec["page_no"])
+        variant = rec["variant"]
         parsed = _parse_library_file(p)
         if not parsed:
             skipped += 1
             continue
-        fm, body = parsed
-        d_id = fm.get("document_id")
-        page_no = fm.get("page")
-        if d_id is None or page_no is None:
-            skipped += 1
-            continue
-        if doc_id is not None and int(d_id) != doc_id:
-            continue
-        doc = db.get_document(conn, int(d_id))
-        if not doc:
-            skipped += 1
+        body = parsed[1]
+        if db.get_document(conn, d_id) is None:
+            missing += 1
             continue
         page = conn.execute(
             "SELECT id FROM pages WHERE document_id = ? AND page_no = ?",
-            (int(d_id), int(page_no))).fetchone()
+            (d_id, page_no)).fetchone()
         if not page:
-            skipped += 1
+            missing += 1
             continue
         if variant.startswith("transcription-"):
             db.mark_page_reviewed(conn, page["id"], body)
@@ -1203,7 +1266,7 @@ def review_import(cfg: Config, conn, doc_id: int | None = None, verbose: bool = 
             if verbose:
                 print(f"  reviewed transcription: doc {d_id} page {page_no} ({p.name})")
         elif variant.startswith("edited-"):
-            editor = variant[len("edited-"):].split("@", 1)[0]
+            editor = rec.get("editor") or variant[len("edited-"):].split("@", 1)[0]
             db.set_page_edit(conn, page["id"], editor, text=body,
                              raw_sha=_raw_sha(page_row_raw(conn, page["id"])))
             db.mark_edit_reviewed(conn, page["id"], editor, body)
@@ -1211,7 +1274,28 @@ def review_import(cfg: Config, conn, doc_id: int | None = None, verbose: bool = 
             if verbose:
                 print(f"  reviewed edit: doc {d_id} page {page_no} ({p.name}, editor {editor})")
     conn.commit()
-    return {"pages": updated_pages, "edits": updated_edits, "skipped": skipped}
+    return {"pages": updated_pages, "edits": updated_edits, "skipped": skipped,
+            "missing": missing, "scanned": len(candidates)}
+
+
+def unreview_import(cfg: Config, conn, doc_id: int | None = None,
+                    page_no: int | None = None, verbose: bool = True) -> dict:
+    """Clear the `reviewed` protection from transcription pages and edits.
+
+    The undo for `review_import` (and for a mistaken blanket `pha review`).
+    Text is NOT changed — only the stamp is lifted, so the pages become
+    eligible for `pha scan` / `pha edit` again. Scoped by document and,
+    optionally, a single page. Returns counts of cleared stamps.
+    """
+    pages = db.clear_page_reviewed(conn, doc_id=doc_id, page_no=page_no)
+    edits = db.clear_edit_reviewed(conn, doc_id=doc_id, page_no=page_no)
+    conn.commit()
+    if verbose:
+        scope = "all documents" if doc_id is None else f"doc {doc_id}"
+        if page_no is not None:
+            scope += f" page {page_no}"
+        print(f"  unreviewed: {pages} transcription page(s), {edits} edit(s) ({scope})")
+    return {"pages": pages, "edits": edits}
 
 
 def _edit_null(cfg: Config, conn, doc_id: int, resolved: str,

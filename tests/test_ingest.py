@@ -280,6 +280,208 @@ def test_pending_review_files_detects_correction(tmp_path):
     conn.close()
 
 
+def test_review_import_only_stamps_pending_files(tmp_path):
+    """Regression: `pha review` must stamp ONLY the corrected file.
+
+    The old scope walked every library .md and stamped unconditionally, so one
+    review froze the whole archive against scan/edit — even --reprocess — with
+    no way back. Untouched files must stay un-stamped.
+    """
+    import time as _t
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import review_import, write_document_pages
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        "paths:\n  dropbox: dropbox\n  library: library\n  renders: renders\n"
+        "  palaeographers: palaeographers\n  editors: editors\n  encoders: encoders\n"
+        "  prompts: prompts\n  db: archive.db\n"
+    )
+    cfg = Config.load(root)
+    col = cfg.dropbox / "collections" / "testcol"
+    col.mkdir(parents=True)
+    src = col / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/testcol", now="2026-01-01")
+    pids = []
+    for n in (1, 2, 3):
+        pid = _db.add_page(conn, doc_id, n)
+        _db.set_page_result(conn, pid, raw_text=f"MACHINE TEXT {n}")
+        pids.append(pid)
+    _db.set_document_status(conn, doc_id, "done")
+    conn.commit()
+    out = write_document_pages(cfg, conn, doc_id)
+
+    # nothing changed -> nothing pending -> a review imports and stamps nothing
+    assert review_import(cfg, conn, doc_id=doc_id, verbose=False)["pages"] == 0
+    stamps = conn.execute(
+        "SELECT reviewed_at FROM pages WHERE document_id=?", (doc_id,)).fetchall()
+    assert all(r["reviewed_at"] is None for r in stamps)
+
+    # correct ONLY page 2 (mtime must move past exported_at)
+    _t.sleep(0.05)
+    f2 = out / "page-002.md"
+    f2.write_text(f2.read_text(encoding="utf-8").replace("MACHINE TEXT 2", "HUMAN TEXT 2"),
+                  encoding="utf-8")
+    res = review_import(cfg, conn, doc_id=doc_id, verbose=False)
+    assert res["pages"] == 1
+    rows = {r["page_no"]: r for r in conn.execute(
+        "SELECT page_no, raw_text, reviewed_at FROM pages WHERE document_id=?", (doc_id,))}
+    assert rows[2]["raw_text"] == "HUMAN TEXT 2"
+    assert rows[2]["reviewed_at"] is not None
+    # the two untouched pages are still free to be re-scanned
+    assert rows[1]["reviewed_at"] is None and rows[3]["reviewed_at"] is None
+    assert rows[1]["raw_text"] == "MACHINE TEXT 1"
+
+    # a second review is a no-op: importing updated exported_at, so nothing reads
+    # as pending any more (the file was not edited again).
+    assert review_import(cfg, conn, doc_id=doc_id, verbose=False)["pages"] == 0
+
+    # --all is the explicit blanket import and DOES stamp the rest
+    res = review_import(cfg, conn, doc_id=doc_id, verbose=False, include_all=True)
+    assert res["pages"] == 3
+    stamps = conn.execute(
+        "SELECT COUNT(*) n FROM pages WHERE document_id=? AND reviewed_at IS NOT NULL",
+        (doc_id,)).fetchone()["n"]
+    assert stamps == 3
+    conn.close()
+
+
+def test_review_import_handles_edited_variant_scoped(tmp_path):
+    """Only the corrected edited-* page is stamped; its sibling is untouched."""
+    import time as _t
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import (
+        review_import, unreview_import, write_edited_pages)
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        "paths:\n  dropbox: dropbox\n  library: library\n  renders: renders\n"
+        "  palaeographers: palaeographers\n  editors: editors\n  encoders: encoders\n"
+        "  prompts: prompts\n  db: archive.db\n"
+    )
+    cfg = Config.load(root)
+    col = cfg.dropbox / "collections" / "testcol"
+    col.mkdir(parents=True)
+    src = col / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/testcol", now="2026-01-01")
+    for n in (1, 2):
+        pid = _db.add_page(conn, doc_id, n)
+        _db.set_page_result(conn, pid, raw_text=f"RAW {n}")
+        _db.set_page_edit(conn, pid, "mod", text=f"EDITED {n}", raw_sha="x")
+    _db.set_document_status(conn, doc_id, "done")
+    conn.commit()
+    out = write_edited_pages(cfg, conn, doc_id, "mod")
+
+    _t.sleep(0.05)
+    f1 = out / "page-001.md"
+    f1.write_text(f1.read_text(encoding="utf-8").replace("EDITED 1", "CORRECTED 1"),
+                  encoding="utf-8")
+    res = review_import(cfg, conn, doc_id=doc_id, verbose=False)
+    assert res["edits"] == 1
+    rows = {r["page_no"]: r for r in conn.execute(
+        "SELECT p.page_no, pe.text, pe.reviewed_at FROM page_edits pe "
+        "JOIN pages p ON p.id = pe.page_id WHERE p.document_id=? AND pe.editor='mod'",
+        (doc_id,))}
+    assert rows[1]["text"] == "CORRECTED 1" and rows[1]["reviewed_at"] is not None
+    assert rows[2]["text"] == "EDITED 2" and rows[2]["reviewed_at"] is None
+
+    # --unset lifts both the page and the edit protection, scoped to the doc
+    cleared = unreview_import(cfg, conn, doc_id=doc_id, verbose=False)
+    assert cleared == {"pages": 0, "edits": 1}
+    n = conn.execute(
+        "SELECT COUNT(*) n FROM page_edits pe JOIN pages p ON p.id = pe.page_id "
+        "WHERE p.document_id=? AND pe.reviewed_at IS NOT NULL", (doc_id,)).fetchone()["n"]
+    assert n == 0
+    # the corrected text is KEPT — only the stamp goes
+    kept = conn.execute(
+        "SELECT pe.text FROM page_edits pe JOIN pages p ON p.id = pe.page_id "
+        "WHERE p.document_id=? AND p.page_no=1 AND pe.editor='mod'", (doc_id,)).fetchone()
+    assert kept["text"] == "CORRECTED 1"
+    conn.close()
+
+
+def test_unreview_import_scopes_page_and_restores_reprocess(tmp_path):
+    """--unset --doc N --page P clears only that page, then edit can run again."""
+    import time as _t
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import (
+        review_import, unreview_import, write_document_pages, write_edited_pages,
+        _edit_needed)
+    from types import SimpleNamespace
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        "paths:\n  dropbox: dropbox\n  library: library\n  renders: renders\n"
+        "  palaeographers: palaeographers\n  editors: editors\n  encoders: encoders\n"
+        "  prompts: prompts\n  db: archive.db\n"
+    )
+    cfg = Config.load(root)
+    col = cfg.dropbox / "collections" / "testcol"
+    col.mkdir(parents=True)
+    src = col / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/testcol", now="2026-01-01")
+    for n in (1, 2):
+        pid = _db.add_page(conn, doc_id, n)
+        _db.set_page_result(conn, pid, raw_text=f"RAW {n}")
+        _db.set_page_edit(conn, pid, "mod", text=f"EDITED {n}", raw_sha="x")
+    _db.set_document_status(conn, doc_id, "done")
+    conn.commit()
+    out = write_document_pages(cfg, conn, doc_id)
+    edit_out = write_edited_pages(cfg, conn, doc_id, "mod")
+
+    _t.sleep(0.05)
+    for n in (1, 2):
+        f = out / f"page-{n:03d}.md"
+        f.write_text(f.read_text(encoding="utf-8").replace(f"RAW {n}", f"HUMAN {n}"),
+                     encoding="utf-8")
+        e = edit_out / f"page-{n:03d}.md"
+        e.write_text(e.read_text(encoding="utf-8").replace(f"EDITED {n}", f"CORRECTED {n}"),
+                     encoding="utf-8")
+    res = review_import(cfg, conn, doc_id=doc_id, verbose=False)
+    assert res["pages"] == 2 and res["edits"] == 2
+    # a reviewed edit refuses even --reprocess
+    page1 = conn.execute("SELECT * FROM pages WHERE document_id=? AND page_no=1", (doc_id,)).fetchone()
+    editor = SimpleNamespace(prompt_file=None)
+    edit_row = dict(conn.execute(
+        "SELECT pe.* FROM page_edits pe WHERE pe.page_id=? AND pe.editor='mod'",
+        (page1["id"],)).fetchone())
+    assert edit_row["reviewed_at"] is not None
+    assert _edit_needed(page1, edit_row, editor, reprocess=True) is False
+
+    # unset just page 1
+    res = unreview_import(cfg, conn, doc_id=doc_id, page_no=1, verbose=False)
+    assert res == {"pages": 1, "edits": 1}
+    page1 = conn.execute("SELECT * FROM pages WHERE document_id=? AND page_no=1", (doc_id,)).fetchone()
+    assert page1["reviewed_at"] is None
+    edit_row = dict(conn.execute(
+        "SELECT pe.* FROM page_edits pe WHERE pe.page_id=? AND pe.editor='mod'",
+        (page1["id"],)).fetchone())
+    assert edit_row["reviewed_at"] is None
+    assert _edit_needed(page1, edit_row, editor, reprocess=True) is True
+    # page 2 is untouched by the page-scoped unset
+    page2 = conn.execute("SELECT * FROM pages WHERE document_id=? AND page_no=2", (doc_id,)).fetchone()
+    assert page2["reviewed_at"] is not None
+    conn.close()
+
+
 def test_doc_slug_readable_date():
     """Library folder names use a readable date, not an opaque hash."""
     from personal_historical_archive.ingest import _doc_slug

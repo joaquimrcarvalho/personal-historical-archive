@@ -113,3 +113,154 @@ def test_cli_pending_clean_is_reported(tmp_path, capsys):
     _write_page_file(cfg, doc, 1)
     cli.cmd_pending(cfg, SimpleNamespace(doc=doc_id, json=False))
     assert "up to date" in capsys.readouterr().out
+
+
+# --- the fast scan must keep the legacy (exported_at NULL) body comparison -----
+
+def _legacy_doc(tmp_path, page_no=1):
+    """A document whose page row has no exported_at, so bodies are compared."""
+    from personal_historical_archive.extract import format_notes
+
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    doc_id, doc = _add_doc_with_page(cfg, page_no=page_no, exported_at=None)
+    conn = _db.connect(cfg.db_path)
+    page = conn.execute("SELECT id FROM pages WHERE document_id=? AND page_no=?",
+                        (doc_id, page_no)).fetchone()
+    _db.set_page_result(conn, page["id"], raw_text="original text")
+    conn.commit()
+    return cfg, doc_id, doc, conn, page["id"], format_notes("original text").strip()
+
+
+def test_pending_legacy_transcription_compares_bodies(tmp_path):
+    cfg, doc_id, doc, conn, _pid, body = _legacy_doc(tmp_path)
+    f = _write_page_file(cfg, doc, 1, body=body)
+    assert pending_review_files(cfg, conn) == []          # identical body -> clean
+    assert pending_review_files(cfg, conn, doc_id=doc_id) == []
+
+    f.write_text(f.read_text(encoding="utf-8").replace("original", "hand corrected"),
+                 encoding="utf-8")
+    pend = pending_review_files(cfg, conn)
+    assert len(pend) == 1 and pend[0]["page_no"] == 1 and pend[0]["document_id"] == doc_id
+    assert pending_review_files(cfg, conn, doc_id=doc_id) == pend  # scoped agrees
+    conn.close()
+
+
+def test_pending_legacy_edited_compares_bodies(tmp_path):
+    cfg, doc_id, doc, conn, pid, _body = _legacy_doc(tmp_path, page_no=2)
+    _db.set_page_edit(conn, pid, "latin-to-english", text="edited text")
+    conn.commit()
+    f = _write_page_file(cfg, doc, 2, variant="edited-latin-to-english", body="edited text")
+    assert pending_review_files(cfg, conn) == []
+
+    f.write_text("---\ndocument_id: %d\npage: 2\n---\n\nchanged by hand\n" % doc_id,
+                 encoding="utf-8")
+    pend = pending_review_files(cfg, conn)
+    assert len(pend) == 1 and pend[0]["editor"] == "latin-to-english"
+    assert pending_review_files(cfg, conn, doc_id=doc_id) == pend
+    conn.close()
+
+
+# --- `pha review` scope: pending only, --all opt-in, --unset undo ------------
+
+def _review_args(doc=None, page=None, all=False, unset=False):
+    return SimpleNamespace(doc=doc, page=page, all=all, unset=unset)
+
+
+def test_cli_review_only_imports_pending_files(tmp_path, capsys):
+    """`pha review` imports the corrected file and leaves the others unstamped."""
+    import os
+
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    doc_id, doc = _add_doc_with_page(cfg, page_no=1, exported_at=None)
+    conn = _db.connect(cfg.db_path)
+    _db.add_page(conn, doc_id, 2)
+    conn.commit()
+    conn.close()
+    # both files written as pha would export them, then their exported_at is
+    # pinned to the write time so neither reads as changed yet
+    f1 = _write_page_file(cfg, doc, 1, body="machine text 1")
+    f2 = _write_page_file(cfg, doc, 2, body="machine text 2")
+    conn = _db.connect(cfg.db_path)
+    for n, f in ((1, f1), (2, f2)):
+        conn.execute("UPDATE pages SET exported_at=? WHERE document_id=? AND page_no=?",
+                     (f.stat().st_mtime, doc_id, n))
+    conn.commit()
+    conn.close()
+
+    # the historian corrects ONLY page 1 (mtime must move past exported_at)
+    time.sleep(0.05)
+    f1.write_text(f1.read_text(encoding="utf-8").replace("machine text 1", "HUMAN CORRECTION"),
+                  encoding="utf-8")
+    os.utime(f1, (f1.stat().st_mtime + 1, f1.stat().st_mtime + 1))
+
+    cli.cmd_review(cfg, _review_args(doc=doc_id))
+    out = capsys.readouterr().out
+    assert "reviewed: 1 transcription page(s)" in out
+
+    conn = _db.connect(cfg.db_path)
+    rows = {r["page_no"]: r for r in conn.execute(
+        "SELECT page_no, raw_text, reviewed_at FROM pages WHERE document_id=?", (doc_id,))}
+    conn.close()
+    assert rows[1]["raw_text"] == "HUMAN CORRECTION"
+    assert rows[1]["reviewed_at"] is not None
+    assert rows[2]["reviewed_at"] is None          # untouched -> still re-scannable
+
+
+def test_cli_review_all_is_opt_in(tmp_path, capsys):
+    """`--all` is the deliberate blanket review: it stamps uncorrected files too."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    doc_id, doc = _add_doc_with_page(cfg, page_no=1, exported_at=1000.0)
+    conn = _db.connect(cfg.db_path)
+    _db.add_page(conn, doc_id, 2)
+    conn.commit()
+    conn.close()
+    _write_page_file(cfg, doc, 1, body="HUMAN CORRECTION")
+    _write_page_file(cfg, doc, 2, body="machine text")
+
+    cli.cmd_review(cfg, _review_args(doc=doc_id, all=True))
+    assert "every library file" in capsys.readouterr().out
+    conn = _db.connect(cfg.db_path)
+    n = conn.execute(
+        "SELECT COUNT(*) n FROM pages WHERE document_id=? AND reviewed_at IS NOT NULL",
+        (doc_id,)).fetchone()["n"]
+    conn.close()
+    assert n == 2
+
+
+def test_cli_review_unset_lifts_the_stamp(tmp_path, capsys):
+    """`--unset` clears pages and edits so they can be re-scanned/re-edited."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    doc_id, doc = _add_doc_with_page(cfg, page_no=1, exported_at=1000.0)
+    _write_page_file(cfg, doc, 1, body="HUMAN CORRECTION")
+    cli.cmd_review(cfg, _review_args(doc=doc_id))
+    capsys.readouterr()
+
+    conn = _db.connect(cfg.db_path)
+    assert conn.execute("SELECT COUNT(*) n FROM pages WHERE reviewed_at IS NOT NULL"
+                        ).fetchone()["n"] == 1
+    conn.close()
+
+    cli.cmd_review(cfg, _review_args(doc=doc_id, unset=True))
+    assert "can be re-scanned/re-edited" in capsys.readouterr().out
+    conn = _db.connect(cfg.db_path)
+    assert conn.execute("SELECT COUNT(*) n FROM pages WHERE reviewed_at IS NOT NULL"
+                        ).fetchone()["n"] == 0
+    # the human's text is kept — only the protection is lifted
+    row = conn.execute("SELECT raw_text FROM pages WHERE document_id=?", (doc_id,)).fetchone()
+    conn.close()
+    assert row["raw_text"] == "HUMAN CORRECTION"
+
+
+def test_cli_review_page_requires_doc(tmp_path, capsys):
+    """Refuse `--page` without `--doc` instead of unstamping every page."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    import pytest
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_review(cfg, _review_args(page=1, unset=True))
+    assert exc.value.code == 2
+    assert "--page requires --doc" in capsys.readouterr().err
