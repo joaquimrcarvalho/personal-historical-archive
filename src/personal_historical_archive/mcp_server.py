@@ -416,9 +416,10 @@ def make_server(cfg: Config) -> FastMCP:
         For each collection (or just `collection` if given, e.g.
         "collections/pfister-notices") returns its documents with:
           - config status: the RECORDED palaeographer/editor/encoder (the models
-            used when the last pass ran) and the LIVE/RESOLVED ones (from the
-            current selection files + definitions), so you can see if a config
-            change is pending;
+            used when the last pass ran) and the LIVE/RESOLVED ones — resolved
+            with the SAME precedence the pipeline uses (a `pha.yaml` sidecar,
+            else the legacy palaeographer/editor selection files, else the
+            configured default) — so you can see if a config change is pending;
           - progress: pages done / total;
           - stage: which pipeline passes have run (transcribed / edited /
             encoded / embedded) and which have not.
@@ -439,8 +440,7 @@ def make_server(cfg: Config) -> FastMCP:
         finally:
             conn.close()
         from collections import OrderedDict
-        from .extract import (encoder_files_for, resolve_editor_id,
-                              resolve_palaeographer_id)
+        from .sidecar import resolve_stages
         from pathlib import Path
 
         def stage(doc) -> list[str]:
@@ -474,19 +474,25 @@ def make_server(cfg: Config) -> FastMCP:
                        "editor": d["editor"], "encoder": d["encoder"]}
                 # resolved (live) config: explicit selection, else the
                 # effective default that would actually run.
+                # Resolve the LIVE config with the SAME helper the pipeline uses
+                # (`sidecar.resolve_stages`): a pha.yaml sidecar (nearest-wins,
+                # including a document-level <stem>.pha.yaml) takes precedence
+                # over the legacy palaeographer/editor selection files, and only
+                # then does the configured default apply. Resolving with the
+                # legacy resolvers alone reported every pha.yaml-configured
+                # collection as the default palaeographer with no editor.
                 try:
-                    pal_id, pal_src = resolve_palaeographer_id(
-                        Path(d["filename"]).stem, sel_dir, cfg.dropbox)
-                    ed_id, ed_src = resolve_editor_id(
-                        Path(d["filename"]).stem, sel_dir, cfg.dropbox)
-                    encs = encoder_files_for(Path(d["filename"]).stem, sel_dir, cfg.dropbox)
-                    enc_names = [Path(f).stem for f in encs]
+                    res = resolve_stages(cfg, sel_dir, stem=Path(d["filename"]).stem)
+                    rpal, red = res["palaeographer"], res["editor"]
+                    eff_pal = rpal["id"] or cfg.active_palaeographer
+                    pal_src = rpal["source"] or "config default (vision.palaeographer)"
+                    pal_model = rpal["model_ref"]
+                    ed_id, ed_src, ed_model = red["id"], red["source"], red["model_ref"]
+                    enc_names = [e["id"] for e in res["encoders"]]
+                    problems = res["problems"]
                 except Exception:
-                    pal_id, pal_src, ed_id, ed_src, enc_names = None, None, None, None, []
-                # effective palaeographer: selection, else the active default
-                eff_pal = pal_id or cfg.active_palaeographer
-                pal_src = pal_src or (
-                    "config default (vision.palaeographer)" if eff_pal != pal_id else None)
+                    eff_pal, pal_src, pal_model = None, None, None
+                    ed_id, ed_src, ed_model, enc_names, problems = None, None, None, [], []
                 total = d["page_count"] or 0
                 done = counts.get(d["id"], 0)
                 # render phase: how many page images have been rendered to the
@@ -519,10 +525,13 @@ def make_server(cfg: Config) -> FastMCP:
                               "embedded": stats.get(d["id"], {}).get("embedded", 0)},
                     "config_recorded": rec,
                     "config_resolved": {"palaeographer": eff_pal,
+                                        "palaeographer_model": pal_model,
                                         "palaeographer_source": pal_src,
                                         "editor": ed_id,
+                                        "editor_model": ed_model,
                                         "editor_source": ed_src,
-                                        "encoders": enc_names},
+                                        "encoders": enc_names,
+                                        "problems": problems},
                     "stage": stage(d),
                 })
             out.append({"collection": rel, "documents": items})

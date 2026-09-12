@@ -168,3 +168,50 @@ def test_get_page_versions(tmp_path):
     assert r["edited"] == {"generic": "EDITED TEXT"}
     assert len(r["encoded"]) == 1
     assert r["encoded"][0]["kind"] == "letter"
+
+
+def test_collection_status_honours_pha_yaml_sidecar(tmp_path):
+    """A collection configured by a pha.yaml sidecar is reported with the
+    sidecar's rules + model, even with a stale legacy selection file beside it.
+
+    Regression test: pha_collection_status used to resolve the live config with
+    the legacy `palaeographer` / `editor` resolvers only, so every
+    sidecar-configured collection was reported as the configured default
+    palaeographer with no editor — disagreeing with the CLI and the pipeline
+    (sidecar.resolve_stages).
+    """
+    cfg = _make_config(tmp_path)
+    # the definitions the sidecar points at (written before the reload)
+    cfg.palaeographers_dir.mkdir(parents=True, exist_ok=True)
+    cfg.editors_dir.mkdir(parents=True, exist_ok=True)
+    cfg.models_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.palaeographers_dir / "ocr.md").write_text(
+        "---\ndescription: OCR pass\n---\nTranscribe with a local OCR engine.\n")
+    (cfg.editors_dir / "modern-pt.md").write_text(
+        "---\ndescription: modernise\n---\nModernise the spelling.\n")
+    (cfg.models_dir / "liteparse.md").write_text(
+        "---\ndescription: LiteParse local OCR\nengine: liteparse\n"
+        "liteparse_lang: por\n---\n")
+    cfg = Config.load(cfg.root)          # pick the new definitions up
+    _seed(cfg)
+    col = cfg.dropbox / "collections" / "testcol"
+    # the sidecar supersedes the legacy palaeographer/editor files _seed wrote
+    (col / "pha.yaml").write_text(
+        "palaeographer:\n  rules: ocr\n  model: liteparse\n"
+        "editor:\n  rules: modern-pt\n  model: default\n", encoding="utf-8")
+
+    import asyncio
+    mcp = mcp_server.make_server(cfg)
+    fns = {t.name: t.fn for t in asyncio.run(mcp.list_tools())}
+    report = fns["pha_collection_status"]()
+    doc = next(g for g in report
+               if g["collection"] == "collections/testcol")["documents"][0]
+    resolved = doc["config_resolved"]
+
+    # the sidecar wins over the legacy files ("qwen-local" / "generic")
+    assert resolved["palaeographer"] == "ocr"
+    assert resolved["palaeographer_model"] == "liteparse"
+    assert "pha.yaml" in resolved["palaeographer_source"]
+    assert resolved["editor"] == "modern-pt"
+    assert resolved["editor_model"] == "default"
+    assert resolved["problems"] == []
