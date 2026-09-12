@@ -1422,6 +1422,10 @@ a topic. Notes live in the archive itself (a sibling of `dropbox/`, `library/`,
 etc.) and are **Obsidian compatible**: use `[[wikilinks]]` to connect notes and
 `[^1]`-style footnotes for citations.
 
+For the wider picture — embedding a page image in a note, and letting an agent
+read or write a personal Obsidian vault — see `obsidian-integration.md` in this
+folder.
+
 ## Why a notes folder?
 
 `pha search` returns snippets and `pha page` returns a full page; a note is the
@@ -1433,9 +1437,12 @@ next person — does not have to re-search from scratch.
 
 - **Filename**: `lowercase-hyphenated.md` (e.g. `malaca.md`). One note per
   topic; keep it focused.
-- **Wikilinks** `[[Note Name]]` link between notes. Link to a note that does
-  not exist yet and Obsidian will offer to create it; create it when it is a
-  real topic.
+- **Wikilinks** `[[Note Name]]` link between notes. **Only link to notes that
+  already exist in this `notes/` folder and that are genuinely related to the
+  new note's content. Never leave a `[[wikilink]]` pointing at a note that does
+  not exist.** If you are tempted to link to a not-yet-written topic, instead
+  mention it in plain prose (or create that note now and then link it). Before
+  finishing a note, check that every `[[wikilink]]` resolves to a real file.
 - **Footnotes** use standard Markdown/Obsidian footnote syntax:
 
       The port was fortified in 1547.[^1]
@@ -1460,15 +1467,21 @@ next person — does not have to re-search from scratch.
 
 ## How to cite an archive source
 
-A citation names an archive **document + page** so the exact text can be opened.
-It is a pointer, not a hyperlink — the agent handling the note resolves it when
-asked (e.g. "show the page referred to in footnote 12").
+Every claim in a note should be traceable back to the archive. Cite the
+**document + page number** and say which variant you used — a page can have
+several (the raw transcription plus one or more edited versions, each by a
+different model), and a claim rests on one of them.
 
 - `pha search "Malaca"` → hits carry a `page_file` and a page number.
-- `pha page <doc> <page>` prints that page's full transcription;
+- `pha page <doc> <page>` prints a page's full transcription;
   `pha page <doc> <page> --edited` prints the edited/translated variant.
 - `<doc>` is a document id or a filename substring, so both
   `pha page 19 379` and `pha page DOCUMENTA-INDICA 379` work.
+- `pha cite <doc> <page> [--edited]` prints a paste-ready citation naming the
+  stable **slug** and the exact **filled** variant. Prefer it to hand-writing a
+  path: it refuses to cite an empty (`*waiting*`) variant, and when several
+  filled variants exist it lists them and asks for `--editor` /
+  `--palaeographer` rather than guessing.
 
 Cite as a footnote, e.g.:
 
@@ -1477,11 +1490,28 @@ Cite as a footnote, e.g.:
     [^1]: *DocHist do Padroado do Oriente* vol04 (doc 22), p. 437, edited —
           `pha page 22 437 --edited`.
 
-The footnote carries enough to open the page: the document (doc 22) and the
-page (437). An agent asked to "show the page referred to in footnote 12" runs
-`pha page 22 437 --edited` and reports the text. Keep the footnote as this plain
-pointer — don't embed a file path or a wikilink, because library paths carry
-the version date and go stale when a document is re-processed.
+The footnote carries enough to open the page: the document (doc 22) and the page
+(437). An agent asked to "show the page referred to in footnote 12" runs
+`pha page 22 437 --edited` and reports the text.
+
+### Durable links (optional — but they don't rot)
+
+A document's numeric id, its dated library folder (`<stem>_YYYY-MM-DD`) and its
+`renders/<sha256>/` directory all change when the document is re-processed, so
+never embed those in a note. The **slug** does not change: it derives from the
+dropbox-relative path (no date, no hash), and only renaming or moving the source
+file changes it.
+
+`pha page <doc> <page> --json` reports the slug, the relative path, the current
+sha, the render path and the full variant set. With `pha serve` running
+(read-only, loopback) a page image can be embedded and keeps working across
+re-scans:
+
+    ![](http://127.0.0.1:8765/doc/<slug>/p437.jpg)
+
+The endpoint resolves the document's current render per request, so a re-scan
+changes the bytes behind the URL without breaking the note. Full setup and
+caveats: `obsidian-integration.md`.
 
 ## How an agent should create a note
 
@@ -1492,13 +1522,14 @@ the version date and go stale when a document is re-processed.
    alone.
 3. **Synthesize** into a single note in THIS folder:
    - State only what the archive supports; say what it does *not* contain.
-   - Cite each fact to its document + page in a footnote.
+   - Cite each fact to its document + page in a footnote (`pha cite <doc> <page>`
+     gives you the slug and the exact variant).
    - Link to other notes with `[[wikilinks]]`; create a new note when another
      topic deserves its own page.
 4. **Save it** here as `lowercase-hyphenated.md` (create any linked-topic note
    too), and make sure every footnote `[^n]` has a matching definition.
-5. Re-check that no citation points at the wrong page and that all footnotes
-   resolve.
+5. Re-check that no citation points at the wrong page, that every `[[wikilink]]`
+   resolves to a real file, and that all footnotes resolve.
 
 ### Recording the ask
 
@@ -1517,8 +1548,8 @@ top, so a later reader knows what question it answers:
 
 The agent answers by writing e.g. `malaca.md` in this folder: the archive to be
 searched, the documents/pages it found, a synthesis of what they say, a
-footnote per page cited, and `[[wikilinks]]` to any related notes (e.g.
-`[[portugal-in-asia]]`, `[[malacca-fortress]]`).
+footnote per page cited, and `[[wikilinks]]` to any genuinely related notes that
+already exist in this folder.
 """
 
 
