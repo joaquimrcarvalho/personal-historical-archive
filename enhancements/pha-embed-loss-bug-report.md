@@ -114,25 +114,48 @@ no vectors still degrades to text-only),
 
 The four documents are text-only but otherwise intact (chunks and FTS are
 present), so they only need re-embedding — and because they currently hold no
-vectors, the new code cannot make them worse if the endpoint fails again:
+vectors, the new code cannot make them worse if the endpoint fails again.
+
+**Run this on the archive machine, from the archive directory** (see the
+warning below about a workspace `.env` hijacking `PHA_ARCHIVE_DIR`):
 
 ```bash
+cd /Users/jrc/jesuit-archive
 pha reindex --path collections/medina-docs-japon    # docs 45, 46
 pha reindex --path collections/pfister-notices      # docs 47, 50
 ```
 
-Run them **one at a time** (the lock enforces this now) and verify with:
+Run them **one after the other** — the lock now makes the second refuse
+rather than compete for the embed endpoint. Nothing needs re-scanning or
+re-editing: only vectors are missing, and the chunk text/FTS rows are what
+keyword search already uses. Verify with:
 
 ```sql
 SELECT c.document_id, COUNT(*) chunks, SUM(c.embedding IS NOT NULL) embedded
 FROM chunks c GROUP BY c.document_id HAVING embedded = 0;
 ```
 
+### Warning — a workspace `.env` can silently retarget the archive
+
+While verifying the repair: a `pha` run from a directory whose `.env` sets
+`PHA_ARCHIVE_DIR` targets **that** archive, not the one named by the shell's
+`PHA_ARCHIVE_DIR` — `/Users/jrc/develop/personal-historical-archive/.env`
+points at the project root, so `pha reindex` run from the checkout reported
+`reindexed 0 document(s)` and exited **0** against an empty DB instead of
+failing loudly. That is how two repair attempts appeared to succeed while
+doing nothing. Check `pha info --json` (it prints the resolved archive/db
+paths) before trusting a background job's output, and run archive maintenance
+from the archive directory.
+
 ## 8. Still open
 
-- **A per-document embedded-count warning in `pha status`** would surface this
-  class of damage without a manual query. `chunk_stats()` already computes the
-  data; it is only ever summed into a global total.
-- **An `error` for indexing degradation**: a document indexed text-only is not
-  flagged anywhere, so a fresh ingest with the endpoint down is also invisible
-  (harmless, but indistinguishable from a healthy document).
+- **An `error`/`status` marker for indexing degradation.** `pha status`
+  already flags a document whose `embedded < chunks` per document
+  (`4 000 chunks (0 embedded)` plus `[keyword-only — run pha reindex]`), which
+  is how the incident was caught — but the archive-level `overview` totals
+  (`chunks: 59158 indexed (45273 embedded)`) and `pha reindex`'s own output
+  gave no hint. A document indexed text-only during a FRESH ingest is likewise
+  indistinguishable from a healthy one on every surface except that marker.
+- **Backfilling vectors already lost to this bug** has to be a full reindex of
+  the affected documents; there is no cheaper path, and no way to tell *when*
+  a document degraded (chunks carry no embedding timestamp).
