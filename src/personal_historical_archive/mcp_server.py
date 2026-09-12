@@ -334,45 +334,23 @@ def make_server(cfg: Config) -> FastMCP:
                 "collections/letters-from-missons" (a collection dir) or a
                 specific file inside it.
         """
-        from .extract import (resolve_editor_id, resolve_palaeographer_id,
-                              resolve_prompt)
-        from .sidecar import resolve_sidecar
+        from .sidecar import resolve_stages
         from pathlib import Path
         p = (cfg.dropbox / document_relpath).resolve()
-        sel_path = p if p.is_dir() else p.parent
-        sc = resolve_sidecar(cfg.dropbox, sel_path, stem=(p.stem if not p.is_dir() else None))
-        pal_override = None
-        if sc.palaeographer:
-            pal_id, pal_src = sc.palaeographer.rules, f"{sc.source} (pha.yaml)"
-            pal_override = sc.palaeographer.model
-        else:
-            pal_id, pal_src = resolve_palaeographer_id(p.stem, sel_path, cfg.dropbox)
-        ed_override = None
-        if sc.editor_set:
-            ed_id = sc.editor.rules if sc.editor else None
-            ed_src = str(sc.source) if sc.source else None
-            ed_override = sc.editor.model if sc.editor else None
-        else:
-            ed_id, ed_src = resolve_editor_id(p.stem, sel_path, cfg.dropbox)
-        prompt_txt, prompt_src = resolve_prompt(p.stem, sel_path, cfg.dropbox, cfg.prompts)
-        pal = cfg.get_palaeographer(pal_id) if pal_id else cfg.get_palaeographer()
-        try:
-            pal = cfg.resolve_model(pal, pal_override)
-        except KeyError:
-            pass
-        ed = cfg.editors.get(ed_id) if ed_id else None
-        if ed:
-            try:
-                ed = cfg.resolve_model(ed, ed_override)
-            except KeyError:
-                pass
+        # ONE resolution for every caller: this tool, pha_collection_status and
+        # the CLI all go through sidecar.resolve_stages. Hand-rolling the
+        # sidecar-vs-legacy precedence here is what let the two config tools
+        # disagree about a pha.yaml-configured collection.
+        sel_dir, stem = (p, None) if p.is_dir() else (p.parent, p.stem)
+        res = resolve_stages(cfg, sel_dir, stem=stem, sidecar_stem=stem)
         return {
             "document": document_relpath,
-            "palaeographer": {"id": pal.id, "model": pal.model, "model_ref": pal.model_ref, "source": pal_src},
-            "editor": {"id": ed.id, "model": ed.model, "model_ref": ed.model_ref, "source": ed_src} if ed else
-                      {"id": None, "model": None, "model_ref": None, "source": ed_src},
-            "prompt_source": prompt_src,
-            "prompt": (prompt_txt or ""),
+            "palaeographer": res["palaeographer"],
+            "editor": res["editor"],
+            "prompt_source": res["prompt_source"],
+            "prompt": res["prompt"],
+            "encoders": res["encoders"],
+            "problems": res["problems"],
         }
 
     @mcp.tool()

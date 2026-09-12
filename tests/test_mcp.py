@@ -170,18 +170,11 @@ def test_get_page_versions(tmp_path):
     assert r["encoded"][0]["kind"] == "letter"
 
 
-def test_collection_status_honours_pha_yaml_sidecar(tmp_path):
-    """A collection configured by a pha.yaml sidecar is reported with the
-    sidecar's rules + model, even with a stale legacy selection file beside it.
-
-    Regression test: pha_collection_status used to resolve the live config with
-    the legacy `palaeographer` / `editor` resolvers only, so every
-    sidecar-configured collection was reported as the configured default
-    palaeographer with no editor — disagreeing with the CLI and the pipeline
-    (sidecar.resolve_stages).
-    """
+def _sidecar_cfg(tmp_path: Path) -> Config:
+    """A project whose collection is configured by a pha.yaml sidecar pointing at
+    real definitions, with a STALE legacy selection file beside it (the sidecar
+    must win)."""
     cfg = _make_config(tmp_path)
-    # the definitions the sidecar points at (written before the reload)
     cfg.palaeographers_dir.mkdir(parents=True, exist_ok=True)
     cfg.editors_dir.mkdir(parents=True, exist_ok=True)
     cfg.models_dir.mkdir(parents=True, exist_ok=True)
@@ -194,11 +187,23 @@ def test_collection_status_honours_pha_yaml_sidecar(tmp_path):
         "liteparse_lang: por\n---\n")
     cfg = Config.load(cfg.root)          # pick the new definitions up
     _seed(cfg)
-    col = cfg.dropbox / "collections" / "testcol"
-    # the sidecar supersedes the legacy palaeographer/editor files _seed wrote
-    (col / "pha.yaml").write_text(
+    (cfg.dropbox / "collections" / "testcol" / "pha.yaml").write_text(
         "palaeographer:\n  rules: ocr\n  model: liteparse\n"
         "editor:\n  rules: modern-pt\n  model: default\n", encoding="utf-8")
+    return cfg
+
+
+def test_collection_status_honours_pha_yaml_sidecar(tmp_path):
+    """A collection configured by a pha.yaml sidecar is reported with the
+    sidecar's rules + model, even with a stale legacy selection file beside it.
+
+    Regression test: pha_collection_status used to resolve the live config with
+    the legacy `palaeographer` / `editor` resolvers only, so every
+    sidecar-configured collection was reported as the configured default
+    palaeographer with no editor — disagreeing with the CLI and the pipeline
+    (sidecar.resolve_stages).
+    """
+    cfg = _sidecar_cfg(tmp_path)
 
     import asyncio
     mcp = mcp_server.make_server(cfg)
@@ -215,3 +220,28 @@ def test_collection_status_honours_pha_yaml_sidecar(tmp_path):
     assert resolved["editor"] == "modern-pt"
     assert resolved["editor_model"] == "default"
     assert resolved["problems"] == []
+
+
+def test_config_tools_agree_on_sidecar_config(tmp_path):
+    """Both config-inspection tools resolve through sidecar.resolve_stages, so
+    pha_collection_config and pha_collection_status cannot disagree about the
+    same collection (they used to: one honoured the pha.yaml sidecar, the other
+    reported the configured default)."""
+    cfg = _sidecar_cfg(tmp_path)
+
+    import asyncio
+    fns = {t.name: t.fn
+           for t in asyncio.run(mcp_server.make_server(cfg).list_tools())}
+
+    cfg_tool = fns["pha_collection_config"]("collections/testcol")
+    resolved = fns["pha_collection_status"](
+        "collections/testcol")[0]["documents"][0]["config_resolved"]
+
+    assert cfg_tool["palaeographer"]["id"] == resolved["palaeographer"] == "ocr"
+    assert (cfg_tool["palaeographer"]["model_ref"]
+            == resolved["palaeographer_model"] == "liteparse")
+    assert cfg_tool["editor"]["id"] == resolved["editor"] == "modern-pt"
+    assert cfg_tool["editor"]["model_ref"] == resolved["editor_model"] == "default"
+    assert cfg_tool["problems"] == resolved["problems"] == []
+    # encoders are reported by both, identically
+    assert [e["id"] for e in cfg_tool["encoders"]] == resolved["encoders"] == ["letters"]
