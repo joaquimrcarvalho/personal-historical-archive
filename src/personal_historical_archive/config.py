@@ -215,7 +215,19 @@ class Model:
     #     uses the PDF's embedded/native text layer where present, OCRing only
     #     the gaps. Faster/cleaner on typed PDFs, but may surface an archive's
     #     old low-quality text layer. Non-PDF sources always fall back to fresh.
+    #   "prefer-embedded" - decide PER PAGE: read the page's embedded text with
+    #     pymupdf and reuse it (parsing the source PDF) only when it passes the
+    #     quality gate below; otherwise OCR the raster. Best of both: a
+    #     born-digital/well-OCR'd PDF is not re-OCR'd, a scan with a junk layer
+    #     is OCR'd normally. Non-PDF sources always fall back to fresh.
     liteparse_ocr: str = "fresh"
+    # Quality gate for `liteparse_ocr: prefer-embedded` (see
+    # model_client.embedded_text_is_good). min_chars is the minimum
+    # non-whitespace character count for the layer to be considered at all;
+    # min_quality is the ratio floor applied to both "share of characters that
+    # are letters" and "share of tokens that look like words".
+    liteparse_embedded_min_chars: int = 200
+    liteparse_embedded_min_quality: float = 0.60
     prompt_file: Path | None = None
 
 
@@ -268,7 +280,11 @@ class Palaeographer:
     liteparse_lang: str = ""       # --ocr-language (Tesseract format, e.g. "por", "fra")
     liteparse_dpi: int | None = None  # --dpi render resolution (default 150; 300 = quality)
     liteparse_format: str = "text"  # "text" | "markdown" | "json" (see Model)
-    liteparse_ocr: str = "fresh"    # "fresh" (raster -> must OCR) | "embedded" (source PDF text layer)
+    liteparse_ocr: str = "fresh"    # "fresh" (raster) | "embedded" (source PDF text layer)
+                                    #   | "prefer-embedded" (embedded only when the
+                                    #   layer passes the quality gate, else raster)
+    liteparse_embedded_min_chars: int = 200      # prefer-embedded gate (see Model)
+    liteparse_embedded_min_quality: float = 0.60  # prefer-embedded gate (see Model)
 
     @property
     def prompt_source(self) -> str:
@@ -584,6 +600,8 @@ class Config:
             common["liteparse_dpi"] = m.liteparse_dpi
             common["liteparse_format"] = m.liteparse_format
             common["liteparse_ocr"] = m.liteparse_ocr
+            common["liteparse_embedded_min_chars"] = m.liteparse_embedded_min_chars
+            common["liteparse_embedded_min_quality"] = m.liteparse_embedded_min_quality
         return dataclasses.replace(stage, **common)
 
     def resolve_model(self, stage, model_id: str | None = None):
@@ -827,6 +845,8 @@ def _model_from_frontmatter(model_id: str, text: str, file: Path) -> Model | Non
         liteparse_dpi=(int(fm["liteparse_dpi"]) if fm.get("liteparse_dpi") is not None else None),
         liteparse_format=str(fm.get("liteparse_format", "text")).strip().lower() or "text",
         liteparse_ocr=str(fm.get("liteparse_ocr", "fresh")).strip().lower() or "fresh",
+        liteparse_embedded_min_chars=int(fm.get("liteparse_embedded_min_chars", 200)),
+        liteparse_embedded_min_quality=float(fm.get("liteparse_embedded_min_quality", 0.60)),
         prompt_file=file,
     )
 
@@ -842,7 +862,9 @@ def _resolve_model(fm: dict, models: dict) -> tuple[Model, str]:
     if "base_url" in fm or "api_key" in fm or "api_style" in fm or "engine" in fm \
             or "tesseract_lang" in fm or "tesseract_psm" in fm \
             or "liteparse_lang" in fm or "liteparse_dpi" in fm \
-            or "liteparse_format" in fm or "liteparse_ocr" in fm:
+            or "liteparse_format" in fm or "liteparse_ocr" in fm \
+            or "liteparse_embedded_min_chars" in fm \
+            or "liteparse_embedded_min_quality" in fm:
         # legacy inline interface (pre-registry) — includes non-LLM engines
         # (e.g. `engine: tesseract` or `engine: liteparse`) which have no
         # base_url/api_key.
@@ -864,6 +886,8 @@ def _resolve_model(fm: dict, models: dict) -> tuple[Model, str]:
             liteparse_dpi=(int(fm["liteparse_dpi"]) if fm.get("liteparse_dpi") is not None else None),
             liteparse_format=str(fm.get("liteparse_format", "text")).strip().lower() or "text",
             liteparse_ocr=str(fm.get("liteparse_ocr", "fresh")).strip().lower() or "fresh",
+            liteparse_embedded_min_chars=int(fm.get("liteparse_embedded_min_chars", 200)),
+            liteparse_embedded_min_quality=float(fm.get("liteparse_embedded_min_quality", 0.60)),
         )
         return m, ""
     # new rules-only file: no model here (chosen per document in pha.yaml);
@@ -897,6 +921,12 @@ def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path, models: 
         else str(fm.get("liteparse_format", "text")).strip().lower() or "text",
         liteparse_ocr=m.liteparse_ocr if m.liteparse_ocr != "fresh"
         else str(fm.get("liteparse_ocr", "fresh")).strip().lower() or "fresh",
+        liteparse_embedded_min_chars=m.liteparse_embedded_min_chars
+        if m.liteparse_embedded_min_chars != 200
+        else int(fm.get("liteparse_embedded_min_chars", 200)),
+        liteparse_embedded_min_quality=m.liteparse_embedded_min_quality
+        if m.liteparse_embedded_min_quality != 0.60
+        else float(fm.get("liteparse_embedded_min_quality", 0.60)),
         temperature=float(fm.get("temperature", 0.1)),
         max_tokens=int(fm.get("max_tokens", 4096)),
         prompt_text=body,
@@ -1178,7 +1208,15 @@ _MODEL_SAMPLE = """---
 #                                    #   scans); "embedded" = parse the ORIGINAL source PDF
 #                                    #   page, using its embedded/native text layer where
 #                                    #   present (fast on typed PDFs; may surface an archive's
-#                                    #   old low-quality layer). Non-PDF sources: always fresh.
+#                                    #   old low-quality layer); "prefer-embedded" = per page,
+#                                    #   use the embedded layer only when it passes the quality
+#                                    #   gate below, else OCR the raster. Non-PDF sources:
+#                                    #   always fresh.
+#   liteparse_embedded_min_chars: 200      # prefer-embedded gate: minimum non-whitespace
+#                                          #   characters for the layer to be considered
+#   liteparse_embedded_min_quality: 0.60   # prefer-embedded gate: ratio floor for "share of
+#                                          #   characters that are letters" and "share of tokens
+#                                          #   that look like words"
 # Then select it per document/collection in pha.yaml:
 #   palaeographer: {rules: <rules-id>, model: <this-model-id>}
 # (or inline `engine: tesseract`/`engine: liteparse` in the palaeographer's own
@@ -1233,6 +1271,11 @@ _MODEL_LITEPARSE_SAMPLE = """---
 #   embedded — parse the ORIGINAL source PDF page, using the PDF's embedded/
 #     native text layer where present (faster on typed PDFs, but may surface
 #     an archive's old low-quality layer). Non-PDF sources are always fresh.
+#   prefer-embedded — decide PER PAGE: read the page's embedded text with
+#     pymupdf and reuse it (parsing the source PDF) only when it passes the
+#     quality gate (liteparse_embedded_min_chars / liteparse_embedded_min_quality),
+#     else OCR the raster — so a good layer is never re-OCR'd and a junk one is
+#     never trusted.
 # liteparse_format:
 #   text (default) — layout-preserved plain text as the transcript.
 #   markdown — structured markdown.  json — text + per-item bboxes/confidence.
@@ -1240,8 +1283,44 @@ description: LiteParse (local document parser / OCR)
 engine: liteparse
 liteparse_lang: por          # --ocr-language (Tesseract format: "por", "fra", ...)
 liteparse_dpi: 300           # optional --dpi render resolution (default 150; 300 = quality)
-liteparse_ocr: fresh         # fresh (default) | embedded
+liteparse_ocr: fresh         # fresh (default) | embedded | prefer-embedded
 liteparse_format: text       # text (default) | markdown | json
+---
+
+
+"""
+
+
+_MODEL_LITEPARSE_EMBEDDED_SAMPLE = """---
+# SAMPLE LiteParse model — REUSE a good embedded PDF text layer, else OCR —
+# never loaded (name starts with '_'). To USE it: copy this file to
+# models/liteparse-embedded.md (drop the leading '_') and pair it with a
+# content-only palaeographer rules file in pha.yaml:
+#   palaeographer: {rules: ocr, model: liteparse-embedded}
+# LiteParse is a LOCAL document/OCR parser, NOT an LLM (install the `lit` CLI:
+# `pip install liteparse` or `npm i -g @llamaindex/liteparse`).
+# Why this variant: `liteparse_ocr: embedded` ALWAYS parses the original PDF
+# page — great when the PDF carries a real text layer, harmful when that layer
+# is the residue of a bad OCR pass. `prefer-embedded` decides PER PAGE: pha
+# reads the page's embedded text with pymupdf (no OCR, no subprocess) and
+# reuses it only when it passes the quality gate (enough text, mostly letters,
+# tokens that look like words); otherwise the page is OCR'd from the rendered
+# raster exactly as with `fresh`. So one model covers a mixed collection —
+# born-digital or well-OCR'd pages are not re-OCR'd, scans with a junk layer
+# are. Non-PDF sources (single images / folders of images) always OCR.
+# Gate tunables (defaults shown; lower them for sparse pages, raise them if a
+# poor layer still slips through):
+#   liteparse_embedded_min_chars: 200      # non-whitespace chars on the page
+#   liteparse_embedded_min_quality: 0.60   # ratio floor for letter-share and
+#                                          # word-likeness (0..1)
+description: LiteParse (local OCR) — reuse a good embedded PDF text layer, else OCR
+engine: liteparse
+liteparse_lang: por           # --ocr-language (Tesseract format: "por", "fra", ...)
+liteparse_dpi: 300            # render resolution used when the page must be OCR'd
+liteparse_ocr: prefer-embedded   # fresh | embedded | prefer-embedded
+liteparse_format: text        # layout-preserved plain text
+liteparse_embedded_min_chars: 200
+liteparse_embedded_min_quality: 0.60
 ---
 
 
@@ -1636,6 +1715,7 @@ def builtin_samples() -> tuple[tuple[str, str, str], ...]:
         # local OCR/parse engines (not LLMs)
         ("models", "_sample.tesseract.md", _MODEL_TESSERACT_SAMPLE),
         ("models", "_sample.liteparse.md", _MODEL_LITEPARSE_SAMPLE),
+        ("models", "_sample.liteparse.embedded.md", _MODEL_LITEPARSE_EMBEDDED_SAMPLE),
         ("models", "_sample.liteparse.fra.md", _MODEL_LITEPARSE_FRA_SAMPLE),
         ("models", "_sample.liteparse.spa.md", _MODEL_LITEPARSE_SPA_SAMPLE),
         ("palaeographers", "_sample.ocr.md", _PAL_OCR_SAMPLE),

@@ -36,7 +36,15 @@
 #                                    #   scans); "embedded" = parse the ORIGINAL source PDF
 #                                    #   page, using its embedded/native text layer where
 #                                    #   present (fast on typed PDFs; may surface an archive's
-#                                    #   old low-quality layer). Non-PDF sources: always fresh.
+#                                    #   old low-quality layer); "prefer-embedded" = per page,
+#                                    #   use the embedded layer only when it passes the quality
+#                                    #   gate below, else OCR the raster. Non-PDF sources:
+#                                    #   always fresh.
+#   liteparse_embedded_min_chars: 200      # prefer-embedded gate: minimum non-whitespace
+#                                          #   characters for the layer to be considered
+#   liteparse_embedded_min_quality: 0.60   # prefer-embedded gate: ratio floor for "share of
+#                                          #   characters that are letters" and "share of tokens
+#                                          #   that look like words"
 # Then select it per document/collection in pha.yaml:
 #   palaeographer: {rules: <rules-id>, model: <this-model-id>}
 # (or inline `engine: tesseract`/`engine: liteparse` in the palaeographer's own

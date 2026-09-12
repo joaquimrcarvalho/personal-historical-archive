@@ -368,7 +368,11 @@ In the model file (`models/<id>.md`):
   `por`, `lat`, `por+lat`), optional `tesseract_psm` (page-segmentation mode).
   Needs the `tesseract` program installed (and its language data).
 - **LiteParse** — `engine: liteparse`, `liteparse_lang` (OCR language, e.g.
-  `por`, `fra`), optional `liteparse_dpi` (resolution; use `300` for quality).
+  `por`, `fra`), optional `liteparse_dpi` (resolution; use `300` for quality);
+  `liteparse_ocr` chooses what is read: `fresh` (always OCR the page image),
+  `embedded` (always use the PDF's own text layer, if it has one) or
+  `prefer-embedded` (use that text layer only when it is good quality,
+  otherwise OCR).
   Needs the `lit` program installed. The same `lit` CLI comes from either
   `pip install liteparse` or `npm i -g @llamaindex/liteparse` — install with
   whichever toolchain you already use: pha finds engines the same way your

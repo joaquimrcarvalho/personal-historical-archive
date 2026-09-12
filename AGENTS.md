@@ -52,7 +52,8 @@
   fresh `pha init-archive`; never loaded — the `_` prefix means "copy me to a
   real id"): the how-to-create `_sample.md` per stage; local engines
   `_sample.tesseract.md`, `_sample.liteparse.md`, `_sample.liteparse.fra.md`,
-  `_sample.liteparse.spa.md`; local LM Studio models
+  `_sample.liteparse.spa.md`, `_sample.liteparse.embedded.md`; local LM Studio
+  models
   `_sample.local-qwen3-vl.md`, `_sample.local-gemma4.md`; printed-book rules
   `_sample.printed-books.md`, `_sample.printed-critical-edition.md`; and
   `_sample.generic.md` (general-purpose editor). `config.builtin_samples()` is
@@ -115,12 +116,18 @@
   loads no model (it still takes the pha scan lock). The engine + its settings
   live in the MODEL file (`models/tesseract.md`: `tesseract_lang`,
   `tesseract_psm`; `models/liteparse.md`: `liteparse_lang`, `liteparse_dpi`,
-  `liteparse_ocr` fresh|embedded, `liteparse_format` text|markdown|json); a
+  `liteparse_ocr` fresh|embedded|prefer-embedded, `liteparse_format`
+  text|markdown|json); a
   content-only rules file names the pass and is paired in pha.yaml, e.g.
   `palaeographer: {rules: ocr, model: tesseract}` (one rules file serves both
   engines — OCR ignores the prompt). Start from the samples
   `models/_sample.tesseract.md`, `models/_sample.liteparse.md`,
   `palaeographers/_sample.ocr.md`.
+  **`liteparse_ocr: prefer-embedded`** reuses a PDF page's own text layer only
+  when it passes a quality gate (enough text, mostly letters, word-like
+  tokens — `liteparse_embedded_min_chars`, `liteparse_embedded_min_quality`;
+  Latin-script word test only, so CJK/Greek/Cyrillic pass), else OCRs the
+  raster; conservative by design, sample `models/_sample.liteparse.embedded.md`.
   **Install on the ARCHIVE machine.** Probe FIRST with `pha doctor` — it
   checks the binaries pha spawns (and works even before an archive is set).
   Options: `--engine liteparse` treats an engine as required, `--json` prints

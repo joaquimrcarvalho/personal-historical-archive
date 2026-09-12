@@ -192,8 +192,10 @@ def run_liteparse(
 
     ``target`` is either the rendered page RASTER (``liteparse_ocr: fresh`` —
     no embedded text layer, so LiteParse MUST OCR it) or the ORIGINAL source
-    PDF page (``liteparse_ocr: embedded`` + ``target_page`` — LiteParse uses
-    the PDF's native/embedded text where present and OCRs the gaps).
+    PDF page (``liteparse_ocr: embedded``/``prefer-embedded`` + ``target_page``
+    — LiteParse uses the PDF's native/embedded text where present and OCRs the
+    gaps). Choosing BETWEEN those two inputs is ``_liteparse_page_engine``'s
+    job, not this helper's.
 
     - ``lang`` is the ``--ocr-language`` value (Tesseract format: ``"por"``,
       ``"fra"``, ...; ``""`` lets LiteParse use its default ``eng``).
@@ -237,6 +239,100 @@ def _tesseract_page_engine(palaeographer, image_path, _ctx) -> str:
     return run_tesseract(image_path, palaeographer.tesseract_lang, palaeographer.tesseract_psm)
 
 
+# --- embedded-PDF-text quality gate (liteparse_ocr: prefer-embedded) --------
+#
+# A PDF can carry its own text layer: real text for a born-digital file, or —
+# on an old scan — the residue of a bad OCR pass. Reusing a GOOD layer through
+# `lit parse <source.pdf> --target-pages N` is far cheaper and cleaner than
+# re-OCRing the raster; reusing a BAD one silently poisons the transcript. So
+# `prefer-embedded` must judge the layer before trusting it. pymupdf reads the
+# page's text WITHOUT OCR (no subprocess, no model), and a few cheap signals
+# separate real prose from OCR sludge:
+#
+#   1. enough text at all (min_chars) — a near-empty layer is not worth it;
+#   2. mostly LETTERS, not digits/symbols (letter ratio);
+#   3. tokens look like WORDS, not glyph soup: for Latin-script text a word of
+#      any length normally contains a vowel ("l1l 1lI 0f tI1e" fails, "of the"
+#      passes); non-Latin scripts (CJK, Greek, Cyrillic, ...) skip that test.
+#
+# Any replacement/control character is an automatic reject.
+
+# Vowels used by the word-likeness test (Latin script only).
+_EMBEDDED_VOWELS = set("aeiouyàáâãäåèéêëìíîïòóôõöùúûüýÿæœ")
+
+# Control characters that are legitimate on a page (line/paragraph structure).
+_EMBEDDED_OK_CONTROL = {"\t", "\n", "\r"}
+
+
+def _token_looks_like_word(token: str) -> bool:
+    """Is this whitespace-delimited token plausibly a real word?
+
+    Latin-script tokens must contain a vowel (the cheapest dictionary-free
+    signal that separates words from OCR glyph soup); other scripts pass, since
+    their vowels are not Latin letters."""
+    letters = [c for c in token if c.isalpha()]
+    if len(letters) < 2:
+        return False
+    if all(c.isascii() for c in letters):
+        return any(c.lower() in _EMBEDDED_VOWELS for c in letters)
+    return True
+
+
+def embedded_text_is_good(
+    text: str, min_chars: int = 200, min_quality: float = 0.60
+) -> bool:
+    """Decide whether a PDF page's embedded text layer is worth reusing.
+
+    ``min_chars`` is the minimum non-whitespace character count (a page with
+    almost no text layer is rejected, so it is re-OCR'd); ``min_quality`` is
+    the minimum ratio, applied to both "share of characters that are letters"
+    and "share of tokens that look like words" (0..1).
+
+    Conservative by design: anything doubtful returns False, which sends the
+    page down the ordinary OCR-the-raster path — the same result as before
+    this mode existed, so a bad judgement never loses the fallback.
+    """
+    compact = "".join(text.split())
+    if len(compact) < max(1, int(min_chars)):
+        return False
+    # a replacement char (undecodable byte) or a stray control char means the
+    # layer is damaged beyond usefulness
+    for ch in text:
+        if ch == "\ufffd" or (ord(ch) < 32 and ch not in _EMBEDDED_OK_CONTROL):
+            return False
+    letters = sum(1 for ch in compact if ch.isalpha())
+    if letters / len(compact) < min_quality:
+        return False
+    tokens = [t for t in text.split() if sum(1 for c in t if c.isalpha()) >= 2]
+    if not tokens:
+        return False
+    wordlike = sum(1 for t in tokens if _token_looks_like_word(t))
+    return (wordlike / len(tokens)) >= min_quality
+
+
+def pdf_page_text(source: str | Path, page_no: int) -> str:
+    """The embedded/native text layer of ONE PDF page (``""`` when absent).
+
+    Reads the page's own text with pymupdf — no OCR, no subprocess. Used by the
+    ``liteparse_ocr: prefer-embedded`` gate. Any failure (missing dependency,
+    encrypted/corrupt PDF, page out of range) yields ``""`` so the caller
+    simply falls back to OCRing the raster: judging the text layer must never
+    be able to break a scan.
+    """
+    try:
+        import pymupdf as fitz
+    except Exception:  # noqa: BLE001 - absent pymupdf just disables the gate
+        return ""
+    try:
+        with fitz.open(str(source)) as doc:
+            idx = int(page_no) - 1
+            if idx < 0 or idx >= doc.page_count:
+                return ""
+            return doc[idx].get_text("text") or ""
+    except Exception:  # noqa: BLE001 - unreadable PDF -> no embedded layer
+        return ""
+
+
 def _liteparse_page_engine(palaeographer, image_path, ctx) -> str:
     """Produce a page transcript with the local LiteParse parser (lit CLI).
 
@@ -248,18 +344,43 @@ def _liteparse_page_engine(palaeographer, image_path, ctx) -> str:
       embedded/native text layer where present. Non-PDF sources (single
       images / folders of images) have no embedded layer and fall back to the
       raster.
+    - "prefer-embedded": decide PER PAGE — read the page's embedded text layer
+      with pymupdf and reuse it (parsing the source PDF) only when
+      ``embedded_text_is_good`` accepts it; otherwise OCR the raster. So a
+      born-digital or well-OCR'd PDF skips re-OCR, while a scan carrying a junk
+      text layer is OCR'd exactly as with "fresh". Tuned by
+      ``liteparse_embedded_min_chars`` / ``liteparse_embedded_min_quality``.
     """
     fmt = (palaeographer.liteparse_format or "text").strip().lower() or "text"
     lang = palaeographer.liteparse_lang
     dpi = palaeographer.liteparse_dpi
-    if (palaeographer.liteparse_ocr or "fresh").strip().lower() == "embedded":
+    mode = (palaeographer.liteparse_ocr or "fresh").strip().lower()
+
+    # the ORIGINAL source PDF page is only addressable for a PDF source
+    src_pdf: Path | None = None
+    if mode in ("embedded", "prefer-embedded"):
         source = getattr(ctx, "source", None)
         page_no = getattr(ctx, "page_no", None)
         if source is not None and page_no is not None:
             sp = Path(source)
             if sp.is_file() and sp.suffix.lower() == ".pdf":
-                return run_liteparse(sp, lang, dpi, fmt=fmt, target_page=page_no)
-        # no embedded text layer to use (non-PDF source) -> fresh OCR on the raster
+                src_pdf = sp
+
+    if src_pdf is not None:
+        if mode == "embedded":
+            return run_liteparse(src_pdf, lang, dpi, fmt=fmt, target_page=page_no)
+        # prefer-embedded: trust the layer only when it reads like real text
+        min_chars = getattr(palaeographer, "liteparse_embedded_min_chars", 200)
+        min_quality = getattr(palaeographer, "liteparse_embedded_min_quality", 0.60)
+        if embedded_text_is_good(
+            pdf_page_text(src_pdf, page_no),
+            200 if min_chars is None else int(min_chars),
+            0.60 if min_quality is None else float(min_quality),
+        ):
+            return run_liteparse(src_pdf, lang, dpi, fmt=fmt, target_page=page_no)
+
+    # fresh OCR on the raster: the default, the non-PDF case, and the
+    # prefer-embedded fallback when the layer is missing or poor
     return run_liteparse(image_path, lang, dpi, fmt=fmt)
 
 

@@ -241,7 +241,9 @@ def test_run_liteparse_format_and_target_page(monkeypatch):
 # --------------------------------------------------------------------------- liteparse engine routing
 
 def _pal(**kw) -> SimpleNamespace:
-    base = dict(liteparse_lang="", liteparse_dpi=None, liteparse_format="text", liteparse_ocr="fresh")
+    base = dict(liteparse_lang="", liteparse_dpi=None, liteparse_format="text",
+                liteparse_ocr="fresh", liteparse_embedded_min_chars=200,
+                liteparse_embedded_min_quality=0.60)
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -302,6 +304,156 @@ def test_liteparse_engine_embedded_non_pdf_falls_back_to_raster(monkeypatch):
     _liteparse_page_engine(pal, Path("/tmp/render/p001.jpg"), ctx)
     assert seen["args"][0] == Path("/tmp/render/p001.jpg")
     assert seen["kwargs"] == {"fmt": "text"}
+
+
+# --------------------------------------------------------------------------- embedded-layer quality gate
+
+# ~270 chars of ordinary prose: passes every gate.
+_GOOD_PROSE = (
+    "The quick brown fox jumps over the lazy dog near the river bank. "
+    "A second sentence follows so the page carries enough text to judge. "
+    "Kept in Latin script with ordinary vowels in every single token. "
+) * 2
+
+# The same length of OCR glyph soup: consonants, digits and no vowels at all.
+_GLYPH_SOUP = (
+    "bb1 ccc ddd fff ggg hhh jjj kkk lll mmm nnn ppp qqq rrr sss ttt vvv "
+    "www xxx zzz bb1 ccc ddd fff ggg hhh jjj kkk lll mmm nnn ppp qqq "
+) * 3
+
+
+def test_embedded_text_is_good_accepts_prose():
+    assert mc.embedded_text_is_good(_GOOD_PROSE) is True
+
+
+def test_embedded_text_is_good_rejects_short_layer():
+    """Too little text on the page -> not worth reusing; OCR instead."""
+    assert mc.embedded_text_is_good("Chapter One") is False
+    assert mc.embedded_text_is_good(_GOOD_PROSE, min_chars=10_000) is False
+
+
+def test_embedded_text_is_good_rejects_glyph_soup():
+    """Long enough and mostly letters, but the tokens are not words."""
+    assert len("".join(_GLYPH_SOUP.split())) >= 200  # clears the length gate,
+    assert mc.embedded_text_is_good(_GLYPH_SOUP) is False  # so the word gate rejects it
+
+
+def test_embedded_text_is_good_rejects_control_and_replacement_chars():
+    assert mc.embedded_text_is_good(_GOOD_PROSE + "\x07") is False
+    assert mc.embedded_text_is_good(_GOOD_PROSE + "\ufffd") is False
+
+
+def test_embedded_text_is_good_rejects_non_letter_text():
+    assert mc.embedded_text_is_good("1234567890 " * 40) is False
+
+
+def test_embedded_text_is_good_accepts_non_latin_script():
+    """The vowel test is Latin-only: CJK pages must not be rejected for it."""
+    assert mc.embedded_text_is_good("漢字文獻檔案歷史研究" * 20) is True
+
+
+def test_embedded_text_is_good_quality_threshold_is_tunable():
+    """A layer that passes at the default floor can be rejected by a stricter one."""
+    assert mc.embedded_text_is_good(_GOOD_PROSE, min_quality=0.60) is True
+    assert mc.embedded_text_is_good(_GOOD_PROSE, min_quality=0.999) is False
+
+
+def test_pdf_page_text_returns_empty_for_missing_pdf():
+    assert mc.pdf_page_text("/tmp/does-not-exist-pha.pdf", 1) == ""
+
+
+def test_liteparse_engine_prefer_embedded_uses_good_layer(monkeypatch, tmp_path):
+    """prefer-embedded parses the SOURCE PDF when the layer reads well."""
+    from pathlib import Path
+    from personal_historical_archive import model_client as mc2
+
+    src_pdf = tmp_path / "source.pdf"
+    src_pdf.write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr(mc2, "pdf_page_text", lambda s, p: _GOOD_PROSE)
+    seen: dict = {}
+    monkeypatch.setattr(
+        mc2, "run_liteparse", lambda *a, **k: seen.update(args=a, kwargs=k) or "out"
+    )
+    pal = _pal(liteparse_ocr="prefer-embedded", liteparse_lang="por")
+    ctx = SimpleNamespace(source=src_pdf, page_no=3, total=10)
+    out = mc2._liteparse_page_engine(pal, Path("/tmp/render/p003.jpg"), ctx)
+    assert out == "out"
+    assert seen["args"][0] == src_pdf  # source PDF, not the raster
+    assert seen["kwargs"] == {"fmt": "text", "target_page": 3}
+
+
+def test_liteparse_engine_prefer_embedded_falls_back_on_soup(monkeypatch, tmp_path):
+    """A junk embedded layer must NOT be reused -> OCR the raster."""
+    from pathlib import Path
+    from personal_historical_archive import model_client as mc2
+
+    src_pdf = tmp_path / "source.pdf"
+    src_pdf.write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr(mc2, "pdf_page_text", lambda s, p: _GLYPH_SOUP)
+    seen: dict = {}
+    monkeypatch.setattr(
+        mc2, "run_liteparse", lambda *a, **k: seen.update(args=a, kwargs=k) or "out"
+    )
+    pal = _pal(liteparse_ocr="prefer-embedded")
+    ctx = SimpleNamespace(source=src_pdf, page_no=3, total=10)
+    mc2._liteparse_page_engine(pal, Path("/tmp/render/p003.jpg"), ctx)
+    assert seen["args"][0] == Path("/tmp/render/p003.jpg")
+    assert seen["kwargs"] == {"fmt": "text"}  # no --target-pages
+
+
+def test_liteparse_engine_prefer_embedded_falls_back_without_layer(monkeypatch, tmp_path):
+    """A page with no embedded text at all -> OCR the raster."""
+    from pathlib import Path
+    from personal_historical_archive import model_client as mc2
+
+    src_pdf = tmp_path / "source.pdf"
+    src_pdf.write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr(mc2, "pdf_page_text", lambda s, p: "")
+    seen: dict = {}
+    monkeypatch.setattr(
+        mc2, "run_liteparse", lambda *a, **k: seen.update(args=a, kwargs=k) or "out"
+    )
+    pal = _pal(liteparse_ocr="prefer-embedded")
+    ctx = SimpleNamespace(source=src_pdf, page_no=1, total=1)
+    mc2._liteparse_page_engine(pal, Path("/tmp/render/p001.jpg"), ctx)
+    assert seen["args"][0] == Path("/tmp/render/p001.jpg")
+
+
+def test_liteparse_engine_prefer_embedded_honours_strict_threshold(monkeypatch, tmp_path):
+    """A model can demand more text than the page has -> OCR the raster."""
+    from pathlib import Path
+    from personal_historical_archive import model_client as mc2
+
+    src_pdf = tmp_path / "source.pdf"
+    src_pdf.write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr(mc2, "pdf_page_text", lambda s, p: _GOOD_PROSE)
+    seen: dict = {}
+    monkeypatch.setattr(
+        mc2, "run_liteparse", lambda *a, **k: seen.update(args=a, kwargs=k) or "out"
+    )
+    pal = _pal(liteparse_ocr="prefer-embedded", liteparse_embedded_min_chars=100_000)
+    ctx = SimpleNamespace(source=src_pdf, page_no=1, total=1)
+    mc2._liteparse_page_engine(pal, Path("/tmp/render/p001.jpg"), ctx)
+    assert seen["args"][0] == Path("/tmp/render/p001.jpg")
+
+
+def test_liteparse_engine_prefer_embedded_non_pdf_never_reads_layer(monkeypatch):
+    """Non-PDF source: the gate is not even consulted; OCR the raster."""
+    from pathlib import Path
+    from personal_historical_archive import model_client as mc2
+
+    def _boom(*a, **k):  # must not be called
+        raise AssertionError("pdf_page_text must not run for a non-PDF source")
+
+    monkeypatch.setattr(mc2, "pdf_page_text", _boom)
+    seen: dict = {}
+    monkeypatch.setattr(
+        mc2, "run_liteparse", lambda *a, **k: seen.update(args=a, kwargs=k) or "out"
+    )
+    pal = _pal(liteparse_ocr="prefer-embedded")
+    ctx = SimpleNamespace(source=Path("/tmp/source.png"), page_no=1, total=1)
+    mc2._liteparse_page_engine(pal, Path("/tmp/render/p001.jpg"), ctx)
+    assert seen["args"][0] == Path("/tmp/render/p001.jpg")
 
 
 # --------------------------------------------------------------------------- engine binary resolution

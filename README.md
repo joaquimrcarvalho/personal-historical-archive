@@ -495,7 +495,7 @@ content-only: copy, rename, pair with a model in `pha.yaml`.
 | Engine | Model file fields | Tool needed |
 |--------|-------------------|-------------|
 | `tesseract` | `engine: tesseract`, `tesseract_lang` (e.g. `por`/`lat`/`por+lat`), optional `tesseract_psm` | `tesseract` + language data (`brew install tesseract tesseract-lang`) |
-| `liteparse` | `engine: liteparse`, `liteparse_lang` (e.g. `por`/`fra`), optional `liteparse_dpi`; plus `liteparse_ocr` (`fresh`/`embedded`) and `liteparse_format` (`text`/`markdown`/`json`) | `lit` CLI — install ONE of `pip install liteparse` (Python) or `npm i -g @llamaindex/liteparse` (Node); see below |
+| `liteparse` | `engine: liteparse`, `liteparse_lang` (e.g. `por`/`fra`), optional `liteparse_dpi`; plus `liteparse_ocr` (`fresh`/`embedded`/`prefer-embedded`) and `liteparse_format` (`text`/`markdown`/`json`) | `lit` CLI — install ONE of `pip install liteparse` (Python) or `npm i -g @llamaindex/liteparse` (Node); see below |
 
 > **Installing the engines** (on the machine that runs pha). Probe first with
 > `pha doctor` (`--engine liteparse` requires a specific engine; `--json` for
@@ -545,6 +545,19 @@ content-only: copy, rename, pair with a model in `pha.yaml`.
 >   PDF's embedded/native text layer where present (faster/cleaner on typed
 >   PDFs; may surface the archive's old layer). Non-PDF sources are always
 >   `fresh`.
+> - `liteparse_ocr: prefer-embedded` decides **per page**: pha reads the page's
+>   embedded text with pymupdf (no OCR, no subprocess) and reuses it — parsing
+>   the source PDF — only when it passes a quality gate; otherwise the page is
+>   OCR'd from the raster exactly as with `fresh`. That covers a mixed
+>   collection: born-digital or well-OCR'd pages are never re-OCR'd, while a
+>   scan carrying a junk text layer is. The gate asks for enough text
+>   (`liteparse_embedded_min_chars`, default 200 non-whitespace characters),
+>   mostly letters, and tokens that look like words (`liteparse_embedded_min_quality`,
+>   default 0.60 — the ratio floor for letter-share and word-likeness; the
+>   word test is Latin-script only, so CJK/Greek/Cyrillic pages are not
+>   penalised). It is conservative: anything doubtful falls back to OCR, i.e.
+>   to the pre-`prefer-embedded` behaviour. Ready to use as
+>   `models/_sample.liteparse.embedded.md`.
 > - `liteparse_format: text` (default) stores layout-preserved plain text as
 >   the transcript; `markdown` stores structured markdown; `json` stores
 >   LiteParse's text + per-item bounding boxes/confidence — a spatial dump a
@@ -553,11 +566,11 @@ content-only: copy, rename, pair with a model in `pha.yaml`.
 >
 > Ready-to-duplicate samples ship in the project's `models/` folder (also
 > seeded on first run; names starting with `_` are never loaded):
-> `_sample.tesseract.md`, `_sample.liteparse.md` and the language presets
-> `_sample.liteparse.fra.md` / `_sample.liteparse.spa.md`; plus the local
-> LM Studio interfaces `_sample.local-qwen3-vl.md` and
-> `_sample.local-gemma4.md`. Copy one to `models/<id>.md`, edit, and select it
-> via `pha.yaml`.
+> `_sample.tesseract.md`, `_sample.liteparse.md`, the language presets
+> `_sample.liteparse.fra.md` / `_sample.liteparse.spa.md`, the embedded-layer
+> variant `_sample.liteparse.embedded.md`; plus the local LM Studio interfaces
+> `_sample.local-qwen3-vl.md` and `_sample.local-gemma4.md`. Copy one to
+> `models/<id>.md`, edit, and select it via `pha.yaml`.
 >
 > **Pairing them with a palaeographer.** An OCR engine ignores the palaeographer
 > prompt (there is no prompt), so one content file serves both engines — copy

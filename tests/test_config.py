@@ -277,6 +277,45 @@ def test_liteparse_model_defaults_text_fresh():
     )
     assert m.liteparse_format == "text"
     assert m.liteparse_ocr == "fresh"
+    # the prefer-embedded quality gate has documented defaults
+    assert m.liteparse_embedded_min_chars == 200
+    assert m.liteparse_embedded_min_quality == 0.60
+
+
+def test_liteparse_prefer_embedded_model_parses_gate_settings():
+    """`liteparse_ocr: prefer-embedded` + its gate knobs survive front matter."""
+    m = c._model_from_frontmatter(
+        "liteparse-embedded",
+        "---\ndescription: ocr\nengine: liteparse\nliteparse_ocr: prefer-embedded\n"
+        "liteparse_embedded_min_chars: 350\nliteparse_embedded_min_quality: 0.75\n---\n",
+        Path("/tmp/liteparse-embedded.md"),
+    )
+    assert m.liteparse_ocr == "prefer-embedded"
+    assert m.liteparse_embedded_min_chars == 350
+    assert m.liteparse_embedded_min_quality == 0.75
+
+
+def test_liteparse_prefer_embedded_binds_through_model_registry(tmp_path):
+    """A rules-only palaeographer bound to the variant gets the gate settings."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    arc = tmp_path / "arc"
+    (arc / "models").mkdir(parents=True)
+    (arc / "models" / "liteparse-embedded.md").write_text(
+        "---\nengine: liteparse\nliteparse_ocr: prefer-embedded\n"
+        "liteparse_embedded_min_chars: 350\nliteparse_embedded_min_quality: 0.75\n---\n"
+    )
+    (arc / "palaeographers").mkdir(parents=True)
+    (arc / "palaeographers" / "ocr-rules.md").write_text(
+        "---\ndescription: rules only\n---\nbody\n"
+    )
+    cfg = Config.load(root)
+    bound = cfg.resolve_model(cfg.palaeographers["ocr-rules"], "liteparse-embedded")
+    assert bound.liteparse_ocr == "prefer-embedded"
+    assert bound.liteparse_embedded_min_chars == 350
+    assert bound.liteparse_embedded_min_quality == 0.75
+    assert bound.model_ref == "liteparse-embedded"
 
 
 def test_liteparse_palaeographer_inline_engine():
@@ -406,6 +445,17 @@ def test_liteparse_language_samples_parse():
                                     Path("/tmp/_sample.liteparse.spa.md"))
     assert spa.engine == "liteparse"
     assert spa.liteparse_lang == "spa+lat"
+
+
+def test_liteparse_embedded_sample_parses():
+    """The prefer-embedded sample is a valid LiteParse model with gate defaults."""
+    lp = c._model_from_frontmatter("liteparse-embedded", c._MODEL_LITEPARSE_EMBEDDED_SAMPLE,
+                                   Path("/tmp/_sample.liteparse.embedded.md"))
+    assert lp.engine == "liteparse"
+    assert lp.liteparse_ocr == "prefer-embedded"
+    assert lp.liteparse_embedded_min_chars == 200
+    assert lp.liteparse_embedded_min_quality == 0.60
+    assert lp.liteparse_format == "text"
 
 
 def test_printed_book_palaeographer_samples_are_content_only():

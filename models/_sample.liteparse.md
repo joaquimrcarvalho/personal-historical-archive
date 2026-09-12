@@ -13,6 +13,11 @@
 #   embedded — parse the ORIGINAL source PDF page, using the PDF's embedded/
 #     native text layer where present (faster on typed PDFs, but may surface
 #     an archive's old low-quality layer). Non-PDF sources are always fresh.
+#   prefer-embedded — decide PER PAGE: read the page's embedded text with
+#     pymupdf and reuse it (parsing the source PDF) only when it passes the
+#     quality gate (liteparse_embedded_min_chars / liteparse_embedded_min_quality),
+#     else OCR the raster — so a good layer is never re-OCR'd and a junk one is
+#     never trusted.
 # liteparse_format:
 #   text (default) — layout-preserved plain text as the transcript.
 #   markdown — structured markdown.  json — text + per-item bboxes/confidence.
@@ -20,7 +25,7 @@ description: LiteParse (local document parser / OCR)
 engine: liteparse
 liteparse_lang: por          # --ocr-language (Tesseract format: "por", "fra", ...)
 liteparse_dpi: 300           # optional --dpi render resolution (default 150; 300 = quality)
-liteparse_ocr: fresh         # fresh (default) | embedded
+liteparse_ocr: fresh         # fresh (default) | embedded | prefer-embedded
 liteparse_format: text       # text (default) | markdown | json
 ---
 
