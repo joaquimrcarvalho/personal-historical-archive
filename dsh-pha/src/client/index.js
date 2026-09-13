@@ -12,7 +12,7 @@ async function get(path) {
 }
 
 // ---- compact markdown -> React (headings, lists, tables, footnotes w/ caret, wikilinks)
-function inline(t, opts) {
+function inline(t, o) {
   const out = []
   // Normalize LaTeX-style \\(^{n}\\) / \\(_{n}\\) to $^{n}$ / $_{n}$ so they render as sup/sub.
   let s = String(t == null ? '' : t)
@@ -38,13 +38,18 @@ function inline(t, opts) {
       const resolved = known && known.length ? resolveNoteName(w.target, known) : null
       const dangling = !!(known && known.length && !resolved)
       const target = resolved || w.target
-      out.push(React.createElement('a', {
-        className: 'pha-note-link' + (dangling ? ' dangling' : ''),
-        title: (dangling ? 'no note named ' + w.target + ' — click to look for it' : 'note: ' + target)
-          + (w.anchor ? ' #' + w.anchor : ''),
-        key: 'wl' + m.index,
-        onClick: (ev) => { if (ev && ev.preventDefault) ev.preventDefault(); if (o.onNote) o.onNote(target, w.anchor) },
-      }, w.label))
+      const title = (dangling ? 'no note named ' + w.target + ' — click to look for it' : 'note: ' + target)
+        + (w.anchor ? ' #' + w.anchor : '')
+      // Outside the notes viewer (a definition body, a page's edited text) there is no
+      // note context to open: show the wikilink as text rather than a dead link.
+      out.push(o.onNote
+        ? React.createElement('a', {
+            className: 'pha-note-link' + (dangling ? ' dangling' : ''),
+            title,
+            key: 'wl' + m.index,
+            onClick: (ev) => { if (ev && ev.preventDefault) ev.preventDefault(); o.onNote(target, w.anchor) },
+          }, w.label)
+        : React.createElement('span', { className: 'pha-note-link', title, key: 'wl' + m.index }, w.label))
     } else if (tok.startsWith('[^')) {
       const n = tok.slice(2, -1)
       out.push(React.createElement('sup', { id: 'fnref-' + n, key: 'fnr' + n },

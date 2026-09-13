@@ -142,7 +142,11 @@ archive's own conventions produce is routed deliberately:
 Footnote references (`[^n]`) jump to their note and each footnote has a `↩` back to its
 reference. The rules live in `src/client/links.js` — dependency-free, unit-tested by
 `node scripts/check-links.mjs`, and inlined into `lib/client.js` by the build, so the
-served bundle stays one self-contained module.
+served bundle stays one self-contained module. `node scripts/check-render.mjs` renders a
+note containing every link shape against a stubbed React and walks the result, which is
+what catches a *runtime* mistake in this glue (`node --check` only sees syntax — an
+undefined identifier there once blanked the whole view); `npm run check` runs all three
+checks.
 
 ## GUI (conversation) view
 
