@@ -87,19 +87,24 @@ file changes it.
 
 `pha page <doc> <page> --json` reports the slug, the relative path, the current
 sha, the render path and the full variant set. With `pha serve` running
-(read-only, loopback) a page image can be embedded and keeps working across
-re-scans:
+(read-only, loopback) there are two forms, and they do different jobs:
 
-    ![](http://127.0.0.1:8765/doc/<slug>/p437.jpg)
+    [p. 437](http://127.0.0.1:8765/doc/<slug>/p437)      ← LINK: the page viewer
+    ![](http://127.0.0.1:8765/doc/<slug>/p437.jpg)       ← EMBED: the image only
 
-The endpoint resolves the document's current render per request, so a re-scan
-changes the bytes behind the URL without breaking the note.
+**Link to the viewer** (`/p437`, no extension): it shows the render and lets the
+reader page forward/back, jump to the first or last page, and see the position
+(`p. 437 of 618`) — so a citation is somewhere to keep reading. **Embed the
+`.jpg`** when the picture itself belongs inline: an embed cannot navigate (a note
+cannot contain the viewer — Obsidian blocks iframes).
 
-**Such a link resolves only while that server is running** — start it with
-`pha serve` (read-only, loopback `http://127.0.0.1:8765`). **A note that embeds
-one must carry a short warning near the top**, so a reader who sees a missing
-image knows it is the server, not the note. Full setup and caveats:
-`obsidian-integration.md`.
+Both resolve the document's current render per request, so a re-scan changes the
+bytes behind the URL without breaking the note.
+
+**They resolve only while that server is running** — start it with `pha serve`
+(read-only, loopback `http://127.0.0.1:8765`). **A note that embeds one must carry
+a short warning near the top**, so a reader who sees a missing image knows it is
+the server, not the note. Full setup and caveats: `obsidian-integration.md`.
 
 ## How an agent should create a note
 

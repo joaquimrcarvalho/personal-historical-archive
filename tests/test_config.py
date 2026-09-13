@@ -512,3 +512,19 @@ def test_repo_sample_files_match_builtin_constants():
         p = root / sub / fname
         assert p.exists(), f"missing committed sample {sub}/{fname}"
         assert p.read_text(encoding="utf-8") == content, f"{sub}/{fname} drifted from its constant"
+
+
+def test_serve_defaults_and_config(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text("paths:\n  dropbox: dropbox\n")
+    cfg = Config.load(root)
+    assert (cfg.serve_host, cfg.serve_port) == ("127.0.0.1", 8765)
+    assert cfg.serve_base_url == "http://127.0.0.1:8765"
+
+    (root / "config.yaml").write_text(
+        "paths:\n  dropbox: dropbox\nserve:\n  host: 0.0.0.0\n  port: 9000\n")
+    cfg = Config.load(root)
+    assert cfg.serve_port == 9000
+    # a wildcard BIND address is not a usable client URL
+    assert cfg.serve_base_url == "http://127.0.0.1:9000"

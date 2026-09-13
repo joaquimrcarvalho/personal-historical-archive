@@ -193,3 +193,17 @@ def variant_label(name: str) -> str:
 def render_url(base_url: str, slug: str, page_no: int, ext: str = "jpg") -> str:
     """The stable URL of a page render served by ``pha serve``."""
     return f"{base_url.rstrip('/')}/doc/{slug}/p{int(page_no):03d}.{ext}"
+
+
+def viewer_url(base_url: str, slug: str, page_no: int) -> str:
+    """The stable URL of the served page **viewer** (prev/next, first/last).
+
+    The same page as :func:`render_url`, but the HTML reading surface rather
+    than the bare JPEG — this is what a citation should link to.
+    """
+    return f"{base_url.rstrip('/')}/doc/{slug}/p{int(page_no):03d}"
+
+
+def overview_url(base_url: str, slug: str) -> str:
+    """The stable URL of the served document overview (page ranges + jump box)."""
+    return f"{base_url.rstrip('/')}/doc/{slug}/"

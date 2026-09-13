@@ -170,3 +170,23 @@ def test_cite_and_serve_subcommands_are_registered(capsys):
             cli.main([cmd, "--help"])
         assert exc.value.code == 0
         assert cmd in capsys.readouterr().out
+
+
+def test_cli_page_json_has_navigation_fields(cfg, add_document, capsys):
+    doc_id = add_document(pages=(1, 2, 3))
+    cli.cmd_page(cfg, _page_args(doc=doc_id, page=2))
+    data = json.loads(capsys.readouterr().out)
+    assert data["page_count"] == 3
+    assert data["prev_page"] == 1 and data["next_page"] == 3
+    assert data["page_url"].endswith("/doc/colx-d/p002")
+    assert data["overview_url"].endswith("/doc/colx-d/")
+
+
+def test_cli_page_navigation_boundaries(cfg, add_document, capsys):
+    doc_id = add_document(pages=(1, 2, 3))
+    cli.cmd_page(cfg, _page_args(doc=doc_id, page=1))
+    first = json.loads(capsys.readouterr().out)
+    assert first["prev_page"] is None and first["next_page"] == 2
+    cli.cmd_page(cfg, _page_args(doc=doc_id, page=3))
+    last = json.loads(capsys.readouterr().out)
+    assert last["prev_page"] == 2 and last["next_page"] is None

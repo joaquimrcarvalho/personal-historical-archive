@@ -137,6 +137,14 @@ def make_server(cfg: Config) -> FastMCP:
             out["rel_path"] = rel_path
             out["sha256"] = doc["sha256"]
             out["variants"] = addresses.variant_files(cfg, doc, page_no, page["source_name"])
+            # Navigation: an agent can walk a document without asking for the
+            # page count first (the served viewer exposes the same links).
+            total = doc["page_count"] or 0
+            out["page_count"] = total
+            out["prev_page"] = page_no - 1 if page_no > 1 else None
+            out["next_page"] = page_no + 1 if (total and page_no < total) else None
+            out["page_url"] = addresses.viewer_url(cfg.serve_base_url, out["slug"], page_no)
+            out["overview_url"] = addresses.overview_url(cfg.serve_base_url, out["slug"])
             # edited versions (all editors that produced one)
             edits = conn.execute(
                 "SELECT editor, text FROM page_edits WHERE page_id = ? AND status='done'",

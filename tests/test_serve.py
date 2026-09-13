@@ -195,3 +195,128 @@ def test_empty_archive_serves_an_empty_index(cfg):
         assert "unknown slug" in json.loads(body)["error"]
     finally:
         srv.close()
+
+
+# ---- page navigation: viewer, overview and the jump box ----------------------
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _get_nofollow(srv, path):
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(srv.base + path, timeout=5) as r:
+            return r.status, dict(r.headers), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read()
+
+
+def _head_headers(srv, path):
+    req = urllib.request.Request(srv.base + path, method="HEAD")
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return r.status, dict(r.headers)
+
+
+def test_viewer_navigation_and_position(cfg, add_document, write_render, server):
+    doc_id = add_document(pages=(1, 2, 3))
+    write_render(doc_id, 2)
+    status, ctype, body = server.get("/doc/colx-d/p002")
+    text = body.decode()
+    assert status == 200
+    assert ctype.startswith("text/html")
+    assert "p. 2 of 3" in text
+    assert 'href="/doc/colx-d/p001"' in text      # prev / first
+    assert 'href="/doc/colx-d/p003"' in text      # next / last
+    assert 'src="/doc/colx-d/p002.jpg"' in text   # the raw render
+
+
+def test_viewer_boundaries_disable_the_controls(cfg, add_document, write_render, server):
+    doc_id = add_document(pages=(1, 2, 3))
+    write_render(doc_id, 1)
+    write_render(doc_id, 3)
+    first = server.get("/doc/colx-d/p001")[2].decode()
+    assert '<span class="btn">◀ prev</span>' in first
+    assert '<span class="btn">⤒ first</span>' in first
+    assert 'href="/doc/colx-d/p002"' in first
+    last = server.get("/doc/colx-d/p003")[2].decode()
+    assert '<span class="btn">next ▶</span>' in last
+    assert '<span class="btn">last ⤓</span>' in last
+    assert 'href="/doc/colx-d/p002"' in last
+
+
+def test_viewer_without_a_render_still_navigates(cfg, add_document, write_render, server):
+    doc_id = add_document(pages=(1, 2, 3))
+    write_render(doc_id, 1)
+    write_render(doc_id, 3)          # page 2 deliberately has no render
+    status, _, body = server.get("/doc/colx-d/p002")
+    text = body.decode()
+    assert status == 200
+    assert "No render for page 2" in text
+    assert 'href="/doc/colx-d/p001"' in text
+    assert 'href="/doc/colx-d/p003"' in text
+
+
+def test_viewer_prefetches_neighbours_and_adds_keys(cfg, add_document, write_render, server):
+    doc_id = add_document(pages=(1, 2, 3))
+    write_render(doc_id, 2)
+    text = server.get("/doc/colx-d/p002")[2].decode()
+    assert text.count('rel="prefetch"') == 2
+    assert "ArrowLeft" in text and "ArrowRight" in text
+
+
+def test_viewer_unknown_slug_and_out_of_range(cfg, add_document, server):
+    add_document(pages=(1, 2, 3))
+    status, ctype, body = server.get("/doc/nope/p001")
+    assert status == 404 and ctype.startswith("text/html")
+    assert "unknown document" in body.decode()
+    status, _, body = server.get("/doc/colx-d/p099")
+    assert status == 404
+    assert "out of range" in body.decode()
+
+
+def test_viewer_escapes_document_metadata(cfg, add_document, server):
+    add_document(filename="a&b<c.pdf")
+    status, _, body = server.get("/doc/colx-a-b-c/p001")
+    text = body.decode()
+    assert status == 200
+    assert "a&amp;b&lt;c.pdf" in text
+    assert "<c.pdf" not in text
+
+
+def test_viewer_sets_csp_and_cache_headers(cfg, add_document, server):
+    add_document(pages=(1,))
+    status, headers = _head_headers(server, "/doc/colx-d/p001")
+    assert status == 200
+    assert "default-src 'none'" in headers["Content-Security-Policy"]
+    assert headers["Cache-Control"] == "no-cache"
+
+
+def test_overview_lists_ranges_and_a_jump_box(cfg, add_document, server):
+    add_document(pages=tuple(range(1, 121)))
+    status, _, body = server.get("/doc/colx-d/")
+    text = body.decode()
+    assert status == 200
+    assert "120 pages" in text
+    for target in ("/doc/colx-d/p001", "/doc/colx-d/p051", "/doc/colx-d/p101"):
+        assert f'href="{target}"' in text
+    assert 'action="/doc/colx-d/go"' in text
+
+
+def test_jump_redirects_and_rejects_bad_input(cfg, add_document, server):
+    add_document(pages=(1, 2, 3))
+    status, headers, _ = _get_nofollow(server, "/doc/colx-d/go?page=2")
+    assert status == 302
+    assert headers.get("Location") == "/doc/colx-d/p002"
+    assert _get_nofollow(server, "/doc/colx-d/go?page=99")[0] == 404
+    assert _get_nofollow(server, "/doc/colx-d/go?page=x")[0] == 404
+
+
+def test_meta_reports_the_navigation_urls(cfg, add_document, server):
+    add_document(pages=(1, 2, 3))
+    data = json.loads(server.get("/doc/colx-d/meta.json")[2])
+    assert data["pages"] == {"first": 1, "last": 3}
+    assert data["viewer_url"] == "/doc/colx-d/p{page}"
+    assert data["overview_url"] == "/doc/colx-d/"
+    assert data["render_url"] == "/doc/colx-d/p{page}.jpg"      # unchanged

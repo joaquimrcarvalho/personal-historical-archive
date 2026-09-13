@@ -426,6 +426,11 @@ class Config:
     # search
     default_mode: str
     top_k: int
+    # `pha serve` — the read-only render/viewer endpoint. Kept in config so the
+    # served links, `pha cite` and `pha page --json` all quote the same base URL
+    # instead of each hard-coding 8765.
+    serve_host: str
+    serve_port: int
     # self-update: daily startup check + `pha update`
     update_enabled: bool
     update_interval_h: int
@@ -445,6 +450,7 @@ class Config:
         emb = raw.get("embeddings", {}) or {}
         ext = raw.get("extraction", {}) or {}
         sea = raw.get("search", {}) or {}
+        srv = raw.get("serve", {}) or {}
         upd = raw.get("update", {}) or {}
 
         def _env_setting(name: str) -> str | None:
@@ -554,6 +560,8 @@ class Config:
             dir_documents=bool(ext.get("dir_documents", True)),
             default_mode=str(sea.get("default_mode", "hybrid")),
             top_k=int(sea.get("top_k", 10)),
+            serve_host=str(_env_setting("PHA_SERVE_HOST") or srv.get("host", "127.0.0.1")),
+            serve_port=int(_env_setting("PHA_SERVE_PORT") or srv.get("port", 8765)),
             update_enabled=bool(upd.get("enabled", True)),
             update_interval_h=int(upd.get("interval_h", 24)),
             update_timeout=int(upd.get("timeout", 5)),
@@ -653,6 +661,18 @@ class Config:
             return
         _seed_sample(sample, "filter.md", FILTER_SAMPLE_MD)
         _seed_sample(sample, "filter.py", FILTER_SAMPLE_PY)
+
+    @property
+    def serve_base_url(self) -> str:
+        """Base URL of the local render server, e.g. ``http://127.0.0.1:8765``.
+
+        A wildcard *bind* address is not a usable client URL, so it maps to
+        loopback here.
+        """
+        host = self.serve_host or "127.0.0.1"
+        if host in ("", "0.0.0.0", "::"):
+            host = "127.0.0.1"
+        return f"http://{host}:{self.serve_port}"
 
     def ensure_dirs(self) -> None:
         for d in (self.dropbox, self.inbox, self.library, self.data, self.renders, self.notes,
@@ -1855,19 +1875,24 @@ file changes it.
 
 `pha page <doc> <page> --json` reports the slug, the relative path, the current
 sha, the render path and the full variant set. With `pha serve` running
-(read-only, loopback) a page image can be embedded and keeps working across
-re-scans:
+(read-only, loopback) there are two forms, and they do different jobs:
 
-    ![](http://127.0.0.1:8765/doc/<slug>/p437.jpg)
+    [p. 437](http://127.0.0.1:8765/doc/<slug>/p437)      ← LINK: the page viewer
+    ![](http://127.0.0.1:8765/doc/<slug>/p437.jpg)       ← EMBED: the image only
 
-The endpoint resolves the document's current render per request, so a re-scan
-changes the bytes behind the URL without breaking the note.
+**Link to the viewer** (`/p437`, no extension): it shows the render and lets the
+reader page forward/back, jump to the first or last page, and see the position
+(`p. 437 of 618`) — so a citation is somewhere to keep reading. **Embed the
+`.jpg`** when the picture itself belongs inline: an embed cannot navigate (a note
+cannot contain the viewer — Obsidian blocks iframes).
 
-**Such a link resolves only while that server is running** — start it with
-`pha serve` (read-only, loopback `http://127.0.0.1:8765`). **A note that embeds
-one must carry a short warning near the top**, so a reader who sees a missing
-image knows it is the server, not the note. Full setup and caveats:
-`obsidian-integration.md`.
+Both resolve the document's current render per request, so a re-scan changes the
+bytes behind the URL without breaking the note.
+
+**They resolve only while that server is running** — start it with `pha serve`
+(read-only, loopback `http://127.0.0.1:8765`). **A note that embeds one must carry
+a short warning near the top**, so a reader who sees a missing image knows it is
+the server, not the note. Full setup and caveats: `obsidian-integration.md`.
 
 ## How an agent should create a note
 

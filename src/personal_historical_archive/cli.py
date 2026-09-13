@@ -194,6 +194,7 @@ def cmd_page(cfg: Config, args) -> None:
         rel_path = addresses.document_rel_path(cfg, doc)
         slug = addresses.doc_slug(rel_path)
         render = addresses.render_path(cfg, doc, args.page, page["source_name"])
+        total = doc["page_count"] or 0
         meta = {
             "document_id": doc["id"],
             "filename": doc["filename"],
@@ -211,6 +212,13 @@ def cmd_page(cfg: Config, args) -> None:
             "render": str(render) if render else None,
             "render_exists": render is not None,
             "variants": addresses.variant_files(cfg, doc, args.page, page["source_name"]),
+            # Navigation: the served viewer flips pages, and these are the same
+            # links so an agent can walk a document without a second lookup.
+            "page_count": total,
+            "prev_page": args.page - 1 if args.page > 1 else None,
+            "next_page": args.page + 1 if (total and args.page < total) else None,
+            "page_url": addresses.viewer_url(cfg.serve_base_url, slug, args.page),
+            "overview_url": addresses.overview_url(cfg.serve_base_url, slug),
         }
         if getattr(args, "json", False):
             print(json.dumps({**meta, "text": text}, ensure_ascii=False, indent=2))
@@ -314,6 +322,10 @@ def cmd_cite(cfg: Config, args) -> None:
             "file": variant["file"],
             "render": str(render) if render else None,
             "render_exists": render is not None,
+            # The viewer (not the bare jpg): a citation should land somewhere the
+            # reader can page forward/back from.
+            "url": addresses.viewer_url(cfg.serve_base_url, slug, args.page),
+            "overview_url": addresses.overview_url(cfg.serve_base_url, slug),
         }
         if getattr(args, "json", False):
             print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -322,6 +334,7 @@ def cmd_cite(cfg: Config, args) -> None:
         print(f"  slug:  {slug}")
         print(f"  page:  {args.page}")
         print(f"  file:  {variant['file']}")
+        print(f"  url:   {payload['url']}")
     finally:
         conn.close()
 
@@ -1773,7 +1786,8 @@ def cmd_serve(cfg: Config, args) -> None:
     """
     from .serve import run_server
 
-    run_server(cfg, host=args.host, port=args.port, quiet=args.quiet)
+    run_server(cfg, host=args.host or cfg.serve_host, port=args.port or cfg.serve_port,
+               quiet=args.quiet)
 
 
 def cmd_doctor(cfg: Config, args) -> None:
@@ -2229,9 +2243,11 @@ def main(argv: list[str] | None = None) -> None:
     sv = sub.add_parser(
         "serve",
         help="run the read-only render server (stable /doc/<slug>/p<NNN>.jpg URLs)")
-    sv.add_argument("--host", default="127.0.0.1",
-                    help="bind address (default loopback; 0.0.0.0 exposes the archive to the LAN)")
-    sv.add_argument("--port", type=int, default=8765)
+    sv.add_argument("--host", default=None,
+                    help="bind address (default: serve.host from config, else 127.0.0.1; "
+                         "0.0.0.0 exposes the archive to the LAN)")
+    sv.add_argument("--port", type=int, default=None,
+                    help="port (default: serve.port from config, else 8765)")
     sv.add_argument("--quiet", action="store_true", help="suppress per-request logging")
     sv.set_defaults(fn=cmd_serve)
 

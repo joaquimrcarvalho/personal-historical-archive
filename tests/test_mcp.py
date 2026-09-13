@@ -245,3 +245,27 @@ def test_config_tools_agree_on_sidecar_config(tmp_path):
     assert cfg_tool["problems"] == resolved["problems"] == []
     # encoders are reported by both, identically
     assert [e["id"] for e in cfg_tool["encoders"]] == resolved["encoders"] == ["letters"]
+
+
+def test_get_page_reports_navigation(tmp_path):
+    """pha_get_page carries page_count/prev/next and the served viewer URLs."""
+    cfg = _make_config(tmp_path)
+    seed = _seed(cfg)
+    doc_id = seed["doc1"]
+    conn = db.connect(cfg.db_path)
+    try:
+        db.update_document(conn, doc_id, page_count=2)
+        conn.commit()
+    finally:
+        conn.close()
+
+    import asyncio
+    mcp = mcp_server.make_server(cfg)
+    fns = {t.name: t.fn for t in asyncio.run(mcp.list_tools())}
+    first = fns["pha_get_page"](doc_id, 1)
+    assert first["page_count"] == 2
+    assert first["prev_page"] is None and first["next_page"] == 2
+    assert first["page_url"].endswith("/doc/testcol-doc/p001")
+    assert first["overview_url"].endswith("/doc/testcol-doc/")
+    last = fns["pha_get_page"](doc_id, 2)
+    assert last["prev_page"] == 1 and last["next_page"] is None

@@ -101,3 +101,16 @@ def test_cite_rejects_two_disambiguators(cfg, add_document, write_variant, capsy
                                 palaeographer="ocr"))
     assert exc.value.code == 2
     assert "only one of" in capsys.readouterr().err
+
+
+def test_cite_prints_the_viewer_url(cfg, add_document, write_variant, capsys):
+    """The citation links to the served viewer (prev/next), not the bare jpg."""
+    doc_id = add_document()
+    write_variant(doc_id, "edited-french-ocr@deepseek-v4-flash", 1, "real text")
+    cli.cmd_cite(cfg, _args(doc=doc_id, edited=True))
+    data = json.loads(capsys.readouterr().out)
+    assert data["url"].endswith("/doc/colx-d/p001")
+    assert data["overview_url"].endswith("/doc/colx-d/")
+    cli.cmd_cite(cfg, _args(doc=doc_id, edited=True, json=False))
+    out = capsys.readouterr().out
+    assert "url:" in out and "/doc/colx-d/p001" in out

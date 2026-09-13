@@ -989,9 +989,9 @@ lowercase, non-alphanumerics to `-`), so it survives a re-scan and changes only
 on rename/move.
 
 ```bash
-pha page 47 51 --json          # → "slug", "rel_path", "sha256", "render", "variants"
-pha cite 47 51 --edited        # → slug + the exact filled variant, in a footnote-ready block
-pha serve                      # → http://127.0.0.1:8765/doc/<slug>/p051.jpg
+pha page 47 51 --json          # → slug/rel_path/sha256/render/variants + page_count/prev/next/urls
+pha cite 47 51 --edited        # → slug + the exact filled variant + the viewer URL
+pha serve                      # → http://127.0.0.1:8765/doc/<slug>/p051
 ```
 
 `pha cite` refuses to cite an empty variant: where a page has both a `*waiting*`
@@ -1003,6 +1003,24 @@ writes), binds to loopback by default and warns on `--host 0.0.0.0`; it resolves
 and without changing any URL a consumer embedded. The JSON/`--json` and MCP
 payloads carry the same fields, so an external tool never has to re-derive the
 render path or the `edited-<editor>[@model]` grammar.
+
+**Paging a document.** A citation links to the HTML **page viewer**, which shows
+the render plus prev/next/first/last, a position (`p. 51 of 618`) and a jump box —
+so a footnote is somewhere you can keep reading, instead of a dead-end image.
+Plain links and a GET form, so it works with JavaScript off; the arrow keys work
+when it is on.
+
+| route | what it returns |
+|---|---|
+| `/doc/<slug>/p<NNN>` | the page **viewer**: render + prev/next/first/last + jump box |
+| `/doc/<slug>/` | the document **overview**: page count, variants, page ranges, "start reading" |
+| `/doc/<slug>/go?page=N` | the jump-box target (redirects to the viewer) |
+| `/doc/<slug>/p<NNN>.jpg` | the raw render (unchanged — inline embeds use this) |
+| `/doc/<slug>/meta.json` | metadata + `viewer_url` / `overview_url` / `pages` |
+
+The server's host and port live in `config.yaml` (`serve: {host, port}`, default
+`127.0.0.1:8765`), and `pha cite` / `pha page --json` quote that base URL, so a
+citation and the server agree on where the viewer is.
 
 ### Self-update
 
