@@ -6,7 +6,8 @@
   "main": "lib/index.js",
   "scripts": {
     "build:client": "node scripts/build-client.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "check:links": "node scripts/check-links.mjs"
   },
   "exports": {
     ".": {

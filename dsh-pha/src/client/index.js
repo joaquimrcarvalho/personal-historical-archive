@@ -4,6 +4,7 @@
 // (discovered via the package.json `dsh.client` block). Data comes from the same-origin
 // `/pha/*` JSON endpoints registered by the host half (lib/index.js).
 import React from 'react'
+import { classifyLink, docSlugFor, parseWikilink, resolveNoteName, slugifyPath } from './links.js'
 
 async function get(path) {
   const res = await fetch(path)
@@ -12,7 +13,6 @@ async function get(path) {
 
 // ---- compact markdown -> React (headings, lists, tables, footnotes w/ caret, wikilinks)
 function inline(t, opts) {
-  const onNote = opts && opts.onNote
   const out = []
   // Normalize LaTeX-style \\(^{n}\\) / \\(_{n}\\) to $^{n}$ / $_{n}$ so they render as sup/sub.
   let s = String(t == null ? '' : t)
@@ -30,14 +30,74 @@ function inline(t, opts) {
     else if (tok.startsWith('`') && tok.endsWith('`')) out.push(React.createElement('code', null, tok.slice(1, -1)))
     else if (tok.startsWith('~~') && tok.endsWith('~~')) out.push(React.createElement('del', null, tok.slice(2, -2)))
     else if (tok.startsWith('[[')) {
-      const nm = tok.slice(2, -2)
-      out.push(onNote ? React.createElement('a', { className: 'pha-note-link', onClick: () => onNote(nm) }, nm) : React.createElement('span', { className: 'pha-note-link' }, nm))
+      // [[Note]] · [[Note|label]] · [[Note#Heading]] · [[Note.md]] — resolved against
+      // the note list when we have it, so a miss renders as a dangling link instead of
+      // failing silently on click.
+      const w = parseWikilink(tok.slice(2, -2))
+      const known = o.noteNames
+      const resolved = known && known.length ? resolveNoteName(w.target, known) : null
+      const dangling = !!(known && known.length && !resolved)
+      const target = resolved || w.target
+      out.push(React.createElement('a', {
+        className: 'pha-note-link' + (dangling ? ' dangling' : ''),
+        title: (dangling ? 'no note named ' + w.target + ' — click to look for it' : 'note: ' + target)
+          + (w.anchor ? ' #' + w.anchor : ''),
+        key: 'wl' + m.index,
+        onClick: (ev) => { if (ev && ev.preventDefault) ev.preventDefault(); if (o.onNote) o.onNote(target, w.anchor) },
+      }, w.label))
     } else if (tok.startsWith('[^')) {
       const n = tok.slice(2, -1)
-      out.push(React.createElement('sup', { id: 'fnref-' + n }, React.createElement('a', { href: '#fn-' + n }, n)))
+      out.push(React.createElement('sup', { id: 'fnref-' + n, key: 'fnr' + n },
+        React.createElement('a', {
+          href: '#fn-' + n,
+          onClick: (ev) => { if (o.onAnchor) { ev.preventDefault(); o.onAnchor('fn-' + n) } },
+        }, n)))
     } else if (tok.startsWith('[')) {
       const nm = tok.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
-      out.push(nm ? React.createElement('a', { href: nm[2] }, nm[1]) : tok)
+      if (!nm) out.push(tok)
+      else {
+        const label = nm[1]
+        const href = nm[2].trim()
+        const c = classifyLink(href)
+        const key = 'md' + m.index
+        if (c.kind === 'anchor') {
+          // Same-page jumps never leave the harness, with or without a scroll handler.
+          out.push(React.createElement('a', {
+            href,
+            key,
+            onClick: o.onAnchor ? (ev) => { ev.preventDefault(); o.onAnchor(c.id) } : undefined,
+          }, label))
+        } else if (c.kind === 'citation' && o.onCitation) {
+          // A `pha cite` footnote: open the page in THIS view (image + text) instead of
+          // leaving the harness for the pha serve viewer.
+          out.push(React.createElement('a', {
+            className: 'pha-page-link',
+            href,
+            key,
+            title: 'open p.' + (c.page === null ? '?' : c.page) + ' of ' + c.slug + ' in this view',
+            onClick: (ev) => { ev.preventDefault(); o.onCitation(c) },
+          }, label, c.page === null ? null : React.createElement('span', { className: 'pha-link-tag' }, 'p.' + c.page)))
+        } else if (c.kind === 'note' && o.onNote) {
+          out.push(React.createElement('a', {
+            className: 'pha-note-link',
+            href,
+            key,
+            title: 'note: ' + c.name,
+            onClick: (ev) => { ev.preventDefault(); o.onNote(c.name, null) },
+          }, label))
+        } else {
+          // Everything else leaves the app: a new tab keeps the harness page — and this
+          // conversation — exactly where it is.
+          out.push(React.createElement('a', {
+            className: 'pha-ext-link',
+            href: c.href,
+            target: '_blank',
+            rel: 'noopener noreferrer',
+            title: c.href,
+            key,
+          }, label, React.createElement('span', { className: 'pha-ext-mark' }, '↗')))
+        }
+      }
     } else if (tok.startsWith('$')) {
       const sc = tok.match(/^\$([\^_])\{(.*)\}\$$/)
       out.push(sc ? React.createElement(sc[1] === '^' ? 'sup' : 'sub', null, sc[2]) : tok)
@@ -56,6 +116,15 @@ function renderMd(text, opts) {
   if (o.footnotes === undefined) o.footnotes = {}
   const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n')
   const blocks = []
+  const headingIds = {}
+  // Headings carry a stable id so `[[Note#Heading]]` and `[text](#Heading)` can land
+  // on a section; duplicates get a numeric suffix.
+  const headingIdFor = (text) => {
+    const base = 'h-' + (slugifyPath(text) || 'section')
+    if (headingIds[base] === undefined) { headingIds[base] = 1; return base }
+    headingIds[base] += 1
+    return base + '-' + headingIds[base]
+  }
   let i = 0
   let para = []
   const flushPara = () => { if (para.length) { blocks.push(React.createElement('p', null, inline(para.join(' '), o))); para = [] } }
@@ -70,6 +139,12 @@ function renderMd(text, opts) {
       kids.push(React.createElement('p', { className: 'pha-fn', key: id, id: 'fn-' + id },
         React.createElement('span', { className: 'pha-fn-num' }, '[' + id + '] '),
         ...inline(o.footnotes[id], o),
+        React.createElement('a', {
+          className: 'pha-fn-back',
+          href: '#fnref-' + id,
+          title: 'back to the reference',
+          onClick: (ev) => { if (o.onAnchor) { ev.preventDefault(); o.onAnchor('fnref-' + id) } },
+        }, '↩'),
       ))
     }
     blocks.push(React.createElement('section', { className: 'pha-footnotes' }, kids))
@@ -105,7 +180,12 @@ function renderMd(text, opts) {
     }
     if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) { flushPara(); blocks.push(React.createElement('hr')); i++; continue }
     const h = trimmed.match(/^(#{1,6})\s+(.*)$/)
-    if (h) { flushPara(); blocks.push(React.createElement('h' + Math.min(6, h[1].length), null, inline(h[2], o))); i++; continue }
+    if (h) {
+      flushPara()
+      blocks.push(React.createElement('h' + Math.min(6, h[1].length), { id: headingIdFor(h[2]) }, inline(h[2], o)))
+      i++
+      continue
+    }
     const bq = trimmed.match(/^>\s?(.*)$/)
     if (bq) { flushPara(); blocks.push(React.createElement('blockquote', null, inline(bq[1], o))); i++; continue }
     if (trimmed.startsWith('|') && lines[i + 1] && lines[i + 1].trim().match(/^\|[\s:|\-]+\|$/)) {
@@ -153,8 +233,8 @@ function splitFront(text) {
     : { front: null, body: String(text || '') }
 }
 
-function renderNote(content, onNote) {
-  const o = { onNote, footnotes: {}, renderFootnotes: true }
+function renderNote(content, linkOpts) {
+  const o = Object.assign({ footnotes: {}, renderFootnotes: true }, linkOpts || {})
   let body = String(content || '')
   let title = null
   const fm = body.match(/^---\n([\s\S]*?)\n---\n?/)
@@ -218,6 +298,12 @@ const CSS = [
   '.pha-fn{display:block;margin:0 0 6px;line-height:1.45;padding-left:1.8em;text-indent:-1.8em}',
   '.pha-fn-num{color:var(--dsw-alias-label-secondary,inherit)}',
   '.pha-note-link{color:var(--dsw-alias-brand-primary,#0b5fff);cursor:pointer;text-decoration:underline}',
+  '.pha-note-link.dangling{color:var(--dsw-alias-state-warn-primary,#e8890c);text-decoration-style:dotted}',
+  '.pha-page-link{color:var(--dsw-alias-brand-primary,#0b5fff);cursor:pointer;text-decoration:underline}',
+  '.pha-ext-link{color:var(--dsw-alias-brand-primary,#0b5fff);text-decoration:underline}',
+  '.pha-link-tag{margin-left:4px;font-size:10px;opacity:.65}',
+  '.pha-ext-mark{margin-left:2px;font-size:10px;opacity:.6}',
+  '.pha-fn-back{margin-left:6px;text-decoration:none;opacity:.6}',
   '.pha-content{display:flex;gap:12px;align-items:flex-start}',
   '.pha-media{flex:0 0 45%;max-width:45%;position:sticky;top:0}',
   '.pha-text{flex:1;min-width:0}',
@@ -248,7 +334,7 @@ function relPath(doc) {
 
 function PhaView() {
   const h = React.createElement
-  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false })
+  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null })
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -258,6 +344,7 @@ function PhaView() {
   const [textOn, setTextOn] = React.useState(true)
   const [imgData, setImgData] = React.useState(null)
   const [rootEl, setRootEl] = React.useState(null)
+  const [noteAnchor, setNoteAnchor] = React.useState(null)
 
   React.useEffect(() => {
     // The document list first — it is what the user waits for. Notes and the
@@ -275,6 +362,11 @@ function PhaView() {
   }, [])
 
   const pageNo = state.pageReq ? state.pageReq.page : null
+  React.useEffect(() => {
+    if (!state.selectedNote || !noteAnchor) return
+    scrollToAnchor(noteAnchor)
+  }, [state.selectedNote, noteAnchor])
+
   React.useEffect(() => {
     if (!showImg || !state.pageReq) { setImgData(null); return }
     let alive = true
@@ -377,13 +469,61 @@ function PhaView() {
     } catch (e) { msg = String((e && e.message) || e) }
     setState((s) => ({ ...s, configMsg: msg, defMsg: msg }))
   }
-  async function openNote(name) {
-    setState((s) => ({ ...s, noteMode: true, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, configMode: false, config: null, configMsg: null }))
-    const r = await get('/pha/note?name=' + encodeURIComponent(name))
-    setState((s) => ({ ...s, selectedNote: r && r.ok ? { name: r.name, content: r.content, path: r.path } : null }))
+  async function openNote(name, anchor) {
+    setState((s) => ({ ...s, noteMode: true, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, noteMsg: null, configMode: false, config: null, configMsg: null }))
+    setNoteAnchor(anchor || null)
+    try {
+      const r = await get('/pha/note?name=' + encodeURIComponent(name))
+      setState((s) => ({
+        ...s,
+        selectedNote: (r && r.ok) ? { name: r.name, content: r.content, path: r.path } : null,
+        noteMsg: (r && !r.ok) ? ((r && r.error) || ('no note named ' + name)) : null,
+      }))
+    } catch (e) {
+      setState((s) => ({ ...s, selectedNote: null, noteMsg: String((e && e.message) || e) }))
+    }
   }
-  async function openPage(pageNo, edited) {
-    const doc = state.selectedId
+
+  // Scroll to an anchor inside the rendered markdown. Heading ids are `h-<slug>`, so a
+  // wikilink's `#Heading` text and a markdown `#id` both find their target.
+  function scrollToAnchor(raw) {
+    const id = String(raw || '')
+    if (!id || typeof document === 'undefined') return false
+    const tries = [id, 'h-' + slugifyPath(id), slugifyPath(id)]
+    for (const t of tries) {
+      if (!t) continue
+      const el = document.getElementById(t)
+      if (el && el.scrollIntoView) { el.scrollIntoView({ block: 'start' }); return true }
+    }
+    return false
+  }
+
+  function docIdForSlug(slug) {
+    for (const d of (state.docs || [])) if (docSlugFor(d) === slug) return d.id
+    return null
+  }
+
+  // A citation link (`/doc/<slug>/p<NNN>`) points at the pha serve viewer. Resolve the
+  // slug against the archive we are already browsing and open that page HERE, so a
+  // footnote is readable inside the harness and does not require `pha serve`.
+  async function openCitation(c) {
+    if (!c || !c.slug) return
+    let id = docIdForSlug(c.slug)
+    if (id === null && !state.docs) {
+      const r = await get('/pha/documents')
+      if (r && r.ok) setState((s) => ({ ...s, docs: r.documents, archive: r.archive || s.archive }))
+      for (const d of ((r && r.ok && r.documents) || [])) if (docSlugFor(d) === c.slug) id = d.id
+    }
+    if (id === null) {
+      setState((s) => ({ ...s, noteMsg: 'no document in this archive matches /doc/' + c.slug + ' — the note may cite another archive' }))
+      return
+    }
+    setState((s) => ({ ...s, noteMsg: null }))
+    await openDoc(id)
+    if (c.page) openPage(c.page, false, id)
+  }
+  async function openPage(pageNo, edited, docId) {
+    const doc = docId === undefined || docId === null ? state.selectedId : docId
     // Re-arm the per-variant default: the raw transcription shows as plain text, the
     // edited variant as markdown. An explicit txt/md choice applies to the page on
     // screen only and is dropped when another page is opened.
@@ -422,6 +562,7 @@ function PhaView() {
 
   const s = state
   const searchMode = !!s.searchMode
+  const noteNames = (s.notes || []).map((n) => n.name)
   const editors = []
   let groups = []
   if (searchMode && s.hits) {
@@ -603,8 +744,16 @@ function PhaView() {
   } else if (s.noteMode && s.selectedNote) {
     right = h('div', { className: 'pha-right' },
       h('div', null, h('strong', null, s.selectedNote.name), h('div', { className: 'pha-muted' }, s.selectedNote.path)),
-      renderNote(s.selectedNote.content, openNote),
+      s.noteMsg ? h('div', { className: 'pha-err' }, s.noteMsg) : null,
+      renderNote(s.selectedNote.content, {
+        onNote: openNote,
+        onCitation: openCitation,
+        onAnchor: scrollToAnchor,
+        noteNames: noteNames,
+      }),
     )
+  } else if (s.noteMode && !s.selectedNote) {
+    right = h('div', { className: 'pha-empty' }, s.noteMsg || 'Loading note…')
   } else if (!s.detail) right = h('div', { className: 'pha-empty' }, searchMode ? 'Select a matching document to see its matched pages.' : 'Select a document or note to read it.')
   else if (!s.detail.doc) right = h('div', { className: 'pha-empty' }, 'Document not found in the archive.')
   else {

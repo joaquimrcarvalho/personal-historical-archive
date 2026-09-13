@@ -125,6 +125,25 @@ A JSON body means the row activated. `404` means it did not (wrong profile, or n
 row was added). `403` means the route exists but that instance requires its session credentials —
 not a plugin problem; use the tool call instead. The port differs per launch, so never hard-code it.
 
+### Links in the notes view
+
+`notes/` files are read as Obsidian-compatible markdown, and every link shape the
+archive's own conventions produce is routed deliberately:
+
+| in a note | in the viewer |
+|---|---|
+| `[[Note]]`, `[[Note|alias]]`, `[[Note.md]]` | opens that note; matching is case-, space- and accent-insensitive (`[[the strait]]` finds `The-Strait.md`) |
+| `[[Note#Heading]]`, `[text](#id)` | opens the note (if needed) and scrolls to the heading |
+| `[[missing-note]]` | rendered as an *unresolved* (amber, dotted) link instead of failing silently |
+| `[p. 437](http://127.0.0.1:8765/doc/<slug>/p437)` — a `pha cite` footnote | opens **that page of that document in this view** (image + text), resolved by the same slug rule `pha serve` uses — no `pha serve`, no leaving the harness |
+| `[other](other-note.md)` | opens `other` in the notes viewer |
+| any other `http(s)://`, `mailto:` | a new tab, so the harness page (and the conversation) stays put |
+
+Footnote references (`[^n]`) jump to their note and each footnote has a `↩` back to its
+reference. The rules live in `src/client/links.js` — dependency-free, unit-tested by
+`node scripts/check-links.mjs`, and inlined into `lib/client.js` by the build, so the
+served bundle stays one self-contained module.
+
 ## GUI (conversation) view
 
 The graphical **PHA view** is preserved in this package as:

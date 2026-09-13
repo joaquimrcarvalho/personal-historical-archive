@@ -27,6 +27,21 @@ let body = readFileSync(srcPath, 'utf8')
 // We provide React via require("react") + the __toESM interop in the factory,
 // so drop the ESM import (single-line react import) from the bundle body.
 body = body.replace(/^import[^\n]*from\s*['"]react['"];?\s*\n/m, '')
+// The link helpers live in their own dependency-free module (src/client/links.js) so
+// scripts/check-links.mjs can unit-test them directly. The served bundle must stay ONE
+// self-contained module, so inline that file here.
+const linksPath = join(root, 'src/client/links.js')
+let links = readFileSync(linksPath, 'utf8')
+if (/^\s*import\s/m.test(links)) {
+  throw new Error('build-client: src/client/links.js must not import anything — it is inlined into the bundle')
+}
+links = links.replace(/^export\s+/gm, '').replace(/\s+$/, '\n')
+const linksImport = body.match(/^import[^\n]*from\s*['"]\.\/links\.js['"];?\s*\n/m)
+if (linksImport === null) {
+  throw new Error("build-client: src/client/index.js must import the link helpers from './links.js'")
+}
+body = body.replace(linksImport[0], links)
+
 // Keep any other top-level imports out of the bundle (there are none today, but
 // if one appears we want a loud failure rather than a silently broken bundle).
 const leftoverImport = body.match(/^import\s/m)

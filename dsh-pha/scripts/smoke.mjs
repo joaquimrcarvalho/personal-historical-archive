@@ -91,6 +91,9 @@ check(/exports\.inject\s*=/.test(bundle), 'client bundle exports a named inject'
 check(/inject\s*=\s*\[\s*["']slots["']/.test(bundle), 'client bundle injects the slots service')
 check(bundle.includes('conversation.view'), 'client bundle registers conversation.view')
 check(/require\(["']react["']\)/.test(bundle), 'client bundle keeps react external')
+check(bundle.includes('function slugifyPath'), 'client bundle inlines the link helpers')
+check(!/from\s*["']\.\/links\.js["']/.test(bundle), 'client bundle has no leftover ./links.js import')
+check(!/^\s*import\s/m.test(bundle), 'client bundle imports nothing')
 
 console.log('')
 if (failures.length) {
