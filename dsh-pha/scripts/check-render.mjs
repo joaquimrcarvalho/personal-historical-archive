@@ -49,10 +49,21 @@ const sandbox = {
 }
 sandbox.globalThis = sandbox
 vm.createContext(sandbox)
-vm.runInContext(`${runtime}\n${links}\n${src}\n;globalThis.__pha = { inline, renderMd, renderNote, classifyLink, parseWikilink, resolveNoteName };`,
+vm.runInContext(`${runtime}\n${links}\n${src}\n;globalThis.__pha = { inline, renderMd, renderNote, classifyLink, parseWikilink, resolveNoteName, PhaView };`,
   sandbox, { filename: sourcePath })
 
-const { renderNote, renderMd } = sandbox.__pha
+const { renderNote, renderMd, PhaView } = sandbox.__pha
+
+// The whole view, rendered with the stubbed hooks: this is what catches a typo in the
+// pane/toolbar glue (an undefined helper, a mistyped state field) before it blanks the tab.
+let view
+try {
+  view = PhaView()
+  check(view && view.props && String(view.props.className).includes('pha-root'),
+    'PhaView() renders the whole view (left pane, toolbar, right pane)')
+} catch (e) {
+  check(false, 'PhaView() renders the whole view — threw: ' + e.message)
+}
 
 const NOTE = [
   '---',

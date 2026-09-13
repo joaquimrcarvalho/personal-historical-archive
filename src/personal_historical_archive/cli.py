@@ -894,40 +894,169 @@ def _move_into(src: Path, dst: Path) -> None:
     shutil.move(str(src), str(dst))
 
 
+def _inbox_units(cfg: Config) -> list[Path]:
+    """Document units parked in the inbox (absolute paths): files and
+    image-directories, the same units `discover()` would hand a scan."""
+    return _inbox_held(cfg)
+
+
+def _inbox_resolve(cfg: Config, rel: str) -> Path:
+    """Resolve an inbox-relative path, refusing anything that escapes the inbox."""
+    root = cfg.inbox.resolve()
+    cand = (cfg.inbox / rel).resolve()
+    if cand != root and root not in cand.parents:
+        raise ValueError(f"{rel!r} is outside the inbox")
+    if cand.name.startswith("."):
+        raise ValueError(f"{rel!r} is a dot-path; refusing to touch it")
+    return cand
+
+
+def _inbox_file_count(path: Path) -> int:
+    """Files a move of `path` would relocate (dot-files stay behind)."""
+    if path.is_file():
+        return 1
+    return sum(1 for p in path.rglob("*") if p.is_file() and not p.name.startswith("."))
+
+
+def _inbox_tree_bytes(path: Path) -> int:
+    if path.is_file():
+        return path.stat().st_size
+    return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
+
+
+def _inbox_plan(cfg: Config, rel: str | None) -> list[tuple[Path, Path]]:
+    """`(src, dst)` pairs for moving one inbox entry — or the whole inbox — into
+    the dropbox, preserving the relative layout. Raises ValueError on a bad path."""
+    if rel:
+        src = _inbox_resolve(cfg, rel)
+        if not src.exists():
+            raise ValueError(f"nothing in the inbox at {rel!r}")
+        return [(src, cfg.dropbox / src.relative_to(cfg.inbox))]
+    if not cfg.inbox.is_dir():
+        return []
+    return [(entry, cfg.dropbox / entry.name)
+            for entry in sorted(cfg.inbox.iterdir())
+            if not entry.name.startswith(".")]
+
+
+def _inbox_execute(cfg: Config, plan: list[tuple[Path, Path]]) -> None:
+    for src, dst in plan:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        _move_into(src, dst)
+
+
+def _inbox_json(cfg: Config) -> dict:
+    """Structured inbox listing: one group per directory holding parked units, the
+    documents in it, and the totals a move would carry."""
+    held = _inbox_units(cfg)
+    groups: dict[str, dict] = {}
+    for p in held:
+        rel = p.relative_to(cfg.inbox)
+        key = "" if str(rel.parent) == "." else rel.parent.as_posix()
+        label = "(inbox root)" if key == "" else key[len("collections/"):] if key.startswith("collections/") else key
+        g = groups.setdefault(key, {"rel_path": key, "label": label, "documents": 0, "files": 0,
+                                    "bytes": 0, "units": []})
+        g["documents"] += 1
+        g["units"].append({
+            "rel_path": rel.as_posix(),
+            "name": p.name,
+            "kind": p.suffix.lstrip(".").lower() if p.is_file() else "folder",
+            "bytes": _inbox_tree_bytes(p),
+        })
+    for key, g in groups.items():
+        d = cfg.inbox if key == "" else cfg.inbox / key
+        g["files"] = _inbox_file_count(d) if d.exists() else 0
+        g["bytes"] = sum(u["bytes"] for u in g["units"])
+        g["units"].sort(key=lambda u: u["name"])
+        g["move_target"] = "dropbox/" + key if key else "dropbox/"
+    total_files = _inbox_file_count(cfg.inbox) if cfg.inbox.is_dir() else 0
+    return {
+        "ok": True,
+        "inbox": str(cfg.inbox),
+        "dropbox": str(cfg.dropbox),
+        "exists": cfg.inbox.is_dir(),
+        "documents": len(held),
+        "files": total_files,
+        "bytes": _inbox_tree_bytes(cfg.inbox) if cfg.inbox.is_dir() else 0,
+        "collections": [groups[k] for k in sorted(groups, key=lambda k: (k == "", k))],
+    }
+
+
 def cmd_inbox(cfg: Config, args) -> None:
     """Manage documents parked ON HOLD in the inbox.
 
     Documents sitting in <archive_dir>/inbox are never scanned; `pha status`
     reports them as 'on hold'. `pha inbox` lists them; `pha inbox --dry-run`
     shows the move plan; `pha inbox --move` relocates them into the dropbox
-    (preserving the relative layout) so a following `pha scan` ingests them."""
-    held = _inbox_held(cfg)
+    (preserving the relative layout) so a following `pha scan` ingests them.
+    An optional PATH (relative to the inbox) scopes both the plan and the move
+    to one document or one folder — what the Harness view uses to move a single
+    selected item."""
+    rel = getattr(args, "path", None)
     move = bool(getattr(args, "move", False))
     dry = bool(getattr(args, "dry_run", False))
+    as_json = bool(getattr(args, "json", False))
+
+    if (move or dry) and rel:
+        try:
+            plan = _inbox_plan(cfg, rel)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
+    else:
+        plan = _inbox_plan(cfg, None)
 
     # --dry-run takes precedence: show the move plan without touching anything.
     if dry:
-        if not held:
-            print("inbox is empty (nothing to move)")
+        if not plan:
+            if as_json:
+                print(json.dumps({"ok": True, "would_move": [], "files": 0}, indent=2))
+            else:
+                print("inbox is empty (nothing to move)")
             return
-        print(f"would move {len(held)} file(s) from the inbox into the dropbox:")
-        for p in held:
-            print(f"  {p.relative_to(cfg.inbox)}  →  dropbox/{p.relative_to(cfg.inbox)}")
+        pairs = [{"from": f"inbox/{src.relative_to(cfg.inbox).as_posix()}",
+                  "to": f"dropbox/{dst.relative_to(cfg.dropbox).as_posix()}",
+                  "files": _inbox_file_count(src)} for src, dst in plan]
+        if as_json:
+            print(json.dumps({"ok": True, "path": rel, "files": sum(p["files"] for p in pairs),
+                              "would_move": pairs}, indent=2, ensure_ascii=False))
+            return
+        if rel:
+            print(f"would move {sum(p['files'] for p in pairs)} file(s) from the inbox:")
+        else:
+            print(f"would move {len(_inbox_units(cfg))} file(s) from the inbox into the dropbox:")
+        for p in pairs:
+            print(f"  {p['from'][len('inbox/'):]}  →  {p['to']}")
         print("  (run `pha inbox --move` to move them, then `pha scan`)")
         return
 
     if move:
-        if not held:
-            print("inbox is empty (nothing to move)")
+        if not plan:
+            if as_json:
+                print(json.dumps({"ok": True, "moved": [], "files": 0}, indent=2))
+            else:
+                print("inbox is empty (nothing to move)")
             return
-        for entry in sorted(cfg.inbox.iterdir()):
-            if entry.name.startswith("."):
-                continue
-            _move_into(entry, cfg.dropbox / entry.name)
-        print(f"moved {len(held)} file(s) from the inbox into the dropbox")
+        units_before = len(_inbox_units(cfg))  # the tally `pha status` reports
+        moved = [{"from": f"inbox/{src.relative_to(cfg.inbox).as_posix()}",
+                  "to": f"dropbox/{dst.relative_to(cfg.dropbox).as_posix()}",
+                  "files": _inbox_file_count(src)} for src, dst in plan]
+        _inbox_execute(cfg, plan)
+        if as_json:
+            print(json.dumps({"ok": True, "path": rel, "files": sum(m["files"] for m in moved),
+                              "moved": moved}, indent=2, ensure_ascii=False))
+            return
+        if rel:
+            print(f"moved {sum(m['files'] for m in moved)} file(s): {moved[0]['from']}  →  {moved[0]['to']}")
+        else:
+            print(f"moved {units_before} file(s) from the inbox into the dropbox")
         print("  →  run `pha scan` to ingest them")
         return
 
+    held = _inbox_units(cfg)
+    if as_json:
+        print(json.dumps(_inbox_json(cfg), indent=2, ensure_ascii=False))
+        return
     if not held:
         print("inbox is empty — park documents for later in " + str(cfg.inbox))
         return
@@ -935,9 +1064,9 @@ def cmd_inbox(cfg: Config, args) -> None:
     width = _term_width()
     holds: dict[str, list[str]] = {}
     for p in held:
-        rel = p.relative_to(cfg.inbox)
-        key = str(rel.parent) if str(rel.parent) != "." else "(inbox root)"
-        holds.setdefault(key, []).append(rel.name)
+        r = p.relative_to(cfg.inbox)
+        key = str(r.parent) if str(r.parent) != "." else "(inbox root)"
+        holds.setdefault(key, []).append(r.name)
     print("inbox (on hold, never scanned): " + str(cfg.inbox))
     for key in sorted(holds, key=lambda k: (k == "(inbox root)", k)):
         d = key[len("collections/"):] if key.startswith("collections/") else key
@@ -947,7 +1076,6 @@ def cmd_inbox(cfg: Config, args) -> None:
         listing = _snip(names, width - len(prefix) - 1)
         print(_fit(prefix + listing + ")", width))
     print("  →  `pha inbox --move` to put them in the dropbox, then `pha scan`")
-
 
 def cmd_filters(cfg: Config, args) -> None:
     """List the archive's stage filters (`filters/<id>/`)."""
@@ -2176,10 +2304,13 @@ def main(argv: list[str] | None = None) -> None:
     inf.set_defaults(fn=cmd_info)
 
     ib = sub.add_parser("inbox", help="list documents on hold, or move them into the dropbox")
+    ib.add_argument("path", nargs="?", default=None,
+                    help="a file or folder inside the inbox (relative); default: the whole inbox")
     ib.add_argument("--move", action="store_true",
                     help="move held documents into the dropbox (then `pha scan`)")
     ib.add_argument("--dry-run", action="store_true",
                     help="show what --move would do without moving anything")
+    ib.add_argument("--json", action="store_true", help="structured output for agents and the view")
     ib.set_defaults(fn=cmd_inbox)
 
     pg = sub.add_parser("page", help="print the full transcription of one page")

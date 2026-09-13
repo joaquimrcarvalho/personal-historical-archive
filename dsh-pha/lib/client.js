@@ -151,6 +151,19 @@ async function get(path) {
   return await res.json()
 }
 
+// The inbox move is the one mutating call; the host route only accepts POST.
+async function post(path) {
+  const res = await fetch(path, { method: 'POST' })
+  return await res.json()
+}
+
+function fmtBytes(n) {
+  const v = Number(n) || 0
+  if (v < 1024) return v + ' B'
+  if (v < 1024 * 1024) return (v / 1024).toFixed(v < 10240 ? 1 : 0) + ' kB'
+  return (v / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
 // ---- compact markdown -> React (headings, lists, tables, footnotes w/ caret, wikilinks)
 function inline(t, o) {
   const out = []
@@ -409,6 +422,7 @@ const CSS = [
   '.pha-doc{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:6px;cursor:pointer;border:1px solid transparent}',
   '.pha-doc:hover{background:var(--dsw-alias-bg-layer-1,#f2f2f2)}',
   '.pha-doc.sel{background:var(--dsw-alias-bg-layer-2,#e8e8e8);border-color:var(--dsw-alias-border-l2,#999)}',
+  '.pha-doc.sub{padding-left:22px}',
   '.pha-doc-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
   '.pha-doc-meta{font-size:11px;opacity:.6;white-space:nowrap}',
   '.pha-chip{font-size:10px;padding:1px 6px;border-radius:10px;border:1px solid var(--dsw-alias-border-l2,#777);white-space:nowrap}',
@@ -479,7 +493,7 @@ function relPath(doc) {
 
 function PhaView() {
   const h = React.createElement
-  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null })
+  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null, inbox: null, inboxErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false })
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -503,6 +517,7 @@ function PhaView() {
         get('/pha/notes').then((r) => setState((s) => ({ ...s, notes: r && r.ok ? r.notes : [] }))).catch(() => {})
         get('/pha/defs').then((r) => setState((s) => ({ ...s, defs: r && r.ok ? r.defs : [] }))).catch(() => {})
         get('/pha/collectionEncoders').then((r) => setState((s) => ({ ...s, collEncoders: r && r.ok ? r.encoders : [] }))).catch(() => {})
+        refreshInbox()
       })
   }, [])
 
@@ -559,7 +574,7 @@ function PhaView() {
     } catch (e) { setState((s) => ({ ...s, pendingPages: null, pendingNeeds: null })) }
   }
   async function openDoc(id) {
-    setState((s) => ({ ...s, selectedId: id, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null }))
+    setState((s) => ({ ...s, selectedId: id, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null }))
     const r = await get('/pha/document?doc=' + encodeURIComponent(id))
     setState((s) => ({ ...s, detail: r && r.ok ? { doc: r.doc, pages: r.pages || [], edits: r.edits || [], matched: false } : null }))
     loadPending(id)
@@ -570,11 +585,11 @@ function PhaView() {
     const vmap = {}
     matched.forEach((hit) => { vmap[hit.page_no] = hit.variant })
     const pages = r && r.ok && r.pages ? r.pages.filter((p) => vmap[p.page_no] !== undefined) : []
-    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null }))
+    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null }))
     loadPending(id)
   }
   async function openDef(d) {
-    setState((s) => ({ ...s, defMode: true, selectedDef: null, defMsg: null, noteMode: false, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null }))
+    setState((s) => ({ ...s, defMode: true, selectedDef: null, defMsg: null, noteMode: false, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null }))
     try {
       const r = await get('/pha/def?path=' + encodeURIComponent(d.path))
       setState((s) => ({ ...s, selectedDef: (r && r.ok) ? { kind: r.kind, name: r.name, path: r.path, content: r.content } : null, defMsg: (r && !r.ok) ? ((r && r.error) || 'load failed') : null }))
@@ -588,6 +603,76 @@ function PhaView() {
       setState((s) => ({ ...s, defMsg: (r && r.ok) ? ('opened: ' + (r.path || d.path) + ' — save in your editor, then Refresh') : ((r && r.error) || 'open failed') }))
     } catch (e) { setState((s) => ({ ...s, defMsg: String((e && e.message) || e) })) }
   }
+  async function refreshInbox() {
+    try {
+      const r = await get('/pha/inbox')
+      setState((s) => ({ ...s, inbox: (r && r.ok) ? r : null, inboxErr: (r && !r.ok) ? ((r && r.error) || 'inbox read failed') : null }))
+    } catch (e) {
+      setState((s) => ({ ...s, inbox: null, inboxErr: String((e && e.message) || e) }))
+    }
+  }
+
+  // Selecting anything in the inbox shows it in the right pane with the move action.
+  function openInbox(sel) {
+    setState((s) => ({
+      ...s, inboxSel: sel, inboxPlan: null, inboxMsg: null, inboxErr: null,
+      configMode: false, config: null, configMsg: null,
+      noteMode: false, selectedNote: null, selectedId: null, detail: null,
+      page: null, pageReq: null, pageErr: null,
+      defMode: false, selectedDef: null, defMsg: null,
+    }))
+  }
+
+  // Step one of the move: ask the CLI what it would do (`pha inbox --dry-run --json`),
+  // so the confirm button can state the real file count and destination.
+  async function planInboxMove() {
+    const sel = state.inboxSel
+    if (!sel) return
+    setState((s) => ({ ...s, inboxBusy: true, inboxPlan: null, inboxMsg: null, inboxErr: null }))
+    try {
+      const q = sel.rel_path ? '?path=' + encodeURIComponent(sel.rel_path) : ''
+      const r = await get('/pha/inbox/plan' + q)
+      setState((s) => ({
+        ...s, inboxBusy: false,
+        inboxPlan: (r && r.ok) ? r : null,
+        inboxErr: (r && !r.ok) ? ((r && r.error) || 'could not plan the move') : null,
+      }))
+    } catch (e) {
+      setState((s) => ({ ...s, inboxBusy: false, inboxErr: String((e && e.message) || e) }))
+    }
+  }
+
+  // Step two: the real move (POST), then re-read the inbox and the document list.
+  async function doInboxMove() {
+    const sel = state.inboxSel
+    if (!sel) return
+    setState((s) => ({ ...s, inboxBusy: true, inboxMsg: null, inboxErr: null }))
+    try {
+      const q = sel.rel_path ? '?path=' + encodeURIComponent(sel.rel_path) : ''
+      let r = null
+      try { r = await post('/pha/inbox/move' + q) } catch (e) { r = null }
+      if (!r || !r.ok) {
+        // Some carriers only route GET to a plugin handler; the route then wants an
+        // explicit `confirm=1`, which this second call supplies (a bare GET cannot move).
+        try { r = await get('/pha/inbox/move' + q + (q ? '&' : '?') + 'confirm=1') } catch (e) { r = null }
+      }
+      if (r && r.ok) {
+        const first = (r.moved && r.moved[0]) || null
+        setState((s) => ({
+          ...s, inboxBusy: false, inboxPlan: null, inboxSel: null,
+          inboxMsg: 'moved ' + (r.files || 0) + ' file(s)'
+            + (first ? ': ' + first.from + '  →  ' + first.to : '')
+            + ' — run `pha scan` to ingest them',
+        }))
+        refreshInbox()
+      } else {
+        setState((s) => ({ ...s, inboxBusy: false, inboxErr: (r && r.error) || 'the move failed' }))
+      }
+    } catch (e) {
+      setState((s) => ({ ...s, inboxBusy: false, inboxErr: String((e && e.message) || e) }))
+    }
+  }
+
   async function openConfig() {
     const sel = state.selectedId
     if (!sel) return
@@ -615,7 +700,7 @@ function PhaView() {
     setState((s) => ({ ...s, configMsg: msg, defMsg: msg }))
   }
   async function openNote(name, anchor) {
-    setState((s) => ({ ...s, noteMode: true, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, noteMsg: null, configMode: false, config: null, configMsg: null }))
+    setState((s) => ({ ...s, noteMode: true, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, noteMsg: null, configMode: false, config: null, configMsg: null, inboxSel: null }))
     setNoteAnchor(anchor || null)
     try {
       const r = await get('/pha/note?name=' + encodeURIComponent(name))
@@ -685,11 +770,11 @@ function PhaView() {
   async function doSearch() {
     const q = searchText.trim()
     if (!q) return
-    setState((s) => ({ ...s, searchMode: true, hits: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, noteMode: false, selectedNote: null }))
+    setState((s) => ({ ...s, searchMode: true, hits: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, noteMode: false, selectedNote: null, inboxSel: null }))
     const r = await get('/pha/search?q=' + encodeURIComponent(q) + '&limit=20')
     setState((s) => ({ ...s, hits: r && r.ok ? r.results : null }))
   }
-  function clearSearch() { setSearchText(''); setState((s) => ({ ...s, searchMode: false, hits: null, selectedId: null, detail: null, page: null, pageReq: null })) }
+  function clearSearch() { setSearchText(''); setState((s) => ({ ...s, searchMode: false, hits: null, selectedId: null, detail: null, page: null, pageReq: null, inboxSel: null, inboxMsg: null })) }
   async function editOpen() {
     const doc = state.detail && state.detail.doc
     const pr = state.pageReq
@@ -750,7 +835,7 @@ function PhaView() {
     h('span', { className: 'pha-title' }, 'pha archive'),
     h('span', { className: 'pha-muted' }, s.archive || '…'),
     h('span', { className: 'pha-spacer' }),
-    h('button', { className: 'pha-btn', onClick: () => { if (s.searchMode) clearSearch(); get('/pha/documents').then((r) => setState((x) => ({ ...x, docs: r && r.ok ? r.documents : null }))); get('/pha/notes').then((r) => setState((x) => ({ ...x, notes: r && r.ok ? r.notes : [] }))); get('/pha/defs').then((r) => setState((x) => ({ ...x, defs: r && r.ok ? r.defs : [] }))); get('/pha/collectionEncoders').then((r) => setState((x) => ({ ...x, collEncoders: r && r.ok ? r.encoders : [] }))) } }, '⟳ Refresh'),
+    h('button', { className: 'pha-btn', onClick: () => { if (s.searchMode) clearSearch(); get('/pha/documents').then((r) => setState((x) => ({ ...x, docs: r && r.ok ? r.documents : null }))); get('/pha/notes').then((r) => setState((x) => ({ ...x, notes: r && r.ok ? r.notes : [] }))); get('/pha/defs').then((r) => setState((x) => ({ ...x, defs: r && r.ok ? r.defs : [] }))); get('/pha/collectionEncoders').then((r) => setState((x) => ({ ...x, collEncoders: r && r.ok ? r.encoders : [] }))); refreshInbox() } }, '⟳ Refresh'),
   )
 
   const searchHeader = h('div', { className: 'pha-search' },
@@ -759,6 +844,33 @@ function PhaView() {
     searchMode ? h('button', { className: 'pha-btn small', title: 'clear search', onClick: clearSearch }, '✕') : null,
   )
 
+  const inboxSelKey = s.inboxSel ? (s.inboxSel.kind + ':' + s.inboxSel.rel_path) : null
+  const inboxUnit = (u) => h('div', {
+    className: 'pha-doc sub' + (inboxSelKey === 'document:' + u.rel_path ? ' sel' : ''),
+    key: 'ibu-' + u.rel_path,
+    title: 'inbox/' + u.rel_path,
+    onClick: () => openInbox({ kind: 'document', rel_path: u.rel_path, label: u.name, kindOf: u.kind, bytes: u.bytes, files: 1, documents: 1 }),
+  },
+    h('span', { className: 'pha-chip dim' }, u.kind || 'file'),
+    h('span', { className: 'pha-doc-name' }, u.name),
+    h('span', { className: 'pha-doc-meta' }, fmtBytes(u.bytes)),
+  )
+  const inboxList = (s.inbox && s.inbox.documents) ? h('div', { className: 'pha-group' },
+    h('div', { className: 'pha-group-h' }, 'inbox  (' + s.inbox.documents + ' document' + (s.inbox.documents === 1 ? '' : 's') + ' on hold)'),
+    (s.inbox.collections || []).map((c) => [
+      h('div', {
+        className: 'pha-doc' + (inboxSelKey === 'collection:' + c.rel_path ? ' sel' : ''),
+        key: 'ibc-' + (c.rel_path || 'root'),
+        title: 'inbox/' + c.rel_path + '  →  ' + c.move_target,
+        onClick: () => openInbox({ kind: 'collection', rel_path: c.rel_path, label: c.label, bytes: c.bytes, files: c.files, documents: c.documents }),
+      },
+        h('span', { className: 'pha-chip busy' }, 'collection'),
+        h('span', { className: 'pha-doc-name' }, c.label),
+        h('span', { className: 'pha-doc-meta' }, c.documents + ' doc' + (c.documents === 1 ? '' : 's') + ' · ' + fmtBytes(c.bytes)),
+      ),
+      (c.units || []).map((u) => inboxUnit(u)),
+    ]),
+  ) : null
   const noteList = (s.notes && s.notes.length) ? h('div', { className: 'pha-group' },
     h('div', { className: 'pha-group-h' }, 'notes  (' + s.notes.length + ')'),
     s.notes.map((n) => h('div', { className: 'pha-doc' + (s.selectedNote && s.selectedNote.name === n.name ? ' sel' : ''), key: n.name, onClick: () => openNote(n.name) },
@@ -820,6 +932,7 @@ function PhaView() {
           h('span', { className: 'pha-doc-meta' }, (d.page_count || 0) + 'p' + (d.palaeographer ? ' · ' + d.palaeographer : '')),
         )),
       )),
+      inboxList,
       noteList,
       defGroups,
       collEncGroups,
@@ -829,7 +942,45 @@ function PhaView() {
   const left = h('div', { className: 'pha-left', style: { width: leftPct + '%' } }, searchHeader, body)
 
   let right
-  if (s.configMode) {
+  if (s.inboxSel) {
+    const sel = s.inboxSel
+    const plan = s.inboxPlan
+    right = h('div', { className: 'pha-right' },
+      h('div', null,
+        h('strong', null, (sel.kind === 'collection' ? 'inbox collection — ' : 'inbox document — ') + sel.label),
+        h('div', { className: 'pha-muted' }, 'inbox/' + sel.rel_path),
+      ),
+      h('div', { className: 'pha-muted' },
+        (sel.kind === 'collection'
+          ? sel.documents + ' document(s) · ' + sel.files + ' file(s)'
+          : (sel.kindOf || 'file') + ' · 1 file')
+        + ' · ' + fmtBytes(sel.bytes) + ' · on hold — never scanned'),
+      h('div', { className: 'pha-muted' },
+        'moving it puts it in ' + (sel.rel_path ? 'dropbox/' + sel.rel_path : 'the dropbox') + '; run `pha scan` afterwards to ingest it'),
+      h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
+        h('button', { className: 'pha-btn primary', disabled: !!s.inboxBusy, onClick: planInboxMove }, plan ? 'Re-plan move' : 'Move to Dropbox'),
+        plan ? h('button', { className: 'pha-btn', disabled: !!s.inboxBusy, onClick: doInboxMove },
+          'Confirm move (' + plan.files + ' file' + (plan.files === 1 ? '' : 's') + ')') : null,
+        plan ? h('button', { className: 'pha-btn', disabled: !!s.inboxBusy, onClick: () => setState((x) => ({ ...x, inboxPlan: null })) }, 'Cancel') : null,
+        h('button', { className: 'pha-btn small', onClick: refreshInbox }, '⟳ Refresh inbox'),
+      ),
+      plan ? h('div', { className: 'pha-muted' },
+        (plan.would_move || []).map((m, k) => h('div', { key: 'ibp' + k }, 'will move ' + m.files + ' file(s): ' + m.from + '  →  ' + m.to))
+          .concat([h('div', { key: 'ibp-hint' }, 'nothing has moved yet — confirm to do it')])) : null,
+      s.inboxErr ? h('div', { className: 'pha-err' }, s.inboxErr) : null,
+      h('div', { className: 'pha-content' },
+        h('div', { className: 'pha-md' },
+          h('p', null, 'The inbox mirrors the dropbox: a parked collection lives at ',
+            h('code', null, 'inbox/collections/<name>/'), '. Nothing here is transcribed or indexed.'),
+          h('p', null, 'Moving keeps the relative layout, so ',
+            h('code', null, sel.rel_path ? 'inbox/' + sel.rel_path : 'inbox/'),
+            ' becomes ',
+            h('code', null, sel.rel_path ? 'dropbox/' + sel.rel_path : 'dropbox/'),
+            '.'))),
+    )
+  } else if (s.inboxMsg) {
+    right = h('div', { className: 'pha-empty' }, s.inboxMsg)
+  } else if (s.configMode) {
     const c = s.config
     const res = c && c.resolved
     right = h('div', { className: 'pha-right' },

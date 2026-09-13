@@ -369,6 +369,21 @@ function apply(ctx) {
   // collection has none on its chain (idempotent: an existing pha.yaml is shown,
   // never rewritten), so the view can surface a collection still configured only
   // by the legacy palaeographer/editor selection files.
+  // The inbox is the one place this plugin MUTATES: `pha inbox --move` relocates
+  // parked documents into the dropbox (preserving the layout). It never touches the
+  // dropbox itself, and the CLI re-validates every path, so the route can only ever
+  // move something that already sits inside the archive's inbox.
+  async function runInbox(a, mode) {
+    const argv = ['inbox']
+    if (a && a.path) argv.push(String(a.path))
+    if (mode === 'plan') argv.push('--dry-run')
+    if (mode === 'move') argv.push('--move')
+    argv.push('--json')
+    const r = await phaRun(argv)
+    if (r.code !== 0) throw new Error(cliFailure(r, 'pha inbox failed'))
+    return parseJson(r.out)
+  }
+
   async function runConfig(doc) {
     const r = await phaRun(['config', '--doc', String(doc), '--json', '--write'])
     if (r.code !== 0) throw new Error('pha config failed: ' + String(r.err || r.out).slice(0, 400))
@@ -457,7 +472,12 @@ function apply(ctx) {
   // ---- durable browser data layer (same-origin /pha/* JSON routes) --------
   // Read-only: browsing, page text + render image, search. Mutations go through
   // the pha_* tools / the agent, so do the pha lock + staleness semantics.
-  // Two exceptions: `/pha/open` launches the OS-default app on a page file
+  // Three exceptions, all still funnelled through the `pha` CLI: `/pha/open` launches
+  // the OS-default app on a page file, `/pha/config` may write a collection's pha.yaml,
+  // and `/pha/inbox/move` moves a parked item into the dropbox. `pha` re-validates each
+  // one; the plugin never writes to the archive itself.
+  //
+  // (Formerly two: `/pha/open` launches the OS-default app on a page file
   // (doc/page resolved + validated by `pha open`), and `/pha/config` may write a
   // collection's pha.yaml from the resolved configuration (only when it has none).
   function json(handler) {
@@ -465,7 +485,7 @@ function apply(ctx) {
       (async () => {
         try {
           const params = Object.fromEntries(new URL(req.url, 'http://localhost').searchParams)
-          const data = await handler(params)
+          const data = await handler(params, req)
           res.writeHead(200, { 'content-type': 'application/json' })
           res.end(JSON.stringify(data))
         } catch (e) {
@@ -557,6 +577,18 @@ function apply(ctx) {
     ['/pha/config', json(async (p) => {
       if (!p.doc) throw new Error('doc required')
       return await runConfig(p.doc)
+    })],
+    ['/pha/inbox', json(async (p) => await runInbox(p, 'list'))],
+    ['/pha/inbox/plan', json(async (p) => await runInbox(p, 'plan'))],
+    ['/pha/inbox/move', json(async (p, req) => {
+      // A move is a filesystem mutation, so it must be asked for explicitly: POST, or
+      // (for a carrier that routes only GET to a plugin handler) `?confirm=1`. A bare
+      // GET can never move anything.
+      const method = (req && req.method) || 'GET'
+      if (method !== 'POST' && p.confirm !== '1') {
+        throw new Error('refusing to move: POST or ?confirm=1 is required')
+      }
+      return await runInbox(p, 'move')
     })],
     ['/pha/search', json(async (p) => {
       const q = String(p.q || '').trim()

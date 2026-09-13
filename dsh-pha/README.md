@@ -125,6 +125,26 @@ A JSON body means the row activated. `404` means it did not (wrong profile, or n
 row was added). `403` means the route exists but that instance requires its session credentials —
 not a plugin problem; use the tool call instead. The port differs per launch, so never hard-code it.
 
+### The inbox (parked documents)
+
+The left pane lists the archive's `inbox/` — the sibling of `dropbox/` where documents
+wait on hold — directly after the dropbox groups. Each entry (a collection directory, or a
+single document inside one) is selectable, and selecting it opens a pane with a **Move to
+Dropbox** button:
+
+1. the button first asks the CLI for the plan (`pha inbox --dry-run --json`), so the
+   confirm step states the real file count and the destination;
+2. **Confirm move** performs it (`pha inbox --move [PATH]`), preserving the relative
+   layout — `inbox/collections/CAT` becomes `dropbox/collections/CAT`, merging into an
+   existing directory rather than nesting — and then re-reads the inbox;
+3. the pane reminds you that `pha scan` is what ingests the moved documents.
+
+This is the plugin's **only mutating route** (`POST /pha/inbox/move`, or `?confirm=1` for a
+carrier that routes only GET): it moves things *out of the inbox into the dropbox* and
+nothing else. The CLI re-validates the path, so it can never reach outside `inbox/` — a
+`../` path, an absolute path or a dot-path is refused before anything moves, and a bare GET
+is rejected without an explicit confirmation.
+
 ### Links in the notes view
 
 `notes/` files are read as Obsidian-compatible markdown, and every link shape the
