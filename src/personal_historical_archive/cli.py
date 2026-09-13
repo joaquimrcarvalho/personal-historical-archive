@@ -2360,7 +2360,7 @@ def main(argv: list[str] | None = None) -> None:
     k.add_argument("--set", metavar="NAME", help="store a value for NAME (read from stdin)")
     k.set_defaults(fn=cmd_key)
 
-    sset = sub.add_parser("set", help="set a project setting (stored in gitignored .env)")
+    sset = sub.add_parser("set", help="set a project setting (archive dir in config.yaml; secrets in .env)")
     ssub = sset.add_subparsers(dest="setting", required=True)
     sad = ssub.add_parser("archive-dir", help="set the archive data root (documents + definitions + generated output)")
     sad.add_argument("path", nargs="?", help="path to the archive directory (or prompted)")

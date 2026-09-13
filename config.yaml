@@ -7,9 +7,11 @@
 # dir holds only code, engine-level prompts (prompts/) and the _sample.md
 # templates.
 #
-# archive_dir precedence: PHA_ARCHIVE_DIR env var > PHA_ARCHIVE_DIR in the
-# gitignored .env (set via `pha set archive-dir`) > paths.archive_dir >
-# default "." (the project root — fully backward compatible).
+# archive_dir precedence: PHA_ARCHIVE_DIR env var (a per-run/per-machine
+# override, and the way to keep a personal path out of a shared file) >
+# paths.archive_dir below (what `pha set archive-dir` writes) > a legacy
+# PHA_ARCHIVE_DIR line in a gitignored .env > default "." (the project root —
+# fully backward compatible). `pha info` prints which one won.
 #
 # paths below that hold DATA are relative to archive_dir. paths that hold
 # CODE/CONFIG (prompts) are relative to the project root.
