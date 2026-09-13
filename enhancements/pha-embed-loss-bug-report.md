@@ -135,16 +135,27 @@ SELECT c.document_id, COUNT(*) chunks, SUM(c.embedding IS NOT NULL) embedded
 FROM chunks c GROUP BY c.document_id HAVING embedded = 0;
 ```
 
-### Warning — a workspace `.env` can silently retarget the archive
+### Warning — a checkout `.env` can silently retarget the archive
 
-While verifying the repair: a `pha` run from a directory whose `.env` sets
-`PHA_ARCHIVE_DIR` targets **that** archive, not the one named by the shell's
-`PHA_ARCHIVE_DIR` — `/Users/jrc/develop/personal-historical-archive/.env`
-points at the project root, so `pha reindex` run from the checkout reported
-`reindexed 0 document(s)` and exited **0** against an empty DB instead of
-failing loudly. That is how two repair attempts appeared to succeed while
-doing nothing. Check `pha info --json` (it prints the resolved archive/db
-paths) before trusting a background job's output, and run archive maintenance
+While verifying the repair, `pha reindex` run from the project checkout
+reported `reindexed 0 document(s)` and exited **0** against an empty archive
+instead of failing loudly. That is how two repair attempts appeared to succeed
+while doing nothing.
+
+The cause is a **stale `.env` at the config root** (here
+`/Users/jrc/develop/personal-historical-archive/.env`, which at the time
+pointed at the project root rather than the real archive). Resolution is, in
+order and as documented: the real environment, then a `NAME=...` line in
+`.env` at the config root, then `paths.archive_dir` in `config.yaml`, then the
+default `.`. That order was verified during this investigation: with the shell
+env naming B and `.env` naming A, **B wins**. So an explicit
+`PHA_ARCHIVE_DIR=... pha ...` is always safe — but a bare `pha ...` from a
+checkout whose `.env` names the wrong archive is not, and the failure is
+silent because an empty archive is a *valid* archive.
+
+Recorded as the operational lesson rather than a code defect: check
+`pha info --json` (it prints the resolved archive and db paths) before
+trusting a background job's output, and prefer running archive maintenance
 from the archive directory.
 
 ## 8. Still open
