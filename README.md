@@ -169,22 +169,24 @@ pha --help
 #    - create a NEW archive from scratch (default structure + AGENTS.md +
 #      .gitignore + zero-config defaults):
 #      pha init-archive /path/to/new-archive
-#    - or point at an existing archive (stores the path in a gitignored .env):
+#    - or point at an existing archive (records it in config.yaml):
 #      pha set archive-dir /path/to/your/archive
 #      (or interactively: run `pha set archive-dir` and type the path when asked)
-#    Equivalent: set the PHA_ARCHIVE_DIR env var (takes precedence), or put
-#    paths.archive_dir in config.yaml (not recommended — machine-specific).
+#    Equivalent: set the PHA_ARCHIVE_DIR env var for one run (it takes
+#    precedence over everything), or edit paths.archive_dir in config.yaml.
 #    Defaults to the project dir, so a fresh clone works with zero config:
 #    palaeographers/, editors/ and encoders/ are seeded with a default that
 #    uses qwen/qwen3-vl-8b on LM Studio.
 #    (If you chose the dev-venv fallback above, replace `pha` with `$PHA`.)
 #
-#    WHICH ARCHIVE AM I USING? `pha info --json` prints the resolved archive
-#    and db paths — check it before a long background job. A .env in the
-#    checkout can win over the shell's PHA_ARCHIVE_DIR, and a wrong archive
-#    does not fail loudly: commands just operate on the other archive (an
-#    empty one reports "0 documents" and exits 0). Run archive maintenance
-#    from the archive directory to avoid ambiguity.
+#    WHICH ARCHIVE AM I USING? `pha info` prints the resolved archive plus an
+#    `archive_source` line saying WHY that one (environment / legacy .env /
+#    config.yaml / the default) — check it before a long background job.
+#    `pha status` etc. also warn when a configured archive holds no documents
+#    but another archive.db sits in a parent directory (the shape of a stale
+#    pointer). The location itself lives in config.yaml (`paths.archive_dir`,
+#    written by `pha set archive-dir`), and an explicit PHA_ARCHIVE_DIR in the
+#    environment overrides it for a single run.
 
 # 4. start LM Studio, load qwen/qwen3-vl-8b (or your palaeo model), and the
 #    embedding model; start the local server on port 1234
@@ -965,7 +967,7 @@ pha test [target] [--pages N] [--random] [--seed S] [--show]
                                     #   (safe: writes to a scratch dir; never touches the archive;
                                     #    --show re-prints, --list lists, --clean deletes test run dirs)
 pha init-archive [PATH]      # create a new self-contained archive directory
-pha set archive-dir [PATH]   # set the archive data root (stored in gitignored .env)
+pha set archive-dir [PATH]   # set the archive data root (stored in config.yaml)
 pha archive-dir              # alias for `pha set archive-dir`
 pha set dropbox [PATH]       # DEPRECATED: set only the documents folder
 pha upload document PATH [--name N] [--replace] [--merge]
@@ -1042,9 +1044,10 @@ or per-invocation with the `PHA_NO_UPDATE_CHECK=1` environment variable.
 ## Configuration (`config.yaml`)
 
 - `paths.archive_dir` — the single self-contained **data root** (see Data
-  layout). Default `.` (the project dir). Set it per machine via
-  `pha set archive-dir` or the `PHA_ARCHIVE_DIR` env var — never commit a
-  machine-specific path.
+  layout). Default `.` (the project dir). `pha set archive-dir` writes it here,
+  so the location is a tracked, reviewable line; an explicit
+  `PHA_ARCHIVE_DIR` in the environment overrides it for one run, which is how
+  to keep a machine-specific path out of the committed file.
 - `vision.*` — model server + vision model for extraction
 - `embeddings.*` — model server + embedding model; `batch_size` caps how many
   chunks go in each `/embeddings` request (some endpoints reject an input over

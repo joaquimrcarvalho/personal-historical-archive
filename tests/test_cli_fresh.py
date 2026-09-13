@@ -92,11 +92,13 @@ def test_prompt_interactive_create_new(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.os.path, "expanduser", lambda s: str(home))
 
     assert cli._prompt_archive_setup(cfg) is True
-    # created ~/pha-home (fakehome/pha-home) and pointed pha at it in the root .env
+    # created ~/pha-home (fakehome/pha-home) and recorded it in config.yaml
     assert (home / "pha-home" / "archive.db").parent.is_dir()
+    config = (cfg.root / "config.yaml").read_text(encoding="utf-8")
+    assert "archive_dir:" in config and str(home) in config
+    # and NOT in the gitignored .env (the pointer lives in config.yaml now)
     envp = cfg.root / ".env"
-    assert envp.exists()
-    assert "PHA_ARCHIVE_DIR=" in envp.read_text(encoding="utf-8")
+    assert not envp.exists() or "PHA_ARCHIVE_DIR" not in envp.read_text(encoding="utf-8")
 
 
 def test_prompt_interactive_existing(tmp_path, monkeypatch):
@@ -109,11 +111,11 @@ def test_prompt_interactive_existing(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.sys, "stdin", FakeStdin())
     monkeypatch.setattr("builtins.input", lambda prompt="": "1")
     set_calls = []
-    monkeypatch.setattr(cli, "_set_env_in_dotenv",
+    monkeypatch.setattr(cli, "_set_archive_dir_in_config",
                         lambda *a, **k: set_calls.append((a, k)))
 
     assert cli._prompt_archive_setup(cfg) is True
-    assert set_calls, "_set_env_in_dotenv should have been called to point at an existing archive"
+    assert set_calls, "_set_archive_dir_in_config should have been called"
 
 
 def test_help_overview_points_to_docs(tmp_path, capsys, monkeypatch):
@@ -179,3 +181,161 @@ def test_pending_summary_missing_doc():
     lines = cli._pending_summary_lines(pending, lambda d: None)
     assert "doc#9" in lines[2]
     assert "(root)" in lines[2]
+
+
+# --- the archive location now lives in config.yaml (not the gitignored .env) ---
+
+def _run_set_archive_dir(cfg, path):
+    """Drive `pha set archive-dir PATH` non-interactively."""
+    from types import SimpleNamespace
+    cli.cmd_set_archive_dir(cfg, SimpleNamespace(path=str(path)))
+
+
+def test_set_archive_dir_writes_paths_archive_dir(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    cfg, root = _make_cfg(tmp_path, ".")
+    arc = tmp_path / "the-archive"
+    arc.mkdir()
+    _run_set_archive_dir(cfg, arc)
+    text = (root / "config.yaml").read_text(encoding="utf-8")
+    assert f"archive_dir: {arc}" in text
+    assert not (root / ".env").exists() or "PHA_ARCHIVE_DIR" not in (
+        root / ".env").read_text(encoding="utf-8")
+    # and it resolves on the next load
+    assert Config.load(root).archive_dir == arc.resolve()
+
+
+def test_set_archive_dir_preserves_config_comments_and_other_keys(tmp_path, monkeypatch):
+    """The edit must be a targeted line change, not a YAML round-trip."""
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        "# a comment that must survive\n"
+        "paths:\n"
+        "  archive_dir: .   # inline note\n"
+        "  dropbox: dropbox\n"
+        "\n"
+        "update:\n  check: true\n"
+    )
+    cfg = Config.load(root)
+    arc = tmp_path / "arc2"
+    arc.mkdir()
+    _run_set_archive_dir(cfg, arc)
+    text = (root / "config.yaml").read_text(encoding="utf-8")
+    assert "# a comment that must survive" in text
+    assert "dropbox: dropbox" in text
+    assert "check: true" in text
+    assert f"archive_dir: {arc}" in text
+    assert text.count("archive_dir:") == 1          # replaced, not appended
+    assert "  # inline note" not in text            # the stale inline comment goes
+
+
+def test_set_archive_dir_creates_a_paths_block_when_missing(tmp_path, monkeypatch):
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text("update:\n  check: true\n")
+    cfg = Config.load(root)
+    arc = tmp_path / "arc3"
+    arc.mkdir()
+    _run_set_archive_dir(cfg, arc)
+    text = (root / "config.yaml").read_text(encoding="utf-8")
+    assert "paths:" in text and f"archive_dir: {arc}" in text
+    assert Config.load(root).archive_dir == arc.resolve()
+
+
+def test_set_archive_dir_migrates_a_legacy_dotenv_line(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    cfg, root = _make_cfg(tmp_path, ".")
+    (root / ".env").write_text("PHA_ARCHIVE_DIR=/somewhere/old\n")
+    arc = tmp_path / "arc4"
+    arc.mkdir()
+    _run_set_archive_dir(cfg, arc)
+    env_text = (root / ".env").read_text(encoding="utf-8")
+    assert "PHA_ARCHIVE_DIR" not in env_text
+    assert "legacy" in capsys.readouterr().out
+
+
+def test_env_still_overrides_config_yaml(tmp_path, monkeypatch):
+    """An explicit PHA_ARCHIVE_DIR is a per-run override; config.yaml is the default."""
+    from_cfg = tmp_path / "from-config"
+    from_cfg.mkdir()
+    from_env = tmp_path / "from-env"
+    from_env.mkdir()
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {from_cfg}\n")
+    assert Config.load(root).archive_dir == from_cfg.resolve()
+    monkeypatch.setenv("PHA_ARCHIVE_DIR", str(from_env))
+    assert Config.load(root).archive_dir == from_env.resolve()
+
+
+# --- resolution is now loud when it matters (option 1) -----------------------
+
+def test_notice_when_no_archive_is_configured(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    cfg, _ = _make_cfg(tmp_path, ".")
+    cli._warn_resolved_archive(cfg)
+    err = capsys.readouterr().err
+    assert "archive:" in err and "default" in err
+    assert "pha set archive-dir" in err
+
+
+def test_no_notice_when_an_archive_is_configured_and_populated(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    arc = tmp_path / "real"
+    arc.mkdir()
+    cfg, root = _make_cfg(tmp_path, str(arc))
+    conn = __import__("personal_historical_archive.db", fromlist=["db"]).connect(cfg.db_path)
+    now = __import__("time").time()
+    conn.execute(
+        "INSERT INTO documents (filename, path, sha256, status, created_at, updated_at) "
+        "VALUES ('a.pdf', ?, 'x', 'done', ?, ?)", (str(root / "a.pdf"), now, now))
+    conn.commit()
+    conn.close()
+    cli._warn_resolved_archive(cfg)
+    assert capsys.readouterr().err == ""
+
+
+def test_warns_when_the_configured_archive_is_empty_but_another_exists(tmp_path, monkeypatch, capsys):
+    """The stale-.env shape: configured archive empty, another archive.db nearby."""
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    empty = tmp_path / "wrong"
+    empty.mkdir()
+    cfg, root = _make_cfg(tmp_path, str(empty))
+    # an archive database in the CWD's parent (where the user probably meant)
+    (tmp_path / "archive.db").write_bytes(b"")
+    monkeypatch.chdir(root)
+    cli._warn_resolved_archive(cfg)
+    err = capsys.readouterr().err
+    assert "has no documents" in err and "pha info" in err
+
+
+def test_dotenv_archive_dir_reports_the_legacy_source(tmp_path, monkeypatch):
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    cfg, root = _make_cfg(tmp_path, ".")
+    (root / ".env").write_text("PHA_ARCHIVE_DIR=/legacy/place\n")
+    assert cli._dotenv_archive_dir(cfg) == "/legacy/place"
+
+
+def test_info_reports_where_the_archive_came_from(tmp_path, monkeypatch, capsys):
+    import json as _json
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    arc = tmp_path / "cfg-arc"
+    arc.mkdir()
+    cfg, _ = _make_cfg(tmp_path, str(arc))
+    cli.cmd_info(cfg, type("A", (), {"json": True})())
+    data = _json.loads(capsys.readouterr().out)
+    assert data["archive_source"] == "paths.archive_dir in config.yaml"
+    assert data["filters"] == str(cfg.filters_dir)
+
+
+def test_info_reports_the_env_source(tmp_path, monkeypatch, capsys):
+    import json as _json
+    arc = tmp_path / "cfg-arc"
+    arc.mkdir()
+    monkeypatch.setenv("PHA_ARCHIVE_DIR", str(arc))
+    cfg, _ = _make_cfg(tmp_path, ".")
+    cli.cmd_info(cfg, type("A", (), {"json": True})())
+    assert _json.loads(capsys.readouterr().out)["archive_source"].startswith("PHA_ARCHIVE_DIR env")

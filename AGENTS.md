@@ -34,8 +34,10 @@
   `notes/` (Obsidian-compatible research notes generated from archive queries),
   `library/`, `renders/`, `archive.db` (generated). The project dir holds only
   code, `prompts/`, `schema/` and the `_sample.md` templates. Precedence:
-  `PHA_ARCHIVE_DIR` env > `PHA_ARCHIVE_DIR` in `.env` (`pha set archive-dir`)
-  > `paths.archive_dir` > default `.`. A fresh archive is seeded with
+  `PHA_ARCHIVE_DIR` env > `paths.archive_dir` in `config.yaml` (written by
+  `pha set archive-dir`; this is the tracked, reviewable home for the
+  location) > a legacy `PHA_ARCHIVE_DIR` line in a gitignored `.env` > the
+  default `.`. A fresh archive is seeded with
   `default.md` for model/palaeographer/editor/encoder (all qwen3-vl-8b) so it
   works with zero config.
 - **Three config layers.** (1) `models/<id>.md` — pure model interface

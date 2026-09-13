@@ -463,8 +463,20 @@ def cmd_info(cfg: Config, args) -> None:
     `pha status` walks every library page file (minutes on a large archive) and
     `pha doctor` probes the engine binaries, while this is just config loading.
     """
+    # `archive_source` says WHY this archive: env / legacy .env / config.yaml /
+    # the default. A wrong archive is otherwise silent (an empty archive is a
+    # valid archive), so this is the answer to "which one am I actually on?".
+    if os.environ.get("PHA_ARCHIVE_DIR"):
+        source = "PHA_ARCHIVE_DIR environment variable"
+    elif _dotenv_archive_dir(cfg) is not None:
+        source = "PHA_ARCHIVE_DIR in .env (legacy)"
+    elif (cfg.root / "config.yaml").exists():
+        source = "paths.archive_dir in config.yaml"
+    else:
+        source = "default (project root)"
     info = {
         "archive_dir": str(cfg.archive_dir),
+        "archive_source": source,
         "db_path": str(cfg.db_path),
         "dropbox": str(cfg.dropbox),
         "library": str(cfg.library),
@@ -474,6 +486,7 @@ def cmd_info(cfg: Config, args) -> None:
         "palaeographers": str(cfg.palaeographers_dir),
         "editors": str(cfg.editors_dir),
         "encoders": str(cfg.encoders_dir),
+        "filters": str(cfg.filters_dir),
     }
     if getattr(args, "json", False):
         print(json.dumps(info, ensure_ascii=False, indent=2))
@@ -1434,8 +1447,9 @@ def cmd_upload(cfg: Config, args) -> None:
 def _set_env_in_dotenv(cfg: Config, env_name: str, display: str, current: str,
                        path: str | None = None) -> None:
     """Prompt for (or accept) a path and store it as env_name in the
-    gitignored project .env. Shared by `pha set archive-dir` and the
-    deprecated `pha set dropbox`."""
+    gitignored project .env. Used by the DEPRECATED `pha set dropbox` only —
+    the archive location goes in `config.yaml` (see
+    `_set_archive_dir_in_config`)."""
     if not path:
         try:
             if not sys.stdin.isatty():
@@ -1463,16 +1477,114 @@ def _set_env_in_dotenv(cfg: Config, env_name: str, display: str, current: str,
         print(f"{env_name} unchanged: {current}")
 
 
+def _write_paths_archive_dir(text: str, value: str) -> str:
+    """Set `paths.archive_dir` in config.yaml, preserving everything else.
+
+    A targeted line edit rather than a YAML round-trip: config.yaml carries
+    explanatory comments that `yaml.safe_dump` would strip. Only a
+    `archive_dir:` key inside the `paths:` block is touched.
+    """
+    lines = text.splitlines()
+    paths_at = None
+    for i, line in enumerate(lines):
+        if re.match(r"^paths:\s*(#.*)?$", line):
+            paths_at = i
+            break
+    if paths_at is None:
+        block = ["paths:", f"  archive_dir: {value}"]
+        if lines and lines[-1].strip():
+            lines.append("")
+        return "\n".join(lines + block) + "\n"
+    # inside the block, up to the next top-level key
+    end = len(lines)
+    for j in range(paths_at + 1, len(lines)):
+        if lines[j].strip() and not lines[j][:1].isspace():
+            end = j
+            break
+    for j in range(paths_at + 1, end):
+        if re.match(r"^\s+archive_dir:", lines[j]):
+            indent = lines[j][: len(lines[j]) - len(lines[j].lstrip())]
+            lines[j] = f"{indent}archive_dir: {value}"
+            return "\n".join(lines) + "\n"
+    lines.insert(paths_at + 1, f"  archive_dir: {value}")
+    return "\n".join(lines) + "\n"
+
+
+def _clear_dotenv_archive_dir(cfg: Config) -> bool:
+    """Drop a legacy PHA_ARCHIVE_DIR line from .env. True if one was removed."""
+    envp = cfg.root / ".env"
+    if not envp.exists():
+        return False
+    try:
+        lines = envp.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    kept = [l for l in lines if not l.strip().startswith("PHA_ARCHIVE_DIR=")]
+    if len(kept) == len(lines):
+        return False
+    try:
+        envp.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def _set_archive_dir_in_config(cfg: Config, path: str | None) -> None:
+    """Prompt for (or accept) an archive root and store it in config.yaml.
+
+    `config.yaml` is the tracked, reviewable home for the archive location
+    (DEC: one visible pointer instead of a gitignored `.env` line that can go
+    stale unnoticed). `PHA_ARCHIVE_DIR` in the real environment still wins, so
+    a one-off or per-machine override needs no file edit.
+    """
+    current = str(getattr(cfg, "archive_dir", "") or "")
+    if not path:
+        try:
+            if not sys.stdin.isatty():
+                path = sys.stdin.readline().strip()
+        except Exception:
+            path = None
+    if not path:
+        print("Archive directory:")
+        print(f"  current: {current}")
+        try:
+            path = input("Path (Enter to keep current): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            path = ""
+    if not path:
+        print(f"archive_dir unchanged: {current}")
+        return
+    expanded = os.path.expanduser(path).strip()
+    if not os.path.isabs(expanded):
+        expanded = str((cfg.root / expanded).resolve())
+    cfgp = cfg.root / "config.yaml"
+    try:
+        text = cfgp.read_text(encoding="utf-8") if cfgp.exists() else ""
+    except OSError as e:
+        print(f"error: cannot read {cfgp}: {e}", file=sys.stderr)
+        return
+    try:
+        cfgp.write_text(_write_paths_archive_dir(text, expanded), encoding="utf-8")
+    except OSError as e:
+        print(f"error: cannot write {cfgp}: {e}", file=sys.stderr)
+        return
+    print(f"stored paths.archive_dir -> {expanded}  (in {cfgp})")
+    if _clear_dotenv_archive_dir(cfg):
+        print("removed the legacy PHA_ARCHIVE_DIR line from .env "
+              "(config.yaml is now the source of truth)")
+
+
 def cmd_set_archive_dir(cfg: Config, args) -> None:
     """`pha set archive-dir` (or `pha archive-dir`) — set the archive data root.
 
-    Stores PHA_ARCHIVE_DIR in the gitignored project .env. All data —
-    documents (dropbox), model definitions (palaeographers/editors/encoders)
-    and generated output (library, renders, db) — lives under this directory.
-    Read back automatically on the next `pha` run (never committed)."""
+    Stores `paths.archive_dir` in config.yaml, so the archive location is a
+    tracked, reviewable line rather than a gitignored `.env` value.
+    `PHA_ARCHIVE_DIR` in the environment still overrides it for a one-off run.
+    All data — documents (dropbox), model definitions
+    (palaeographers/editors/encoders) and generated output (library, renders,
+    db) — lives under this directory."""
     path = getattr(args, "path", None)
-    _set_env_in_dotenv(cfg, "PHA_ARCHIVE_DIR", "Archive directory",
-                       str(getattr(cfg, "archive_dir", "")), path)
+    _set_archive_dir_in_config(cfg, path)
 
 
 def cmd_init_archive(cfg: Config, args) -> None:
@@ -1856,16 +1968,124 @@ def _archive_unconfigured(cfg: Config) -> bool:
         return True
 
 
+def _prospective_archive(cfg: Config) -> Path | None:
+    """Another pha archive sitting where the user probably expected this one.
+
+    Heuristic, and deliberately conservative: look only in the CWD's parents
+    for an `archive.db`, and ignore the directory we already resolved to. A
+    single `stat` per level, and the walk stops at `$HOME`, so this is cheap
+    enough to run on every command.
+    """
+    try:
+        cur = Path.cwd().resolve()
+    except OSError:
+        return None
+    home = Path(os.path.expanduser("~"))
+    resolved = cfg.archive_dir.resolve()
+    for d in [cur, *cur.parents]:
+        if d == resolved:
+            return None  # we are already looking at it
+        if (d / "archive.db").exists():
+            return d
+        if d == home:
+            break
+    return None
+
+
+def _archive_is_empty(cfg: Config) -> bool:
+    """Does the resolved archive hold no documents (or have no DB yet)?"""
+    dbp = cfg.db_path
+    if not dbp.exists():
+        return True
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
+        try:
+            return conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - an unreadable DB is not our problem here
+        return False
+
+
+def _resolve_archive_dir_line(cfg: Config) -> str:
+    """One line naming the archive in use, and how it was chosen."""
+    if os.environ.get("PHA_ARCHIVE_DIR"):
+        how = "from PHA_ARCHIVE_DIR in the environment"
+    elif _dotenv_archive_dir(cfg) is not None:
+        how = "from the legacy PHA_ARCHIVE_DIR line in .env"
+    else:
+        cfg_yaml = (cfg.root / "config.yaml")
+        val = None
+        if cfg_yaml.exists():
+            try:
+                import yaml
+                raw = yaml.safe_load(cfg_yaml.read_text(encoding="utf-8")) or {}
+                val = (raw.get("paths", {}) or {}).get("archive_dir")
+            except Exception:  # noqa: BLE001
+                val = None
+        if val and str(val).strip() not in ("", "."):
+            how = "from paths.archive_dir in config.yaml"
+        else:
+            how = ("the default (no archive configured) — "
+                   "`pha set archive-dir <path>` to choose one")
+    return f"archive: {cfg.archive_dir}   ({how})"
+
+
+def _dotenv_archive_dir(cfg: Config) -> str | None:
+    """The legacy PHA_ARCHIVE_DIR value in .env, as an absolute string."""
+    envp = cfg.root / ".env"
+    if not envp.exists():
+        return None
+    try:
+        for line in envp.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("PHA_ARCHIVE_DIR="):
+                raw = line.split("=", 1)[1].strip().strip('"').strip("'")
+                return str((cfg.root / raw).resolve()) if not os.path.isabs(raw) else raw
+    except OSError:
+        return None
+    return None
+
+
+def _warn_resolved_archive(cfg: Config) -> None:
+    """Say which archive we resolved, when that is worth saying.
+
+    Two cases, both silent until now:
+
+    - no archive is configured (fallback to the project root / CWD): the user
+      is told where it landed, because an empty archive is a VALID archive and
+      a wrong one therefore fails silently;
+    - an archive IS configured, but it holds no documents while another
+      `archive.db` sits in a parent directory — the shape of a stale `.env`
+      pointing at the wrong place.
+
+    Printed to stderr (never stdout: `--json` output and piping must stay
+    clean) and only for commands that actually work on the archive.
+    """
+    if not _archive_explicitly_set(cfg):
+        print(_resolve_archive_dir_line(cfg), file=sys.stderr)
+        return
+    if not _archive_is_empty(cfg):
+        return
+    other = _prospective_archive(cfg)
+    if other is not None:
+        print(
+            f"warning: the configured archive {cfg.archive_dir} has no documents, "
+            f"but {other} has an archive.db — is this the archive you meant? "
+            f"Check with `pha info`.",
+            file=sys.stderr,
+        )
+
+
 def _create_and_set(cfg: Config, path: Path) -> None:
-    """Create a new archive at `path` and point pha at it (persist PHA_ARCHIVE_DIR)."""
+    """Create a new archive at `path` and point pha at it (paths.archive_dir)."""
     from .archive_init import init_archive
     try:
         p = init_archive(str(path), project_root=cfg.root)
     except (FileExistsError, NotADirectoryError) as e:
         print(f"error: {e}", file=sys.stderr)
         return
-    _set_env_in_dotenv(cfg, "PHA_ARCHIVE_DIR", "Archive directory",
-                       str(cfg.archive_dir), str(p))
+    _set_archive_dir_in_config(cfg, str(p))
     print(f"created and pointed pha at {p}")
 
 
@@ -1886,8 +2106,7 @@ def _prompt_archive_setup(cfg: Config) -> bool:
         except (EOFError, KeyboardInterrupt):
             ans = ""
         if ans == "1":
-            _set_env_in_dotenv(cfg, "PHA_ARCHIVE_DIR", "Archive directory",
-                               str(cfg.archive_dir), None)
+            _set_archive_dir_in_config(cfg, None)
             return True
         if ans in ("", "2"):
             _create_and_set(cfg, home_pha)
@@ -2207,6 +2426,16 @@ def main(argv: list[str] | None = None) -> None:
             cfg = Config.load()  # reload now that archive_dir may have changed
         else:
             sys.exit(1)
+
+    # Say which archive we resolved when it is worth saying (never to stdout:
+    # `--json` output and piping must stay clean). Setup/diagnostic commands
+    # are excluded so the notice cannot get in the way of fixing the problem.
+    if args.cmd not in ("set", "archive-dir", "dropbox", "init-archive", "key",
+                        "help", "update", "doctor", "info"):
+        try:
+            _warn_resolved_archive(cfg)
+        except Exception:  # noqa: BLE001 - a notice must never break a command
+            pass
 
     cfg.ensure_dirs()
 
