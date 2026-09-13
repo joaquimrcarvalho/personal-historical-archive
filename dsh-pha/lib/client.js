@@ -726,24 +726,31 @@ function PhaView() {
 // (which only orders bundle arrival) — cordis waits for the services listed here.
 const inject =  ['slots']
 
+function registerPhaView(scope) {
+  const slots = scope.slots || scope.get('slots')
+  if (!slots) return
+  scope.effect(() => {
+    const id = 'dsh-pha-css'
+    if (typeof document !== 'undefined' && document.querySelector('style[data-pha]') === null) {
+      const tag = document.createElement('style')
+      tag.dataset.pha = id
+      tag.textContent = CSS
+      document.head.appendChild(tag)
+    }
+    return () => { const tag = document.querySelector('style[data-pha]'); if (tag) tag.remove() }
+  })
+  slots.inject('conversation.view', () => slots.register(
+    { name: 'conversation.view', id: 'pha', order: 30, label: 'PHA' },
+    PhaView,
+  ))
+}
+
 const apply =  (ctx) => {
-    const slots = ctx.get('slots')
-    if (!slots) return
-    const disposeCss = ctx.effect(() => {
-      const id = 'dsh-pha-css'
-      if (typeof document !== 'undefined' && document.querySelector('style[data-pha]') === null) {
-        const tag = document.createElement('style')
-        tag.dataset.pha = id
-        tag.textContent = CSS
-        document.head.appendChild(tag)
-      }
-      return () => { const tag = document.querySelector('style[data-pha]'); if (tag) tag.remove() }
-    })
-    void disposeCss
-    slots.inject('conversation.view', () => slots.register(
-      { name: 'conversation.view', id: 'pha', order: 30, label: 'PHA' },
-      PhaView,
-    ))
+  // Never bail out when `slots` is not resolved yet: the static inject above makes
+  // cordis wait for it, but if a loader hands us a scope where the service is still
+  // arriving, `ctx.inject` opens a child scope that applies when it does. The old
+  // `if (!slots) return` turned that race into a view that silently never appeared.
+  ctx.inject(['slots'], (scope) => { registerPhaView(scope) })
 }
 
 		exports.apply = apply;
