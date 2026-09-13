@@ -93,8 +93,13 @@ re-scans:
     ![](http://127.0.0.1:8765/doc/<slug>/p437.jpg)
 
 The endpoint resolves the document's current render per request, so a re-scan
-changes the bytes behind the URL without breaking the note. Full setup and
-caveats: `obsidian-integration.md`.
+changes the bytes behind the URL without breaking the note.
+
+**Such a link resolves only while that server is running** — start it with
+`pha serve` (read-only, loopback `http://127.0.0.1:8765`). **A note that embeds
+one must carry a short warning near the top**, so a reader who sees a missing
+image knows it is the server, not the note. Full setup and caveats:
+`obsidian-integration.md`.
 
 ## How an agent should create a note
 
