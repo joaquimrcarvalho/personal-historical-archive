@@ -373,6 +373,12 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   Check `pha_extraction_status` / the lock before starting a pass.
 - **Quit LM Studio when not ingesting** — its model page-out is what eats disk
   space. Do not leave a vision + editor model loaded at the same time.
+- **Render cache is pruned automatically.** Rendered page images live in
+  `renders/<content-sha>/`. A superseded or removed document's folder is
+  deleted when a changed file is re-scanned, on `pha rm`, and on `pha bundle
+  --move` — but only once no live document still shares that content hash.
+  Sweep any leftovers with `pha prune [--dry-run]` (a content-cache GC; it
+  never touches the DB or `library/`).
 - **After changing config**: re-run the matching pass (`pha scan`, `pha edit`,
   `pha encode`) so staleness-by-mtime picks up the change, then confirm with
   `pha status` / `pha_extraction_status`.

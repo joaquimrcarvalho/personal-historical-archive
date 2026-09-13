@@ -113,6 +113,7 @@ pha scan                         # extract + index new/changed dropbox files
 pha search "query"               # search the extracted text
 pha review [--doc N]             # import human corrections from library/
 pha reindex [--path collections/COLX]  # rebuild the index (or one collection/doc)
+pha prune [--dry-run]            # delete orphaned render image caches
 pha help                         # full command list
 pha help agents                  # agent conventions
 ```
@@ -139,6 +140,9 @@ A document is a dropbox-relative subpath: `collections/COLX`, `documents/`
 ## Operating discipline
 
 - **Never edit `renders/`, `archive.db`, or other generated files directly.**
+- Rendered page images are cached under `renders/<content-sha>/`. Orphaned
+  folders (from a changed or removed document) are cleaned up automatically;
+  sweep any leftovers with `pha prune [--dry-run]`.
 - Editing a page file under `library/` is a human correction: run `pha review`
   to import it, then `pha reindex`.
 - **Only ONE local-model job at a time** — `pha scan` and `pha edit` share a
@@ -205,6 +209,10 @@ root.
 ## How an agent should operate
 
 - Never edit `renders/`, `archive.db` or other generated files directly.
+- Rendered page images are cached in `renders/<content-sha>/`; orphaned
+  folders are pruned automatically when a document changes or is removed.
+  Sweep any leftovers with `pha prune [--dry-run]` (never touches the DB or
+  `library/`).
 - `pha status` reports progress and pending review corrections.
 - Editing a page file under `library/` is a human correction; run
   `pha review` to import it, then `pha reindex`.
