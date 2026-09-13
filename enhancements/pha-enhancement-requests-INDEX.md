@@ -78,6 +78,16 @@ chunk/FTS/embedding machinery but adds a new *source* (the `notes/` folder), and
 it pairs with the stable-page-addresses work — notes cite the slug and can embed
 the render URL.
 
+## Housekeeping notes
+
+Not features — parked decisions that need revisiting rather than implementing.
+
+- [`dot-writing-dir-review.md`](dot-writing-dir-review.md) — the repo-local
+  `.writing/` directory (633 per-path markdown snapshots, 4.3 MB) is
+  **gitignored by decision, not resolved**: it holds no unique content, but its
+  origin could not be identified. Records what was verified, what is unknown,
+  and the four triggers that should reopen it.
+
 ## Reference implementation notes (in the archive, not the pha repo)
 
 - Documenta Indica editors and encoders live under

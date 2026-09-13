@@ -18,5 +18,10 @@ test-1577-archive/
 # a pha run from the project dir with no archive configured seeds one here
 archive.db*
 
+# Per-file markdown captures written by the editing/agent tooling (unknown
+# provenance — see enhancements/dot-writing-dir-review.md). Ignored so a
+# `git add -A` cannot commit 600+ stale copies of the repo's own docs.
+.writing/
+
 # OS
 .DS_Store
