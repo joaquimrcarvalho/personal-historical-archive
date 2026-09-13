@@ -258,15 +258,26 @@ archive directory does not need the source.
 - **Format**: `[[wikilinks]]` connect notes; `[^n]` footnotes hold citations;
   YAML front matter (`title`, `created`, `tags`, `sources`) is recommended.
   Otherwise keep it plain Markdown so the files render in any viewer.
-- **Citations are pointers, not links.** A citation footnote names the source
-  document + page + variant (e.g. `[^1]: *DocHist do Padroado do Oriente*
-  vol04 (doc 22), p. 437, edited — \`pha page 22 437 --edited\`.`). Resolve it
-  on request (e.g. "show the page referred to in footnote 12") by running that
-  `pha page` command. Do **not** embed a `library/` file path or wikilink into
-  those footnotes: library paths carry the document's version date and go stale
-  when a document is re-processed.
+- **Citations name the document + page + the variant, and link the served
+  viewer.** Use `pha cite <doc> <page> [--edited]` — it prints the citation, the
+  stable slug and the exact **filled** variant, and refuses to cite an empty
+  (`*waiting*`) one. Link the page **viewer** so a reader can carry on reading:
+
+      [^1]: *DocHist do Padroado do Oriente* vol04 (doc 22), p. 437
+            (edited: modern-portuguese@deepseek-v4-flash) —
+            [p. 437](http://127.0.0.1:8765/doc/<slug>/p437) · `pha cite 22 437 --edited`
+
+  Link `/doc/<slug>/p<page>` (the viewer: prev/next/first/last, position, jump
+  box); embed `/p<page>.jpg` **only** when the picture belongs inline (an embed
+  cannot navigate). Never embed a `library/` path — it carries the version date
+  and goes stale on re-processing.
+- **Those links resolve only while `pha serve` is running**, so a note that
+  embeds or links a page must carry a short warning near the top (`pha serve` is
+  read-only, loopback `127.0.0.1:8765`). Resolve a citation on request (e.g.
+  "show the page in footnote 12") with `pha page <doc> <page> [--edited]`.
 - Full instructions: see `notes/README.md` in the archive (or the repo's
-  top-level `notes/README.md`, the seed template).
+  top-level `notes/README.md`, the seed template), plus `obsidian-integration.md`
+  in the archive's `notes/`.
 
 ### DeepSeek Harness plugin (dsh-pha)
 

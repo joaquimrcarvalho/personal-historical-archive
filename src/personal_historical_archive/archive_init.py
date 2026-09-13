@@ -219,6 +219,25 @@ root.
 - Full usage: see the pha README (in the source repository linked above, or
   the README.md in this directory).
 
+## Writing a note in `notes/`
+
+Cite the source document + page **and the variant**, and link the served page
+viewer so a reader can page forward and back:
+
+    [^1]: *DocHist do Padroado do Oriente* vol04 (doc 22), p. 437
+          (edited: modern-portuguese@deepseek-v4-flash) —
+          [p. 437](http://127.0.0.1:8765/doc/<slug>/p437) · `pha cite 22 437 --edited`
+
+- `pha cite <doc> <page> [--edited]` prints the citation, the stable slug and
+  the exact **filled** variant; it refuses to cite an empty (`*waiting*`) one.
+- Link `/doc/<slug>/p<page>` — the **viewer** has prev/next/first/last, the
+  position (`p. 437 of 618`) and a jump box. Embed `/p<page>.jpg` only when the
+  picture belongs inline (an embed cannot navigate).
+- Those links resolve only while `pha serve` is running, so put a short warning
+  near the top of the note. Never embed a `library/` path — it carries the
+  version date and goes stale on re-processing.
+- Full format: `notes/README.md` in this directory.
+
 ## Re-running / re-scanning a specific document
 
 `pha scan` only processes NEW or CHANGED files: an already-transcribed
