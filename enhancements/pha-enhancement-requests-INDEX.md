@@ -3,10 +3,10 @@
 These are design/spec docs (drafts) for additions to pha, written while
 working on the **Documenta Indica** collection. They are grouped by feature
 and meant to be read together. Implemented so far: **stable page addresses**
-(`pha cite` / `pha serve`) and both **bug reports** below (review scope, embed
-loss — 0.19.0). Still to do: **stage filters** (the front-runner), **notes
-search**, the `extends` composition directive, and the encoder structure
-prescan.
+(`pha cite` / `pha serve`), **stage filters** (framework + six reference
+filters — see below), and both **bug reports** below (review scope, embed
+loss — 0.19.0). Still to do: **notes search**, the `extends` composition
+directive, and the encoder structure prescan.
 
 Both bug reports were blocking prerequisites for the remaining work, which is
 why they went first:
@@ -24,7 +24,7 @@ The remaining items are independent and can land in any order.
 
 | doc | feature | one-line summary |
 |---|---|---|
-| `pha-filters-enhancement-request.md` | **Stage filters** | `pre`/`post` text filters around a stage's model — a stage becomes `input → pre filters → rules model → post filters → output`. Deterministic, chainable scripts (repo ships generic ones; collections add their own). `line-numbers`, OCR-separator stripping, whitespace/footnote-marker cleanup, hyphen joining. Per-stage scope table + `editor.pre` vs `palaeographer.post` guidance. |
+| `pha-filters-enhancement-request.md` | **Stage filters** | **IMPLEMENTED** (`6829dbf` + `b55889a`; design record in [`FILTERS_PLAN.md`](../FILTERS_PLAN.md), which is annotated with the deviations — Python filters run in-process and staleness is signature-based rather than mtime-based). `pre`/`post` text filters around a stage's model — a stage becomes `input → pre filters → rules model → post filters → output`. Deterministic, chainable scripts; the repo ships six reference filters (`line-numbers`, OCR-separator stripping, whitespace and footnote-marker cleanup, hyphen joining, and the `markdown-from-records` artifact filter). An edited filter re-runs its stage automatically. |
 | `pha-stage-extends-enhancement-request.md` | **Prompt composition (`extends`)** | Let a rules file be "base rules + delta" (`extends:`/`include:` front matter), composed at load time so shared editor/palaeographer/encoder bodies live in one place (e.g. `latin-to-english-ocr` extends `latin-to-english`). Covers ordering, settings cascade, model-not-inherited, and base-file re-edit invalidation. |
 | `pha-encoder-tools-enhancement-request.md` | **Encoder tools** | After an encode, pha runs collection-bundled *tools* that materialise artifacts from the records (e.g. `markdown-from-records`: one markdown file per document/section). Also documents the model-assisted entry detection, character-aware chunking, and the collection **structure prescan** (§3.4: per-document layout register deriving page filters/prompt blocks per volume). **Merged**: the artifact/`markdown-from-records` part is planned as an `encoder.post` **artifact filter** in `FILTERS_PLAN.md`; the prescan part is not yet planned. |
 | `pha-stable-page-addresses-enhancement-request.md` | **Stable page addresses & render serving** | A re-scan-proof way to *link to* a page from outside pha. One canonical `slug` derived from the dropbox-relative path (no date, no hash, unlike `documents.id` / the dated library folder / `renders/<sha256>/`); `pha cite` naming the exact *filled* variant; `pha page --json` gaining `slug`/`rel_path`/`sha256`/`render`/`variants`; and `pha serve` — a read-only loopback endpoint with stable `/doc/{slug}/p{page}.jpg` URLs that resolves the current sha per request. Motivated by Obsidian footnotes; complements `WEB_INTERFACE_PLAN.md` (whose API surface has no render route) and would let `dsh-pha`'s `/pha/pageImage` return bytes instead of a data URL. **Implemented**: `addresses.py` (slug/rel path/render/variants), `pha cite`, `pha serve`, the new `pha page --json` fields, plus tests. |
@@ -49,19 +49,25 @@ The remaining items are independent and can land in any order.
 
 The three features are complementary and can land independently:
 
-1. **Filters** (this one, most general) — mechanical, source-specific text
-   shaping around a model. It removes OCR cleanup and line-number concerns
-   from prompts and gives per-collection opt-in (`editor.pre: [line-numbers]`).
+1. **Filters** ✅ (implemented) — mechanical, source-specific text shaping
+   around a model. It removed OCR cleanup and line-number concerns from
+   prompts and gives per-collection opt-in (`editor.pre: [line-numbers]`).
 2. **`extends`** — avoids duplicating the shared model-prompt body when a
    variant still needs different *prompt* rules (the judgment layer), after
    the mechanical bits have moved into filters.
-3. **Artifact filters + prescan** — make `pha encode`'s JSON records usable
-   (per-document markdown, as an `encoder.post` artifact filter once filters
-   exist) and make multi-volume layout data-driven.
+3. **Artifact filters + prescan** — the artifact half is **done**
+   (`markdown-from-records` as an `encoder.post` filter, `6829dbf`); the
+   structure prescan (multi-volume layout data-driven) remains.
 
 Suggested reading order: filters → extends → artifact filters/prescan, since
 filters subsume the OCR-cleanup that `extends` and the tools were partly
 motivated by. Any collection can adopt a subset.
+
+`extends` is now the more interesting of the two remaining prompt-level items
+to revisit: with filters carrying the *mechanical* differences between two
+editions, what is left for a shared base prompt body is smaller than when the
+request was written, so the case for it should be re-measured before building
+it (~½–1 day if it still holds).
 
 **Notes search** is independent of those three: it reuses the existing
 chunk/FTS/embedding machinery but adds a new *source* (the `notes/` folder), and

@@ -1,6 +1,15 @@
 # Enhancement request — stage filters (pre/post processing around a rules model)
 
-**Status:** draft for discussion.
+**Status:** **IMPLEMENTED** (2026-09; commits `6829dbf` + `b55889a`). This
+document is the original request; the design of record is
+[`../FILTERS_PLAN.md`](../FILTERS_PLAN.md), annotated with what shipped and
+where reality deviated (Python filters run in-process; staleness is
+signature-based rather than mtime-based). Shipped surface: `filters/<id>/` in
+the archive, all five hooks (`palaeographer.post`, `editor.pre`,
+`editor.post`, `encoder.pre`, `encoder.post`), `pre:`/`post:` in `pha.yaml`,
+`pha filters` / `pha filter`, and six reference filters including the
+`markdown-from-records` artifact. Still open: no adoption on a real collection
+yet (FILTERS_PLAN §10).
 **Author/date:** archive work session (Documenta Indica collection).
 **Motivating use cases:** OCR cleanup for early-modern printed editions;
 edition-specific margin line-numbers; general "shape the transcription

@@ -1,7 +1,13 @@
 # Enhancement request — pha encoders with bundled tools (e.g. write one Markdown file per extracted record)
 
-**Status:** draft for discussion (write-up prepared alongside the *Documenta
-Indica* encoder; not implemented).
+**Status:** **PARTLY IMPLEMENTED** (2026-09). The artifact half — one Markdown
+file per record — shipped as the `markdown-from-records` **artifact filter**
+(`encoder.post`, commit `6829dbf`), under the owner ruling that the
+bundled-tools runner is absorbed into the stage-filter framework rather than
+built as a second mechanism; see [`../FILTERS_PLAN.md`](../FILTERS_PLAN.md).
+The **structure prescan** (§3.4) is **not implemented** and still needs a
+design decision. Proposal §3.1–3.3 (model-assisted entry detection,
+character-aware chunking, raw/edited cross-reference) are untouched.
 **Author/date:** archive work session on the `documenta-indica` collection.
 **Related files (reference implementation in the archive):**
 `dropbox/collections/documenta-indica/encoders/` — `documents.md`,
