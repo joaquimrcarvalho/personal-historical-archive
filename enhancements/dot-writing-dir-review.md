@@ -1,7 +1,9 @@
 # Note — `.writing/` is gitignored; review that decision later
 
-**Status:** ignored by decision, **not** resolved. Nothing to implement here;
-this note exists so the choice is revisited rather than fossilising.
+**Status:** ignored by decision. **Origin now answered** (reported, not
+independently verified — see below): it is the Harness writing-tool's
+**snapshot cache**, i.e. derived data. Nothing to implement here; this note
+exists so the retention choice is revisited rather than fossilising.
 **Date:** 2026-09. **Written against:** pha 0.23.0, repo state at `21add40`.
 
 ## What the directory is
@@ -45,42 +47,63 @@ git history.
 
 ## What is NOT known
 
-**What creates it.** A grep of the DSH Desktop checkout
-(`/Applications/DSH Desktop.app/Contents/Resources/app`) for `.writing` finds no
-reference, so it could not be confirmed as a Harness feature. The shape (a
-`comments/` sibling, per-change serial numbering) reads like an editing/review
-tool's capture, but that is inference, not evidence. **Do not state the origin
-as fact until it is observed.**
+**What creates it — now answered by the operator, but not independently
+verified.** Reported (2026-09, another Harness session): *"`.writing/`
+directory — that's the Harness writing-tool's snapshot cache, not part of the
+repo."* That is the working explanation and it fits every observation: a
+**snapshot cache** for a writing/editing tool, keyed per captured path, one
+`001.md` per path, with the `comments/` sibling next to it. It is recorded here
+as **reported, not proven** — see below for the two searches that failed to
+confirm it.
+
+Two attempts to corroborate from the installed Harness, both negative:
+
+1. Grepping `/Applications/DSH Desktop.app/Contents/Resources/app` — **the path
+   does not exist**; that checkout is a single packed `app.asar`, so the search
+   found nothing rather than finding absence.
+2. Scanning that `app.asar` for `.writing` — 10 hits, **all false positives**:
+   `writingMode` (a CSS/DOM property) and `state.writing` (Node's stream
+   state), plus a `writingScript` typeface option. No `.writing` directory, no
+   snapshot cache, nothing about a writing tool.
+
+So the bundle neither confirms nor denies it; the tool may live in
+`app.asar.unpacked`, in a package not shipped here, or in a native module.
+**The operator's answer is authoritative for practical purposes** — it makes
+the gitignore decision clearly right, since a cache is derived data by
+definition — but do not upgrade it to "verified" without seeing the writer.
 
 ## Decision taken
 
-Added `.writing/` to `.gitignore` (the conservative middle option):
+Added `.writing/` to `.gitignore`.
 
-- it stays on disk, so a tool that depends on it is unaffected;
-- `git status` is clean again, and a `git add -A` cannot commit 633 stale
-  copies of the repo's own docs;
-- no content is destroyed, which matters while the origin is unknown.
+If it is a **cache** — as reported — this is not a close call: derived data
+does not belong in version control, so **do not commit it**, ever. The only
+real question left is deletion, and the conservative choice was made for a
+reason that has now largely evaporated: with the origin known, the standing
+recommendation is **delete it whenever convenient** (it regenerates, or it does
+not; either way it holds nothing unique — 0 orphans). It is parked rather than
+deleted only because deleting another tool's cache mid-session is not this
+note's call.
 
 Alternatives, for the record: **delete it** (recovers 4.3 MB; nothing unique is
 lost, per the table above) or **leave it untracked** (harmless but noisy).
 
-## When to revisit — and what would settle it
+## When to revisit
 
-1. **The origin is identified.** If tooling is found that reads or writes
-   `.writing/`, its retention rules decide this, not us. The cheapest test:
-   note the current `mtime`/file count, make a markdown edit, and see whether
-   the directory changes. If it does, capture the creating process.
+1. **Deletion looks worthwhile** — e.g. a repo-wide sweep of the ignored scratch
+   trees (`test-1577-archive/`, `benchmarks/`, `.writing/`). With the cache
+   origin reported and `orphaned = 0`, deleting is safe; re-run the three
+   counts first anyway.
 2. **It grows.** It is a *snapshot* today; if entries start appearing as
-   `002.md`, `003.md` per path it has become a revision store — a different
-   thing entirely, and worth understanding before it accumulates.
-3. **Space or confusion matters.** At 4.3 MB this is trivial; if it reaches
-   hundreds of MB, delete it (no unique content, per the table).
-4. **A repo-wide cleanup happens** (`pha prune`-style housekeeping, or a sweep
-   of `test-1577-archive/`, `benchmarks/` and the other ignored scratch trees),
-   fold this in: the note is the reminder that `.writing/` was parked, not
-   reviewed.
+   `002.md`, `003.md` per path the tool is retaining history, which changes the
+   space calculus (and is worth knowing before it accumulates).
+3. **The writer is seen.** If a tooling change or a direct observation shows the
+   cache being written, record it here and mark the origin **verified**; the
+   retention decision then belongs to that tool, not to us.
+4. **A `.writing/` entry is ever missing a live counterpart** (`orphaned > 0`).
+   That is the one condition that breaks the "no unique content" conclusion —
+   a capture of a file that no longer exists anywhere, including git history —
+   and it would force a file-by-file look before anything deletes the tree.
 
 Re-evaluate with the same three numbers that decided it: *identical*,
-*stale*, *orphaned*. If `orphaned` ever becomes non-zero, this note's
-"no unique content" conclusion no longer holds and the directory must be
-examined file by file before anything deletes it.
+*stale*, *orphaned*.
