@@ -165,7 +165,8 @@ export class LocalConnection {
     // sync use guarded by init() having run; returns file names.
     try {
       return fs.readdirSync((this._paths as ArchivePaths).inbox).filter(
-        (f) => fs.statSync(path.join((this._paths as ArchivePaths).inbox, f)).isFile());
+        (f) => !f.startsWith(".") &&
+          fs.statSync(path.join((this._paths as ArchivePaths).inbox, f)).isFile());
     } catch { return []; }
   }
 
