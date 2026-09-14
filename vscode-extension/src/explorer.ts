@@ -70,6 +70,7 @@ export class PhaExplorer implements vscode.TreeDataProvider<PhaNode> {
             n.description = p.edit ? `edited: ${p.edit.editor}` : "raw only";
             n.tooltip = p.page.error ?? undefined;
             n.iconPath = new vscode.ThemeIcon(p.pendingReview ? "edit" : "file-text");
+            n.command = { command: "pha.openTranscription", title: "Open Transcription", arguments: [n] };
             return n;
           });
           if (!det.pages.length) {
@@ -171,6 +172,7 @@ export class PhaExplorer implements vscode.TreeDataProvider<PhaNode> {
       n.iconPath = new vscode.ThemeIcon(
         d.status === "done" ? "file-text" : d.status === "error" ? "error" : "sync~spin");
       n.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+      n.command = { command: "pha.openDocumentWhole", title: "Open Document", arguments: [n] };
       return n;
     }
     const n = new PhaNode("document", u.name, { relPath: u.relPath, unscanned: true, isDir: u.isDir });
@@ -195,7 +197,7 @@ export class PhaExplorer implements vscode.TreeDataProvider<PhaNode> {
       ["Editors", "editors"],
       ["Encoders", "encoders"],
     ];
-    if (!section) {
+    if (!section || section === "Configuration") {
       return dirs.map(([label, dir]) => {
         const n = new PhaNode("configSection", label, dir);
         n.iconPath = new vscode.ThemeIcon("folder");
