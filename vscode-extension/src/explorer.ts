@@ -119,9 +119,13 @@ export class PhaExplorer implements vscode.TreeDataProvider<PhaNode> {
     const units = await this.conn.dropboxUnits();
     const out: PhaNode[] = [];
     if (prefix === "documents") {
-      // top-level loose documents (dir_path empty or "(root)")
+      // loose documents: directly at the dropbox root OR inside documents/
+      // (pha's seeded layout puts individual sources in dropbox/documents/)
       for (const u of units) {
-        if (u.relPath.includes("/")) continue;
+        if (u.relPath.includes("/")) {
+          if (!u.relPath.startsWith("documents/")) continue;
+          if (u.relPath.slice("documents/".length).includes("/")) continue;
+        }
         out.push(this.unitNode(u));
       }
       return out;
