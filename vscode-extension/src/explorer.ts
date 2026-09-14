@@ -217,6 +217,7 @@ export class PhaExplorer implements vscode.TreeDataProvider<PhaNode> {
         const n = new PhaNode("configFile", f, path.join(root, f));
         n.iconPath = new vscode.ThemeIcon(f.startsWith("_sample") ? "gift" : "file-code");
         n.description = f.startsWith("_sample") ? "template" : "";
+        n.command = { command: "pha.openConfigFile", title: "Open Configuration File", arguments: [n] };
         nodes.push(n);
       }
     } catch { /* dir missing */ }

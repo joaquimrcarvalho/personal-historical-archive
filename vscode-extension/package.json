@@ -2,7 +2,7 @@
   "name": "pha-vscode",
   "displayName": "PHA — personal historical archive",
   "description": "Manage a pha archive from VS Code: browse the dropbox, walk document → transcription → edited → encoded, check configuration, run pipeline jobs.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "joaquimrcarvalho",
   "license": "UNLICENSED",
   "private": true,
