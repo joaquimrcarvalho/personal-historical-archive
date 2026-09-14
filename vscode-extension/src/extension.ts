@@ -107,7 +107,11 @@ export function activate(_context: vscode.ExtensionContext) {
   reg("pha.openDocumentWhole", async (n?: PhaNode) => {
     if (!n) return;
     const doc = n.data as DocRow;
-    if (!doc.id) return;
+    if (!doc.id) {
+      vscode.window.showInformationMessage(
+        "This document is not yet scanned — run PHA: Scan to extract it first.");
+      return;
+    }
     await pages.openWholeDocument(await conn.documentDetail(doc));
   });
 

@@ -113,7 +113,10 @@ export class LocalConnection {
 
   async loadDocs(): Promise<Map<string, DocRow>> {
     const docs = await this.db.documents();
-    this.docIndex = new Map(docs.map((d) => [d.path, d]));
+    const prefix = (await this.init()).dropbox + "/";
+    // documents.path is stored ABSOLUTE; the tree walks dropbox-relative paths
+    const rel = (d: DocRow) => d.path.startsWith(prefix) ? d.path.slice(prefix.length) : d.path;
+    this.docIndex = new Map(docs.map((d) => [rel(d), d]));
     return this.docIndex;
   }
 
@@ -202,8 +205,10 @@ export class LocalConnection {
         const pageName = pg.source_name
           ? pg.source_name.replace(/\.[^.]+$/, ".md")
           : `page-${String(pg.page_no).padStart(3, "0")}.md`;
-        rawFile = findVariant(lib, "transcription-", pageName);
-        editedFile = edit ? findVariant(lib, "edited-", pageName) : undefined;
+        rawFile = findVariant(lib, "transcription-", pageName,
+          doc.palaeographer ? variantPrefix("transcription", doc.palaeographer, doc.palaeographer_model) : undefined);
+        editedFile = edit ? findVariant(lib, "edited-", pageName,
+          doc.editor ? variantPrefix("edited", doc.editor, doc.editor_model) : undefined) : undefined;
       }
       let renderFile: string | undefined;
       const rdir = path.join(this._paths!.renders, doc.sha256);
@@ -257,13 +262,21 @@ export interface DropboxUnit {
   doc?: DocRow;             // present when scanned/archived
 }
 
-function findVariant(libDir: string, prefix: string, pageName: string): string | undefined {
+function variantPrefix(kind: "transcription" | "edited", id: string, model: string | null): string {
+  return `${kind}-${id}` + (model ? `@${model}` : "");
+}
+
+function findVariant(
+  libDir: string, prefix: string, pageName: string, preferredPrefix?: string,
+): string | undefined {
   try {
-    for (const d of fs.readdirSync(libDir)) {
-      if (d.startsWith(prefix)) {
-        const f = path.join(libDir, d, pageName);
-        if (fs.existsSync(f)) return f;
-      }
+    const dirs = fs.readdirSync(libDir).filter((d) => d.startsWith(prefix));
+    // prefer the CURRENT run's folder (e.g. transcription-gazette@model) over
+    // stale folders left by earlier runs
+    dirs.sort((a, _b) => (preferredPrefix && a.startsWith(preferredPrefix) ? -1 : 0));
+    for (const d of dirs) {
+      const f = path.join(libDir, d, pageName);
+      if (fs.existsSync(f)) return f;
     }
   } catch { /* lib dir unreadable */ }
   return undefined;
