@@ -8,7 +8,9 @@ and meant to be read together. Implemented so far: **stable page addresses**
 and both **bug reports** below (review scope, embed loss — 0.19.0). Still to do:
 **notes search**, the `extends` composition directive, the encoder structure
 prescan, and **endpoint-scoped locking** (the last one is operational rather than
-a pipeline feature, and can land any time).
+a pipeline feature, and can land any time), and **re-reading one page with a
+chosen palaeographer/model** (read a big volume with a cheap model, then fix the
+pages it got wrong with a better one — without re-extracting the volume).
 
 Both bug reports were blocking prerequisites for the remaining work, which is
 why they went first:
@@ -33,6 +35,7 @@ The remaining items are independent and can land in any order.
 | `pha-notes-search-enhancement-request.md` | **Search the notes folder** | Make `pha search` cover `notes/`: a separate `notes` + `notes_fts` + embeddings index (notes are NOT `documents` rows, so `pha status`/`export`/bundles/review stay clean), mtime-based reindex from `pha scan`/`reindex`, `--source archive\|notes\|all`, and a `kind` discriminator in results so the PHA view opens a note hit through its existing `openNote`. Rejects modelling notes as documents and rejects indexing the whole Obsidian vault. |
 | `pha-page-navigation-enhancement-request.md` | **Page navigation for citations** | The follow-on to stable addresses: a citation lands on a static `/doc/{slug}/p{N}.jpg` with no next/previous, no position ("437" but not "437 of 638") and no way back to p. 1 — while the PHA view's reader already navigates. Adds an HTML **page viewer** at `/doc/{slug}/p{N}` (prev/next/first/last, jump box, keyboard, prefetch; works with JS off) and a **document overview** at `/doc/{slug}/` (page ranges, "start reading"), leaves `.jpg` untouched, points citations at the viewer, and adds `page_count`/`prev_page`/`next_page`/`viewer_url` to `meta.json`, `pha page --json`, `pha cite` and MCP `pha_get_page`. **Implemented**: viewer/overview/jump routes in `serve.py`, the `serve: {host, port}` config block, the navigation fields, and tests — the notes' links are migrated to the viewer. |
 | `pha-per-server-model-lock-enhancement-request.md` | **Endpoint-scoped locking** | Enforce "one model at a time" per **model-server**, not per archive: a declared `server:` on each `models/*.md`, locks keyed on it in a **user-global** lock dir, two jobs allowed **iff their server sets are disjoint**, and unlabelled files keeping today's global behaviour. Motivated by *"the embed model looks light, so the rule needn't apply"* — LM Studio auto-evict keeps **one JIT model per instance**, so the embed model *evicts* the vision model, and the correct axis is *different server*, not *smaller model*. Also closes two real gaps: two archives on one machine take two different locks and load two models into one LM Studio, and `pha search`/MCP `pha_search` load the embed model with **no lock at all** — precisely, the CLI and the FastMCP tool do (the dsh-pha plugin route pins `--mode keyword`, so it is safe by conservatism, not design); the fix is to consult the lock *before* the embed call and reuse the note/degrade path that already exists. Rejects URL-based local/remote inference (under LM Link a `localhost` request can be served by a remote device). |
+| `pha-single-page-rescan-enhancement-request.md` | **`pha scan` — one page, chosen palaeographer/model** | The reading model is chosen **per document**, never per page, so fixing one bad page means re-extracting the whole volume (and `pha scan --palaeographer` does not even override a collection's `pha.yaml` — `scan_once()` drops the `explicit` argument, contradicting `README.md:629`). Proposes `pha scan --path <one doc> --page N --palaeographer X --model Y`: page-scoped render/transcribe/re-edit/re-index, per-page provenance (new `pages` columns + page front matter), and a **pin** so a later bulk pass or `--reprocess` cannot discard the deliberate reading (`--unpin` releases it, mirroring `pha review --unset`). Motivating use: cheap model over a big volume, better model on the pages it got wrong. Also fixes `--palaeographer` to be a true per-run override and adds `pha test --page N` as a no-write preview. |
 
 ## Bug reports
 
@@ -77,6 +80,13 @@ it (~½–1 day if it still holds).
 chunk/FTS/embedding machinery but adds a new *source* (the `notes/` folder), and
 it pairs with the stable-page-addresses work — notes cite the slug and can embed
 the render URL.
+
+**Single-page re-scan** is independent too, and the smallest of the outstanding
+items: it changes the *granularity* of a scan (one page, an override pair for
+that action) rather than the pipeline. It also carries the fix for the
+`--palaeographer` flag that `README.md:629` already promises, and it is the
+machine-side counterpart of the human review round-trip — both exist so one bad
+page does not cost a whole volume.
 
 ## Housekeeping notes
 
