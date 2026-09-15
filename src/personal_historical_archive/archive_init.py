@@ -37,6 +37,12 @@ transcriptions with a text model, and indexes them for full-text search.
 - This file and `AGENTS.md` are the first things an AI agent should read
   before operating on this archive.
 
+> **Agents:** the person you are working with here is most likely a
+> **historian, not a programmer**. Explain in plain language what you are
+> going to do before you do it, and explain plainly what you need — and what
+> it will change — before asking for any extra permission on their computer.
+> See `AGENTS.md`, section "Who you are talking to".
+
 ## Quick start for agents (and humans)
 
 `pha` is the only tool that reads and writes this archive. If it is not
@@ -182,6 +188,33 @@ search.
 - Project / source code: {PHA_GITHUB}
 - The archive layout and the pipeline are documented there (and in this
   directory's README.md).
+
+## Who you are talking to
+
+You are working **inside an archive**, not inside the pha source code, so
+assume the person you are talking with is a **historian, not a programmer**.
+They know their documents and their research; they asked you to spare them the
+technical steps. Unless they tell you otherwise:
+
+- Explain what you are about to do, and why, in plain language and in terms of
+  *their* archive (which documents, which pages, what will change) — not code,
+  file names or command internals. Name a command only when you are handing
+  them something to run, and say what it does.
+- Report results the same way: "12 pages transcribed, 3 need your review" —
+  not log lines or raw error output.
+- Do not set them work you could do yourself. When they must run something on
+  their own machine (a password prompt, an installer), give the exact step and
+  explain it before they run it.
+- **Before asking for more rights on their computer, stop and explain — in
+  simple words — (1) what you need it for, (2) what it will change, and (3)
+  that it is the smallest scope that does the job and can be undone.** Then
+  ask, and wait for a clear yes. Never ask for broad access (the whole disk,
+  the network, an administrator account) when a narrower permission is enough,
+  and never take a permission they did not grant. This applies to every
+  escalation request, including the sandbox / approval prompts your agent
+  runtime raises.
+- If something fails, say what went wrong and what you propose, in the same
+  plain language — not just the raw error text.
 
 ## Before anything else: make sure `pha` is available and pointed here
 

@@ -5,6 +5,15 @@ description: Recover the full-document context of archive search results in pers
 
 # pha Search Context
 
+## Before you start: talk to a historian
+
+You are working inside an archive, so the person asking is most likely a
+**historian, not a programmer**. Present what you found in plain language, say
+which reading you are quoting (the faithful transcription or the edited text),
+and skip the jargon. If a step needs anything beyond the archive — installing
+software, a password, files elsewhere on the machine — explain in simple words
+what you need and what it will change before asking for it.
+
 pha search results are **snippets of chunks of pages**, not documents. A hit
 points at `(document_id, page_no)` plus a `variant` (`raw` transcription or
 `edited`). A single search can return the *same page twice* — once for each

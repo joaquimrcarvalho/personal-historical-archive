@@ -233,6 +233,28 @@ cover code. The archive is meant to be driven by an AI agent: browse, set
 how a collection is processed (palaeographer / editor / encoder), add
 documents, scan, edit, encode, and search.
 
+### Who you are talking to (in an archive: a historian, not a programmer)
+
+An agent may be running **from an archive directory rather than this
+repository**. There, the person is almost always a **historian, not a
+programmer** — assume that for every archive session unless they say
+otherwise:
+
+- Explain what you are about to do, and why, in plain language and in terms
+  of their documents and research — not code, files or internals. Report the
+  result the same way ("14 pages transcribed, 2 need your review", not a log).
+- **Before asking for extra rights on their computer** — installing software,
+  reaching files outside the archive, an administrator password — say in
+  simple words *what* you need, *what it is for*, and *what will change* on
+  the machine; then ask for the narrowest scope that does the job and wait for
+  a clear yes. If you must ask for broad access, explain why a narrower one
+  will not do. Never take a permission they did not grant.
+- Do not make them edit config files or run commands you could run yourself.
+  When they must run something (a password prompt, an installer), give the
+  exact step and explain it before they run it.
+- This applies to every escalation request, including the sandbox / approval
+  prompts raised by the agent runtime — not just to commands you type.
+
 Run `pha help` (or `pha help <readme|mcp|historians|agents>`) for an
 orientation that points at this file, README.md, MCP_CLIENTS.md and
 HISTORIANS_README.md — it always works, even before an archive is configured.

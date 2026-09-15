@@ -5,6 +5,16 @@ description: Re-run the pha pipeline on one existing document or collection in p
 
 # pha Document Operations
 
+## Before you start: talk to a historian
+
+You are working inside an archive, so the person asking is most likely a
+**historian, not a programmer**. Say what you are about to re-run, and why, in
+plain language and in terms of their documents — and report the result the same
+way. If the job needs anything beyond the archive (installing software, a
+password, files elsewhere on the machine), explain in simple words what you
+need, what it is for and what will change; ask for the smallest permission that
+does the job, and wait for a clear yes.
+
 The pipeline is: dropbox → palaeographer (per-page transcription) → optional
 editor → optional encoder → index. Once a document is ingested, **`pha scan`
 will not touch it again** unless something changed — an already-transcribed

@@ -14,6 +14,19 @@ def _stamped_current(doc: str, project_root=None) -> str:
     return ai._stamp(getattr(ai, doc))
 
 
+def test_archive_docs_tell_agents_the_user_is_a_historian():
+    """The archive-facing docs carry the communication rule: inside an archive
+    the person is a historian, not a programmer, and any extra permission is
+    asked for in plain language first."""
+    for doc in (ai.ARCHIVE_AGENTS_MD, ai.ARCHIVE_README_MD):
+        assert "not a programmer" in doc, "archive docs must name the audience"
+    agents = ai.ARCHIVE_AGENTS_MD
+    # the escalation rule, phrased plainly (what / why / what changes / narrowest)
+    assert "more rights" in agents
+    assert "what will change" in agents
+    assert "narrower permission" in agents
+
+
 def test_init_archive_stamps_the_docs(tmp_path):
     p = tmp_path / "arc"
     ai.init_archive(p)
