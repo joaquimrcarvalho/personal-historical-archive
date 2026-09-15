@@ -66,7 +66,14 @@ export class ReadOnlyDb {
     // avoid any quoting-in-shell issues (execFile already avoids the shell).
     const script = [
       "import json, os, sqlite3",
-      "conn = sqlite3.connect('file:' + os.environ['PHA_DB'] + '?mode=ro', uri=True)",
+      // mode=ro fails ("unable to open database file") while a scan/serve holds
+      // the DB in WAL (a ro connection cannot create the -shm file); fall back
+      // to immutable=1, which reads the last checkpointed state without WAL.
+      "try:",
+      "    conn = sqlite3.connect('file:' + os.environ['PHA_DB'] + '?mode=ro', uri=True)",
+      "    conn.execute('SELECT 1')",
+      "except sqlite3.OperationalError:",
+      "    conn = sqlite3.connect('file:' + os.environ['PHA_DB'] + '?immutable=1', uri=True)",
       "conn.row_factory = sqlite3.Row",
       "rows = conn.execute(os.environ['PHA_SQL'], json.loads(os.environ['PHA_PARAMS'])).fetchall()",
       "print(json.dumps([dict(r) for r in rows]))",
