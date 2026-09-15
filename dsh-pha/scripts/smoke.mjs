@@ -59,7 +59,7 @@ check(plugin && typeof plugin.dispose === 'function', 'apply() returns a dispose
 
 // 3. Tool definitions are the raw JSON Schema the registry validates, not a spec.
 const EXPECTED_TOOLS = ['pha_status', 'pha_documents', 'pha_document', 'pha_page', 'pha_search',
-  'pha_open', 'pha_pending', 'pha_archive', 'pha_job_start', 'pha_job_status', 'pha_job_kill']
+  'pha_open', 'pha_pending', 'pha_bib', 'pha_archive', 'pha_job_start', 'pha_job_status', 'pha_job_kill']
 check(tools.length === EXPECTED_TOOLS.length, `registers ${EXPECTED_TOOLS.length} tools (got ${tools.length})`)
 for (const name of EXPECTED_TOOLS) check(tools.some((t) => t.name === name), 'tool ' + name)
 for (const t of tools) {
@@ -80,7 +80,7 @@ for (const t of tools) {
 // 4. The same-origin routes the view fetches.
 const EXPECTED_ROUTES = ['/pha/status', '/pha/archive', '/pha/documents', '/pha/document', '/pha/page',
   '/pha/search', '/pha/pageImage', '/pha/open', '/pha/pending', '/pha/config', '/pha/notes', '/pha/note',
-  '/pha/defs', '/pha/def', '/pha/collectionEncoders', '/pha/inbox', '/pha/inbox/plan', '/pha/inbox/move']
+  '/pha/defs', '/pha/def', '/pha/collectionEncoders', '/pha/bib', '/pha/inbox', '/pha/inbox/plan', '/pha/inbox/move']
 for (const path of EXPECTED_ROUTES) check(routes.includes(path), 'route ' + path)
 
 // 5. The client half stays loadable as a harness client module.

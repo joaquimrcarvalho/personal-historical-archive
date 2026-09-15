@@ -125,6 +125,33 @@ A JSON body means the row activated. `404` means it did not (wrong profile, or n
 row was added). `403` means the route exists but that instance requires its session credentials —
 not a plugin problem; use the tool call instead. The port differs per launch, so never hard-code it.
 
+### Bibliographic references (sidecars)
+
+A document's reference (`<stem>.dc.json`, `<stem>.bib` or `<stem>.mods.xml`, parsed into one
+record by pha) is part of the view:
+
+- the **document header** shows the formatted reference exactly as `pha bib` / `pha cite`
+  render it, under the filename;
+- a **`bib` chip** marks every document that carries a sidecar — read from *disk*, so it is
+  right even on an archive whose DB snapshot has not been refreshed since the sidecar was
+  added — amber when the record's own `record_origin` says it is unverified
+  (`agent-drafted-unverified`, `fetched-from-zotero-unverified`);
+- **Reference** opens the record: every field with content, the sidecar path and format,
+  the origin, and an **Edit sidecar** button that opens the sidecar in your editor. MODS is
+  never offered for editing (interchange only) — the pane prints the
+  `pha bib <doc> --to-json --write` conversion instead;
+- `GET /pha/bib?doc=N` is the live read (`pha bib <doc> --json`, which writes nothing), so a
+  sidecar added since the last scan shows up immediately. Presence-only, exactly as pha
+  defines it: a document without a sidecar shows none, and a reference is never inherited
+  from a neighbour.
+
+The document list and the single-document read also carry the stored snapshot
+(`document_bibliography`) when an archive has one. That table only exists once a `pha` run
+has migrated the archive, and the plugin **never migrates**: it joins the table when it is
+present and reports no stored references when it is not, rather than failing the whole
+read. `tests/test_dsh_pha_sql.py` runs the plugin's embedded SQL program against both
+schemas — the unmigrated one is what a real archive looked like when this was added.
+
 ### The inbox (parked documents)
 
 The left pane lists the archive's `inbox/` — the sibling of `dropbox/` where documents

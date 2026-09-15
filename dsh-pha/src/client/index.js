@@ -17,6 +17,25 @@ async function post(path) {
   return await res.json()
 }
 
+// A bibliography record is a dataclass dump: scalars, lists of {name, role} and nested
+// objects. Flatten one field to a display string (null when it says nothing).
+function bibFieldValue(v) {
+  if (v === null || v === undefined || v === '') return null
+  if (Array.isArray(v)) {
+    const parts = v.map((x) => (x && typeof x === 'object')
+      ? [x.name || x.value || x.title, x.role || x.type].filter(Boolean).join(' ')
+      : String(x)).filter(Boolean)
+    return parts.length ? parts.join('; ') : null
+  }
+  if (typeof v === 'object') {
+    const parts = Object.keys(v)
+      .map((k) => (v[k] === null || v[k] === undefined || v[k] === '' ? null : k + ': ' + v[k]))
+      .filter(Boolean)
+    return parts.length ? parts.join(', ') : null
+  }
+  return String(v)
+}
+
 function fmtBytes(n) {
   const v = Number(n) || 0
   if (v < 1024) return v + ' B'
@@ -283,6 +302,11 @@ const CSS = [
   '.pha-doc:hover{background:var(--dsw-alias-bg-layer-1,#f2f2f2)}',
   '.pha-doc.sel{background:var(--dsw-alias-bg-layer-2,#e8e8e8);border-color:var(--dsw-alias-border-l2,#999)}',
   '.pha-doc.sub{padding-left:22px}',
+  '.pha-ref{margin:3px 0 0;font-size:12.5px;line-height:1.4;color:var(--dsw-alias-label-secondary,inherit)}',
+  '.pha-bib{border:1px solid var(--dsw-alias-border-l1,#333);border-radius:6px;padding:8px 10px;font-size:12px}',
+  '.pha-bib-table{border-collapse:collapse;margin-top:6px}',
+  '.pha-bib-table td{vertical-align:top;padding:1px 8px 1px 0;line-height:1.45}',
+  '.pha-bib-k{opacity:.6;white-space:nowrap}',
   '.pha-doc-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
   '.pha-doc-meta{font-size:11px;opacity:.6;white-space:nowrap}',
   '.pha-chip{font-size:10px;padding:1px 6px;border-radius:10px;border:1px solid var(--dsw-alias-border-l2,#777);white-space:nowrap}',
@@ -353,7 +377,7 @@ function relPath(doc) {
 
 function PhaView() {
   const h = React.createElement
-  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null, inbox: null, inboxErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false })
+  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null, inbox: null, inboxErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null })
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -364,6 +388,7 @@ function PhaView() {
   const [imgData, setImgData] = React.useState(null)
   const [rootEl, setRootEl] = React.useState(null)
   const [noteAnchor, setNoteAnchor] = React.useState(null)
+  const [bibOpen, setBibOpen] = React.useState(false)
 
   React.useEffect(() => {
     // The document list first — it is what the user waits for. Notes and the
@@ -433,11 +458,35 @@ function PhaView() {
       setState((s) => ({ ...s, pendingPages: (r && r.ok) ? (r.pending || []) : null, pendingNeeds: (r && r.ok) ? r.needs : null }))
     } catch (e) { setState((s) => ({ ...s, pendingPages: null, pendingNeeds: null })) }
   }
+  // The stored snapshot (`/pha/document`) shows a reference immediately; this live read
+  // (`pha bib <doc> --json`, which never writes) is authoritative and catches a sidecar
+  // added since the last scan.
+  async function loadBib(id) {
+    setState((s) => ({ ...s, bib: null, bibErr: null }))
+    try {
+      const r = await get('/pha/bib?doc=' + encodeURIComponent(id))
+      setState((s) => ({ ...s, bib: (r && r.ok) ? r : null, bibErr: (r && !r.ok) ? ((r && r.error) || 'could not read the reference') : null }))
+    } catch (e) {
+      setState((s) => ({ ...s, bib: null, bibErr: String((e && e.message) || e) }))
+    }
+  }
+
+  async function editSidecar(path) {
+    if (!path) return
+    try {
+      const r = await get('/pha/open?path=' + encodeURIComponent(path))
+      setState((s) => ({ ...s, editMsg: (r && r.ok) ? ('opened: ' + (r.path || path)) : ((r && r.error) || 'open failed') }))
+    } catch (e) {
+      setState((s) => ({ ...s, editMsg: String((e && e.message) || e) }))
+    }
+  }
+
   async function openDoc(id) {
-    setState((s) => ({ ...s, selectedId: id, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null }))
+    setState((s) => ({ ...s, selectedId: id, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null, bib: null, bibErr: null }))
     const r = await get('/pha/document?doc=' + encodeURIComponent(id))
     setState((s) => ({ ...s, detail: r && r.ok ? { doc: r.doc, pages: r.pages || [], edits: r.edits || [], matched: false } : null }))
     loadPending(id)
+    loadBib(id)
   }
   async function openSearchDoc(id) {
     const r = await get('/pha/document?doc=' + encodeURIComponent(id))
@@ -789,6 +838,14 @@ function PhaView() {
         g.docs.map((d) => h('div', { className: 'pha-doc' + (s.selectedId === d.id ? ' sel' : ''), key: d.id, onClick: () => openDoc(d.id) },
           h('span', { className: 'pha-chip ' + statusClass(d.status) }, d.status || '?'),
           h('span', { className: 'pha-doc-name', title: d.filename }, d.filename),
+          // A reference is marked from the sidecar's presence on disk (right even before the
+          // snapshot exists); amber when the record's own origin says it is unverified.
+          (d.reference || d.bib_sidecar_present)
+            ? h('span', {
+                className: 'pha-chip ' + (/unverified/i.test(d.bib_origin || '') ? 'busy' : 'dim'),
+                title: d.reference || ('bibliographic sidecar: ' + (d.bib_sidecar_name || '')),
+              }, 'bib')
+            : null,
           h('span', { className: 'pha-doc-meta' }, (d.page_count || 0) + 'p' + (d.palaeographer ? ' · ' + d.palaeographer : '')),
         )),
       )),
@@ -943,13 +1000,41 @@ function PhaView() {
         plain ? h('pre', { className: 'pha-pre' }, pv.text || '(empty)') : h('div', { className: 'pha-md' }, renderMd(pv.text || '')),
       ) : (s.pageLoading ? h('div', { className: 'pha-empty' }, 'Loading page…') : h('div', { className: 'pha-empty' }, 'Select a page to read its text.'))
     }
+    const bibLive = (s.bib && s.bib.found) ? s.bib : null
+    const refText = (bibLive && bibLive.reference) || d.reference || null
+    const modsOnly = !!((bibLive && bibLive.sidecar) && /\.mods\.xml$/i.test(bibLive.sidecar))
     right = h('div', { className: 'pha-right' },
-      h('div', null, h('strong', null, '#' + d.id + ' ' + d.filename), h('div', { className: 'pha-muted' }, (d.path || '') + ' · ' + (d.kind || ''))),
+      h('div', null,
+        h('strong', null, '#' + d.id + ' ' + d.filename),
+        // the formatted reference, as the archive's own `pha bib`/`pha cite` render it
+        refText ? h('div', { className: 'pha-ref' }, refText) : null,
+        h('div', { className: 'pha-muted' }, (d.path || '') + ' · ' + (d.kind || '')),
+      ),
       h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
         h('span', { className: 'pha-chip ' + statusClass(d.status) }, d.status || '?'),
         h('span', { className: 'pha-chip' }, (d.page_count || 0) + ' pages'),
         h('button', { className: 'pha-btn small', title: "Show this collection's pha.yaml configuration (resolved, generating it only when none is in scope)", onClick: openConfig }, 'Config'),
+        bibLive ? h('button', { className: 'pha-btn small' + (bibOpen ? ' on' : ''), title: 'the reference record and its sidecar', onClick: () => setBibOpen(!bibOpen) }, 'Reference') : null,
+        (bibLive && bibLive.verified === false) ? h('span', { className: 'pha-chip busy', title: 'machine-drafted or imported — confirm the source before citing it' }, 'unverified reference') : null,
       ),
+      (bibOpen || (bibLive && bibLive.verified === false && !refText)) ? h('div', { className: 'pha-bib' },
+        s.bibErr ? h('div', { className: 'pha-err' }, s.bibErr) : null,
+        bibLive ? h('div', null,
+          h('div', { className: 'pha-muted' },
+            (bibLive.source_format || '?') + ' · ' + (bibLive.sidecar || '(no sidecar path)')
+            + (bibLive.verified === false ? ' · unverified' : ' · verified')),
+          bibLive.warning ? h('div', { className: 'pha-err' }, bibLive.warning) : null,
+          bibLive.bibliography ? h('table', { className: 'pha-bib-table' },
+            h('tbody', null, Object.keys(bibLive.bibliography).map((k) => {
+              const v = bibFieldValue(bibLive.bibliography[k])
+              return v ? h('tr', { key: k }, h('td', { className: 'pha-bib-k' }, k), h('td', null, v)) : null
+            }))) : null,
+          h('div', { style: { display: 'flex', gap: 6, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' } },
+            (!modsOnly && bibLive.sidecar) ? h('button', { className: 'pha-btn small', title: 'Open this sidecar in your default editor', onClick: () => editSidecar(bibLive.sidecar) }, 'Edit sidecar') : null,
+            modsOnly ? h('span', { className: 'pha-muted' }, 'MODS is an interchange format — `pha bib ' + d.id + ' --to-json --write` makes it editable') : null,
+          ),
+        ) : h('div', { className: 'pha-muted' }, 'no bibliographic reference for this document (presence-only — a reference is never inherited)'),
+      ) : null,
       h('div', { className: 'pha-pages' },
         h('div', { className: 'pha-jump' },
           h('span', { className: 'pha-muted' }, (searchMode ? listPages.length + ' matched / ' : '') + totalPages + ' pages'),

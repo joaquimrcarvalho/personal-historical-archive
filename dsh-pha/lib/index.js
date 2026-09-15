@@ -13,7 +13,7 @@ const MAX = 4 * 1024 * 1024
 const JOB_MAX = 16 * 1024 * 1024
 
 const DB_SCRIPT = [
-  'import sqlite3, json, sys',
+  "import os, sqlite3, json, sys",
   'db = sys.argv[1]',
   'op = sys.argv[2]',
   'c = sqlite3.connect("file:" + db + "?immutable=1", uri=True)',
@@ -22,12 +22,23 @@ const DB_SCRIPT = [
   'def out(obj):',
   '    print(json.dumps(obj, ensure_ascii=False))',
   '    raise SystemExit(0)',
+  '# Column lists and one schema probe, shared by every op.',
+  "cols_docs = \"d.id, d.filename, d.path, d.dir_path, d.kind, d.page_count, d.status, d.palaeographer, d.editor, d.palaeographer_model, d.editor_model, d.error\"",
+  'cols_doc = "d.id, d.filename, d.path, d.dir_path, d.kind, d.page_count, d.status, d.palaeographer, d.editor, d.palaeographer_model, d.editor_model, d.error, d.updated_at"',
+  'bib_cols = "b.citation as reference, b.source_format as bib_format, b.sidecar_path as bib_sidecar, b.record_origin as bib_origin"',
+  'null_cols = "null as reference, null as bib_format, null as bib_sidecar, null as bib_origin"',
+  '# The snapshot table exists only once an archive has been migrated by a pha run, and',
+  '# this plugin migrates nothing: join it when it is there, and report no references u2014',
+  '# rather than failing the whole read u2014 when it is not.',
+  'has_bib = q.execute("select 1 from sqlite_master where type = ? and name = ?", ("table", "document_bibliography")).fetchone() is not None',
+  'bib_sel = bib_cols if has_bib else null_cols',
+  'bib_join = " left join document_bibliography b on b.document_id = d.id" if has_bib else ""',
   'if op == "documents":',
-  '    rows = q.execute("select id, filename, dir_path, kind, page_count, status, palaeographer, editor, palaeographer_model, editor_model, error from documents order by id").fetchall()',
-  '    out([dict(r) for r in rows])',
+  '    rows = q.execute("select " + cols_docs + ", " + bib_sel + " from documents d" + bib_join + " order by d.id").fetchall()',
+  "    held = []\n    # Sidecar presence is read FROM DISK, so it is right even on an archive whose\n    # snapshot table does not exist yet (presence-only: never inherited).\n    for r in rows:\n        d = dict(r)\n        p = d.get(\"path\") or \"\"\n        if os.path.isdir(p):\n            base, stem = p, os.path.basename(p)\n        else:\n            base, stem = os.path.dirname(p), os.path.splitext(os.path.basename(p))[0]\n        found = [os.path.join(base, stem + e) for e in (\".dc.json\", \".bib\", \".mods.xml\")]\n        found = [f for f in found if os.path.isfile(f)]\n        d[\"bib_sidecar_name\"] = found[0] if found else None\n        d[\"bib_sidecar_present\"] = bool(found)\n        held.append(d)\n    out(held)",
   'if op == "document":',
   '    ident = sys.argv[3]',
-  '    doc = q.execute("select id, filename, path, dir_path, kind, page_count, status, palaeographer, editor, palaeographer_model, editor_model, error, updated_at from documents where id = ? or filename = ? or path = ? limit 1", (ident, ident, ident)).fetchone()',
+  '    doc = q.execute("select " + cols_doc + ", " + bib_sel + " from documents d" + bib_join + " where d.id = ? or d.filename = ? or d.path = ? limit 1", (ident, ident, ident)).fetchone()',
   '    if doc is None:',
   '        out(None)',
   '    d = dict(doc)',
@@ -306,6 +317,10 @@ function apply(ctx) {
     'print(json.dumps(out, ensure_ascii=False))',
   ].join('\n')
   function defPathAllowed(p) {
+    // Bibliographic sidecars are the exception to the .md rule: the forms a human edits
+    // are the Dublin Core JSON and BibTeX; MODS is interchange only
+    // (`pha bib --to-json|--to-bibtex --write` converts it).
+    if ((/\.dc\.json$/i.test(p) || /\.bib$/i.test(p)) && p.startsWith(archiveDir + '/dropbox/')) return true
     if (!p.endsWith('.md')) return false
     if (DEF_KINDS.some((k) => p.startsWith(archiveDir + '/' + k + '/'))) return true
     // collection-local encoders travel with the documents:
@@ -421,6 +436,12 @@ function apply(ctx) {
       const r = await phaRun(argv)
       if (r.code !== 0) throw new Error(cliFailure(r, 'pha page failed'))
       return { ok: true, page: parseJson(r.out) }
+    }],
+    ['pha_bib', "Read one document's bibliographic reference: its sidecar (.dc.json / .bib / .mods.xml) parsed into one record — the formatted reference, the fields, the sidecar path and format, and whether it is verified. Presence-only: a document without a sidecar reports none; a reference is never inherited.", { doc: { type: 'string', description: 'document id, filename substring or dropbox-relative path' } }, ['doc'], async (a) => {
+      const r = await phaRun(['bib', String(a.doc), '--json'])
+      if (r.code !== 0) throw new Error(cliFailure(r, 'pha bib failed'))
+      const d = parseJson(r.out)
+      return Object.assign({}, d, { ok: true, found: !!d.reference })
     }],
     ['pha_search', 'Full-text search across the archive (keyword / phrase match). Returns structured hits with document id, page number, variant and snippet text — only pages that actually contain the query terms.', { query: { type: 'string', description: 'search terms' }, limit: { type: 'integer', description: 'max hits (default 5, max 20)' } }, ['query'], async (a) => {
       const q = String(a.query || '').trim()
@@ -577,6 +598,15 @@ function apply(ctx) {
     ['/pha/config', json(async (p) => {
       if (!p.doc) throw new Error('doc required')
       return await runConfig(p.doc)
+    })],
+    ['/pha/bib', json(async (p) => {
+      if (!p.doc) throw new Error('doc required')
+      const r = await phaRun(['bib', String(p.doc), '--json'])
+      if (r.code !== 0) throw new Error(cliFailure(r, 'pha bib failed'))
+      const d = parseJson(r.out)
+      // `ok: true` here means the READ worked; `reference` is the answer, null when the
+      // document has no sidecar (presence-only — a reference is never inherited).
+      return Object.assign({}, d, { ok: true, found: !!d.reference })
     })],
     ['/pha/inbox', json(async (p) => await runInbox(p, 'list'))],
     ['/pha/inbox/plan', json(async (p) => await runInbox(p, 'plan'))],
