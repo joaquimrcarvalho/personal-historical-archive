@@ -23,6 +23,17 @@ def _make_cfg(tmp_path) -> Config:
     return Config.load(root)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_lock_dir(tmp_path, monkeypatch):
+    """Keep tests out of the real user-global model-server lock directory.
+
+    `locks.lock_dir()` resolves to ~/Library/Caches/pha/locks (or XDG) by
+    default; a test that acquires a lock must never create files there. The
+    env var is read at call time, so monkeypatching it is enough.
+    """
+    monkeypatch.setenv("PHA_LOCK_DIR", str(tmp_path / "pha-locks"))
+
+
 @pytest.fixture
 def cfg(tmp_path) -> Config:
     c = _make_cfg(tmp_path)

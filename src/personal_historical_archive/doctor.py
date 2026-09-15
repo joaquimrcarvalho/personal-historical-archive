@@ -90,6 +90,8 @@ def diagnose(
     declared: dict[str, list[str]] | None = None,
     require: set[str] | None = None,
     archive: str | None = None,
+    servers: list[dict[str, Any]] | None = None,
+    lock_dir: str | None = None,
 ) -> dict[str, Any]:
     """Check every supported engine and return a JSON-friendly report.
 
@@ -197,6 +199,11 @@ def diagnose(
         "broken": broken,
         "archive": archive,
         "engines": engines,
+        # Model-server picture (one model per server at a time): which `server:`
+        # keys the archive's model files declare, their declared capacity, and
+        # where the locks live. Empty when no config is available.
+        "servers": servers or [],
+        "lock_dir": lock_dir,
     }
 
 
@@ -232,6 +239,26 @@ def render(report: dict[str, Any]) -> str:
         if not e["ok"]:
             lines.append(f"      fix:   {e['install']}")
             lines.append(f"      verify: {e['verify']}")
+    lines.append("")
+    # Model servers: which `server:` keys serialise against each other. An
+    # unlabelled model file takes the wildcard and so serialises with everything
+    # (the pre-0.24.1 global behaviour), which is why it is worth flagging.
+    lines.append("model servers (one model per server at a time — see AGENTS.md)")
+    servers = report.get("servers") or []
+    if not servers:
+        lines.append("  (no model files loaded — no archive configured?)")
+    for s in servers:
+        key = s.get("key", "?")
+        label = "*  (unlabelled — serialises with every job)" if key == "*" else key
+        slots = s.get("slots", 1)
+        cap = f"{slots} jobs" if slots > 1 else "1 job"
+        models = ", ".join(s.get("models", []))
+        lines.append(f"  {label:<34} {cap:<8} {models}")
+    if any(s.get("slots", 1) > 1 for s in servers):
+        lines.append("  note: capacity > 1 is only safe when those models are already")
+        lines.append("        loaded (auto-evict off), or the server has the RAM.")
+    if report.get("lock_dir"):
+        lines.append(f"  lock dir: {report['lock_dir']}")
     lines.append("")
     if report["broken"]:
         lines.append("RESULT: FAIL — missing/broken: " + ", ".join(report["broken"]))

@@ -137,13 +137,15 @@ palaeographer / editor / prompt / encoders), inspect, don't re-run:
 - D/M: `pha_collection_config('collections/COLX')` (one object with the
   resolved `palaeographer`, `editor`, `prompt` and their `source`).
 
-### 3. Respect the single-model lock
+### 3. Respect the model-server lock
 
-`pha scan`, `pha edit` and `pha test` share **one lock**: a machine can hold a
-single local model at a time (LM Studio loads one model; loading two
-swaps/page-out and fills the disk). Never start one while another is running —
-check `pha status` / `pha_extraction_status` first, and if a pass is running,
-wait (or, in Profile D, poll `pha_job_status`).
+A job holds a lock on **every model-server it will use** (`pha scan`,
+`pha edit`, `pha test`, `pha reindex`, `pha unbundle`): a server that loads
+models just in time keeps one resident, and loading two there swaps/page-out
+and fills the disk. Jobs whose servers are disjoint may run together. Never
+start one while another is using the same server — check `pha status` /
+`pha_extraction_status` first, and if a pass is running, wait (or, in Profile
+D, poll `pha_job_status`). `pha doctor` lists the servers and their capacity.
 
 ### 4. Verify the result
 

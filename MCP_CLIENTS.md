@@ -10,7 +10,7 @@ processed (palaeographer / editor / encoder).
 
 | tool | purpose |
 | --- | --- |
-| `pha_search(query, mode, limit, collection)` | ranked passages — hybrid (keyword+semantic, default), keyword, semantic; optional collection filter |
+| `pha_search(query, mode, limit, collection, allow_embed)` | ranked passages — hybrid (keyword+semantic, default), keyword, semantic; optional collection filter. Returns `{mode, query, results, note}` (the same shape as `pha search --json`): `note` explains any degradation, e.g. hybrid falling back to keyword while a scan holds the embedding server (`allow_embed: true` to force it) |
 | `pha_get_document(document_id, max_chars)` | metadata + full extracted per-page text |
 | `pha_get_page(document_id, page_no, include_image)` | all versions of one page: transcribed, edited (per editor), encoded (per-page records), and the cached page image as base64 |
 | `pha_list_documents(status, limit, collection)` | browse the archive |

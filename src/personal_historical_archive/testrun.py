@@ -47,13 +47,12 @@ from .extract import (
     resolve_prompt,
 )
 from .ingest import (
-    _acquire_scan_lock,
     _expand_records,
     _parse_json_array,
-    _release_scan_lock,
     discover,
     transcribe_page,
 )
+from . import locks
 from .model_client import ModelClient
 from .sidecar import effective_render, resolve_sidecar
 
@@ -260,6 +259,33 @@ def _resolve_encoders(
             enc = dataclasses.replace(enc, max_tokens=max_tokens)
         resolved.append((enc, p, eid, src))
     return resolved
+
+
+def _job_keys(
+    cfg: Config, docs: list[Path], pal_override: str | None, ed_override: str | None,
+    enc_override: str | None, model: str | None,
+) -> list[str]:
+    """Model-server keys `pha test` will touch: palaeographer + editor + encoders.
+
+    Resolved from the same helpers `_test_doc` uses and BEFORE the lock is
+    taken, so the preview claims exactly the servers it may load a model on
+    (see locks.py). `pha test` never embeds, so the embed server is not here.
+    """
+    keys: set[str] = set()
+    for path in docs:
+        file_dir = _file_dir(path)
+        sc = resolve_sidecar(cfg.dropbox, file_dir,
+                             stem=(path.stem if not path.is_dir() else None))
+        pal, _pid, _src = _resolve_palaeographer(cfg, path, sc, pal_override, model, None, None)
+        keys.add(locks.stage_key(pal))
+        plan = _resolve_editor(cfg, path, sc, ed_override, model, None, None)
+        if plan.kind == "editor" and plan.editor is not None:
+            keys.add(locks.stage_key(plan.editor))
+        for enc, _f, _eid, _src in _resolve_encoders(cfg, path, sc, enc_override, model,
+                                                     None, None):
+            keys.add(locks.stage_key(enc))
+    keys.discard("")
+    return sorted(keys)
 
 
 def _page_units(
@@ -681,14 +707,17 @@ def run_test(
     Returns a summary dict. Raises KeyError for an unknown override id; other
     errors are captured per document in `DocResult.errors`.
     """
-    if not _acquire_scan_lock(cfg):
-        return {"skipped": True, "reason": "another scan/edit job is running (one local model at a time)"}
+    cfg.ensure_dirs()
+    docs = _resolve_target(cfg, target)
+    if not docs:
+        return {"skipped": True, "reason": "no documents matched the target"}
+    lock = locks.acquire(cfg, _job_keys(cfg, docs, palaeographer, editor, encoder, model),
+                         label="pha test")
+    if not lock.ok:
+        reason = lock.reason()
+        print(f"  {reason}", flush=True)
+        return {"skipped": True, "reason": reason}
     try:
-        cfg.ensure_dirs()
-        docs = _resolve_target(cfg, target)
-        if not docs:
-            return {"skipped": True, "reason": "no documents matched the target"}
-
         stamped = time.strftime("%Y%m%d-%H%M%S")
         scratch = cfg.data / ".pha-test" / f"{_doc_slug(docs[0])}-{stamped}"
         scratch.mkdir(parents=True, exist_ok=True)
@@ -713,4 +742,4 @@ def run_test(
         _write(scratch / "report.md", _report_markdown(summary, documents))
         return summary
     finally:
-        _release_scan_lock(cfg)
+        locks.release(lock)

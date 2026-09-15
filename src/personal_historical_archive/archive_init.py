@@ -171,8 +171,11 @@ folder once and never overwrites it — edit or extend it freely.
   sweep any leftovers with `pha prune [--dry-run]`.
 - Editing a page file under `library/` is a human correction: run `pha review`
   to import it, then `pha reindex`.
-- **Only ONE local-model job at a time** — `pha scan` and `pha edit` share a
-  lock; running two local models at once fills the disk and hangs the machine.
+- **One model per model-server at a time** — `pha scan`, `pha edit`,
+  `pha reindex`, `pha test` and `pha unbundle` lock every model-server they
+  will use and refuse if one is busy; jobs on different servers may run
+  together. Running two models on one server fills the disk and hangs the
+  machine. `pha doctor` shows the servers and their capacity.
   Quit LM Studio when not ingesting.
 - Full usage and troubleshooting: see the pha README in the source repository
   linked at the top.
@@ -294,8 +297,9 @@ edit, delete or add skills freely.
 - `pha status` reports progress and pending review corrections.
 - Editing a page file under `library/` is a human correction; run
   `pha review` to import it, then `pha reindex`.
-- Only ONE local-model job at a time; check `pha status` before starting a
-  scan/edit on this machine.
+- One model per model-server at a time; `pha scan`/`pha edit`/`pha reindex`
+  take the locks of the servers they use, so check `pha status` before
+  starting a pass that shares a server with one already running.
 - To change how a collection/document is processed (its palaeographer /
   editor / encoders / prompt), inspect what is already set first:
   `pha palaeographer <file>`, `pha editor <file>`, `pha prompts <file>`,

@@ -122,18 +122,32 @@
   `pha encoder --new` is the non-technical wizard that creates encoder files
   (chat variant: `prompts/encoder-helper.md`). Never write a resolved API key
   into a generated encoder file — keep `${ENV}` placeholders.
-- **Only ONE local-model job at a time.** LM Studio holds a single model in
-  memory — loading two local models (e.g. qwen vision + amalia editor)
-  simultaneously causes swap/page-out that fills the disk and wedges the
-  server. `pha scan`, `pha edit` and `pha reindex` now share the SAME lock, so
-  they cannot run concurrently; if one runs while another holds the lock it
-  reports "another scan/edit/reindex job is running" and exits. **`pha
-  reindex` belongs in that set because re-embedding loads the embed model** —
-  running it alongside a scan/edit is what times out `embed()` (see the
-  vector-loss incident in `enhancements/pha-embed-loss-bug-report.md`). Remote
-  models (MiniMax) don't compete with LM Studio. A palaeographer and editor
-  may use the SAME local model (e.g. qwen for both on Pfister) to keep one
-  slot loaded.
+- **One model per model-server at a time.** A server that loads models just in
+  time keeps a single one resident — loading two (e.g. qwen vision + amalia
+  editor) causes swap/page-out that fills the disk and wedges the server.
+  So `pha scan`, `pha edit`, `pha reindex`, `pha test` and `pha unbundle` each
+  take a lock on **every model-server they will talk to** and refuse if one is
+  busy, naming the server and the holding job. Two jobs may run concurrently
+  **iff their servers are disjoint**, so a job on a remote model does not block
+  a local one. Keys are declared per model file:
+  `models/<id>.md` may carry `server: mac-studio`; an **unlabelled** model file
+  takes the wildcard, which serialises with everything (the old global rule),
+  and the embedding model uses `embeddings.server:` or its endpoint. Declare
+  real capacity once per machine in `config.yaml` when the models are already
+  loaded (auto-evict off):
+  ```yaml
+  servers:
+    mac-studio: {slots: 2}
+  ```
+  `pha doctor` prints the resulting keys, their capacity and the lock dir.
+  Locks live in a **user-global** directory (`~/Library/Caches/pha/locks` on
+  macOS), so two archives sharing one server serialise too. `pha search` never
+  takes the lock: while a job uses the embedding server it answers with keyword
+  results and a `note` instead of loading the embed model (`--force` embeds
+  anyway). **`pha reindex` belongs in that set because re-embedding loads the
+  embed model** — running it alongside a scan/edit is what times out `embed()`
+  (see the vector-loss incident in
+  `enhancements/pha-embed-loss-bug-report.md`).
 - **Local OCR/parse engines (`engine: tesseract` / `engine: liteparse`) run
   WITHOUT LM Studio** — they are local executables, not LLMs, so an OCR scan
   loads no model (it still takes the pha scan lock). The engine + its settings
@@ -386,9 +400,9 @@ repo's bundled `dsh-pha` plugin: it registers the `pha_*` model tools (`pha_stat
 [`DSH_PLUGIN.md`](DSH_PLUGIN.md) and [`dsh-pha/README.md`](dsh-pha/README.md). Install it into
 a Harness profile (`pnpm add <repo>/dsh-pha` + the [`cordis.patch` row](dsh-pha/cordis.patch.example.yml)
 + restart). Reads are read-only (`immutable=1` sqlite / the `pha` CLI); mutations still go
-through the real `pha` CLI, so the single-model lock, staleness and review round-trip rules
-below still apply — never start `pha scan`/`pha edit` while another local-model job holds the
-lock.
+through the real `pha` CLI, so the model-server lock, staleness and review round-trip rules
+below still apply — never start `pha scan`/`pha edit` while another job holds the server they
+need.
 
 ### How to check how a collection/document is configured
 
@@ -415,7 +429,7 @@ collection's processing = the resolved **palaeographer**, **editor**, and
   run; `pha test --show` re-prints the most recent report, `pha test --list`
   lists saved runs, `pha test --clean [target] [--dry-run]` deletes the `.pha-test`
   scratch dirs (run dirs accumulate one per run). It takes the same
-  single-model lock as `pha scan`/`pha edit`.
+  model-server locks as `pha scan`/`pha edit` (one model per server).
 - **Remotely / connected via MCP** (agent on another machine):
   - `pha_collection_config("collections/COLX")` returns **one object** with
     the resolved `palaeographer`, `editor` (or `{id: None, ...}` when none is
@@ -464,11 +478,14 @@ came from (a dropbox `editor` file, a config default, or nowhere).
 
 ### Operating discipline (avoid breaking the machine)
 
-- **One local-model job at a time.** `pha scan`, `pha edit` and `pha reindex`
-  share a lock; never start `pha edit`/re-edit/reindex while a `pha_scan_now`
-  is running on the same machine (two local models → swap → disk fill → hang,
-  and for reindex → `embed()` timeouts that can cost a document its vectors).
-  Check `pha_extraction_status` / the lock before starting a pass.
+- **One model per model-server at a time.** `pha scan`, `pha edit`,
+  `pha reindex`, `pha test` and `pha unbundle` take a lock on each server they
+  will use and refuse if one is busy (naming it and the holding job); jobs on
+  disjoint servers run together. Never start `pha edit`/re-edit/reindex while a
+  `pha_scan_now` is running **against the same server** (two models there →
+  swap → disk fill → hang, and for reindex → `embed()` timeouts that can cost a
+  document its vectors). Check `pha_extraction_status` and `pha doctor` (which
+  lists the keys and the lock dir) before starting a pass.
 - **Quit LM Studio when not ingesting** — its model page-out is what eats disk
   space. Do not leave a vision + editor model loaded at the same time.
 - **Render cache is pruned automatically.** Rendered page images live in

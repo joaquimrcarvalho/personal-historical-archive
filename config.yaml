@@ -74,6 +74,9 @@ vision:
 embeddings:
   backend: lmstudio
   base_url: http://127.0.0.1:1234/v1
+  # server: mac-studio    # which model-server serves this endpoint (see below);
+                          # unset = key on base_url. Declaring it is how two
+                          # archives on one machine serialise on one LM Studio.
   model: text-embedding-nomic-embed-text-v1.5@q4_k_s
   timeout_s: 120
   batch_size: 100        # embed at most this many chunks per request (endpoint limit)
@@ -91,6 +94,14 @@ extraction:
 search:
   default_mode: hybrid    # hybrid | keyword | semantic
   top_k: 10
+
+# Model servers: how many jobs may use one model-server at once ('one model per
+# model-server' — see AGENTS.md). Keys are the `server:` identities declared in
+# models/<id>.md (and `embeddings.server:`); anything unlabelled serialises
+# globally, and an unlisted key defaults to 1. Raise a server to 2 only when the
+# models are already loaded there (LM Studio auto-evict off) or it has the RAM:
+# servers:
+#   mac-studio: {slots: 2}
 
 # Self-update: `pha update` checks the GitHub repo for a newer pha, and the
 # first `pha` run of each day prints a one-line notice when one is available.

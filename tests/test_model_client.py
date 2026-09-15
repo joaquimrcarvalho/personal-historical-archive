@@ -100,6 +100,50 @@ def test_embed_single_request_when_no_batch_size(monkeypatch):
     client.close()
 
 
+# --------------------------------------------------------------------------- malformed responses
+
+@pytest.mark.parametrize("data", [
+    {"choices": [{"message": None}]},                        # MiniMax M3: null message
+    {"choices": [{"message": {"role": "assistant"}}]},       # message without content
+    {"choices": [{"message": {"content": None}}]},           # content present but null
+    {"choices": []},                                         # no choices at all
+    {"error": "rate limited"},                               # not a chat response
+    [],                                                      # not even a mapping
+])
+def test_openai_chat_malformed_response_raises_model_error(monkeypatch, data):
+    """A malformed HTTP-200 chat response must raise ModelError, never a raw
+    TypeError/AttributeError: the per-page guards in ingest catch ModelError,
+    so a bare TypeError escapes them and kills the entire scan (doc 57,
+    documenta-indica, 2026-09-15)."""
+    client = ModelClient("http://example/v1")
+    monkeypatch.setattr(client, "_post", lambda path, payload: data)
+    with pytest.raises(ModelError, match="Unexpected chat response"):
+        client.chat_text("m", "prompt")
+    client.close()
+
+
+def test_chat_vision_malformed_response_raises_model_error(monkeypatch, tmp_path):
+    """chat_vision's OpenAI path delegates to _openai_chat, so a null message
+    on a vision call is recoverable per page too."""
+    img = tmp_path / "p.jpg"
+    img.write_bytes(b"\xff\xd8\xff\xe0not-a-real-jpeg")
+    client = ModelClient("http://example/v1")
+    monkeypatch.setattr(client, "_post", lambda path, payload: {"choices": [{"message": None}]})
+    monkeypatch.setattr(mc, "_prepare_image_b64", lambda *a, **k: ("AAAA", "image/jpeg"))
+    with pytest.raises(ModelError, match="Unexpected chat response"):
+        client.chat_vision("m", "prompt", img)
+    client.close()
+
+
+def test_openai_chat_keeps_a_real_empty_string(monkeypatch):
+    """A well-formed answer that is the empty string is not an error."""
+    client = ModelClient("http://example/v1")
+    monkeypatch.setattr(client, "_post",
+                        lambda path, payload: {"choices": [{"message": {"content": ""}}]})
+    assert client.chat_text("m", "prompt") == ""
+    client.close()
+
+
 # --------------------------------------------------------------------------- tesseract engine
 
 def test_run_tesseract_builds_command_and_returns_stdout(monkeypatch):

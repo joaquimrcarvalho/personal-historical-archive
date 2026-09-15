@@ -176,3 +176,33 @@ def test_discover_excludes_path(tmp_path):
     rels = {str(u.relative_to(cfg.dropbox)) for u in units}
     assert "documents/a.pdf" in rels
     assert not any(r.startswith("inbox") for r in rels)
+
+
+def test_status_surfaces_done_document_with_no_index(tmp_path, capsys):
+    """A `done` document with zero chunks must be visible: this is the state
+    doc 57 (documenta-indica) sat in for hours while a status-only check
+    reported the collection complete. `done` is now written after indexing, so
+    this only fires for rows that predate the fix — which is exactly when it
+    matters."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    col = cfg.dropbox / "collections" / "COLX"
+    col.mkdir(parents=True)
+    src = col / "unindexed.pdf"
+    src.write_bytes(b"%PDF unindexed")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="unindexed.pdf", path=str(src),
+                              sha256=sha256_of(src), size_bytes=1, mtime=1, kind="pdf",
+                              now=time.time(), dir_path="collections/COLX")
+    _db.set_document_status(conn, doc_id, "done")
+    _db.update_document(conn, doc_id, page_count=961)
+    conn.commit()
+    conn.close()
+
+    cli.cmd_status(cfg, SimpleNamespace())
+    out = capsys.readouterr().out
+    assert "1 document(s) marked done with no index" in out
+    assert "unindexed.pdf" in out
+    assert "961 page(s)" in out
+    assert "pha reindex" in out
+

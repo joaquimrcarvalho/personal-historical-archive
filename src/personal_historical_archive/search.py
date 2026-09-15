@@ -5,6 +5,7 @@ import sqlite3
 import numpy as np
 
 from . import db
+from . import locks
 from .config import Config
 from .embed import cosine, prefixed, unpack
 from .model_client import ModelClient, ModelError
@@ -91,11 +92,15 @@ def _rrf_merge(kw: list[dict], sem: list[dict], limit: int, k: int = 60) -> list
             scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
             seen.setdefault(cid, r)
     order = sorted(scores.items(), key=lambda t: t[1], reverse=True)
+    # Label honestly: with only one arm there is no fusion to claim, so a
+    # degraded hybrid (semantic skipped or unavailable) reports keyword hits as
+    # keyword hits rather than as "hybrid".
+    label = "hybrid" if (kw and sem) else ("semantic" if sem else "keyword")
     out = []
     for cid, s in order[:limit]:
         r = dict(seen[cid])
         r["score"] = round(s, 5)
-        r["source"] = "hybrid"
+        r["source"] = label
         out.append(r)
     return out
 
@@ -108,6 +113,7 @@ def search(
     mode: str | None = None,
     limit: int | None = None,
     collection: str | None = None,
+    allow_embed: bool = False,
 ) -> dict:
     mode = (mode or cfg.default_mode).lower()
     limit = limit or cfg.top_k
@@ -119,16 +125,31 @@ def search(
             "mode": mode, "query": query, "results": keyword_search(conn, query, limit, collection), "note": None,
         }
 
-    sem = semantic_search(conn, client, cfg.embed_model, query, limit, collection)
+    # Decide BEFORE embedding. search() already degrades gracefully when the
+    # embed call fails — but by then the load has happened, and loading the
+    # embed model evicts the vision model a running scan is using. Observing the
+    # embed server's lock (never taking it: a search must not block, or be
+    # blocked, for the length of a scan) avoids the eviction entirely.
+    note: str | None = None
+    sem: list[dict] = []
+    embed_server = locks.embed_key(cfg)
+    if not allow_embed and locks.job_running(cfg, embed_server):
+        who = locks.holder_label(embed_server)
+        subject = f"A model job ({who})" if who else "A model job"
+        note = (f"{subject} is using the embedding server; semantic search "
+                "skipped so it keeps its model loaded. Keyword results only — "
+                "re-run when it finishes, pass --force, or point "
+                "embeddings.base_url at a separate server.")
+    else:
+        sem = semantic_search(conn, client, cfg.embed_model, query, limit, collection)
+
     if mode == "semantic":
-        note = None
-        if not sem:
+        if note is None and not sem:
             note = "Semantic search unavailable: embedding model unreachable or no embedded chunks."
         return {"mode": mode, "query": query, "results": sem, "note": note}
 
     kw = keyword_search(conn, query, limit, collection)
-    note = None
-    if not sem:
+    if note is None and not sem:
         note = "Embedding model unreachable or no embedded chunks; showing keyword results only."
     merged = _rrf_merge(kw, sem, limit)
     return {"mode": mode, "query": query, "results": merged, "note": note}

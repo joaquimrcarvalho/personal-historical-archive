@@ -117,6 +117,7 @@ pha scan --watch                    # keep watching the dropbox
 pha search "doação de Évora ao mosteiro"
 pha search "alfange" --mode keyword
 pha search "monastery donation charter" --mode semantic
+pha search "padroado" --force      # embed even while a scan uses the embed server
 # every hit prints its library page file + a shortcut to read the full page:
 pha page 12 37              # full raw transcription of doc 12, page 37
 pha page 12 37 --edited     # the edited (modernized/translated) variant
@@ -508,6 +509,40 @@ context_tokens: 32768
 a **model**, duplicate `models/_sample.md`. Invalid files are skipped with a
 warning — a typo never breaks the load. `pha palaeographer` lists the
 configured palaeographers.
+
+**Model servers (`server:`) and concurrency.** A model file may declare which
+machine serves its endpoint:
+
+```markdown
+# models/qwen3-vision-local.md
+---
+server: mac-studio                    # operator-declared; see below
+base_url: http://127.0.0.1:1234/v1
+model: qwen/qwen3-vl-8b
+---
+```
+
+`pha scan`, `pha edit`, `pha reindex`, `pha test` and `pha unbundle` each take a
+lock on **every model-server they will talk to** and refuse if one is busy,
+naming the server and the holding job; two jobs may run concurrently **iff
+their servers are disjoint** — so a job against a remote model no longer blocks
+a local one, and two archives on one machine that share a server serialise
+(lock files live in a user-global directory, `~/Library/Caches/pha/locks` on
+macOS). A model file with **no** `server:` is unknown, so it serialises with
+everything (the conservative default); the embedding model uses
+`embeddings.server:` or its endpoint; `pha doctor` prints the resulting keys,
+their capacity and the lock dir. A machine that really holds two models at once
+(pre-loaded, auto-evict off) can declare the capacity instead of pretending:
+
+```yaml
+servers:
+  mac-studio: {slots: 2}
+```
+
+`pha search` never takes the lock: while a job is using the embedding server it
+answers with keyword results and a `note` rather than loading the embed model
+and evicting the job's model — pass `--force` to embed anyway, or point
+`embeddings.base_url` at a separate server.
 
 Ready-to-duplicate palaeographer samples also ship as **builtins** (names start
 with `_`, so they are never loaded until you copy one):
@@ -945,8 +980,9 @@ pha test --clean [target]   # delete test report scratch dirs (--dry-run to prev
   an optional target substring); `pha test --clean [target] --dry-run` previews
   without deleting.
 
-Because it runs the pipeline for real, it takes the same single-job lock as
-`pha scan`/`pha edit` (one local model at a time).
+Because it runs the pipeline for real, it takes the model-server locks of every
+server it will use (`pha scan`/`pha edit`/`pha reindex` take the same ones —
+"one model per model-server", see below).
 
 ## CLI reference
 

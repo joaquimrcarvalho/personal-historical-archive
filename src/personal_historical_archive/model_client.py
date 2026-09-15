@@ -627,11 +627,18 @@ class ModelClient:
             raise ModelError(f"Unexpected anthropic response: {data!r}") from e
 
     def _openai_chat(self, payload: dict[str, Any]) -> str:
-        """POST an OpenAI-format chat payload and return the text."""
+        """POST an OpenAI-format chat payload and return the text.
+
+        A malformed-but-HTTP-200 response (observed from MiniMax: a null
+        ``message``) must surface as ``ModelError``, the failure the per-page
+        guards recover from — not as a raw ``TypeError`` that would abort the
+        whole run. ``None["content"]`` is exactly that case, so ``TypeError``
+        is caught here as it already is in ``_anthropic_chat``.
+        """
         data = self._post("/chat/completions", payload)
         try:
             return _strip_think(data["choices"][0]["message"]["content"])
-        except (KeyError, IndexError, AttributeError) as e:
+        except (KeyError, IndexError, AttributeError, TypeError) as e:
             raise ModelError(f"Unexpected chat response: {data!r}") from e
 
     def chat_vision(

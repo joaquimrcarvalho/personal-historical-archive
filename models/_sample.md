@@ -57,6 +57,11 @@
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example model — edit me
 base_url: http://127.0.0.1:1234/v1
+# server: mac-studio        # optional: which machine/instance serves this
+#                           # endpoint. Jobs sharing a server serialise (one
+#                           # model at a time); jobs on different servers may
+#                           # run concurrently. Unset = unknown, serialises
+#                           # with everything. See AGENTS.md.
 model: qwen/qwen3-vl-8b
 api_key: ""
 api_style: openai

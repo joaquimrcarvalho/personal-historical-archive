@@ -80,7 +80,8 @@ def cmd_search(cfg: Config, args) -> None:
             from .search import search as run_search
 
             res = run_search(conn, client, cfg, args.query, mode=args.mode, limit=args.limit,
-                             collection=args.collection)
+                             collection=args.collection,
+                             allow_embed=bool(getattr(args, "force", False)))
         except ModelError as e:
             print(f"model error: {e}", file=sys.stderr)
             sys.exit(2)
@@ -1051,6 +1052,10 @@ def cmd_status(cfg: Config, args) -> None:
                         else:
                             meta.append(f"{cs['chunks']} chunks ({cs['embedded']} embedded)")
                             kw = True
+                    elif d["status"] == "done":
+                        # `done` with no chunks at all: the document was reported
+                        # complete while its index was never written (or was lost).
+                        meta.append("0 chunks — NOT INDEXED")
                     if d["status"] == "error" and d["error"]:
                         meta.append(f"error: {d['error'][:40]}")
                     meta.append(f"updated {_fmt_ts(d['updated_at'])}")
@@ -1080,6 +1085,22 @@ def cmd_status(cfg: Config, args) -> None:
             print()
             for line in _pending_summary_lines(pending, lambda d_id: db.get_document(conn, d_id)):
                 print(line)
+
+        # `done` is written after the editor and indexer (ingest.ingest_file), so
+        # a NEW document cannot end up done-without-chunks -- but archives that
+        # predate that fix still hold such rows (doc 57, documenta-indica,
+        # 2026-09-15: done, 961 pages, 0 chunks, invisible to a status-only check).
+        unindexed = [d for d in docs
+                     if d["status"] == "done" and (d["page_count"] or 0) > 0
+                     and not (stats.get(d["id"]) or {}).get("chunks")]
+        if unindexed:
+            print()
+            print(f"  ⚠  {len(unindexed)} document(s) marked done with no index "
+                  "(search cannot see them):")
+            for d in sorted(unindexed, key=lambda d: d["id"]):
+                print(_fit(f"       #{d['id']:>3d}  [{d['dir_path'] or '(root)'}] "
+                           f"{d['filename']}  — {d['page_count']} page(s)", width))
+            print("     Run:  pha reindex   (or `pha edit --path <doc>` to repair)")
     finally:
         conn.close()
 
@@ -1740,13 +1761,14 @@ def cmd_edit(cfg: Config, args) -> None:
             print(f"  + {r['filename']} [{r['editor']}] ({r['pages']} pages)")
         elif r["reason"] != "no editor configured":
             print(f"  ! {r['filename']}: {r.get('reason', r['action'])}")
-    # re-index edited docs so the search covers both raw and edited variants
-    if edited:
-        client = _client(cfg, cfg.embed_base_url, cfg.embed_timeout_s)
-        try:
-            reindex_all(cfg, client, verbose=False)
-        finally:
-            client.close()
+    # The edit pass indexes the documents it touched (and repairs a document
+    # whose index was never written); report that, rather than silently
+    # leaving search on the pre-edit text. A failure is reported, not fatal.
+    indexed = res.get("indexed", 0)
+    if indexed:
+        print(f"re-indexed {indexed} document(s) so search covers the edited text")
+    for msg in res.get("index_failed", []):
+        print(f"  ! not re-indexed: {msg} — run: pha reindex", file=sys.stderr)
 
 
 def cmd_key(cfg: Config, args) -> None:
@@ -2158,17 +2180,30 @@ def cmd_doctor(cfg: Config, args) -> None:
     prints the machine-readable report.
     """
     from . import doctor
+    from . import locks
 
     declared: dict[str, list[str]] = {}
+    servers: dict[str, dict] = {}
     for m_id, m in sorted((cfg.models or {}).items()):
         eng = (m.engine or "").strip().lower()
         if eng in doctor.ENGINES:
             declared.setdefault(eng, []).append(m_id)
+        key = locks.stage_key(m)
+        if key:
+            entry = servers.setdefault(key, {"key": key, "models": []})
+            entry["models"].append(m_id)
+    ek = locks.embed_key(cfg)
+    servers.setdefault(ek, {"key": ek, "models": []})["models"].append("embeddings")
+    for entry in servers.values():
+        entry["slots"] = cfg.server_slots(entry["key"])
+    unconfigured = _archive_unconfigured(cfg)
     require = set(getattr(args, "engine", None) or [])
     report = doctor.diagnose(
         declared=declared,
         require=require,
-        archive=None if _archive_unconfigured(cfg) else str(cfg.archive_dir),
+        archive=None if unconfigured else str(cfg.archive_dir),
+        servers=[] if unconfigured else [servers[k] for k in sorted(servers)],
+        lock_dir=None if unconfigured else str(locks.lock_dir()),
     )
     if getattr(args, "json", False):
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -2520,6 +2555,10 @@ def main(argv: list[str] | None = None) -> None:
     q.add_argument("--limit", type=int, default=None)
     q.add_argument("--collection", default=None,
                    help="restrict to a collection/dir, e.g. 'documents', 'COLX' or 'collections/COLX'")
+    q.add_argument("--force", "--allow-embed", dest="force", action="store_true",
+                   help="embed the query even while a scan/edit/reindex is using the "
+                        "embedding server (loads the embed model there — it may evict "
+                        "the running job's model)")
     q.add_argument("--json", action="store_true")
     q.set_defaults(fn=cmd_search)
 

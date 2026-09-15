@@ -59,7 +59,8 @@ def make_server(cfg: Config) -> FastMCP:
     )
 
     @mcp.tool()
-    def pha_search(query: str, mode: str = "hybrid", limit: int = 10, collection: str | None = None) -> list[dict]:
+    def pha_search(query: str, mode: str = "hybrid", limit: int = 10, collection: str | None = None,
+                   allow_embed: bool = False) -> dict:
         """Search the extracted manuscript text and return ranked passages.
 
         Args:
@@ -68,8 +69,15 @@ def make_server(cfg: Config) -> FastMCP:
             limit: maximum number of results (1-50).
             collection: restrict to a collection or directory, e.g. 'documents',
                 'COLX' (resolves to collections/COLX), or 'collections/COLX'.
+            allow_embed: embed the query even while a scan/edit/reindex is using the
+                embedding server. By default a running job makes hybrid/semantic
+                fall back to keyword results (with a `note`) instead of loading the
+                embed model and evicting the model that job is using.
         Returns:
-            Ranked passages with document id/name, collection, page number, snippet, and full chunk text.
+            The same shape as `pha search --json`: {mode, query, results, note}.
+            `results` are ranked passages with document id/name, collection, page
+            number, snippet, and full chunk text; `note` explains any degradation
+            (null when nothing was degraded).
         """
         if mode not in ("hybrid", "keyword", "semantic"):
             mode = "hybrid"
@@ -77,11 +85,12 @@ def make_server(cfg: Config) -> FastMCP:
         conn = db.connect(cfg.db_path)
         client = ModelClient(cfg.embed_base_url, timeout_s=cfg.embed_timeout_s)
         try:
-            res = run_search(conn, client, cfg, query, mode=mode, limit=limit, collection=collection)
+            res = run_search(conn, client, cfg, query, mode=mode, limit=limit,
+                             collection=collection, allow_embed=allow_embed)
         finally:
             client.close()
             conn.close()
-        return res["results"]
+        return res
 
     @mcp.tool()
     def pha_get_document(document_id: int, max_chars: int = 20000) -> dict:

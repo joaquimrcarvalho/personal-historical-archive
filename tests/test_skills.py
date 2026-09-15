@@ -25,7 +25,7 @@ EXPECTED = {
         "pha test collections/COLX --pages 3",
         "pha status",
         "pha page",
-        "single-model lock",
+        "model-server lock",
         "pha_job_start",
         "pha_scan_now",
         "dropbox-relative",

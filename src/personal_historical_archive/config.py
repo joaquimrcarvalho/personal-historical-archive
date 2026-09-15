@@ -190,6 +190,14 @@ class Model:
     max_vision_px: int = 1800
     vision_jpeg_quality: int = 88
     context_tokens: int = 200_000
+    # server: a declared identity for the machine/instance that serves this
+    # model, e.g. "mac-studio". pha uses it to decide which jobs may run at the
+    # same time (one model per model-server — see locks.py): jobs whose servers
+    # are disjoint can run concurrently. Free-form and operator-declared,
+    # because the endpoint URL cannot prove locality (LM Link serves a remote
+    # model on localhost, and a tunnel makes a remote look local). Empty means
+    # "unknown" and serialises globally.
+    server: str = ""
     # engine: the implementation that produces the stage's output.
     #   "" / "llm" (default) - an HTTP chat/vision endpoint via ModelClient.
     #   otherwise - a named local engine looked up in model_client.PAGE_ENGINES
@@ -270,6 +278,7 @@ class Palaeographer:
     # openai-style images (LM Studio, qwen) are sent as rendered, untouched.
     vision_jpeg_quality: int = 88
     model_ref: str = ""  # models/<id>.md this palaeographer uses ("" = legacy inline)
+    server: str = ""  # declared model-server identity (see Model.server)
     # engine: ""/"llm" (default) = chat_vision via ModelClient; otherwise a
     # named local engine in model_client.PAGE_ENGINES. Local OCR/parse engines
     # (tesseract, liteparse) are NOT HTTP models — no base_url / api_key /
@@ -313,6 +322,7 @@ class Editor:
     thinking: bool = True
     api_style: str = "openai"
     model_ref: str = ""  # models/<id>.md this editor uses ("" = legacy inline)
+    server: str = ""  # declared model-server identity (see Model.server)
 
 
 @dataclass
@@ -361,6 +371,7 @@ class Encoder:
     # encoders in one collection run in page order.
     pages: str = ""
     model_ref: str = ""  # models/<id>.md this encoder uses ("" = legacy inline)
+    server: str = ""  # declared model-server identity (see Model.server)
 
     @property
     def effective_max_input_chars(self) -> int:
@@ -414,6 +425,11 @@ class Config:
     embed_base_url: str
     embed_model: str
     embed_timeout_s: int
+    # embed_server: optional `server:` identity for the embedding model. With
+    # it, an embed server shared with a vision model is ONE lock key (the clean
+    # way to say "these live on mac-studio"); without it the endpoint URL is the
+    # key. See locks.py.
+    embed_server: str
     embed_batch_size: int
     # extraction
     render_dpi: int
@@ -426,6 +442,15 @@ class Config:
     # search
     default_mode: str
     top_k: int
+    # servers: declared concurrency capacity per model-server, keyed by the
+    # `server:` identity a model file declares (see locks.py). Default 1 — one
+    # job per server, the conservative rule for a default LM Studio (its
+    # auto-evict keeps one JIT-loaded model). Raise it only for a machine that
+    # really can hold the models at once, e.g. with the models pre-loaded and
+    # `Only Keep Last JIT Loaded Model` off:
+    #   servers:
+    #     mac-studio: {slots: 2}
+    servers: dict[str, int]
     # `pha serve` — the read-only render/viewer endpoint. Kept in config so the
     # served links, `pha cite` and `pha page --json` all quote the same base URL
     # instead of each hard-coding 8765.
@@ -550,6 +575,7 @@ class Config:
             embed_base_url=str(emb.get("base_url", "http://127.0.0.1:1234/v1")),
             embed_model=str(emb.get("model", "text-embedding-nomic-embed-text-v1.5@q4_k_m")),
             embed_timeout_s=int(emb.get("timeout_s", 120)),
+            embed_server=str(emb.get("server", "")).strip(),
             embed_batch_size=int(emb.get("batch_size", 100)),
             render_dpi=int(ext.get("render_dpi", 200)),
             max_image_px=int(ext.get("max_image_px", 1800)),
@@ -560,6 +586,7 @@ class Config:
             dir_documents=bool(ext.get("dir_documents", True)),
             default_mode=str(sea.get("default_mode", "hybrid")),
             top_k=int(sea.get("top_k", 10)),
+            servers=_parse_servers(raw.get("servers")),
             serve_host=str(_env_setting("PHA_SERVE_HOST") or srv.get("host", "127.0.0.1")),
             serve_port=int(_env_setting("PHA_SERVE_PORT") or srv.get("port", 8765)),
             update_enabled=bool(upd.get("enabled", True)),
@@ -592,6 +619,14 @@ class Config:
             raise KeyError(f"unknown model {model_id!r}; configured: {sorted(self.models)}")
         return self.models[model_id]
 
+    def server_slots(self, server: str) -> int:
+        """Declared concurrent-job capacity for a model-server key (default 1).
+
+        Keyed by the same identity the lock uses: a declared `server:` name, or
+        a normalised endpoint URL for an unlabelled model. A URL key has no
+        entry and therefore gets the conservative default of one job."""
+        return max(1, int(self.servers.get(server, 1)))
+
     def with_model(self, stage, model_id: str | None):
         """Return a copy of a palaeographer/editor/encoder with its interface
         fields overridden by the given model (models/<id>.md). A falsy model_id
@@ -604,6 +639,7 @@ class Config:
         common = dict(
             base_url=m.base_url, api_key=m.api_key, model=m.model,
             api_style=m.api_style, thinking=m.thinking, model_ref=m.id,
+            server=m.server,
         )
         if isinstance(stage, Encoder):
             common["context_tokens"] = m.context_tokens
@@ -912,6 +948,7 @@ def _model_from_frontmatter(model_id: str, text: str, file: Path) -> Model | Non
         liteparse_ocr=str(fm.get("liteparse_ocr", "fresh")).strip().lower() or "fresh",
         liteparse_embedded_min_chars=int(fm.get("liteparse_embedded_min_chars", 200)),
         liteparse_embedded_min_quality=float(fm.get("liteparse_embedded_min_quality", 0.60)),
+        server=str(fm.get("server", "")).strip(),
         prompt_file=file,
     )
 
@@ -953,6 +990,7 @@ def _resolve_model(fm: dict, models: dict) -> tuple[Model, str]:
             liteparse_ocr=str(fm.get("liteparse_ocr", "fresh")).strip().lower() or "fresh",
             liteparse_embedded_min_chars=int(fm.get("liteparse_embedded_min_chars", 200)),
             liteparse_embedded_min_quality=float(fm.get("liteparse_embedded_min_quality", 0.60)),
+            server=str(fm.get("server", "")).strip(),
         )
         return m, ""
     # new rules-only file: no model here (chosen per document in pha.yaml);
@@ -967,6 +1005,7 @@ def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path, models: 
         id=pal_id,
         description=str(fm.get("description", "")),
         model_ref=model_ref,
+        server=m.server,
         base_url=m.base_url,
         api_key=m.api_key,
         model=m.model,
@@ -1006,6 +1045,7 @@ def _editor_from_frontmatter(ed_id: str, text: str, file: Path, models: dict | N
         id=ed_id,
         description=str(fm.get("description", "")),
         model_ref=model_ref,
+        server=m.server,
         base_url=m.base_url,
         api_key=m.api_key,
         model=m.model,
@@ -1032,6 +1072,7 @@ def _encoder_from_frontmatter(enc_id: str, text: str, file: Path, models: dict |
         id=enc_id,
         description=str(fm.get("description", "")),
         model_ref=model_ref,
+        server=m.server,
         base_url=m.base_url,
         api_key=m.api_key,
         model=m.model,
@@ -1051,6 +1092,36 @@ def _encoder_from_frontmatter(enc_id: str, text: str, file: Path, models: dict |
         candidate_header=str(fm.get("candidate_header", "") or "") or None,
         pages=str(fm.get("pages", "") or "").strip(),
     )
+
+
+def _parse_servers(raw: object) -> dict[str, int]:
+    """Parse the top-level `servers:` block: `{<server-id>: {slots: N}}`.
+
+    Capacity is DECLARED by the operator, never discovered: pha cannot ask the
+    server whether auto-evict is on, and the endpoint URL cannot even prove
+    which device answers. An unlisted id defaults to `slots: 1` (one job per
+    server). A malformed entry is reported and ignored rather than failing the
+    whole config load.
+    """
+    out: dict[str, int] = {}
+    if not isinstance(raw, dict):
+        return out
+    for name, spec in raw.items():
+        key = str(name).strip()
+        if not key:
+            continue
+        slots = 1
+        if isinstance(spec, dict) and spec.get("slots") is not None:
+            try:
+                slots = int(spec["slots"])
+            except (TypeError, ValueError):
+                print(f"warning: servers.{key}.slots is not an integer; using 1")
+                slots = 1
+        if slots < 1:
+            print(f"warning: servers.{key}.slots must be >= 1; using 1")
+            slots = 1
+        out[key] = slots
+    return out
 
 
 def _thinking(fm: dict) -> bool:
@@ -1294,6 +1365,11 @@ _MODEL_SAMPLE = """---
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example model — edit me
 base_url: http://127.0.0.1:1234/v1
+# server: mac-studio        # optional: which machine/instance serves this
+#                           # endpoint. Jobs sharing a server serialise (one
+#                           # model at a time); jobs on different servers may
+#                           # run concurrently. Unset = unknown, serialises
+#                           # with everything. See AGENTS.md.
 model: qwen/qwen3-vl-8b
 api_key: ""
 api_style: openai
@@ -1454,6 +1530,11 @@ _MODEL_QWEN3_LOCAL_SAMPLE = """---
 #     palaeographer/editor rules file front matter.
 description: qwen3-vl via LM Studio (local) — vision + text
 base_url: http://127.0.0.1:1234/v1
+# server: mac-studio        # optional: which machine/instance serves this
+#                           # endpoint. Jobs sharing a server serialise (one
+#                           # model at a time); jobs on different servers may
+#                           # run concurrently. Unset = unknown, serialises
+#                           # with everything. See AGENTS.md.
 model: qwen/qwen3-vl-8b
 api_key: ""
 api_style: openai
@@ -1482,6 +1563,11 @@ _MODEL_GEMMA4_LOCAL_SAMPLE = """---
 #   timeout_s is NOT a model field: set it in the stage rules file.
 description: gemma-4 via LM Studio (local) — vision + text
 base_url: http://127.0.0.1:1234/v1
+# server: mac-studio        # optional: which machine/instance serves this
+#                           # endpoint. Jobs sharing a server serialise (one
+#                           # model at a time); jobs on different servers may
+#                           # run concurrently. Unset = unknown, serialises
+#                           # with everything. See AGENTS.md.
 model: google/gemma-4-e4b
 api_key: ""
 api_style: openai

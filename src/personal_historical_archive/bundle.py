@@ -57,12 +57,10 @@ from .extract import (
     resolve_palaeographer_id,
 )
 from .ingest import (
-    _acquire_scan_lock,
     _doc_slug,
     _is_document_dir,
     _parse_library_file,
     _raw_sha,
-    _release_scan_lock,
     discover,
     index_document,
     remove_library_artifact,
@@ -75,6 +73,7 @@ from .ingest import (
 )
 from .sidecar import resolve_sidecar
 from . import bibliography
+from . import locks
 from .model_client import ModelClient
 
 BUNDLE_FORMAT = "pha-bundle"
@@ -791,9 +790,13 @@ def import_bundle(cfg, bundle_dir: Path, force: bool = False, verbose: bool = Tr
             f"supports ({BUNDLE_VERSION}); update pha first"
         )
 
-    if not _acquire_scan_lock(cfg):
-        return {"action": "skipped",
-                "reason": "another scan/edit job is running (one local model at a time)"}
+    # Importing indexes the documents it brings in, so the only model server
+    # this job touches is the embedding model's.
+    lock = locks.acquire(cfg, [locks.embed_key(cfg)], label="pha unbundle")
+    if not lock.ok:
+        reason = lock.reason()
+        print(f"  {reason}", flush=True)
+        return {"action": "skipped", "reason": reason}
     cfg.ensure_dirs()
     conn = db.connect(cfg.db_path)
     embed_client = ModelClient(cfg.embed_base_url, timeout_s=cfg.embed_timeout_s)
@@ -838,4 +841,4 @@ def import_bundle(cfg, bundle_dir: Path, force: bool = False, verbose: bool = Tr
     finally:
         embed_client.close()
         conn.close()
-        _release_scan_lock(cfg)
+        locks.release(lock)

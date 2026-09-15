@@ -654,61 +654,9 @@ def test_transcribe_page_dispatches_llm(monkeypatch):
 
 
 # --------------------------------------------------------------------------- scan lock (atomic)
-
-def test_scan_lock_acquire_release(tmp_path):
-    from personal_historical_archive import ingest as ing
-
-    cfg = SimpleNamespace(data=tmp_path)
-    assert ing._acquire_scan_lock(cfg) is True
-    lock = ing._scan_lock_path(cfg)
-    assert lock.exists()
-    assert lock.read_text().strip() == str(os.getpid())
-    # same process already owns it
-    assert ing._acquire_scan_lock(cfg) is True
-    ing._release_scan_lock(cfg)
-    assert not lock.exists()
-
-
-def test_scan_lock_refuses_when_other_alive(tmp_path, monkeypatch):
-    from personal_historical_archive import ingest as ing
-
-    cfg = SimpleNamespace(data=tmp_path)
-    lock = ing._scan_lock_path(cfg)
-    lock.write_text("999999")  # a foreign pid
-    monkeypatch.setattr(ing, "_pid_alive", lambda pid: True)
-    assert ing._acquire_scan_lock(cfg) is False
-    assert lock.read_text().strip() == "999999"  # not stolen
-
-
-def test_scan_lock_reclaims_when_other_dead(tmp_path, monkeypatch):
-    from personal_historical_archive import ingest as ing
-
-    cfg = SimpleNamespace(data=tmp_path)
-    lock = ing._scan_lock_path(cfg)
-    lock.write_text("999999")
-    monkeypatch.setattr(ing, "_pid_alive", lambda pid: False)
-    assert ing._acquire_scan_lock(cfg) is True
-    assert lock.read_text().strip() == str(os.getpid())
-
-
-def test_scan_lock_pidless_fresh_is_held_but_old_is_stale(tmp_path):
-    """A pid-less lock is a scan that is still starting (never steal it fresh);
-    after the age threshold it is stale and reclaimable."""
-    import time as _t
-
-    from personal_historical_archive import ingest as ing
-
-    cfg = SimpleNamespace(data=tmp_path)
-    lock = ing._scan_lock_path(cfg)
-    lock.write_text("")  # created, pid not written yet
-    # fresh -> treated as held by an unknown process
-    assert ing._scan_lock_held_by_other(cfg) is True
-    assert ing._acquire_scan_lock(cfg) is False
-    # make it very old -> stale -> reclaimed
-    old = _t.time() - 7 * 3600
-    os.utime(lock, (old, old))
-    assert ing._acquire_scan_lock(cfg) is True
-    assert lock.read_text().strip() == str(os.getpid())
+# The lock itself now lives in locks.py (one model per model-server); its tests
+# are in tests/test_locks.py. What matters here is that a job takes it: the
+# reindex refusal case is covered below.
 
 
 def test_edit_needed_model_file_staleness(tmp_path):
@@ -1011,9 +959,9 @@ def test_reindex_all_reports_failed_documents_and_keeps_them(tmp_path):
 
 
 def test_reindex_all_holds_the_single_model_lock(tmp_path, monkeypatch):
-    """`pha reindex` embeds through the local model, so it must take the same
-    lock as scan/edit — running it concurrently is what caused the embed
-    timeouts (and the vector loss) in the first place."""
+    """`pha reindex` embeds through the model server, so it must take that
+    server's lock (see locks.py) — running it concurrently is what caused the
+    embed timeouts (and the vector loss) in the first place."""
     import time as _t
     from personal_historical_archive.config import Config
     from personal_historical_archive import db as _db
@@ -1042,19 +990,23 @@ def test_reindex_all_holds_the_single_model_lock(tmp_path, monkeypatch):
         def embed(self, model, texts, batch_size):
             return [[2.0] * 4 for _ in texts]
 
-    # a foreign job owns the lock: the test runner's parent is a live pid
-    # owned by this user (pid 1 is not signalable, so it would read as stale)
-    lock = ingest._scan_lock_path(cfg)
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    lock.write_text(str(os.getppid()), encoding="utf-8")
+    # a foreign job holds the embedding model's server: the reindex must refuse,
+    # name that server, and leave the other job's lock alone
+    from personal_historical_archive import locks
+    monkeypatch.setattr(locks, "_pid_alive", lambda pid: True)
+    key = locks.embed_key(cfg)
+    lock_path = locks._slot_path(key, 1)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text("999999 pha scan", encoding="utf-8")
     try:
         res = reindex_all(cfg, Embed(), verbose=False)
         assert res["reindexed"] == 0
-        assert "one local model at a time" in res["reason"]
+        assert key in res["reason"]
+        assert "busy" in res["reason"]
         # and it released nothing it did not own
-        assert lock.exists()
+        assert lock_path.exists()
     finally:
-        lock.unlink(missing_ok=True)
+        lock_path.unlink(missing_ok=True)
 
 
 def test_reindex_all_path_selects_only_docs_under(monkeypatch, tmp_path):
@@ -1196,3 +1148,196 @@ def test_library_page_path_resolves_raw_and_edited(tmp_path):
     (old / "transcription-default" / "page-001.md").write_text("x")
     doc2 = dict(doc, created_at=1_700_000_000)  # slug doc_2023-11-14 -> not on disk
     assert library_page_path(cfg, doc2, 1) == old / "transcription-default" / "page-001.md"
+
+
+# --------------------------------------------------------------------------- discover: a single-file --path
+
+def test_discover_single_file_root_is_that_document(tmp_path):
+    """`pha scan --path <a single .pdf>` must find that one document. It used
+    to walk `root.rglob(...)`, which yields nothing for a file root, so the
+    command silently scanned zero files while AGENTS.md documents it."""
+    drop = tmp_path / "dropbox"
+    col = drop / "collections" / "COLX"
+    col.mkdir(parents=True)
+    doc = col / "a.pdf"
+    doc.write_bytes(b"%PDF-1.4 a")
+    (col / "b.pdf").write_bytes(b"%PDF-1.4 b")
+    assert discover(drop, True, root=doc) == [doc]
+    # a file outside any document-dir, and a non-document file
+    (drop / "notes.txt").write_bytes(b"x")
+    assert discover(drop, True, root=drop / "notes.txt") == []
+    # excluded (e.g. the inbox) still wins
+    assert discover(drop, True, root=doc, exclude=[col]) == []
+
+
+# --------------------------------------------------------------------------- `done` is written last
+
+def _tiny_ingest_cfg(tmp_path):
+    from personal_historical_archive.config import Config
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        "paths:\n  dropbox: dropbox\n  library: library\n  renders: renders\n"
+        "  palaeographers: palaeographers\n  editors: editors\n  encoders: encoders\n"
+        "  models: models\n  prompts: prompts\n  db: archive.db\n"
+    )
+    cfg = Config.load(root)
+    cfg.ensure_dirs()
+    return cfg
+
+
+def _stub_ingest(monkeypatch, ingest_mod, index_impl):
+    """Stub rendering/transcription/editing and the indexer for ingest_file."""
+    from personal_historical_archive.config import Palaeographer
+
+    monkeypatch.setattr(ingest_mod, "page_count", lambda path: 1)
+
+    def fake_render(path, out_dir, dpi, max_px, q, prefix=None, pages=None):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        f = out_dir / "p001.jpg"
+        f.write_bytes(b"jpeg")
+        return [f]
+
+    monkeypatch.setattr(ingest_mod, "render_document", fake_render)
+    monkeypatch.setattr(ingest_mod, "transcribe_page", lambda *a, **k: "TEXT")
+    monkeypatch.setattr(ingest_mod, "edit_document", lambda *a, **k: None)
+    monkeypatch.setattr(ingest_mod, "index_document", index_impl)
+    return Palaeographer(id="default", description="", base_url="", api_key="", model="",
+                         temperature=0.1, max_tokens=16, timeout_s=10, prompt_text="Transcribe.")
+
+
+def test_ingest_sets_done_only_after_indexing(tmp_path, monkeypatch):
+    """`done` is written AFTER the editor and indexer: while index_document
+    runs, the document is still 'processing', and only then becomes 'done'.
+    This is what made doc 57's done-but-0-chunks state impossible to spot."""
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+
+    cfg = _tiny_ingest_cfg(tmp_path)
+    src = cfg.dropbox / "documents" / "doc.pdf"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    seen: dict = {}
+
+    def index_impl(cfg_, conn_, doc_id, **k):
+        seen["status_while_indexing"] = _db.get_document(conn_, doc_id)["status"]
+        return 3
+
+    pal = _stub_ingest(monkeypatch, ingest, index_impl)
+    res = ingest.ingest_file(cfg, conn, object(), src, pal, verbose=False)
+    assert res["action"] == "ingested"
+    assert seen["status_while_indexing"] == "processing"
+    assert _db.get_document_by_path(conn, str(src))["status"] == "done"
+    conn.close()
+
+
+def test_ingest_leaves_processing_when_indexing_crashes(tmp_path, monkeypatch):
+    """A crash while indexing must not leave a healthy-looking `done` row: the
+    document stays 'processing' so the next scan resumes it (the 2026-09-15
+    incident reported such a row as complete for hours)."""
+    import pytest
+
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+    from personal_historical_archive.model_client import ModelError
+
+    cfg = _tiny_ingest_cfg(tmp_path)
+    src = cfg.dropbox / "documents" / "doc.pdf"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+
+    def boom(*a, **k):
+        raise ModelError("embeddings unavailable")
+
+    pal = _stub_ingest(monkeypatch, ingest, boom)
+    with pytest.raises(ModelError):
+        ingest.ingest_file(cfg, conn, object(), src, pal, verbose=False)
+    doc = _db.get_document_by_path(conn, str(src))
+    assert doc["status"] == "processing"      # resumable, not a false 'done'
+    assert doc["status"] != "done"
+    conn.close()
+
+
+# --------------------------------------------------------------------------- `pha edit` indexes what it touched
+
+def test_index_after_edit_decides_by_data(tmp_path, monkeypatch):
+    """`_index_after_edit` indexes when pages were re-edited OR when the
+    document has no chunks at all (the missing-index repair), and never
+    touches a document that is edited-and-indexed already."""
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+    from personal_historical_archive.model_client import ModelError
+
+    cfg = _tiny_ingest_cfg(tmp_path)
+    col = cfg.dropbox / "collections" / "COLX"
+    col.mkdir(parents=True)
+    src = col / "d.pdf"
+    src.write_bytes(b"%PDF-1.4 d")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="d.pdf", path=str(src), sha256="a",
+                              size_bytes=1, mtime=1, kind="pdf",
+                              dir_path="collections/COLX", now="2026-01-01")
+    _db.set_document_status(conn, doc_id, "done")
+    page = _db.add_page(conn, doc_id, 1)
+    _db.add_chunk(conn, doc_id, page, 0, "text", None, "raw")
+    conn.commit()
+
+    calls: list[int] = []
+    monkeypatch.setattr(ingest, "index_document",
+                        lambda cfg_, conn_, doc_id_, **k: calls.append(doc_id_) or 5)
+
+    # edited nothing, index present -> no work, no embed call
+    assert ingest._index_after_edit(cfg, conn, doc_id, 0, verbose=False) == {"indexed": False}
+    assert calls == []
+    # edited pages -> index
+    assert ingest._index_after_edit(cfg, conn, doc_id, 2, verbose=False)["indexed"] is True
+    assert calls == [doc_id]
+    # nothing edited but the index is gone -> repair it
+    _db.clear_chunks(conn, doc_id)
+    conn.commit()
+    assert ingest._index_after_edit(cfg, conn, doc_id, 0, verbose=False)["indexed"] is True
+    assert calls == [doc_id, doc_id]
+
+    # a failing embed is reported, not raised
+    def boom(*a, **k):
+        raise ModelError("embed down")
+    monkeypatch.setattr(ingest, "index_document", boom)
+    res = ingest._index_after_edit(cfg, conn, doc_id, 2, verbose=False)
+    assert res["indexed"] is False and "embed down" in res["index_error"]
+    conn.close()
+
+
+def test_edit_all_indexes_edited_documents(tmp_path, monkeypatch):
+    """`pha edit` re-indexes the documents it re-edited, so search covers the
+    new edited text without a separate archive-wide `pha reindex`."""
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+
+    cfg = _tiny_ingest_cfg(tmp_path)
+    col = cfg.dropbox / "collections" / "COLX"
+    col.mkdir(parents=True)
+    src = col / "d.pdf"
+    src.write_bytes(b"%PDF-1.4 d")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="d.pdf", path=str(src), sha256="a",
+                              size_bytes=1, mtime=1, kind="pdf",
+                              dir_path="collections/COLX", now="2026-01-01")
+    _db.set_document_status(conn, doc_id, "done")
+    conn.commit()
+    conn.close()
+
+    calls: list[int] = []
+    monkeypatch.setattr(ingest, "edit_document",
+                        lambda cfg_, conn_, doc_id_, **k: {"action": "edited", "filename": "d.pdf",
+                                                           "editor": "null", "pages": 4})
+    monkeypatch.setattr(ingest, "index_document",
+                        lambda cfg_, conn_, doc_id_, **k: calls.append(doc_id_) or 9)
+
+    res = ingest.edit_all(cfg, verbose=False)
+    assert calls == [doc_id]
+    assert res["indexed"] == 1
+    assert res["index_failed"] == []
+

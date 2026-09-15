@@ -17,6 +17,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from . import db
+from . import locks
 from .config import Config, Editor, Encoder, Palaeographer
 from .embed import pack, prefixed
 from .extract import (
@@ -199,122 +200,56 @@ def _build_entry_spans(texts: list, starts: list[int],
     return calls
 
 
-# --------------------------------------------------------------------------- scan lock
+# ----------------------------------------------------------------- model-server jobs
 
-def _pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        # os.kill(pid, 0) would TERMINATE the process on Windows; probe
-        # existence instead (OpenProcess with query access, stdlib only).
-        import ctypes
+def _servers_for_document(cfg: Config, path: Path) -> set[str]:
+    """The model-server keys a scan/edit of `path` may talk to.
 
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION, False, pid
-        )
-        if not handle:
-            return False
-        ctypes.windll.kernel32.CloseHandle(handle)
-        return True
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # exists but owned by another user
-    except OSError:
-        return False
-
-
-def _scan_lock_path(cfg: Config) -> Path:
-    return cfg.data / "scan.lock"
-
-
-def _lock_owner_pid(lock: Path) -> int:
-    """Read the pid recorded in a lock file (0 = none/unknown)."""
-    try:
-        return int(lock.read_text(encoding="utf-8").strip() or "0")
-    except (ValueError, OSError):
-        return 0
-
-
-def _lock_stale(lock: Path, pid: int) -> bool:
-    """Is this lock file reclaimable?
-
-    - A recorded pid that is no longer alive -> stale (its holder died).
-    - A pid-less file (created but not yet written) -> stale only after the
-      6 h age threshold: it may belong to a scan that is still starting, and
-      stealing it would let two scans run together.
-    - A lock OLDER than 6 h is always stale even when its pid looks alive
-      (pids get reused; a stale lock must never wedge every future scan).
+    Resolved BEFORE a lock is taken, because the lock must cover every server
+    the job may touch. This mirrors the palaeographer/editor resolution that
+    `ingest_file` performs later; encoders are not part of scan/edit.
     """
-    try:
-        age = time.time() - lock.stat().st_mtime
-    except OSError:
-        age = 0.0
-    if pid > 0:
-        return pid != os.getpid() and not _pid_alive(pid)
-    return age > 6 * 3600
-
-
-def _scan_lock_held_by_other(cfg: Config) -> bool:
-    """True if a DIFFERENT, still-running process holds the scan lock."""
-    lock = _scan_lock_path(cfg)
-    if not lock.exists():
-        return False
-    pid = _lock_owner_pid(lock)
-    if pid == os.getpid():
-        return False
-    return not _lock_stale(lock, pid)
-
-
-def _acquire_scan_lock(cfg: Config) -> bool:
-    """Take the scan lock ATOMICALLY (O_CREAT|O_EXCL).
-
-    When two scans start at the same instant, exactly ONE creates the lock
-    file and the other refuses — no window in which both think they hold it
-    (unlike check-then-write on a plain file). A lock whose holder is dead is
-    reclaimed; a 6 h old lock is stale even if its pid looks alive.
-
-    Returns False if a live scan owns the lock, True once this process owns it
-    (or when locking is impossible and pha proceeds best-effort)."""
-    lock = _scan_lock_path(cfg)
-    for _attempt in range(20):
+    keys: set[str] = set()
+    sidecar = _doc_sidecar(cfg, path)
+    pal_id, _src = resolve_palaeographer_id(
+        path.stem, path if path.is_dir() else path.parent, cfg.dropbox
+    )
+    if sidecar.palaeographer:
+        pal_id = sidecar.palaeographer.rules
+    if pal_id:
         try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            pid = _lock_owner_pid(lock)
-            if pid == os.getpid():
-                return True  # this process already owns it
-            if _lock_stale(lock, pid):
-                # Reclaim. A racer may replace the file between our staleness
-                # check and the unlink, so loop back to the atomic create.
-                try:
-                    lock.unlink()
-                except OSError:
-                    pass
-                continue
-            return False  # a live scan owns the lock
-        except OSError:
-            return True  # cannot lock; proceed (best effort, as before)
-        else:
-            try:
-                os.write(fd, str(os.getpid()).encode("utf-8"))
-            finally:
-                os.close(fd)
-            return True
-    return False  # repeated stale-reclaim races: refuse rather than collide
+            keys.add(locks.stage_key(cfg.resolve_model(cfg.get_palaeographer(pal_id))))
+        except KeyError:
+            pass
+    ed_id: str | None = None
+    if sidecar.editor_set:
+        ed_id = sidecar.editor.rules if sidecar.editor else None
+    else:
+        ed_id, _esrc = resolve_editor_id(
+            path.stem, path if path.is_dir() else path.parent, cfg.dropbox
+        )
+    if ed_id and ed_id not in ("null", "passthrough"):
+        try:
+            keys.add(locks.stage_key(cfg.resolve_model(cfg.get_editor(ed_id))))
+        except KeyError:
+            pass
+    keys.discard("")
+    return keys
 
 
-def _release_scan_lock(cfg: Config) -> None:
-    lock = _scan_lock_path(cfg)
-    try:
-        if lock.exists() and lock.read_text(encoding="utf-8").strip() == str(os.getpid()):
-            lock.unlink()
-    except OSError:
-        pass
+def _job_keys(cfg: Config, paths, embed: bool = True) -> list[str]:
+    """Union of the server keys of a job covering `paths`, plus the embed model.
+
+    An empty key set means the job touches no model server (e.g. an OCR-only
+    preview) and needs no lock at all.
+    """
+    keys: set[str] = set()
+    for p in paths:
+        keys |= _servers_for_document(cfg, p)
+    if embed:
+        keys.add(locks.embed_key(cfg))
+    keys.discard("")
+    return sorted(keys)
 
 
 def sha256_of(path: Path) -> str:
@@ -360,14 +295,17 @@ def discover(
 
     By default walks the whole `dropbox` tree. Pass `root` to restrict
     discovery to a single subpath (a collection, e.g. the directory of
-    dropbox/collections/pfister-notices) so a scan can target one collection
-    instead of the whole dropbox. `root` must be inside `dropbox`.
+    dropbox/collections/pfister-notices, or ONE document file such as
+    documents/myfile.pdf) so a scan can target that unit instead of the whole
+    dropbox. `root` must be inside `dropbox`.
 
     If `root` itself is a directory-of-images, it is treated as ONE document
     (the folder is the document, its images are pages) — the same rule that
     applies to image-directories below a collection root. This makes
     `--path` to a leaf image-folder behave consistently with `--path` to the
-    collection root.
+    collection root. A `root` that is a FILE is that file (previously it fell
+    through `rglob` and discovered nothing, so `pha scan --path <doc.pdf>`
+    silently scanned zero files).
 
     `exclude` skips any unit at or under one of the given paths (e.g. the
     archive's `inbox` when it is nested inside the dropbox) so parked/on-hold
@@ -381,6 +319,12 @@ def discover(
     base = dropbox if root is None else root
     if not base.exists():
         return []
+    if base.is_file():
+        # A single document named directly: it is the unit (mirrors
+        # `_documents_under`, which the `pha edit --path` route already uses).
+        if not is_supported(base.name) or base.name.startswith("."):
+            return []
+        return [] if _excluded(base) else [base]
     units: list[Path] = []
     # When scanning a specific root that is itself a document-directory, the
     # whole folder is the document — do not enumerate its images separately.
@@ -658,7 +602,7 @@ def ingest_file(
             if existing["status"] == "processing":
                 # Only skip if ANOTHER live scan owns this document right now;
                 # a stale 'processing' (killed by sleep/crash/reboot) is resumed.
-                if _scan_lock_held_by_other(cfg) and time.time() - existing["updated_at"] < 600:
+                if locks.job_running(cfg, locks.embed_key(cfg)) and time.time() - existing["updated_at"] < 600:
                     return {"action": "skipped", "filename": path.name, "reason": "already processing"}
                 reuse = True  # resume (keep done pages)
                 prompt_changed = changed  # prompt/palaeographer edited mid-run
@@ -806,11 +750,16 @@ def ingest_file(
         conn.commit()
         return {"action": "error", "filename": path.name, "error": page_errors[0][1]}
 
-    db.set_document_status(conn, doc_id, "done", prompt_source=prompt_source)
-    conn.commit()
     edit_document(cfg, conn, doc_id, verbose=verbose)  # editor pass (skips if none configured)
     index_document(cfg, conn, doc_id, verbose=verbose)  # indexes raw + edited variants
     write_document_pages(cfg, conn, doc_id)
+    # `done` is written LAST, after the editor and the indexer have run. A crash
+    # in either used to leave a healthy-looking row -- `done`, no edited variant,
+    # 0 chunks (doc 57, documenta-indica, 2026-09-15) -- which every status-only
+    # check reported as success. Now such a document stays 'processing' and the
+    # next scan resumes it.
+    db.set_document_status(conn, doc_id, "done", prompt_source=prompt_source)
+    conn.commit()
     return {"action": "ingested", "filename": path.name, "pages": total, "prompt": prompt_source}
 
 
@@ -1794,28 +1743,68 @@ def edit_document(
     return {"action": "edited", "filename": doc["filename"], "editor": resolved, "pages": edited}
 
 
+def _index_after_edit(cfg: Config, conn, doc_id: int, edited_pages: int,
+                      verbose: bool = True) -> dict:
+    """Re-index a document the editor pass just finished.
+
+    Indexing runs when the editor changed pages (their edited variant is new)
+    **or** when the document has no chunks at all — the repair case from the
+    2026-09-15 incident: `pha edit` re-edited pages of a document whose index
+    had never been written, and left it that way. A failed embed is reported
+    and the pass continues; it is not fatal to the other documents.
+    """
+    stats = db.chunk_stats(conn, doc_id) or {}
+    has_chunks = stats.get(doc_id, {}).get("chunks", 0) > 0
+    if edited_pages <= 0 and has_chunks:
+        return {"indexed": False}
+    try:
+        chunks = index_document(cfg, conn, doc_id, verbose=verbose)
+    except ModelError as e:
+        if verbose:
+            print(f"  ! not re-indexed: {e}", flush=True)
+        return {"indexed": False, "index_error": str(e)}
+    if verbose and edited_pages <= 0:
+        print(f"  index repaired: {chunks} chunk(s) (the document had none)", flush=True)
+    return {"indexed": True, "chunks": chunks}
+
+
 def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True,
              page_no: int | None = None) -> dict:
     """Run the editor pass for every document that has an editor configured.
 
-    Uses the SAME lock as scan_once: a scan and an edit must not run
-    concurrently, because they both load a local model and LM Studio only
-    holds ONE model in memory at a time (two local jobs -> swap -> disk fill).
-    If another job holds the lock, this pass reports it and exits."""
-    if not _acquire_scan_lock(cfg):
-        return {"results": [{"action": "skipped", "filename": "(edit)",
-                             "reason": "another scan/edit job is running (one local model at a time)"}]}
+    Takes a lock on every model-server the matched documents may talk to (plus
+    the embedding model), so an edit and a scan cannot evict each other's models
+    — and two jobs on *different* servers still run concurrently (see locks.py).
+    If another job holds a needed server, this pass reports which one and exits."""
     cfg.ensure_dirs()
     conn = db.connect(cfg.db_path)
+    lock = None
     try:
+        docs = db.list_documents(conn, limit=10000)
+        keys = _job_keys(cfg, [Path(d["path"]) for d in docs if d["path"]])
+        lock = locks.acquire(cfg, keys, label="pha edit")
+        if not lock.ok:
+            reason = lock.reason()
+            print(f"  {reason}", flush=True)
+            return {"results": [{"action": "skipped", "filename": "(edit)",
+                                 "reason": reason}]}
         results = []
-        for d in db.list_documents(conn, limit=10000):
-            results.append(edit_document(cfg, conn, d["id"], reprocess=reprocess,
-                                         verbose=verbose, page_no=page_no))
-        return {"results": results}
+        indexed = 0
+        index_failed: list[str] = []
+        for d in docs:
+            res = edit_document(cfg, conn, d["id"], reprocess=reprocess,
+                                verbose=verbose, page_no=page_no)
+            if res.get("action") == "edited":
+                idx = _index_after_edit(cfg, conn, d["id"], res.get("pages", 0),
+                                        verbose=verbose)
+                indexed += 1 if idx.get("indexed") else 0
+                if idx.get("index_error"):
+                    index_failed.append(f"{d['filename']}: {idx['index_error']}")
+            results.append(res)
+        return {"results": results, "indexed": indexed, "index_failed": index_failed}
     finally:
         conn.close()
-        _release_scan_lock(cfg)
+        locks.release(lock)
 
 
 def edit_documents_under(
@@ -1825,9 +1814,10 @@ def edit_documents_under(
     """Run the editor pass for JUST the documents under a dropbox subpath
     (`pha edit --path collections/COLX`, a document folder, ...).
 
-    Shares the scan lock with scan_once/edit_all (one job at a time). Only
-    ALREADY-INGESTED documents are edited; a document whose transcription is
-    missing is skipped (run `pha scan --path` for it first)."""
+    Shares the model-server locks with scan_once/edit_all (one model per server)
+    and indexes what it re-edited. Only ALREADY-INGESTED documents are edited; a
+    document whose transcription is missing is skipped (run `pha scan --path`
+    for it first)."""
     root = Path(path)
     if not root.is_absolute():
         root = cfg.dropbox / root
@@ -1836,13 +1826,11 @@ def edit_documents_under(
         if not root.exists():
             print(f"  target path does not exist: {path}", flush=True)
             return {"results": []}
-    if not _acquire_scan_lock(cfg):
-        return {"results": [{"action": "skipped", "filename": "(edit)",
-                             "reason": "another scan/edit job is running (one local model at a time)"}]}
     cfg.ensure_dirs()
     conn = db.connect(cfg.db_path)
+    lock = None
     try:
-        results = []
+        matched: list[tuple] = []
         seen: set[int] = set()
         for f in discover(cfg.dropbox, cfg.dir_documents, root=root, exclude=[cfg.inbox]):
             doc = db.get_document_by_path(conn, str(f))
@@ -1854,12 +1842,31 @@ def edit_documents_under(
                           f"(status={doc['status']})", flush=True)
                 continue
             seen.add(doc["id"])
-            results.append(edit_document(cfg, conn, doc["id"], reprocess=reprocess,
-                                         verbose=verbose, page_no=page_no))
-        return {"results": results}
+            matched.append((doc, f))
+        lock = locks.acquire(cfg, _job_keys(cfg, [f for _d, f in matched]),
+                             label="pha edit")
+        if not lock.ok:
+            reason = lock.reason()
+            print(f"  {reason}", flush=True)
+            return {"results": [{"action": "skipped", "filename": "(edit)",
+                                 "reason": reason}]}
+        results = []
+        indexed = 0
+        index_failed: list[str] = []
+        for doc, _f in matched:
+            res = edit_document(cfg, conn, doc["id"], reprocess=reprocess,
+                                verbose=verbose, page_no=page_no)
+            if res.get("action") == "edited":
+                idx = _index_after_edit(cfg, conn, doc["id"], res.get("pages", 0),
+                                        verbose=verbose)
+                indexed += 1 if idx.get("indexed") else 0
+                if idx.get("index_error"):
+                    index_failed.append(f"{doc['filename']}: {idx['index_error']}")
+            results.append(res)
+        return {"results": results, "indexed": indexed, "index_failed": index_failed}
     finally:
         conn.close()
-        _release_scan_lock(cfg)
+        locks.release(lock)
 
 
 # --------------------------------------------------------------------------- encoders (structured records)
@@ -2456,11 +2463,7 @@ def scan_once(
     verbose: bool = True,
     path: str | None = None,
 ) -> dict:
-    if not _acquire_scan_lock(cfg):
-        return {"scanned": 0, "results": [{"action": "skipped", "filename": "(scan)",
-                                           "reason": "another scan is running"}]}
     cfg.ensure_dirs()
-    conn = db.connect(cfg.db_path)
     # resolve the --path/--collection target to a discovery root under dropbox
     scan_root = cfg.dropbox
     if path:
@@ -2477,6 +2480,16 @@ def scan_once(
             else:
                 print(f"  target path does not exist: {path}", flush=True)
                 scan_root = root  # discover() returns [] if missing
+    # Discover BEFORE locking: the lock must cover every model-server the job
+    # may touch, and that is known only from the matched documents' config.
+    files = discover(cfg.dropbox, cfg.dir_documents, root=scan_root, exclude=[cfg.inbox])
+    lock = locks.acquire(cfg, _job_keys(cfg, files), label="pha scan")
+    if not lock.ok:
+        reason = lock.reason()
+        print(f"  {reason}", flush=True)
+        return {"scanned": 0, "results": [{"action": "skipped", "filename": "(scan)",
+                                           "reason": reason}]}
+    conn = db.connect(cfg.db_path)
     # vision clients per effective palaeographer (rules + model override): the
     # default is the passed client; other palaeographers get their own.
     clients: dict[tuple, tuple[ModelClient, Palaeographer]] = {
@@ -2484,7 +2497,6 @@ def scan_once(
     }
     try:
         db.backfill_dir_path(conn, cfg.dropbox)
-        files = discover(cfg.dropbox, cfg.dir_documents, root=scan_root, exclude=[cfg.inbox])
         results = []
         for i, f in enumerate(files, 1):
             if verbose:
@@ -2531,7 +2543,7 @@ def scan_once(
         return {"scanned": len(files), "results": results}
     finally:
         conn.close()
-        _release_scan_lock(cfg)
+        locks.release(lock)
         for pid, (c, _p) in clients.items():
             if pid != palaeographer.id:
                 c.close()
@@ -2552,11 +2564,18 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
     Takes the SAME lock as `scan_once`/`edit_all`: reindexing embeds through
     the local embed model, so running it alongside a scan or edit is the
     "two local models at once" swap that this lock exists to prevent — and
-    embed-endpoint contention is exactly what makes `embed()` time out."""
-    if not _acquire_scan_lock(cfg):
-        return {"reindexed": 0, "chunks": {}, "failed": [],
-                "reason": "another scan/edit/reindex job is running (one local model at a time)"}
+    Takes a lock on the embedding model's server (see locks.py): reindexing
+    embeds through the embed model, so running it alongside a scan or edit that
+    uses the same server is the "two local models at once" swap this lock
+    exists to prevent — and embed-endpoint contention is exactly what makes
+    `embed()` time out. A scan using a *different* server can run alongside."""
     cfg.ensure_dirs()
+    keys = _job_keys(cfg, [], embed=True)
+    lock = locks.acquire(cfg, keys, label="pha reindex")
+    if not lock.ok:
+        # cmd_reindex reports the reason (and exits 2); keep the message in the
+        # return value rather than printing it twice.
+        return {"reindexed": 0, "chunks": {}, "failed": [], "reason": lock.reason()}
     conn = db.connect(cfg.db_path)
     try:
         db.backfill_dir_path(conn, cfg.dropbox)
@@ -2581,7 +2600,7 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
         return {"reindexed": len(counts), "chunks": counts, "failed": failed}
     finally:
         conn.close()
-        _release_scan_lock(cfg)
+        locks.release(lock)
 
 
 def _bibliography_front_matter(doc) -> dict:

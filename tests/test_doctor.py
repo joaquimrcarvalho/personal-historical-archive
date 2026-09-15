@@ -151,3 +151,29 @@ def test_found_via_fallback_not_on_path(monkeypatch):
     assert by["liteparse"]["on_path"] is False
     assert by["liteparse"]["path"] == resolved
     assert "not on pha's PATH" in doctor.render(rep)
+
+
+def test_doctor_reports_model_servers(monkeypatch):
+    """`pha doctor` shows the model-server keys jobs serialise on, their declared
+    capacity, the unlabelled wildcard, and the lock directory."""
+    _patch(monkeypatch, paths={})
+    rep = doctor.diagnose(servers=[
+        {"key": "*", "slots": 1, "models": ["default", "liteparse"]},
+        {"key": "mac-studio", "slots": 2, "models": ["qwen3-vision-local"]},
+    ], lock_dir="/tmp/pha-locks")
+    out = doctor.render(rep)
+    assert "model servers" in out
+    assert "mac-studio" in out and "2 jobs" in out
+    assert "unlabelled" in out
+    assert "/tmp/pha-locks" in out
+    assert "capacity > 1 is only safe" in out
+    assert rep["servers"][1]["key"] == "mac-studio"
+    assert rep["lock_dir"] == "/tmp/pha-locks"
+
+
+def test_doctor_renders_without_a_config(monkeypatch):
+    """No archive configured (no servers, no lock dir): still renders."""
+    _patch(monkeypatch, paths={})
+    out = doctor.render(doctor.diagnose())
+    assert "model servers" in out
+    assert "no model files loaded" in out

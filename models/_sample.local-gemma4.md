@@ -13,6 +13,11 @@
 #   timeout_s is NOT a model field: set it in the stage rules file.
 description: gemma-4 via LM Studio (local) — vision + text
 base_url: http://127.0.0.1:1234/v1
+# server: mac-studio        # optional: which machine/instance serves this
+#                           # endpoint. Jobs sharing a server serialise (one
+#                           # model at a time); jobs on different servers may
+#                           # run concurrently. Unset = unknown, serialises
+#                           # with everything. See AGENTS.md.
 model: google/gemma-4-e4b
 api_key: ""
 api_style: openai

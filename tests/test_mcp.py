@@ -60,6 +60,31 @@ def _seed(cfg: Config) -> dict:
     return {"doc1": doc1, "doc2": doc2}
 
 
+def test_pha_search_returns_the_full_result_dict(tmp_path):
+    """`pha_search` returns {mode, query, results, note} — matching
+    `pha search --json` — so an MCP agent can tell hybrid results from a
+    keyword-only degrade. It used to return a bare list and threw the note away
+    (which already lost the pre-existing 'embedding model unreachable' note)."""
+    cfg = _make_config(tmp_path)
+    _seed(cfg)
+    mcp = mcp_server.make_server(cfg)
+    search_fn = None
+    import asyncio
+    for t in asyncio.run(mcp.list_tools()):
+        if t.name == "pha_search":
+            search_fn = t.fn
+    assert search_fn is not None, "pha_search tool not registered"
+
+    # keyword mode: no embed model is touched, so no network is involved
+    res = search_fn(query="text", mode="keyword")
+    assert isinstance(res, dict)
+    assert set(res) == {"mode", "query", "results", "note"}
+    assert res["mode"] == "keyword"
+    assert res["query"] == "text"
+    assert res["note"] is None
+    assert res["results"], "the seeded chunk is a keyword hit"
+
+
 def test_collection_status_shape(tmp_path):
     cfg = _make_config(tmp_path)
     _seed(cfg)
