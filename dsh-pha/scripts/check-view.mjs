@@ -8,6 +8,7 @@
 // the rules; scripts/build-client.mjs inlines them into the served bundle). These checks
 // pin the round trip: what is remembered, what is seeded back synchronously, and what
 // still has to be loaded.
+import { askContext, mergeDraft } from '../src/client/askcontext.js'
 import { restorePlan, seedState, seedUi, snapshotView } from '../src/client/viewmemory.js'
 
 let failures = 0
@@ -67,6 +68,27 @@ eq(restorePlan(null), null, 'no memory -> nothing to load')
 const both = Object.assign({}, searchState, { selectedId: 7, pageReq: { doc: 7, page: 2, edited: false } })
 eq(restorePlan(snapshotView(both, {})), { kind: 'document', id: 7, page: 2, edited: false },
   'a document opened from search results is the reading position')
+
+console.log('askContext — what a question from the reading pane carries')
+const ctx = askContext({ docId: 19, filename: 'DOCUMENTA-INDICA-1550-1553.pdf', page: 496, variant: 'edited', editor: 'latin-to-english@x' })
+eq(ctx.split('\n')[0], 'Context: DOCUMENTA-INDICA-1550-1553.pdf (doc 19), page 496 — edited (latin-to-english@x) variant',
+  'names the document, page and the exact variant being read')
+eq(ctx.includes('`pha page 19 496 --edited`'), true, 'tells the agent how to recover the full page (edited)')
+eq(askContext({ docId: 19, filename: 'x.pdf', page: 3, variant: 'raw' }).includes('`pha page 19 3`'), true,
+  'the raw variant cites the plain page command')
+eq(askContext({ docId: 22, filename: 'v.pdf', page: 437, variant: 'edited', reference: 'Rego, *Documentação* (1947)' }).split('\n')[1],
+  'Reference: Rego, *Documentação* (1947)', 'carries the document reference when it has one')
+eq(askContext({ docId: 22, filename: 'v.pdf', reference: 'x', unverified: true }).includes('[unverified reference'),
+  true, 'an unverified record is flagged in the context (never stated as fact)')
+eq(askContext({ docId: 7, filename: 'd.pdf' }).includes('`pha document 7`'), true,
+  'with no page on screen, the document is the context')
+eq(askContext({ docId: 7, filename: 'd.pdf' }).includes('page'), false, 'no page mentioned when none is selected')
+
+console.log('mergeDraft — never clobber what the reader already typed')
+eq(mergeDraft('', 'CTX'), 'CTX\n\n', 'empty draft: context first, room to type')
+eq(mergeDraft('  \n', 'CTX'), 'CTX\n\n', 'whitespace-only draft counts as empty')
+eq(mergeDraft('What does this say?', 'CTX'), 'What does this say?\n\nCTX\n\n', 'their question stays, context follows')
+eq(mergeDraft(null, 'CTX'), 'CTX\n\n', 'no draft at all')
 
 console.log('')
 if (failures > 0) {

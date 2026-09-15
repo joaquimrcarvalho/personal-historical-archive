@@ -172,6 +172,27 @@ nothing else. The CLI re-validates the path, so it can never reach outside `inbo
 `../` path, an absolute path or a dot-path is refused before anything moves, and a bare GET
 is rejected without an explicit confirmation.
 
+### Ask about what you are reading
+
+The harness's **composer belongs to the session shell**, so the message box is already there
+while the PHA view is active — you can ask a question without leaving the reading pane. What
+was missing was the context, which the view now supplies itself: a conversation target
+receives the input shell's `inputActions` and `useInput` as standard props, and
+`inputActions.setDraft(...)` is the same call the shell uses to restore a stored draft.
+
+**Ask in Chat** drafts a citation-accurate header for what is on screen —
+`Context: DOCUMENTA-INDICA-1550-1553.pdf (doc 19), page 496 — edited (latin-to-english@…) variant`,
+plus the document's reference (marked `[unverified reference…]` when the sidecar says so) and
+the `pha page`/`pha document` command to recover the full text. It **drafts rather than
+sends**, appending below anything you have already typed, so you can edit it first.
+
+It stays a *pointer* deliberately: the agent has the `pha_page` tool and the archive's own
+rule is to recover the full page before answering, so naming the exact page and variant beats
+pasting text that goes stale when a historian corrects the page. If a future harness stops
+handing views the input props, the button falls back to putting the same text on the
+clipboard instead of failing silently (`src/client/askcontext.js`, unit-tested by
+`node scripts/check-view.mjs`).
+
 ### The reading position survives a tab switch
 
 The harness renders one conversation view at a time, so switching to Chat **unmounts** the

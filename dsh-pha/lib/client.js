@@ -229,6 +229,53 @@ function restorePlan(memory) {
   if (m.inbox) return { kind: 'inbox', sel: m.inbox }
   return null
 }
+// "Ask about this page" — the context a question carries, as pure text.
+//
+// The PHA view is a conversation target, so the harness hands it `inputActions` (the
+// input shell's actions — the shell itself calls `inputActions.setDraft(draft)`) and
+// `useInput` (the input state, with `.draft`). That is enough to put an accurate
+// citation of what is on screen into the composer, without any host-side change.
+//
+// The text is deliberately a *pointer*, not a transcript: the agent has the `pha_page`
+// tool (and the citation discipline in AGENTS.md says to recover the full page before
+// answering), so naming the exact page and variant is better than pasting text that can
+// go stale the moment a historian corrects the page.
+//
+// scripts/check-view.mjs unit-tests these rules; scripts/build-client.mjs inlines the
+// file into lib/client.js.
+
+/** A compact, citation-accurate context header for a question about one page (or one
+ *  document when no page is on screen). */
+function askContext(info) {
+  const i = info || {}
+  const hasDoc = i.docId !== null && i.docId !== undefined && i.docId !== ''
+  const who = i.filename
+    ? String(i.filename) + (hasDoc ? ' (doc ' + i.docId + ')' : '')
+    : (hasDoc ? 'doc ' + i.docId : 'the archive')
+  const variant = i.variant
+    ? ' — ' + i.variant + (i.editor ? ' (' + i.editor + ')' : '') + ' variant'
+    : ''
+  const lines = ['Context: ' + who + (i.page ? ', page ' + i.page : '') + variant]
+  if (i.reference) {
+    lines.push('Reference: ' + String(i.reference).trim()
+      + (i.unverified ? ' [unverified reference — confirm it before citing]' : ''))
+  }
+  if (i.page && hasDoc) {
+    lines.push('Read the full page with `pha page ' + i.docId + ' ' + i.page
+      + (i.variant === 'edited' ? ' --edited' : '') + '` (or the pha_page tool).')
+  } else if (hasDoc) {
+    lines.push('Read the document with `pha document ' + i.docId + '` (or the pha_document tool).')
+  }
+  return lines.join('\n')
+}
+
+/** Draft text: the context above an empty draft, or appended below what the reader has
+ *  already typed (never clobbering it), with room to keep typing either way. */
+function mergeDraft(existing, context) {
+  const e = String(existing == null ? '' : existing)
+  if (e.trim() === '') return context + '\n\n'
+  return e.replace(/\s+$/, '') + '\n\n' + context + '\n\n'
+}
 async function get(path) {
   const res = await fetch(path)
   return await res.json()
@@ -607,6 +654,11 @@ const viewMemory = new Map()
 function PhaView(props) {
   const sid = (props && props.sessionId) || 'default'
   const [viewBoot] = React.useState(() => viewMemory.get(sid) || null)
+  // Standard props of a conversation target: the input shell's actions and state. The
+  // shell always provides them (`ctx.uiSession.provide({ hooks: ['conversation','input'],
+  // props: ['inputActions'] })`), so the hook is called unconditionally.
+  const inputActions = props ? props.inputActions : null
+  const inputState = (props && typeof props.useInput === 'function') ? props.useInput((s) => s) : null
   const h = React.createElement
   const [state, setState] = React.useState(() => seedState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null, inbox: null, inboxErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null }, viewBoot))
   const [searchText, setSearchText] = React.useState('')
@@ -829,6 +881,38 @@ function PhaView(props) {
       }
     } catch (e) {
       setState((s) => ({ ...s, inboxBusy: false, inboxErr: String((e && e.message) || e) }))
+    }
+  }
+
+  // Put the page on screen into the composer as context, so a question asked from here
+  // is about exactly this document + page + variant. It drafts rather than sends: the
+  // reader can edit or extend it before pressing Enter.
+  function askAboutThis() {
+    const d = state.detail && state.detail.doc
+    if (!d) return
+    const pv = state.page
+    const ctx = askContext({
+      docId: d.id,
+      filename: d.filename,
+      page: state.pageReq ? state.pageReq.page : null,
+      variant: state.pageReq ? (state.pageReq.edited ? 'edited' : 'raw') : null,
+      editor: (pv && pv.editor) || null,
+      reference: (state.bib && state.bib.found && state.bib.reference) || d.reference || null,
+      unverified: !!(state.bib && state.bib.found && state.bib.verified === false),
+    })
+    const draft = (inputState && inputState.draft) || ''
+    if (inputActions && typeof inputActions.setDraft === 'function') {
+      try {
+        inputActions.setDraft(mergeDraft(draft, ctx))
+        setState((s) => ({ ...s, editMsg: 'drafted in the composer below — edit it, then press Enter to ask' }))
+        return
+      } catch (e) { /* fall through to the clipboard */ }
+    }
+    try {
+      if (navigator && navigator.clipboard) navigator.clipboard.writeText(ctx)
+      setState((s) => ({ ...s, editMsg: 'composer not reachable from this view — the context is on your clipboard, paste it into the message box' }))
+    } catch (e) {
+      setState((s) => ({ ...s, editMsg: 'cannot reach the composer from this view' }))
     }
   }
 
@@ -1264,6 +1348,11 @@ function PhaView(props) {
         h('span', { className: 'pha-chip ' + statusClass(d.status) }, d.status || '?'),
         h('span', { className: 'pha-chip' }, (d.page_count || 0) + ' pages'),
         h('button', { className: 'pha-btn small', title: "Show this collection's pha.yaml configuration (resolved, generating it only when none is in scope)", onClick: openConfig }, 'Config'),
+        h('button', {
+          className: 'pha-btn small',
+          title: 'Put this document/page/variant (and its reference) into the message box, to ask about what you are reading',
+          onClick: askAboutThis,
+        }, 'Ask in Chat'),
         bibLive ? h('button', { className: 'pha-btn small' + (bibOpen ? ' on' : ''), title: 'the reference record and its sidecar', onClick: () => setBibOpen(!bibOpen) }, 'Reference') : null,
         (bibLive && bibLive.verified === false) ? h('span', { className: 'pha-chip busy', title: 'machine-drafted or imported — confirm the source before citing it' }, 'unverified reference') : null,
       ),
