@@ -172,6 +172,20 @@ nothing else. The CLI re-validates the path, so it can never reach outside `inbo
 `../` path, an absolute path or a dot-path is refused before anything moves, and a bare GET
 is rejected without an explicit confirmation.
 
+### The reading position survives a tab switch
+
+The harness renders one conversation view at a time, so switching to Chat **unmounts** the
+PHA view and React state dies with it — the document and page you were reading used to be
+forgotten. The client now keeps one snapshot per session in module memory (`src/client/viewmemory.js`,
+unit-tested by `node scripts/check-view.mjs`): the document + page + raw/edited variant, an
+open note, a definition, an inbox item, search results, the txt/md override, the image/text
+toggles and the splitter width.
+
+On the way back the *selection* is seeded synchronously (so nothing flashes empty) while the
+*content* is re-fetched — never cached — so a restored page always shows current text. The
+snapshot lives for the life of the page: a full reload starts fresh, and two sessions in the
+same page remember their own positions.
+
 ### Links in the notes view
 
 `notes/` files are read as Obsidian-compatible markdown, and every link shape the

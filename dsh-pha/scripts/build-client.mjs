@@ -27,20 +27,23 @@ let body = readFileSync(srcPath, 'utf8')
 // We provide React via require("react") + the __toESM interop in the factory,
 // so drop the ESM import (single-line react import) from the bundle body.
 body = body.replace(/^import[^\n]*from\s*['"]react['"];?\s*\n/m, '')
-// The link helpers live in their own dependency-free module (src/client/links.js) so
-// scripts/check-links.mjs can unit-test them directly. The served bundle must stay ONE
-// self-contained module, so inline that file here.
-const linksPath = join(root, 'src/client/links.js')
-let links = readFileSync(linksPath, 'utf8')
-if (/^\s*import\s/m.test(links)) {
-  throw new Error('build-client: src/client/links.js must not import anything — it is inlined into the bundle')
+// A few pieces of pure logic live in their own dependency-free modules so
+// scripts/check-*.mjs can unit-test them directly (src/client/links.js, viewmemory.js).
+// The served bundle must stay ONE self-contained module, so inline each of them here.
+for (const name of ['links.js', 'viewmemory.js']) {
+  const modulePath = join(root, 'src/client', name)
+  let source = readFileSync(modulePath, 'utf8')
+  if (/^\s*import\s/m.test(source)) {
+    throw new Error(`build-client: src/client/${name} must not import anything — it is inlined into the bundle`)
+  }
+  source = source.replace(/^export\s+/gm, '').replace(/\s+$/, '\n')
+  const specifier = name.replace('.js', '')
+  const importLine = body.match(new RegExp(`^import[^\\n]*from\\s*['"]\\./${specifier}\\.js['"];?\\s*\\n`, 'm'))
+  if (importLine === null) {
+    throw new Error(`build-client: src/client/index.js must import the helpers from './${specifier}.js'`)
+  }
+  body = body.replace(importLine[0], source)
 }
-links = links.replace(/^export\s+/gm, '').replace(/\s+$/, '\n')
-const linksImport = body.match(/^import[^\n]*from\s*['"]\.\/links\.js['"];?\s*\n/m)
-if (linksImport === null) {
-  throw new Error("build-client: src/client/index.js must import the link helpers from './links.js'")
-}
-body = body.replace(linksImport[0], links)
 
 // Keep any other top-level imports out of the bundle (there are none today, but
 // if one appears we want a loud failure rather than a silently broken bundle).

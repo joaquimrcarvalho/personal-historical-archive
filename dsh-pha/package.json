@@ -7,8 +7,9 @@
   "scripts": {
     "build:client": "node scripts/build-client.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "check": "node scripts/check-links.mjs && node scripts/check-render.mjs && node scripts/smoke.mjs",
+    "check": "node scripts/check-links.mjs && node scripts/check-view.mjs && node scripts/check-render.mjs && node scripts/smoke.mjs",
     "check:links": "node scripts/check-links.mjs",
+    "check:view": "node scripts/check-view.mjs",
     "check:render": "node scripts/check-render.mjs"
   },
   "exports": {

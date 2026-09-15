@@ -5,6 +5,7 @@
 // `/pha/*` JSON endpoints registered by the host half (lib/index.js).
 import React from 'react'
 import { classifyLink, docSlugFor, parseWikilink, resolveNoteName, slugifyPath } from './links.js'
+import { restorePlan, seedState, seedUi, snapshotView } from './viewmemory.js'
 
 async function get(path) {
   const res = await fetch(path)
@@ -375,16 +376,24 @@ function relPath(doc) {
   return doc ? (doc.dir_path ? doc.dir_path + '/' + doc.filename : doc.filename) : ''
 }
 
-function PhaView() {
+// The conversation view is unmounted when the reader switches to the Chat tab, so its
+// React state is destroyed and the document/page they were reading was forgotten. One
+// snapshot per session lives here for the life of the page (a reload starts fresh); the
+// content behind a restored selection is always re-fetched.
+const viewMemory = new Map()
+
+function PhaView(props) {
+  const sid = (props && props.sessionId) || 'default'
+  const [viewBoot] = React.useState(() => viewMemory.get(sid) || null)
   const h = React.createElement
-  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null, inbox: null, inboxErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null })
+  const [state, setState] = React.useState(() => seedState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null, inbox: null, inboxErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null }, viewBoot))
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
-  const [leftPct, setLeftPct] = React.useState(38)
+  const [leftPct, setLeftPct] = React.useState(() => seedUi(viewBoot).leftPct)
   const [dragging, setDragging] = React.useState(false)
-  const [showImg, setShowImg] = React.useState(false)
-  const [textOn, setTextOn] = React.useState(true)
+  const [showImg, setShowImg] = React.useState(() => seedUi(viewBoot).showImg)
+  const [textOn, setTextOn] = React.useState(() => seedUi(viewBoot).textOn)
   const [imgData, setImgData] = React.useState(null)
   const [rootEl, setRootEl] = React.useState(null)
   const [noteAnchor, setNoteAnchor] = React.useState(null)
@@ -404,7 +413,26 @@ function PhaView() {
         get('/pha/collectionEncoders').then((r) => setState((s) => ({ ...s, collEncoders: r && r.ok ? r.encoders : [] }))).catch(() => {})
         refreshInbox()
       })
+    // Back from another tab: the selection is already seeded, so this only loads the
+    // content behind it (a document's detail + page, a note, a definition, an inbox item).
+    const plan = restorePlan(viewBoot)
+    if (plan === null) return
+    if (plan.kind === 'document') {
+      openDoc(plan.id).then(() => { if (plan.page) openPage(plan.page, plan.edited, plan.id) })
+    } else if (plan.kind === 'note') {
+      openNote(plan.name, null)
+    } else if (plan.kind === 'definition') {
+      openDef({ path: plan.path })
+    } else if (plan.kind === 'inbox') {
+      openInbox(plan.sel)
+    }
   }, [])
+
+  // Keep this session's reading position, so switching tabs and coming back lands on the
+  // same document and page.
+  React.useEffect(() => {
+    viewMemory.set(sid, snapshotView(state, { textOn: textOn, showImg: showImg, leftPct: leftPct }))
+  })
 
   const pageNo = state.pageReq ? state.pageReq.page : null
   React.useEffect(() => {

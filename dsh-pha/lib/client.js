@@ -146,6 +146,89 @@ function classifyLink(url) {
   if (md) return { kind: 'note', name: md[1], href: raw }
   return { kind: 'external', href: raw }
 }
+// Reading-position memory for the PHA view — pure, dependency-free, DOM-free.
+//
+// The conversation view is unmounted when the reader switches to the Chat tab, and
+// React state dies with the component, so the document and page they were reading were
+// forgotten. The client keeps a snapshot per session in module memory (page lifetime,
+// fresh on reload) and this module owns the two halves of that: what to remember, and
+// what to load again when the view comes back. The data itself is never cached here —
+// only the selection, so a restored view always reads current text.
+//
+// scripts/check-view.mjs unit-tests these rules; scripts/build-client.mjs inlines the
+// file into lib/client.js (the served bundle stays one dependency-free module).
+
+/** What to remember: the selection (document + page + variant, note, definition, inbox
+ *  item, search results) and the view preferences. */
+function snapshotView(state, ui) {
+  const s = state || {}
+  const u = ui || {}
+  const doc = (s.selectedId === null || s.selectedId === undefined)
+    ? null
+    : {
+        id: s.selectedId,
+        page: s.pageReq ? s.pageReq.page : null,
+        edited: !!(s.pageReq && s.pageReq.edited),
+      }
+  return {
+    doc: doc,
+    note: s.selectedNote ? s.selectedNote.name : null,
+    def: s.selectedDef ? { path: s.selectedDef.path } : null,
+    inbox: s.inboxSel || null,
+    search: (s.searchMode && s.hits) ? { query: s.query || '', hits: s.hits, pageVariant: s.searchPageVariant || null } : null,
+    plain: s.plainOverride === undefined ? null : s.plainOverride,
+    ui: {
+      textOn: u.textOn !== false,
+      showImg: !!u.showImg,
+      leftPct: Number(u.leftPct) > 0 ? Number(u.leftPct) : 38,
+    },
+  }
+}
+
+/** Seed a fresh component state from a snapshot: the *identity* of the selection comes
+ *  back synchronously (so nothing flashes empty), while its content is re-fetched by
+ *  `restorePlan`. A document opened from search results keeps both. */
+function seedState(defaults, memory) {
+  const s = Object.assign({}, defaults)
+  const m = memory || {}
+  if (m.search) {
+    s.searchMode = true
+    s.hits = m.search.hits || null
+    s.query = m.search.query || ''
+    s.searchPageVariant = m.search.pageVariant || null
+  }
+  if (m.doc) {
+    s.selectedId = m.doc.id
+    s.pageReq = m.doc.page ? { doc: m.doc.id, page: m.doc.page, edited: !!m.doc.edited } : null
+  }
+  if (m.plain === true || m.plain === false) s.plainOverride = m.plain
+  if (m.note) s.noteMode = true
+  if (m.def) s.defMode = true
+  if (m.inbox) s.inboxSel = m.inbox
+  return s
+}
+
+/** Seed the view toggles (they are separate React states). */
+function seedUi(memory) {
+  const u = (memory && memory.ui) || {}
+  return {
+    textOn: u.textOn !== false,
+    showImg: !!u.showImg,
+    leftPct: Number(u.leftPct) > 0 ? Number(u.leftPct) : 38,
+  }
+}
+
+/** What still has to be LOADED for a seeded state; null when nothing does (a restored
+ *  search already carries its hits). Only one of these can be the current reading
+ *  position, so a document wins over a note or a definition. */
+function restorePlan(memory) {
+  const m = memory || {}
+  if (m.doc) return { kind: 'document', id: m.doc.id, page: m.doc.page, edited: !!m.doc.edited }
+  if (m.note) return { kind: 'note', name: m.note }
+  if (m.def) return { kind: 'definition', path: m.def.path }
+  if (m.inbox) return { kind: 'inbox', sel: m.inbox }
+  return null
+}
 async function get(path) {
   const res = await fetch(path)
   return await res.json()
@@ -515,16 +598,24 @@ function relPath(doc) {
   return doc ? (doc.dir_path ? doc.dir_path + '/' + doc.filename : doc.filename) : ''
 }
 
-function PhaView() {
+// The conversation view is unmounted when the reader switches to the Chat tab, so its
+// React state is destroyed and the document/page they were reading was forgotten. One
+// snapshot per session lives here for the life of the page (a reload starts fresh); the
+// content behind a restored selection is always re-fetched.
+const viewMemory = new Map()
+
+function PhaView(props) {
+  const sid = (props && props.sessionId) || 'default'
+  const [viewBoot] = React.useState(() => viewMemory.get(sid) || null)
   const h = React.createElement
-  const [state, setState] = React.useState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null, inbox: null, inboxErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null })
+  const [state, setState] = React.useState(() => seedState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null, inbox: null, inboxErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null }, viewBoot))
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
-  const [leftPct, setLeftPct] = React.useState(38)
+  const [leftPct, setLeftPct] = React.useState(() => seedUi(viewBoot).leftPct)
   const [dragging, setDragging] = React.useState(false)
-  const [showImg, setShowImg] = React.useState(false)
-  const [textOn, setTextOn] = React.useState(true)
+  const [showImg, setShowImg] = React.useState(() => seedUi(viewBoot).showImg)
+  const [textOn, setTextOn] = React.useState(() => seedUi(viewBoot).textOn)
   const [imgData, setImgData] = React.useState(null)
   const [rootEl, setRootEl] = React.useState(null)
   const [noteAnchor, setNoteAnchor] = React.useState(null)
@@ -544,7 +635,26 @@ function PhaView() {
         get('/pha/collectionEncoders').then((r) => setState((s) => ({ ...s, collEncoders: r && r.ok ? r.encoders : [] }))).catch(() => {})
         refreshInbox()
       })
+    // Back from another tab: the selection is already seeded, so this only loads the
+    // content behind it (a document's detail + page, a note, a definition, an inbox item).
+    const plan = restorePlan(viewBoot)
+    if (plan === null) return
+    if (plan.kind === 'document') {
+      openDoc(plan.id).then(() => { if (plan.page) openPage(plan.page, plan.edited, plan.id) })
+    } else if (plan.kind === 'note') {
+      openNote(plan.name, null)
+    } else if (plan.kind === 'definition') {
+      openDef({ path: plan.path })
+    } else if (plan.kind === 'inbox') {
+      openInbox(plan.sel)
+    }
   }, [])
+
+  // Keep this session's reading position, so switching tabs and coming back lands on the
+  // same document and page.
+  React.useEffect(() => {
+    viewMemory.set(sid, snapshotView(state, { textOn: textOn, showImg: showImg, leftPct: leftPct }))
+  })
 
   const pageNo = state.pageReq ? state.pageReq.page : null
   React.useEffect(() => {

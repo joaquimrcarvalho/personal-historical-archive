@@ -92,7 +92,8 @@ check(/inject\s*=\s*\[\s*["']slots["']/.test(bundle), 'client bundle injects the
 check(bundle.includes('conversation.view'), 'client bundle registers conversation.view')
 check(/require\(["']react["']\)/.test(bundle), 'client bundle keeps react external')
 check(bundle.includes('function slugifyPath'), 'client bundle inlines the link helpers')
-check(!/from\s*["']\.\/links\.js["']/.test(bundle), 'client bundle has no leftover ./links.js import')
+check(bundle.includes('function restorePlan'), 'client bundle inlines the reading-position memory')
+check(!/from\s*["']\.\/(links|viewmemory)\.js["']/.test(bundle), 'client bundle has no leftover inline-module import')
 check(!/^\s*import\s/m.test(bundle), 'client bundle imports nothing')
 
 console.log('')
