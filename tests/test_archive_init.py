@@ -13,7 +13,8 @@ def test_init_archive_creates_structure(tmp_path):
     out = init_archive(p)
     assert out == p.resolve()
     for sub in ("dropbox/documents", "dropbox/collections", "library",
-                "renders", "notes", "models", "palaeographers", "editors", "encoders"):
+                "renders", "notes", "models", "palaeographers", "editors", "encoders",
+                "skills"):
         assert (p / sub).is_dir(), f"missing {sub}"
     # notes folder carries the Obsidian-compatible human/agent instructions
     notes_readme = (p / "notes" / "README.md").read_text(encoding="utf-8")
@@ -43,6 +44,11 @@ def test_init_archive_creates_structure(tmp_path):
         assert "reprocess" in text, "must warn that unchanged docs are skipped without --reprocess"
         assert "pha page" in text, "must show how to read a page to verify"
         assert "pha test" in text, "must show the config dry-run command"
+    # both must direct agents to the archive's OWN skills folder (the agent may
+    # have no access to the pha source repository)
+    for text in (agents, readme):
+        assert "skills/" in text, "must point agents at the archive's skills folder"
+        assert "SKILL.md" in text, "must name the skill file to read"
     gitignore = (p / ".gitignore").read_text(encoding="utf-8")
     assert "archive.db" in gitignore
     assert "renders/" in gitignore

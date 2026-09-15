@@ -711,6 +711,17 @@ class Config:
                 archive_init.refresh_archive_agent_docs(self.archive_dir)
         except Exception:  # noqa: BLE001 - a doc refresh must never break a command
             pass
+        # the pha-specific agent skills live IN the archive (an agent operating
+        # an archive may have no access to the pha source): seed the folder and
+        # any missing bundled skill. Seeded once and never overwritten, so a
+        # user's edits/additions survive. Skipped when the archive IS the project
+        # dir — there the repo's own skills/ folder already is the source.
+        try:
+            from .archive_skills import seed_archive_skills
+            if self.archive_dir.resolve() != self.root.resolve():
+                seed_archive_skills(self.archive_dir)
+        except Exception:  # noqa: BLE001 - seeding skills must never break a command
+            pass
 
 
 def _parse_palaeographers(

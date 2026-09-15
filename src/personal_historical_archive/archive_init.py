@@ -4,6 +4,7 @@ Creates the default structure at `<path>`:
   dropbox/documents/  dropbox/collections/
   library/  renders/  notes/
   palaeographers/  editors/  encoders/   (seeded with zero-config defaults)
+  skills/                                (the pha-specific agent skills)
 plus a README.md + AGENTS.md (the first files an agent reads: they explain
 what this dir is and how to install `pha` and point it at this archive) and a
 .gitignore (keeps user-facing data, excludes the DB, renders and temp files).
@@ -16,6 +17,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from .archive_skills import seed_archive_skills
 from .config import (
     _DEFAULT_ED, _DEFAULT_ENC, _DEFAULT_PAL, builtin_samples,
     find_project_root, notes_readme_template, _seed_default,
@@ -102,6 +104,7 @@ missing (or the path is wrong): run `pha set archive-dir` with this directory.
 | `palaeographers/`, `editors/`, `encoders/` | model/prompt definitions (one file each; `_sample.md` = template) |
 | `library/` | generated per-page transcriptions and edited text — the human review surface |
 | `notes/` | Obsidian-compatible markdown notes generated from queries to this archive (see `notes/README.md`) |
+| `skills/` | pha-specific agent skills — read the matching `skills/<name>/SKILL.md` before operating (see `skills/README.md`) |
 | `renders/`, `archive.db` | generated cache and index (do not edit) |
 
 ## Everyday commands
@@ -136,6 +139,23 @@ pha page <doc> <page>                            # read one page's full text
 A document is a dropbox-relative subpath: `collections/COLX`, `documents/`
 (individual files), or a directory-of-images document (`documents/ms123`).
 `pha scan`/`pha edit`/`pha test` share the single-model lock — run one at a time.
+
+## Bundled agent skills (`skills/`)
+
+This archive carries its own **pha-specific agent skills** — read the matching
+one before the task, no pha source checkout needed:
+
+- `skills/pha-search-context/SKILL.md` — a `pha search` hit is a snippet;
+  recover the complete page (raw transcription *and* the edited variant) before
+  quoting or summarizing, and read back to the start of the document/item.
+- `skills/pha-document-operations/SKILL.md` — re-scan / re-edit / re-encode one
+  **already-ingested** document or collection (`pha scan --path … --reprocess`,
+  `pha edit --path … --page N`, `pha test`).
+
+Each skill is `<name>/SKILL.md` with YAML front matter whose `name` matches the
+folder; `skills/README.md` documents the format and how to install a skill into
+an agent runtime (`cp -R skills/<name> ~/.agents/skills/`). `pha` seeds this
+folder once and never overwrites it — edit or extend it freely.
 
 ## Operating discipline
 
@@ -204,7 +224,32 @@ root.
   human-readable review surface).
 - `notes/` — Obsidian-compatible markdown notes generated from queries to this
   archive (see `notes/README.md`).
+- `skills/` — **pha-specific agent skills**: read the matching
+  `skills/<name>/SKILL.md` before doing that task (see `skills/README.md`).
 - `renders/`, `archive.db` — generated cache and index (do not edit).
+
+## Read the bundled skills in `skills/` FIRST
+
+This archive ships the agent skills for operating it, so you do **not** need
+the pha source repository. Before the matching task, read the skill and follow
+it:
+
+- `skills/pha-search-context/SKILL.md` — a `pha search` hit is a **snippet of a
+  page**, not a document: number the hits, then recover the complete text of
+  the page (raw transcription *and* the edited variant when one exists) with
+  `pha page <doc> <page> [--edited]` before quoting or answering; when a hit
+  starts mid-document, read back to the document/item start.
+- `skills/pha-document-operations/SKILL.md` — re-run the pipeline on an
+  **already-ingested** document or collection (rescan / re-edit / re-encode):
+  `pha scan --path collections/COLX [--reprocess]`,
+  `pha edit --path collections/COLX --page N`, `pha test collections/COLX --pages 3`.
+
+Each skill is `skills/<name>/SKILL.md` with YAML front matter whose `name`
+matches its folder name. `skills/README.md` documents the format, and how to
+make a runtime pick a skill up automatically (copy it to that runtime's
+user-level skills directory, e.g. `cp -R skills/pha-search-context
+~/.agents/skills/`). `pha` seeds the folder once and never overwrites it —
+edit, delete or add skills freely.
 
 ## How an agent should operate
 
@@ -299,9 +344,9 @@ scan.lock
 # OS cruft
 .DS_Store
 
-# NOTE: dropbox/, library/, palaeographers/, editors/, encoders/, notes/ are
-# kept (they are the user-facing documents, transcriptions, definitions and
-# research notes).
+# NOTE: dropbox/, library/, palaeographers/, editors/, encoders/, notes/ and
+# skills/ are kept (they are the user-facing documents, transcriptions,
+# definitions, research notes and agent skills).
 """
 
 # --- archive agent docs: seeding, and refreshing them on pha updates ---------
@@ -435,6 +480,11 @@ def init_archive(path: str | Path, project_root: Path | None = None) -> Path:
     pal.mkdir(exist_ok=True)
     ed.mkdir(exist_ok=True)
     enc.mkdir(exist_ok=True)
+
+    # the pha-specific agent skills: the archive carries its own copy (plus a
+    # README documenting the format), seeded from the constants embedded in
+    # pha — so the machine that owns the archive needs no source checkout.
+    seed_archive_skills(p)
 
     # seed the BUILTIN samples ("how to create new" templates + the
     # ready-to-duplicate catalogue: OCR/parse engines, local LM Studio models,

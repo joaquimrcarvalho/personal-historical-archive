@@ -340,6 +340,32 @@ cp -R skills/pha-document-operations ~/.agents/skills/
 (Re-copy to update after pulling a newer repo version. A skill's front matter
 `name` must match its folder name, so keep the folder names unchanged.)
 
+#### Every archive carries its own `skills/` folder
+
+An agent handed only the archive directory has no checkout and no network, so
+the archive holds its own copy:
+
+```
+<archive>/skills/README.md                  what these are, and the format
+<archive>/skills/pha-search-context/SKILL.md
+<archive>/skills/pha-document-operations/SKILL.md
+```
+
+`pha init-archive` seeds it, and every pha run seeds it into an existing
+dedicated archive that lacks it (`Config.ensure_dirs`). Seeding happens **once
+and is never overwritten** — like `notes/README.md`, and unlike README.md /
+AGENTS.md (which are marker-stamped and refreshed) — so an archive owner's
+edits, deletions and extra skills survive every later run. The archive's own
+`AGENTS.md` and `README.md` point agents at `<archive>/skills/` first.
+
+The skill bodies are **embedded in the pha package** (`archive_skills.py`), not
+read from the source tree, precisely because the machine that owns the archive
+may have pha installed with no access to this repository. This `skills/` folder
+stays the authored copy; `tests/test_skills.py` asserts the embedded constants
+match these files byte for byte, so the two cannot drift. To ship an update to
+existing archives, edit here (the embedded constant is regenerated from these
+files) and bump the version.
+
 ## DeepSeek Harness plugin (dsh-pha)
 
 This repo also ships a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)

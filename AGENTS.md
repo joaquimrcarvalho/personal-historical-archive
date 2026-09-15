@@ -32,8 +32,9 @@
   owns lives under it: `dropbox/` (documents), `models/` (model-interface
   definitions), `palaeographers/`, `editors/`, `encoders/` (content rules),
   `notes/` (Obsidian-compatible research notes generated from archive queries),
-  `library/`, `renders/`, `archive.db` (generated). The project dir holds only
-  code, `prompts/`, `schema/` and the `_sample.md` templates. Precedence:
+  `skills/` (the pha-specific agent skills, seeded by pha and never
+  overwritten), `library/`, `renders/`, `archive.db` (generated). The project
+  dir holds only code, `prompts/`, `schema/` and the `_sample.md` templates. Precedence:
   `PHA_ARCHIVE_DIR` env > `paths.archive_dir` in `config.yaml` (written by
   `pha set archive-dir`; this is the tracked, reviewable home for the
   location) > a legacy `PHA_ARCHIVE_DIR` line in a gitignored `.env` > the
@@ -240,6 +241,20 @@ search snippet — recover the full page/document) and `pha-document-operations`
 archive created with `pha init-archive` carries its own `AGENTS.md`/`README.md`
 with the same re-run-one-document guidance, so an agent working only from the
 archive directory does not need the source.
+
+**The archive carries its own `skills/` folder** — the pha-specific skills as
+`<archive>/skills/<name>/SKILL.md` plus `skills/README.md` (the format, and how
+to install one into a runtime). `pha init-archive` seeds it, and every run
+seeds it into an existing dedicated archive that lacks it (`Config.ensure_dirs`);
+seeding is **once and never overwritten**, so an archive owner's edits, extra
+skills and deletions survive. The bodies are **embedded in the pha package**
+(not read from this checkout), precisely because the agent operating an archive
+may have pha installed with no access to this repository — and the archive's
+own `AGENTS.md`/`README.md` point agents at `<archive>/skills/` first. The repo
+`skills/*/SKILL.md` files remain the authored copies; a test
+(`tests/test_skills.py`) asserts the embedded constants match them byte for
+byte, so the two cannot drift. Keep the folder name equal to the front-matter
+`name`.
 
 ### Notes (research notes generated from archive queries)
 

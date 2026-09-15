@@ -1961,9 +1961,9 @@ def cmd_init_archive(cfg: Config, args) -> None:
 
     Creates the default structure (dropbox/documents, dropbox/collections,
     library, renders, notes, palaeographers/editors/encoders with zero-config
-    defaults) plus a README.md, AGENTS.md and a .gitignore. If PATH does not
-    exist it is created; if it exists it must be empty (never touches an
-    existing archive)."""
+    defaults, skills/ with the pha-specific agent skills) plus a README.md,
+    AGENTS.md and a .gitignore. If PATH does not exist it is created; if it
+    exists it must be empty (never touches an existing archive)."""
     from .archive_init import init_archive
     try:
         p = init_archive(args.path, project_root=cfg.root)
@@ -1973,6 +1973,7 @@ def cmd_init_archive(cfg: Config, args) -> None:
     print(f"created archive at {p}")
     print("  dropbox/documents/  dropbox/collections/   (drop your sources here)")
     print("  library/  renders/  notes/  palaeographers/  editors/  encoders/")
+    print("  skills/                                  (pha agent skills)")
     print("  README.md + AGENTS.md + .gitignore written")
     print("point pha at it with:  pha set archive-dir " + str(p))
 
