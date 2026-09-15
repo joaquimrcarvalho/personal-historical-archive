@@ -570,3 +570,82 @@ def test_bibtex_emitter_can_stamp_an_agent_draft():
     assert "record_origin = {agent-drafted-unverified}" in text
     back = B.parse_bib(text)
     assert back is not None and back.is_agent_drafted()
+
+
+# ------------------------------------------- the containing work must be cited
+
+ARTICLE = """
+@article{silva1990,
+  author  = {Silva, Joao},
+  title   = {A Selection of Contemporary Sources},
+  journal = {Journal of Jesuit Studies},
+  volume  = {31},
+  year    = {1990},
+  pages   = {5--20}
+}"""
+
+
+def test_an_article_cites_its_journal():
+    """Regression: the journal name was parsed and then silently dropped, so an
+    article cited as its own volume with no container."""
+    bib = B.parse_bib(ARTICLE)
+    assert bib is not None and bib.host is not None
+    assert bib.host.title == "Journal of Jesuit Studies"
+    text = B.format_citation(bib, doc_id=1, page_no=1, variant_label="raw", filename="x.pdf")
+    assert "Journal of Jesuit Studies" in text
+    assert "vol. 31" in text
+    # the page range locates the item inside the journal
+    assert "pp. 5–20" in text
+
+
+def test_a_chapter_cites_the_book_it_sits_in():
+    bib = B.parse_bib(
+        "@inbook{c, author={Costa, Maria}, title={A Chapter}, booktitle={The Containing "
+        "Volume}, volume={2}, address={Roma}, publisher={Institutum}, year={1990}}")
+    assert bib is not None
+    text = B.format_citation(bib, doc_id=2, page_no=1, variant_label="raw", filename="y.pdf")
+    assert "In: The Containing Volume" in text
+    assert "vol. 2" in text and "Roma: Institutum, 1990" in text
+
+
+def test_a_books_series_is_not_rendered():
+    """A `series` either repeats the book's own title (the multi-volume case) or
+    is decorative, so rendering it would stutter or add noise. Deliberate: it
+    keeps every existing book citation stable."""
+    bib = B.parse_bib("@book{b, title={A Book}, author={Sousa, Ana}, "
+                      "series={Monumenta Historica}, number={137}, year={1990}}")
+    assert bib is not None and bib.host is not None
+    text = B.format_citation(bib, doc_id=3, page_no=1, variant_label="raw", filename="z.pdf")
+    assert "Monumenta Historica" not in text
+    assert text == "Sousa, Ana. A Book. vol. 137. (1990). — doc 3, p. 1 (raw)"
+
+
+def test_a_books_page_count_is_not_rendered():
+    """`extent` on a book is a physical description, not a locator."""
+    bib = B.parse_bib("@book{b, title={A Book}, year={1990}, pages={599}}")
+    assert bib is not None and bib.extent == "599 p."
+    assert "599" not in B.format_citation(bib, doc_id=3, page_no=1, variant_label="raw",
+                                          filename="z.pdf")
+
+
+def test_a_repeated_host_title_does_not_stutter():
+    """The multi-volume case: the series title IS the volume's title."""
+    bib = B.parse_dc(json.dumps({
+        "title": "Documentação para a história das missões",
+        "part_number": "4",
+        "genre": "book",
+        "is_part_of": {"title": "Documentação para a história das missões"},
+    }))
+    text = B.format_citation(bib, doc_id=22, page_no=1, variant_label="raw", filename="d.pdf")
+    assert text.count("Documentação para a história das missões") == 1
+
+
+def test_citation_override_does_not_bypass_the_unverified_badge():
+    """A hardcoded override is still a machine-drafted reference, and must stay
+    badged — otherwise it WOULD be a way to make a draft look verified."""
+    bib = B.Bibliography(title="T", genre="article",
+                         record_origin="agent-drafted-unverified",
+                         citation_override="Silva, in Journal of Jesuit Studies 31 (1990).")
+    text = B.format_citation(bib, doc_id=1, page_no=1, variant_label="raw", filename="x.pdf")
+    assert text.startswith("Silva, in Journal of Jesuit Studies 31 (1990).")
+    assert text.endswith("[unverified reference]")

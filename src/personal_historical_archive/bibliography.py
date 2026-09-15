@@ -1163,10 +1163,29 @@ def _compose(bib: Bibliography) -> str:
     title = " : ".join(x for x in (bib.title, bib.sub_title) if x)
     if title:
         parts.append(_sentence(title))
+
+    # The containing work — a journal, or the book a chapter sits in. For an
+    # article or a chapter this is NOT optional: without the journal name the
+    # citation cannot be found, and the page range is what locates the item
+    # inside it. Both used to be captured and then silently dropped.
+    #
+    # For a book the same `host` is usually a `series` that either repeats the
+    # book's own title (the multi-volume case) or is a decorative series
+    # statement, and `extent` is a physical description — so neither is
+    # rendered here. That keeps existing book citations stable.
+    genre = (bib.genre or "").strip().lower()
+    contained = genre in ("article", "chapter")
+    host_title = (bib.host.title or "").strip() if bib.host else ""
+    if contained and host_title:
+        parts.append(_sentence(f"In: {host_title}" if genre == "chapter" else host_title))
+
     volume = bib.part_number or (bib.host.volume if bib.host else None)
     volume = clean_volume(volume)
     if volume:
         parts.append(_sentence(f"vol. {volume}"))
+    if contained and bib.extent:
+        parts.append(_sentence(bib.extent))
+
     imprint: list[str] = []
     if bib.place and bib.publisher:
         imprint.append(f"{bib.place}: {bib.publisher}")
