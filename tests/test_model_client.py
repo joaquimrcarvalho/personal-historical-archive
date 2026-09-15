@@ -203,8 +203,12 @@ def test_run_liteparse_raises_when_not_installed(monkeypatch):
         raise FileNotFoundError("no lit")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    with pytest.raises(ModelError, match="not installed"):
+    with pytest.raises(ModelError, match="not installed") as ei:
         run_liteparse("/tmp/page.jpg")
+    # the fix an agent reads must point at the Python package (the npm route
+    # commonly fails on Windows, which is where agents used to give up)
+    assert "pip install liteparse" in str(ei.value)
+    assert "often fails" in str(ei.value)
 
 
 def test_run_liteparse_raises_on_nonzero_returncode(monkeypatch):

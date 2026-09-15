@@ -186,9 +186,11 @@ def run_liteparse(
 ) -> str:
     """Run LiteParse (`lit parse`) on a file and return its output.
 
-    LiteParse is a LOCAL document/OCR parser (install ``pip install liteparse``
-    or ``npm i -g @llamaindex/liteparse``) — no cloud dependency or LLM. Used
-    when a palaeographer declares ``engine: liteparse``.
+    LiteParse is a LOCAL document/OCR parser (install the **Python** package
+    ``pip install liteparse`` — recommended, and the reliable route on Windows;
+    the ``npm i -g @llamaindex/liteparse`` alternative often fails there) — no
+    cloud dependency or LLM. Used when a palaeographer declares
+    ``engine: liteparse``.
 
     ``target`` is either the rendered page RASTER (``liteparse_ocr: fresh`` —
     no embedded text layer, so LiteParse MUST OCR it) or the ORIGINAL source
@@ -220,8 +222,10 @@ def run_liteparse(
         proc = subprocess.run(cmd, capture_output=True, text=False, timeout=600)
     except FileNotFoundError as e:
         raise ModelError(
-            "lit (LiteParse) is not installed or not on PATH. Install it "
-            "(`pip install liteparse` or `npm i -g @llamaindex/liteparse`) so "
+            "lit (LiteParse) is not installed or not on PATH. Install the "
+            "Python package `pip install liteparse` (recommended, and the "
+            "reliable route on Windows; the npm alternative "
+            "`npm i -g @llamaindex/liteparse` often fails there) so "
             f"the palaeographer's `engine: liteparse` can run. ({e})"
         ) from e
     except subprocess.TimeoutExpired as e:

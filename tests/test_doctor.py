@@ -48,6 +48,14 @@ def _runner(version_outputs=None, default_rc=0):
     return run
 
 
+def test_liteparse_install_advice_prefers_the_python_package():
+    """`pha doctor` must not send a Windows user to npm, where the install
+    commonly fails — the Python package is the recommended route."""
+    hint = doctor.ENGINES["liteparse"]["install"]
+    assert "pip install liteparse" in hint
+    assert "npm" in hint and "often fails" in hint
+
+
 def test_all_engines_missing_and_required_fails(monkeypatch):
     _patch(monkeypatch, paths={})
     rep = doctor.diagnose(declared={"liteparse": ["liteparse.md"]})

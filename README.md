@@ -523,7 +523,7 @@ content-only: copy, rename, pair with a model in `pha.yaml`.
 | Engine | Model file fields | Tool needed |
 |--------|-------------------|-------------|
 | `tesseract` | `engine: tesseract`, `tesseract_lang` (e.g. `por`/`lat`/`por+lat`), optional `tesseract_psm` | `tesseract` + language data (`brew install tesseract tesseract-lang`) |
-| `liteparse` | `engine: liteparse`, `liteparse_lang` (e.g. `por`/`fra`), optional `liteparse_dpi`; plus `liteparse_ocr` (`fresh`/`embedded`/`prefer-embedded`) and `liteparse_format` (`text`/`markdown`/`json`) | `lit` CLI — install ONE of `pip install liteparse` (Python) or `npm i -g @llamaindex/liteparse` (Node); see below |
+| `liteparse` | `engine: liteparse`, `liteparse_lang` (e.g. `por`/`fra`), optional `liteparse_dpi`; plus `liteparse_ocr` (`fresh`/`embedded`/`prefer-embedded`) and `liteparse_format` (`text`/`markdown`/`json`) | `lit` CLI — install the **Python** package `pip install liteparse` (recommended; works on Windows). `npm i -g @llamaindex/liteparse` is the alternative but often fails on Windows — see below |
 
 > **Installing the engines** (on the machine that runs pha). Probe first with
 > `pha doctor` (`--engine liteparse` requires a specific engine; `--json` for
@@ -537,10 +537,15 @@ content-only: copy, rename, pair with a model in `pha.yaml`.
 > (4) the interpreter's own bin dir — so any normal install (brew, pyenv,
 > nvm, pipx, `uv tool`, npm `-g`, pip into pha's own venv) is found
 > automatically, and only genuinely unusual locations need `PHA_ENGINE_PATH`.
-> Tesseract comes from the package managers (see the table above). The `lit`
-> CLI is the SAME whether installed via pip or npm — install with whichever
-> toolchain you already use. `command -v lit` hitting is not proof — `lit` is
-> a common name (e.g. LLVM's test runner); `lit --version` must print a
+> Tesseract comes from the package managers (see the table above). For the `lit`
+> CLI, **install the Python package** — `pip install liteparse` (or
+> `pipx install liteparse` / `uv tool install liteparse`): it is the recommended
+> route and it works on Windows. The Node route
+> (`npm i -g @llamaindex/liteparse`) is the alternative, but it **frequently
+> fails on Windows** (and can leave a different `lit` on PATH); if it fails, do
+> not give up — install the Python package instead. The `lit` CLI is the SAME
+> either way — install one, not both. `command -v lit` hitting is not proof —
+> `lit` is a common name (e.g. LLVM's test runner); `lit --version` must print a
 > LiteParse version. LiteParse bundles its own Tesseract, so it needs no
 > separate tesseract install; for a non-English `liteparse_lang`, make that
 > language's `.traineddata` reachable (offline: point `TESSDATA_PREFIX` at the

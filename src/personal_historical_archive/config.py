@@ -1262,7 +1262,10 @@ _MODEL_SAMPLE = """---
 #   tesseract_lang: por              # -l value ("por", "lat", "por+lat", ...; "" = tesseract default)
 #   tesseract_psm: 6                 # optional --psm page-segmentation mode
 #   engine: liteparse                # LiteParse `lit parse` (needs `lit` on PATH:
-#                                    #   pip install liteparse | npm i -g @llamaindex/liteparse)
+#                                    #   pip install liteparse — Python package,
+#                                    #   RECOMMENDED and works on Windows; npm i -g
+#                                    #   @llamaindex/liteparse is the alternative but
+#                                    #   often fails on Windows)
 #   liteparse_lang: por              # --ocr-language (Tesseract format, e.g. "por", "fra")
 #   liteparse_dpi: 300               # optional --dpi render resolution (default 150; 300 = quality)
 #   liteparse_format: text           # output: "text" (default) | "markdown" | "json"
@@ -1327,9 +1330,10 @@ _MODEL_LITEPARSE_SAMPLE = """---
 # tweak the settings, and select it per document/collection in pha.yaml:
 #   palaeographer: {rules: <rules-id>, model: liteparse}
 # LiteParse is a LOCAL document/OCR parser, NOT an LLM: install the `lit` CLI
-# (`pip install liteparse` or `npm i -g @llamaindex/liteparse`). It gives
-# layout-preserved text and (with json) per-item bounding boxes/confidence a
-# later reasoning/encoder stage can use.
+# with the Python package `pip install liteparse` — recommended, and it works
+# on Windows (the npm alternative `npm i -g @llamaindex/liteparse` often fails
+# there). It gives layout-preserved text and (with json) per-item bounding
+# boxes/confidence a later reasoning/encoder stage can use.
 # liteparse_ocr:
 #   fresh (default) — OCR the rendered page raster, so LiteParse must OCR it
 #     (no embedded text layer to fall back on; safe on historical scans).
@@ -1362,8 +1366,9 @@ _MODEL_LITEPARSE_EMBEDDED_SAMPLE = """---
 # models/liteparse-embedded.md (drop the leading '_') and pair it with a
 # content-only palaeographer rules file in pha.yaml:
 #   palaeographer: {rules: ocr, model: liteparse-embedded}
-# LiteParse is a LOCAL document/OCR parser, NOT an LLM (install the `lit` CLI:
-# `pip install liteparse` or `npm i -g @llamaindex/liteparse`).
+# LiteParse is a LOCAL document/OCR parser, NOT an LLM (install the `lit` CLI
+# with the Python package `pip install liteparse` — recommended, and it works
+# on Windows, where the npm alternative often fails).
 # Why this variant: `liteparse_ocr: embedded` ALWAYS parses the original PDF
 # page — great when the PDF carries a real text layer, harmful when that layer
 # is the residue of a bad OCR pass. `prefer-embedded` decides PER PAGE: pha

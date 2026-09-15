@@ -173,16 +173,20 @@
     Debian/Ubuntu `apt-get install tesseract-ocr tesseract-ocr-por` (one
     package per language); Windows `choco install tesseract` or the
     UB-Mannheim installer.
-  - LiteParse (`lit parse`, ships the `lit` CLI): the SAME `lit` CLI comes from
-    `pip install liteparse` (Python) or `npm i -g @llamaindex/liteparse`
-    (Node) — alternatives, not both; install with whichever toolchain you
-    already use (see resolution above — any normal install works). A bare
-    `command -v lit` hit is NOT proof (`lit` is a common name, e.g. LLVM's
-    test runner): `lit --version` must print a LiteParse version. LiteParse
-    BUNDLES its own Tesseract, so it needs no separate tesseract install. A
-    non-English `liteparse_lang` requires that language's traineddata to be
-    reachable — offline, set `TESSDATA_PREFIX` to a
-    directory containing the `.traineddata` files.
+  - LiteParse (`lit parse`, ships the `lit` CLI): install the **Python**
+    package — `pip install liteparse` (or `pipx install liteparse` /
+    `uv tool install liteparse`). That is the recommended route and it works
+    on Windows. `npm i -g @llamaindex/liteparse` (Node) is the alternative,
+    but it **frequently fails on Windows** (and can leave the wrong `lit` on
+    PATH) — if it fails, do NOT give up and do not tell the user LiteParse is
+    unavailable: install the Python package instead. The `lit` CLI is the SAME
+    either way — install one, not both (see resolution above — any normal
+    install works). A bare `command -v lit` hit is NOT proof (`lit` is a
+    common name, e.g. LLVM's test runner): `lit --version` must print a
+    LiteParse version. LiteParse BUNDLES its own Tesseract, so it needs no
+    separate tesseract install. A non-English `liteparse_lang` requires that
+    language's traineddata to be reachable — offline, set `TESSDATA_PREFIX` to
+    a directory containing the `.traineddata` files.
 - Pipeline: dropbox → palaeographer per-page transcription → optional editor
   transform → optional encoder (concatenated whole-document text, page-grounded
   records) → SQLite (FTS5 + embeddings, indexing both raw and edited

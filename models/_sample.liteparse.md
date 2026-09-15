@@ -4,9 +4,10 @@
 # tweak the settings, and select it per document/collection in pha.yaml:
 #   palaeographer: {rules: <rules-id>, model: liteparse}
 # LiteParse is a LOCAL document/OCR parser, NOT an LLM: install the `lit` CLI
-# (`pip install liteparse` or `npm i -g @llamaindex/liteparse`). It gives
-# layout-preserved text and (with json) per-item bounding boxes/confidence a
-# later reasoning/encoder stage can use.
+# with the Python package `pip install liteparse` — recommended, and it works
+# on Windows (the npm alternative `npm i -g @llamaindex/liteparse` often fails
+# there). It gives layout-preserved text and (with json) per-item bounding
+# boxes/confidence a later reasoning/encoder stage can use.
 # liteparse_ocr:
 #   fresh (default) — OCR the rendered page raster, so LiteParse must OCR it
 #     (no embedded text layer to fall back on; safe on historical scans).

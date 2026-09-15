@@ -373,9 +373,12 @@ In the model file (`models/<id>.md`):
   `embedded` (always use the PDF's own text layer, if it has one) or
   `prefer-embedded` (use that text layer only when it is good quality,
   otherwise OCR).
-  Needs the `lit` program installed. The same `lit` CLI comes from either
-  `pip install liteparse` or `npm i -g @llamaindex/liteparse` — install with
-  whichever toolchain you already use: pha finds engines the same way your
+  Needs the `lit` program installed. **Ask for the Python version** —
+  `pip install liteparse` (your assistant can run this for you). That is the
+  recommended way, and it works on Windows. The other way,
+  `npm i -g @llamaindex/liteparse`, often fails on Windows: if your assistant
+  tries it and it does not work, do not give up — the Python version does the
+  same job. pha finds engines the same way your
   Terminal does (its own PATH, then the PATH your login shell would provide),
   so any normal install just works. Verify
   with `lit --version` (it must print a LiteParse version, not some other

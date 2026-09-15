@@ -4,8 +4,9 @@
 # models/liteparse-embedded.md (drop the leading '_') and pair it with a
 # content-only palaeographer rules file in pha.yaml:
 #   palaeographer: {rules: ocr, model: liteparse-embedded}
-# LiteParse is a LOCAL document/OCR parser, NOT an LLM (install the `lit` CLI:
-# `pip install liteparse` or `npm i -g @llamaindex/liteparse`).
+# LiteParse is a LOCAL document/OCR parser, NOT an LLM (install the `lit` CLI
+# with the Python package `pip install liteparse` — recommended, and it works
+# on Windows, where the npm alternative often fails).
 # Why this variant: `liteparse_ocr: embedded` ALWAYS parses the original PDF
 # page — great when the PDF carries a real text layer, harmful when that layer
 # is the residue of a bad OCR pass. `prefer-embedded` decides PER PAGE: pha

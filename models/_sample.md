@@ -25,7 +25,10 @@
 #   tesseract_lang: por              # -l value ("por", "lat", "por+lat", ...; "" = tesseract default)
 #   tesseract_psm: 6                 # optional --psm page-segmentation mode
 #   engine: liteparse                # LiteParse `lit parse` (needs `lit` on PATH:
-#                                    #   pip install liteparse | npm i -g @llamaindex/liteparse)
+#                                    #   pip install liteparse — Python package,
+#                                    #   RECOMMENDED and works on Windows; npm i -g
+#                                    #   @llamaindex/liteparse is the alternative but
+#                                    #   often fails on Windows)
 #   liteparse_lang: por              # --ocr-language (Tesseract format, e.g. "por", "fra")
 #   liteparse_dpi: 300               # optional --dpi render resolution (default 150; 300 = quality)
 #   liteparse_format: text           # output: "text" (default) | "markdown" | "json"

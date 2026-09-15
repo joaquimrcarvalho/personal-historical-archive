@@ -50,9 +50,12 @@ ENGINES: dict[str, dict[str, Any]] = {
         # test runner).
         "parse_probe": ["lit", "parse", "--help"],
         "install": (
-            "pip install liteparse OR npm i -g @llamaindex/liteparse — the "
-            "SAME `lit` CLI either way; install with whichever toolchain you "
-            "already use. pha resolves engines through your login shell's "
+            "pip install liteparse — the RECOMMENDED route (Python package; "
+            "also pipx install liteparse / uv tool install liteparse). It "
+            "works on Windows, where the npm alternative "
+            "`npm i -g @llamaindex/liteparse` often fails: if npm fails, use "
+            "the Python package. Install ONE, not both — the `lit` CLI is the "
+            "SAME either way. pha resolves engines through your login shell's "
             "PATH, so any normal install works (PHA_ENGINE_PATH env for "
             "unusual locations). LiteParse bundles its own Tesseract."
         ),
