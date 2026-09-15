@@ -201,9 +201,10 @@ export class LocalConnection {
       let rawFile: string | undefined;
       let editedFile: string | undefined;
       if (lib) {
-        // page file: source stem (dir-of-images) else page-NNN
+        // page file: source stem (dir-of-images) else page-NNN.
+        // source_name is stored WITHOUT extension, so append (not replace).
         const pageName = pg.source_name
-          ? pg.source_name.replace(/\.[^.]+$/, ".md")
+          ? `${pg.source_name.replace(/\.[^.]+$/, "")}.md`
           : `page-${String(pg.page_no).padStart(3, "0")}.md`;
         rawFile = findVariant(lib, "transcription-", pageName,
           doc.palaeographer ? variantPrefix("transcription", doc.palaeographer, doc.palaeographer_model) : undefined);
@@ -214,7 +215,7 @@ export class LocalConnection {
       const rdir = path.join(this._paths!.renders, doc.sha256);
       if (fs.existsSync(rdir)) {
         const cand = pg.source_name
-          ? path.join(rdir, pg.source_name.replace(/\.[^.]+$/, ".jpg"))
+          ? path.join(rdir, `${pg.source_name.replace(/\.[^.]+$/, "")}.jpg`)
           : path.join(rdir, `p${String(pg.page_no).padStart(3, "0")}.jpg`);
         renderFile = fs.existsSync(cand) ? cand : undefined;
       }
