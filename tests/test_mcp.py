@@ -269,3 +269,71 @@ def test_get_page_reports_navigation(tmp_path):
     assert first["overview_url"].endswith("/doc/testcol-doc/")
     last = fns["pha_get_page"](doc_id, 2)
     assert last["prev_page"] == 1 and last["next_page"] is None
+
+
+# ------------------------------------------------------- bibliographic reference
+
+SIDECAR = """<?xml version="1.0"?>
+<mods xmlns="http://www.loc.gov/mods/v3" version="3.8">
+  <titleInfo><title>Documentos históricos do Padroado do Oriente</title><partNumber>IV</partNumber></titleInfo>
+  <name type="personal"><namePart type="family">Silva</namePart><namePart type="given">António</namePart></name>
+  <location><shelfLocator>BNP RES. 1234 V.</shelfLocator></location>
+  <recordInfo><recordOrigin>human-supplied</recordOrigin></recordInfo>
+</mods>
+"""
+
+
+def _tools(mcp):
+    import asyncio
+
+    return {t.name: t.fn for t in asyncio.run(mcp.list_tools())}
+
+
+def test_page_and_document_carry_the_reference(tmp_path):
+    """A remote client must get the reference without reaching the dropbox."""
+    cfg = _make_config(tmp_path)
+    ids = _seed(cfg)
+    (cfg.dropbox / "collections" / "testcol" / "doc.mods.xml").write_text(
+        SIDECAR, encoding="utf-8")
+    from personal_historical_archive.ingest import sync_bibliography
+
+    conn = db.connect(cfg.db_path)
+    try:
+        sync_bibliography(cfg, conn)
+    finally:
+        conn.close()
+
+    fns = _tools(mcp_server.make_server(cfg))
+
+    page = fns["pha_get_page"](document_id=ids["doc1"], page_no=1)
+    assert page["reference"].startswith("Silva, António")
+    assert page["reference_verified"] is True
+    assert page["bibliography"]["part_number"] == "IV"
+
+    doc = fns["pha_get_document"](document_id=ids["doc1"])
+    assert doc["reference"].startswith("Silva, António")
+
+    listing = fns["pha_list_documents"]()
+    row = next(r for r in listing if r["id"] == ids["doc1"])
+    assert row["reference"].startswith("Silva, António")
+
+    # the unreferenced root document is reported as such, not as an error
+    other = next(r for r in listing if r["id"] == ids["doc2"])
+    assert other["reference"] is None and other["reference_verified"] is None
+
+
+def test_reference_is_marked_when_machine_drafted(tmp_path):
+    cfg = _make_config(tmp_path)
+    ids = _seed(cfg)
+    (cfg.dropbox / "collections" / "testcol" / "doc.mods.xml").write_text(
+        SIDECAR.replace("human-supplied", "fetched-from-zotero-unverified"), encoding="utf-8")
+    from personal_historical_archive.ingest import sync_bibliography
+
+    conn = db.connect(cfg.db_path)
+    try:
+        sync_bibliography(cfg, conn)
+    finally:
+        conn.close()
+    fns = _tools(mcp_server.make_server(cfg))
+    page = fns["pha_get_page"](document_id=ids["doc1"], page_no=1)
+    assert page["reference_verified"] is False

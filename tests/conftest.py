@@ -119,6 +119,30 @@ def write_variant(cfg):
 
 
 @pytest.fixture
+def write_sidecar(cfg):
+    """Write a bibliographic sidecar beside a document (BIBLIOGRAPHY_PLAN.md).
+
+    Defaults to the MODS name; pass ``suffix=".dc.json"`` for the Dublin Core
+    variant. Uses the same lookup rule as the loader: ``<stem>.<suffix>`` in
+    the document's own directory layer.
+    """
+
+    def _write(doc_id: int, text: str, suffix: str = ".mods.xml") -> Path:
+        conn = _db.connect(cfg.db_path)
+        try:
+            doc = _db.get_document(conn, doc_id)
+        finally:
+            conn.close()
+        p = Path(doc["path"])
+        base, stem = (p, p.name) if p.is_dir() else (p.parent, p.stem)
+        f = base / f"{stem}{suffix}"
+        f.write_text(text, encoding="utf-8")
+        return f
+
+    return _write
+
+
+@pytest.fixture
 def write_render(cfg):
     """Write a page render under the document's CURRENT sha (renders/<sha>/…)."""
 

@@ -200,10 +200,22 @@ class _Index:
             conn, degraded, error = None, True, str(exc)
         if conn is not None:
             try:
-                rows = conn.execute(
-                    "SELECT id, filename, path, dir_path, sha256, page_count, status, "
-                    "created_at FROM documents"
-                ).fetchall()
+                try:
+                    rows = conn.execute(
+                        "SELECT d.id, d.filename, d.path, d.dir_path, d.sha256, d.page_count, "
+                        "d.status, d.created_at, b.citation AS reference, "
+                        "b.parsed_json AS reference_json, b.source_format AS reference_format, "
+                        "b.record_origin AS reference_origin "
+                        "FROM documents d LEFT JOIN document_bibliography b "
+                        "ON b.document_id = d.id"
+                    ).fetchall()
+                except sqlite3.Error:
+                    # A database written before bibliographic sidecars existed:
+                    # serve everything else, just without references.
+                    rows = conn.execute(
+                        "SELECT id, filename, path, dir_path, sha256, page_count, status, "
+                        "created_at FROM documents"
+                    ).fetchall()
             except sqlite3.Error as exc:
                 rows, degraded, error = [], True, str(exc)
             finally:
@@ -259,6 +271,57 @@ def _document_variants(cfg: Config, doc: dict) -> list[str]:
     if doc_dir is None or not doc_dir.is_dir():
         return []
     return sorted(d.name for d in doc_dir.iterdir() if d.is_dir())
+
+
+def _reference_of(doc: dict) -> str | None:
+    """The stored bibliographic reference for a document, if it has one."""
+    return doc.get("reference") or None
+
+
+def _reference_verified(doc: dict) -> bool | None:
+    """False when the reference was machine-drafted rather than human-supplied.
+
+    Serve shows the marker next to a reference instead of presenting a
+    machine-guessed imprint as fact. The rule itself lives in `bibliography`.
+    """
+    from .bibliography import verified_from_origin
+
+    if not _reference_of(doc):
+        return None
+    return verified_from_origin(doc.get("reference_origin"))
+
+
+def _reference_agent_drafted(doc: dict) -> bool:
+    """Whether this reference must be badged in the page itself.
+
+    Only a model-drafted reference is badged; one imported from the owner's
+    library is reported by `pha bib` instead of warning on every page.
+    """
+    from .bibliography import agent_drafted_from_origin
+
+    return agent_drafted_from_origin(doc.get("reference_origin"))
+
+
+def _reference_record(doc: dict) -> dict | None:
+    """The normalised record behind the reference, for API consumers."""
+    raw = doc.get("reference_json")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+
+
+def _reference_html(doc: dict) -> str:
+    """The reference as a small HTML block, with the model-drafted badge."""
+    ref = _reference_of(doc)
+    if not ref:
+        return ""
+    marker = ""
+    if _reference_agent_drafted(doc):
+        marker = ' <span class="muted">[unverified reference]</span>'
+    return f'<p class="muted">{html.escape(ref)}{marker}</p>'
 
 
 def make_handler(cfg: Config, index: _Index, quiet: bool = False):
@@ -384,6 +447,10 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                 "page_count": doc.get("page_count"),
                 "sha256": doc.get("sha256"),
                 "status": doc.get("status"),
+                # The document's bibliographic reference, when it has a sidecar.
+                "reference": _reference_of(doc),
+                "reference_verified": _reference_verified(doc),
+                "bibliography": _reference_record(doc),
                 "variants": _document_variants(cfg, doc),
                 # Navigable page addresses. `render_url` is the raw image; the
                 # viewer wraps it with prev/next and a position. `{page}` is
@@ -500,7 +567,8 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                        "else if(e.key==='ArrowRight'||e.key==='j'){if(N)location.href=N}"
                        "});</script>")
             self._html(HTTPStatus.OK, _html_page(
-                f"{name} — p. {page}", header + main + footer, head_extra="".join(pre)))
+                f"{name} — p. {page}", header + main + _reference_html(doc) + footer,
+                head_extra="".join(pre)))
 
         def _overview(self, slug: str) -> None:
             """`/doc/{slug}/` — metadata, a page-range list and a jump box."""
@@ -520,6 +588,7 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                 f'<p class="muted">{html.escape(doc.get("rel_path") or "")}<br>'
                 f'sha {html.escape((doc.get("sha256") or "")[:12])} · '
                 f'{html.escape(doc.get("status") or "?")}</p>',
+                _reference_html(doc),
                 '<h2>Pages</h2>',
                 f'<p class="ranges">{_range_links(slug, total)}</p>',
                 f'<form action="{_go_url(slug)}" method="get"><label>Go to page '

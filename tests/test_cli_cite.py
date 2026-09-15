@@ -114,3 +114,93 @@ def test_cite_prints_the_viewer_url(cfg, add_document, write_variant, capsys):
     cli.cmd_cite(cfg, _args(doc=doc_id, edited=True, json=False))
     out = capsys.readouterr().out
     assert "url:" in out and "/doc/colx-d/p001" in out
+
+
+# --------------------------------------------------------------- bibliographic reference
+
+SIDECAR = """<?xml version="1.0"?>
+<mods xmlns="http://www.loc.gov/mods/v3" version="3.8">
+  <titleInfo><title>Documentos históricos do Padroado do Oriente</title><partNumber>IV</partNumber></titleInfo>
+  <name type="personal"><namePart type="family">Silva</namePart><namePart type="given">António</namePart></name>
+  <originInfo><place><placeTerm type="text">Lisboa</placeTerm></place>
+    <publisher>Imprensa Nacional</publisher><dateIssued>1947</dateIssued></originInfo>
+  <location><shelfLocator>BNP RES. 1234 V.</shelfLocator></location>
+  <recordInfo><recordIdentifier source="pha">1</recordIdentifier>
+    <recordOrigin>human-supplied</recordOrigin></recordInfo>
+</mods>
+"""
+
+
+def test_cite_uses_the_bibliographic_sidecar(cfg, add_document, write_variant,
+                                            write_sidecar, capsys):
+    """The citation names the WORK, and still names the variant it rests on."""
+    doc_id = add_document()
+    write_variant(doc_id, "edited-french-ocr@deepseek-v4-flash", 1, "real text")
+    write_sidecar(doc_id, SIDECAR)
+
+    cli.cmd_cite(cfg, _args(doc=doc_id, edited=True))
+    data = json.loads(capsys.readouterr().out)
+    assert data["citation"].startswith("Silva, António. Documentos históricos")
+    assert "vol. IV" in data["citation"]
+    assert "Imprensa Nacional, 1947" in data["citation"]
+    assert "BNP RES. 1234 V." in data["citation"]
+    # the archive locator survives, so the reading cited is still explicit
+    assert data["citation"].endswith("— doc 1, p. 1 (edited: french-ocr@deepseek-v4-flash)")
+    assert data["reference_verified"] is True
+    assert data["bibliography"]["shelfmark"] == "BNP RES. 1234 V."
+    assert data["reference_source"].endswith("d.mods.xml")
+
+
+def test_cite_without_a_sidecar_is_unchanged(cfg, add_document, write_variant, capsys):
+    """The regression guard: no sidecar means byte-identical old behaviour."""
+    doc_id = add_document()
+    write_variant(doc_id, "edited-french-ocr@deepseek-v4-flash", 1, "real text")
+    cli.cmd_cite(cfg, _args(doc=doc_id, edited=True))
+    data = json.loads(capsys.readouterr().out)
+    assert data["citation"] == "d.pdf — doc 1, p. 1 (edited: french-ocr@deepseek-v4-flash)"
+    assert data["reference"] is None and data["bibliography"] is None
+
+
+def test_cite_marks_a_model_drafted_reference(cfg, add_document, write_variant,
+                                              write_sidecar, capsys):
+    """An invented reference must never look like a verified one."""
+    doc_id = add_document()
+    write_variant(doc_id, "edited-french-ocr@deepseek-v4-flash", 1, "real text")
+    write_sidecar(doc_id, SIDECAR.replace("human-supplied", "agent-drafted-unverified"))
+    cli.cmd_cite(cfg, _args(doc=doc_id, edited=True))
+    data = json.loads(capsys.readouterr().out)
+    assert data["reference_verified"] is False
+    assert data["citation"].endswith("[unverified reference]")
+
+
+def test_cite_does_not_badge_a_library_import(cfg, add_document, write_variant,
+                                              write_sidecar, capsys):
+    """Un-reviewed is not the same as model-drafted: a Zotero import is the
+    owner's own data, so `pha bib` reports it and the footnote stays clean."""
+    doc_id = add_document()
+    write_variant(doc_id, "edited-french-ocr@deepseek-v4-flash", 1, "real text")
+    write_sidecar(doc_id, SIDECAR.replace("human-supplied", "fetched-from-zotero-unverified"))
+    cli.cmd_cite(cfg, _args(doc=doc_id, edited=True))
+    data = json.loads(capsys.readouterr().out)
+    assert data["reference_verified"] is False     # still un-reviewed
+    assert "[unverified reference]" not in data["citation"]
+
+
+def test_a_broken_sidecar_warns_but_still_cites(cfg, add_document, write_variant,
+                                                write_sidecar, capsys):
+    doc_id = add_document()
+    write_variant(doc_id, "edited-french-ocr@deepseek-v4-flash", 1, "real text")
+    write_sidecar(doc_id, "<mods> truncated")
+    cli.cmd_cite(cfg, _args(doc=doc_id, edited=True))
+    data = json.loads(capsys.readouterr().out)
+    assert data["citation"] == "d.pdf — doc 1, p. 1 (edited: french-ocr@deepseek-v4-flash)"
+
+
+def test_page_json_carries_the_reference(cfg, add_document, write_sidecar, capsys):
+    doc_id = add_document()
+    write_sidecar(doc_id, SIDECAR)
+    cli.cmd_page(cfg, SimpleNamespace(doc=doc_id, page=1, edited=False, editor=None, json=True))
+    data = json.loads(capsys.readouterr().out)
+    assert data["reference"].startswith("Silva, António")
+    assert data["bibliography"]["part_number"] == "IV"
+    assert data["reference_verified"] is True

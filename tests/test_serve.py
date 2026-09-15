@@ -320,3 +320,79 @@ def test_meta_reports_the_navigation_urls(cfg, add_document, server):
     assert data["viewer_url"] == "/doc/colx-d/p{page}"
     assert data["overview_url"] == "/doc/colx-d/"
     assert data["render_url"] == "/doc/colx-d/p{page}.jpg"      # unchanged
+
+
+# ------------------------------------------------------- bibliographic reference
+
+SIDECAR = """<?xml version="1.0"?>
+<mods xmlns="http://www.loc.gov/mods/v3" version="3.8">
+  <titleInfo><title>Documentos históricos do Padroado do Oriente</title><partNumber>IV</partNumber></titleInfo>
+  <name type="personal"><namePart type="family">Silva</namePart><namePart type="given">António</namePart></name>
+  <originInfo><place><placeTerm type="text">Lisboa</placeTerm></place>
+    <publisher>Imprensa Nacional</publisher><dateIssued>1947</dateIssued></originInfo>
+  <location><shelfLocator>BNP RES. 1234 V.</shelfLocator></location>
+  <recordInfo><recordOrigin>human-supplied</recordOrigin></recordInfo>
+</mods>
+"""
+
+
+def _sync(cfg):
+    from personal_historical_archive.ingest import sync_bibliography
+
+    conn = _db.connect(cfg.db_path)
+    try:
+        sync_bibliography(cfg, conn)
+    finally:
+        conn.close()
+
+
+def test_meta_and_viewer_carry_the_bibliographic_reference(cfg, add_document, write_sidecar):
+    doc_id = add_document()
+    write_sidecar(doc_id, SIDECAR)
+    _sync(cfg)
+    s = _Server(cfg)
+    try:
+        status, _ctype, body = s.get("/doc/colx-d/meta.json")
+        assert status == 200
+        data = json.loads(body)
+        assert data["reference"].startswith("Silva, António")
+        assert data["reference_verified"] is True
+        assert data["bibliography"]["shelfmark"] == "BNP RES. 1234 V."
+
+        status, _ctype, body = s.get("/doc/colx-d/p001")
+        assert status == 200
+        assert "BNP RES. 1234 V." in body.decode()
+
+        status, _ctype, body = s.get("/doc/colx-d/")
+        assert status == 200
+        assert "BNP RES. 1234 V." in body.decode()
+    finally:
+        s.close()
+
+
+def test_meta_without_a_sidecar_has_no_reference(cfg, add_document):
+    add_document()
+    s = _Server(cfg)
+    try:
+        status, _ctype, body = s.get("/doc/colx-d/meta.json")
+        assert status == 200
+        data = json.loads(body)
+        assert data["reference"] is None and data["bibliography"] is None
+    finally:
+        s.close()
+
+
+def test_serve_still_works_without_the_bibliography_table(cfg, add_document):
+    """An archive written before sidecars existed must still serve."""
+    add_document()
+    conn = _db.connect(cfg.db_path)
+    conn.execute("DROP TABLE document_bibliography")
+    conn.commit()
+    conn.close()
+    s = _Server(cfg)
+    try:
+        status, _ctype, body = s.get("/doc/colx-d/meta.json")
+        assert status == 200
+        assert json.loads(body)["reference"] is None
+    finally:
+        s.close()

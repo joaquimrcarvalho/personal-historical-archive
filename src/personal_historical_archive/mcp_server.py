@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastmcp import FastMCP
 
 from . import addresses
@@ -9,6 +11,35 @@ from .config import Config
 from .ingest import make_vision_client, scan_once
 from .model_client import ModelClient
 from .search import search as run_search
+
+
+def _verified_from_origin(origin: str | None) -> bool | None:
+    """Map a stored recordOrigin to a verified flag. The rule lives in `bibliography`."""
+    from .bibliography import verified_from_origin
+
+    return verified_from_origin(origin)
+
+
+def _bibliography_fields(conn, doc_id: int) -> dict:
+    """The stored bibliographic reference for a document, if it has one.
+
+    Read from the snapshot rather than the sidecar so a remote client never
+    needs the dropbox. `pha cite` on the archive machine reads the file live.
+    """
+    row = db.get_bibliography(conn, doc_id)
+    if row is None:
+        return {"reference": None, "reference_verified": None,
+                "reference_source": None, "bibliography": None}
+    try:
+        parsed = json.loads(row["parsed_json"]) if row["parsed_json"] else None
+    except (ValueError, TypeError):
+        parsed = None
+    return {
+        "reference": row["citation"] or None,
+        "reference_verified": _verified_from_origin(row["record_origin"]),
+        "reference_source": row["sidecar_path"],
+        "bibliography": parsed,
+    }
 
 
 def make_server(cfg: Config) -> FastMCP:
@@ -85,6 +116,7 @@ def make_server(cfg: Config) -> FastMCP:
             rel_path = addresses.document_rel_path(cfg, doc)
             out["slug"] = addresses.doc_slug(rel_path)
             out["rel_path"] = rel_path
+            out.update(_bibliography_fields(conn, document_id))
             return out
         finally:
             conn.close()
@@ -145,6 +177,9 @@ def make_server(cfg: Config) -> FastMCP:
             out["next_page"] = page_no + 1 if (total and page_no < total) else None
             out["page_url"] = addresses.viewer_url(cfg.serve_base_url, out["slug"], page_no)
             out["overview_url"] = addresses.overview_url(cfg.serve_base_url, out["slug"])
+            # The document's bibliographic reference, so a client can cite the
+            # work without re-parsing a sidecar it cannot reach.
+            out.update(_bibliography_fields(conn, document_id))
             # edited versions (all editors that produced one)
             edits = conn.execute(
                 "SELECT editor, text FROM page_edits WHERE page_id = ? AND status='done'",
@@ -194,10 +229,15 @@ def make_server(cfg: Config) -> FastMCP:
         conn = db.connect(cfg.db_path)
         try:
             docs = db.list_documents(conn, status=status, limit=limit, collection=collection)
+            refs = db.bibliography_for_documents(conn)
             out = []
             for d in docs:
                 row = {k: d[k] for k in d.keys()}
                 row["slug"] = addresses.document_slug(cfg, d)
+                stored = refs.get(d["id"])
+                row["reference"] = (stored["citation"] if stored else None) or None
+                row["reference_verified"] = (
+                    _verified_from_origin(stored["record_origin"]) if stored else None)
                 out.append(row)
             return out
         finally:

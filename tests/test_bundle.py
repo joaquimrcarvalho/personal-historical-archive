@@ -393,3 +393,59 @@ def test_bundle_single_document_target(tmp_path, monkeypatch):
         assert pages[0]["raw_text"] == "ONLY PAGE"
     finally:
         conn.close()
+
+
+# ------------------------------------------------------- bibliographic sidecar
+
+SIDECAR = """<?xml version="1.0"?>
+<mods xmlns="http://www.loc.gov/mods/v3" version="3.8">
+  <titleInfo><title>Documentos históricos do Padroado do Oriente</title></titleInfo>
+  <recordInfo><recordOrigin>human-supplied</recordOrigin></recordInfo>
+</mods>
+"""
+
+
+def test_bundle_carries_the_bibliographic_sidecar(tmp_path, monkeypatch):
+    """The reference must travel with the document — a bundle that drops it is
+    the failure mode that ruled out a central bibliography file."""
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    monkeypatch.setattr("personal_historical_archive.bundle.ModelClient", _NoEmbed)
+
+    cfg_a = _make_cfg(tmp_path, "projA")
+    seeded = _seed_archive_a(cfg_a, tmp_path)
+    cfg_a = seeded["cfg"]
+    sidecar = cfg_a.dropbox / "collections" / "COLX" / "doc.mods.xml"
+    sidecar.write_text(SIDECAR, encoding="utf-8")
+
+    bundle_dir = tmp_path / "bundle"
+    export_bundle(cfg_a, ["COLX"], out=bundle_dir, verbose=False)
+    assert (bundle_dir / "dropbox/collections/COLX/doc.mods.xml").exists()
+    manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["documents"][0]["bibliography"] == ["collections/COLX/doc.mods.xml"]
+
+    cfg_b = _make_cfg(tmp_path, "projB")
+    cfg_b.ensure_dirs()
+    import_bundle(cfg_b, bundle_dir, verbose=False)
+    assert (cfg_b.dropbox / "collections" / "COLX" / "doc.mods.xml").exists()
+
+
+def test_bundle_without_a_sidecar_still_exports(tmp_path, monkeypatch):
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    monkeypatch.setattr("personal_historical_archive.bundle.ModelClient", _NoEmbed)
+    cfg_a = _make_cfg(tmp_path, "projA")
+    cfg_a = _seed_archive_a(cfg_a, tmp_path)["cfg"]
+    bundle_dir = tmp_path / "bundle"
+    export_bundle(cfg_a, ["COLX"], out=bundle_dir, verbose=False)
+    manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["documents"][0]["bibliography"] == []
+
+
+def test_bundle_move_removes_the_bibliographic_sidecar(tmp_path, monkeypatch):
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    monkeypatch.setattr("personal_historical_archive.bundle.ModelClient", _NoEmbed)
+    cfg_a = _make_cfg(tmp_path, "projA")
+    cfg_a = _seed_archive_a(cfg_a, tmp_path)["cfg"]
+    sidecar = cfg_a.dropbox / "collections" / "COLX" / "doc.mods.xml"
+    sidecar.write_text(SIDECAR, encoding="utf-8")
+    export_bundle(cfg_a, ["COLX"], out=tmp_path / "bundle", move=True, verbose=False)
+    assert not sidecar.exists()

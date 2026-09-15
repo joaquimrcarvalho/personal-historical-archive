@@ -279,6 +279,63 @@ archive directory does not need the source.
   top-level `notes/README.md`, the seed template), plus `obsidian-integration.md`
   in the archive's `notes/`.
 
+### Bibliographic references (sidecars)
+
+A document may carry a full bibliographic reference in a **sidecar beside it**:
+`<stem>.dc.json` (JSON — the structured form a human edits), `<stem>.bib`
+(BibTeX — the form an agent can draft from the scan, and a human can still
+edit), or `<stem>.mods.xml` (MODS 3.8 — a machine interchange format, e.g. what
+Zotero exports). A directory-of-images document keeps it *inside* the folder
+(`vol04/vol04.dc.json`). All three parse into one record, so the format never
+changes how a citation looks. Key spelling is forgiving (`part_number`,
+`partNumber` and `dcterms:partNumber` are one field; BibTeX reads
+`record_origin` or `recordOrigin`), so a qualified Dublin Core JSON-LD record
+also works. If more than one sidecar exists, **JSON wins** (it is the one a
+human maintains) and `pha cite` warns.
+
+- **Drafting a reference from a scan is allowed — and must be marked.** Reading
+  a title page to write a `.bib` needs no Zotero, which is the point of the
+  format. But the entry MUST carry `record_origin = {agent-drafted-unverified}`
+  (`pha bib <doc> --to-bibtex --origin agent-drafted-unverified --write`), which
+  badges every citation `[unverified reference]` until a human checks it. Never
+  remove that marker yourself, and never invent a shelfmark, publisher, volume
+  or date: a wrong one reads exactly like a correct one. Only a human may set
+  `human-supplied` / `human-confirmed`.
+- **Never tell a human to hand-edit MODS XML.** It is an interchange format.
+  Convert it once — `pha bib <doc> --to-json --write` for editable JSON, or
+  `--to-bibtex` for BibTeX (add `--write` to save; `--keep-others` to keep the
+  other formats, `--qualified` for JSON-LD).
+
+- **The rule is presence-only — no inheritance, no default.** A document without
+  a sidecar keeps the filename-only citation. Do NOT copy a neighbouring
+  document's reference, and do not add a sidecar to "fill in" a collection: an
+  inherited reference is a confidently wrong citation, which is worse than none.
+  `pha bib` lists what has no reference, and that gap is expected.
+- **Read and report, don't invent.** `pha bib <doc>` shows one document's
+  reference and `pha bib` the coverage. `pha cite <doc> <page>` renders it;
+  when the record is machine-drafted the citation ends `[unverified reference]`.
+- **Never state a reference as fact unless it is verified.** Bibliographic data
+  is exactly what a model confabulates: a wrong volume number, publisher or
+  shelfmark looks like a correct one. An agent may draft a sidecar when the
+  human asks, but must set `recordOrigin` to `agent-drafted-unverified`, must
+  not invent a shelfmark or an imprint, and must not overwrite a
+  `human-supplied` record without saying so. A wrong source record (e.g. a
+  creator that is really the holding library) belongs fixed in the source
+  system — Zotero — not silently patched in the sidecar.
+- **Editing a sidecar never re-transcribes a document.** A reference is
+  metadata: it does not touch `sha256`, page text, status or the library
+  version, so `pha scan` is not needed to pick it up (`pha cite` and `pha bib`
+  read the file live; the DB snapshot that `pha serve`/MCP read is refreshed by
+  `pha scan`, `pha reindex`, or any `pha bib` run).
+- **Importing from Zotero:** the local API exports MODS —
+  `curl "http://localhost:23119/api/users/0/items/<KEY>?format=mods"`. Strip
+  the `<note>` elements before saving (they carry the owner's annotations and
+  highlights and are ~86% of the bytes) and add a `recordInfo` with the
+  document id, the Zotero key and `fetched-from-zotero-unverified`. If more
+  than one sidecar is present the JSON wins and `pha cite` warns — resolve it,
+  `pha bib --check` reports it.
+- Design and rationale: `BIBLIOGRAPHY_PLAN.md`.
+
 ### DeepSeek Harness plugin (dsh-pha)
 
 A Harness agent on a machine with pha + a Harness install can expose the archive through the

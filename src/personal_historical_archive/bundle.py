@@ -74,6 +74,7 @@ from .ingest import (
     write_records_file,
 )
 from .sidecar import resolve_sidecar
+from . import bibliography
 from .model_client import ModelClient
 
 BUNDLE_FORMAT = "pha-bundle"
@@ -273,6 +274,24 @@ def export_bundle(
                     _copy2(pp, bdrop / pp.relative_to(cfg.dropbox))
                     copied.add(pp)
 
+            # --- bibliographic sidecar: the reference travels WITH the document.
+            # Without this a bundle silently drops it (the selection-file loop
+            # above does not know about it), which is the failure mode that
+            # ruled out a central bibliography file. A directory document's
+            # sidecar sits inside the folder and is already carried by
+            # _copy_tree; this covers the file case (and is a harmless no-op
+            # overwrite for the directory case).
+            bib_sidecars: list[str] = []
+            for suffix in bibliography.SIDECAR_SUFFIXES:
+                bp = Path(row["path"])
+                base, stem = (bp, bp.name) if bp.is_dir() else (bp.parent, bp.stem)
+                sidecar = base / f"{stem}{suffix}"
+                if sidecar.is_file():
+                    bib_sidecars.append(str(sidecar.relative_to(cfg.dropbox)))
+                    if sidecar.is_relative_to(cfg.dropbox) and sidecar not in copied:
+                        _copy2(sidecar, bdrop / sidecar.relative_to(cfg.dropbox))
+                        copied.add(sidecar)
+
             # --- library folder (the finished transcriptions/edits/records)
             slug = _doc_slug(row)
             rel_dir = Path(row["dir_path"] or "")
@@ -353,6 +372,9 @@ def export_bundle(
                 "slug": slug,
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
+                # dropbox-relative paths of the bibliographic sidecars carried
+                # with this document (empty when it has no reference)
+                "bibliography": bib_sidecars,
             })
             if verbose:
                 print(f"  + {rel}  ({row['status']}, {row['page_count'] or 0} pages, "
@@ -404,6 +426,14 @@ def _remove_bundled(
     - the library artifact folder and the database row for every bundled doc.
     """
     unit_paths = {u for _row, u in bundled}
+    # A document's bibliographic sidecar moves with it: bundling removes the
+    # document, and leaving its reference behind would orphan the file.
+    for _row, u in bundled:
+        base, stem = (u, u.name) if u.is_dir() else (u.parent, u.stem)
+        for suffix in bibliography.SIDECAR_SUFFIXES:
+            sidecar = base / f"{stem}{suffix}"
+            if sidecar.exists():
+                unit_paths.add(sidecar)
     covered = {c for c in coll_dirs if any(u != c and c in u.parents for u in unit_paths)}
     to_remove: set[Path] = set()
     if covered:

@@ -490,6 +490,132 @@ palaeographer, editor, status) followed by the text.
 
 ---
 
+## Giving a document its full bibliographic reference
+
+By default a citation says only which file and page it came from:
+
+```
+DocHistMissPadPortOriente_vol04_1548-1550.pdf — doc 22, p. 437
+```
+
+That identifies the scan, not the *work*. To make citations citable in a
+footnote, put a **reference file next to the document**, named after it:
+
+```
+dropbox/collections/DocHistMissPadPortOriente/
+    DocHistMissPadPortOriente_vol04_1548-1550.pdf
+    DocHistMissPadPortOriente_vol04_1548-1550.dc.json   ← the reference
+```
+
+(For a document that is a *folder* of images, the file goes inside the folder
+and is named after the folder: `vol04/vol04.dc.json`.)
+
+The format is **plain JSON** — write the fields you know and leave out the rest:
+
+```json
+{
+  "title": "Documentação para a história das missões do padroado português do Oriente",
+  "part_number": "IV",
+  "creators": [{ "name": "Rego, António da Silva", "role": "editor" }],
+  "place_of_publication": "Lisboa",
+  "publisher": "Agência Geral das Colónias",
+  "date_issued": "1950",
+  "shelfmark": "BNP RES. 1234 V.",
+  "repository": "Biblioteca Nacional de Portugal",
+  "record_origin": "human-supplied"
+}
+```
+
+Field names are forgiving: `part_number`, `partNumber` and
+`dcterms:partNumber` all mean the same thing, so you can paste a record from
+another tool unchanged. All the fields:
+
+| field | meaning |
+| --- | --- |
+| `title`, `sub_title` | the work's title |
+| `part_number`, `part_name` | the volume / part of a set |
+| `creators` | list of `{"name": ..., "role": ...}` — role is optional |
+| `place_of_publication`, `publisher`, `date_issued`, `edition` | the imprint |
+| `repository`, `shelfmark` | where the copy is, and its shelf mark |
+| `identifiers` | list of `{"value": ..., "type": ...}`, e.g. an ISBN |
+| `language`, `type`, `genre`, `format`, `extent`, `rights`, `classification`, `subject` | further description |
+| `is_part_of` | the containing work: `{"title": ..., "volume_number": ...}` |
+| `citation` | an exact citation string to use verbatim, instead of the assembled one |
+| `record_origin` | where the reference came from (see below) |
+
+Then:
+
+```bash
+pha bib <document>              # check what pha read from it
+pha cite <doc> <page>           # your citation now names the work
+```
+
+**If your reference came from Zotero** (which exports MODS, an XML format meant
+for machines, not people), you do not have to edit XML. Convert it once and edit
+the JSON from then on:
+
+```bash
+pha bib <doc> --to-json              # print the JSON for one document
+pha bib <doc> --to-json --write      # write it beside the document
+pha bib --to-json --write            # do this for every document that has one
+```
+
+### BibTeX, if you prefer it
+
+A `.bib` file works exactly the same way — put `<document>.bib` beside the
+document instead. This is also the format to use when **an assistant drafted the
+reference for you from the scan itself** (reading the title page), with no
+Zotero involved:
+
+```bibtex
+@book{rego1950,
+  title     = {Documentação para a história das missões do padroado português do Oriente},
+  editor    = {Rego, António da Silva},
+  volume    = {4},
+  address   = {Lisboa},
+  publisher = {Agência Geral das Colónias},
+  year      = {1950},
+  shelfmark = {BNP RES. 1234 V.},
+  record_origin = {human-supplied}
+}
+```
+
+`title`, `author`/`editor`/`translator`, `volume`, `address`, `publisher`,
+`year`, `edition`, `language`, `pages`, `isbn`, `url`, `series`+`number` and
+`keywords` are all understood; `shelfmark`, `repository`, `record_id` and
+`record_origin` are additions of ours. LaTeX accents (`{\'o}`, `\c{c}`) and
+UTF-8 both work, so a record pasted from anywhere reads correctly. To convert an
+existing reference into BibTeX, use `pha bib <doc> --to-bibtex [--write]`.
+
+**If an assistant drafted the reference, it must say so.** Drafting a reference
+from a scan is allowed and useful, but the entry must carry
+`record_origin = {agent-drafted-unverified}`:
+
+```bash
+pha bib <doc> --to-bibtex --origin agent-drafted-unverified --write
+```
+
+which makes every citation end with `[unverified reference]` until a person
+checks it. Never remove that marker without checking the reference against the
+book — an invented publisher, volume or shelf mark looks exactly like a right
+one. Once you have checked it, change the line to `record_origin = {human-supplied}`
+(or `human-confirmed`).
+
+**Nothing is inherited.** A document with no reference file simply keeps the
+old filename citation — pha never borrows a neighbouring document's reference,
+because a wrong citation is worse than a plain one. `pha bib` lists which
+documents still have no reference.
+
+`record_origin` says where the reference came from. A reference marked
+`agent-drafted-unverified` is shown with a `[unverified reference]` warning in
+every citation until a human confirms it. A reference merely *imported*
+(`fetched-from-zotero-unverified`, or a `.bib` with no `record_origin` at all)
+is **not** warned about in citations, because it is library data rather than a
+model's guess; `pha bib` reports it as not yet reviewed, and you can change
+`record_origin` to `human-confirmed` as you check it.
+
+---
+
 ## Reviewing and correcting the transcriptions
 
 You can read the library files and correct them. There are **two page

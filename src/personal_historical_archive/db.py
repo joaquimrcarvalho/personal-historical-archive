@@ -62,6 +62,16 @@ CREATE TABLE IF NOT EXISTS records (
     source TEXT,
     created_at REAL
 );
+CREATE TABLE IF NOT EXISTS document_bibliography (
+    document_id   INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    sidecar_path  TEXT,
+    sidecar_sha   TEXT,
+    source_format TEXT,
+    citation      TEXT,
+    parsed_json   TEXT,
+    record_origin TEXT,
+    updated_at    REAL NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_pages_doc ON pages(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS idx_edits_page ON page_edits(page_id);
@@ -698,3 +708,58 @@ def records_for_document(conn: sqlite3.Connection, doc_id: int) -> list[sqlite3.
     return conn.execute(
         "SELECT * FROM records WHERE document_id = ? ORDER BY id", (doc_id,)
     ).fetchall()
+
+
+# --------------------------------------------------------------------------- bibliography
+
+def set_bibliography(
+    conn: sqlite3.Connection,
+    doc_id: int,
+    *,
+    sidecar_path: str | None,
+    sidecar_sha: str | None,
+    source_format: str | None,
+    citation: str | None,
+    parsed_json: str | None,
+    record_origin: str | None,
+) -> None:
+    """Store (or replace) a document's bibliographic reference snapshot.
+
+    The snapshot exists so `pha serve`, the MCP tools and the public mirror can
+    read a reference with one SQL query instead of touching the filesystem per
+    request. It is derived data: the sidecar on disk is the source of truth, and
+    `sidecar_sha` is what decides whether the snapshot is stale.
+    """
+    _write(
+        conn,
+        "INSERT INTO document_bibliography "
+        "(document_id, sidecar_path, sidecar_sha, source_format, citation, "
+        " parsed_json, record_origin, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(document_id) DO UPDATE SET "
+        "sidecar_path=excluded.sidecar_path, sidecar_sha=excluded.sidecar_sha, "
+        "source_format=excluded.source_format, citation=excluded.citation, "
+        "parsed_json=excluded.parsed_json, record_origin=excluded.record_origin, "
+        "updated_at=excluded.updated_at",
+        (doc_id, sidecar_path, sidecar_sha, source_format, citation,
+         parsed_json, record_origin, _now()),
+    )
+
+
+def clear_bibliography(conn: sqlite3.Connection, doc_id: int) -> None:
+    """Drop a document's reference (its sidecar was removed)."""
+    _write(conn, "DELETE FROM document_bibliography WHERE document_id = ?", (doc_id,))
+
+
+def get_bibliography(conn: sqlite3.Connection, doc_id: int) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM document_bibliography WHERE document_id = ?", (doc_id,)
+    ).fetchone()
+
+
+def bibliography_for_documents(conn: sqlite3.Connection) -> dict[int, sqlite3.Row]:
+    """Every stored reference, keyed by document id (for index-style reads)."""
+    return {
+        r["document_id"]: r
+        for r in conn.execute("SELECT * FROM document_bibliography").fetchall()
+    }

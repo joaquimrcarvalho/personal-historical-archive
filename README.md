@@ -1022,6 +1022,90 @@ The server's host and port live in `config.yaml` (`serve: {host, port}`, default
 `127.0.0.1:8765`), and `pha cite` / `pha page --json` quote that base URL, so a
 citation and the server agree on where the viewer is.
 
+### Bibliographic references (sidecars)
+
+A page citation names the page; a **bibliographic reference** names the *work*
+the page belongs to — author, title, volume, place, publisher, date, repository,
+shelfmark. A document gets one by gaining a sidecar beside it:
+
+```
+dropbox/collections/COLX/vol04.pdf     →  vol04.dc.json      (JSON — you edit this)
+                                       →  vol04.mods.xml      (MODS 3.8 — machines write this)
+```
+
+For a directory-of-images document the sidecar lives *inside* the folder
+(`vol04/vol04.dc.json`), so it travels with it.
+
+**The rule is deliberately dumb: the sidecar exists, or it does not.** There is
+no inheritance from a parent directory and no default. That is the opposite of
+`pha.yaml` (where inheriting the collection's palaeographer is correct), and on
+purpose — an inherited *bibliographic* default produces a confident wrong
+citation, which is worse than no citation. A document without a sidecar keeps
+exactly the citation pha always printed.
+
+```bash
+pha bib                              # coverage: which documents have a reference
+pha bib <doc>                        # one document's reference, field by field
+pha bib --check                      # broken / empty / duplicated sidecars (exit 1)
+pha bib <doc> --to-json --write      # convert a MODS import into editable JSON
+pha cite <doc> <page>                # the reference + the exact variant cited
+```
+
+```text
+$ pha cite 22 437 --edited
+Rego, António da Silva. Documentação para a história das missões do padroado
+português do Oriente: India. vol. 4 (1548-1550). (Lisboa: AGÊNCIA GERAL DAS
+COLÓNIAS, 1950). — doc 22, p. 437 (edited: modern-portuguese@deepseek-v4-flash)
+```
+
+The archive's own locator (`— doc N, p. P (variant)`) is always kept, so a
+citation still says which reading it rests on. With no sidecar the output is
+unchanged.
+
+**Three formats, three jobs.** JSON is the structured form a person edits. MODS
+is the machine interchange format (what Zotero exports), so a library import
+never has to be hand-edited as XML. **BibTeX is the one an agent can draft from
+the scan itself** — reading a title page or colophon — with no Zotero, and a
+human can still correct it afterwards. All three parse into one record and
+render through one formatter, so `pha cite`, `pha page --json`, the library
+front matter, `pha serve` and the MCP tools cannot disagree. Key spelling is
+forgiving (`part_number` = `partNumber` = `dcterms:partNumber`; BibTeX reads
+`record_origin` or `recordOrigin`), so a qualified Dublin Core JSON-LD record
+from another tool parses unchanged and `pha bib --to-json --qualified` emits
+one. If more than one file exists the **JSON wins** (it is the one a human
+maintains, so an edit to it must not be overridden by a stale import) and
+`pha cite` warns — never silently.
+
+**References are marked, not trusted.** Bibliographic data is exactly what a
+model confabulates, so `recordInfo/recordOrigin` (MODS), `record_origin` (JSON)
+or `record_origin` (BibTeX) records where the reference came from. A
+**model-drafted** reference (`agent-drafted-unverified`) is badged
+`[unverified reference]` in every citation unless a human confirms it. A merely
+**imported** one — `fetched-from-zotero-unverified`, or a `.bib` with no
+provenance field — is the owner's own library data, so a footnote stays clean
+while `pha bib` still reports it as not yet reviewed: the two are deliberately
+different judgements. An agent may draft a reference when asked, but must mark
+it and must not invent a shelfmark or an imprint.
+
+**From Zotero.** Zotero's local API exports MODS directly:
+
+```bash
+curl "http://localhost:23119/api/users/0/items/<KEY>?format=mods" -o doc.mods.xml
+```
+
+Strip the `<note>` elements before saving — Zotero's export embeds every
+annotation and highlight, which is both a leak and 86% of the bytes — and add a
+`recordInfo` with the document id, the Zotero key and
+`fetched-from-zotero-unverified`. Then convert once, and edit the result:
+
+```bash
+pha bib --to-json --write          # every reference -> <stem>.dc.json
+pha bib <doc> --to-bibtex          # or a BibTeX entry (and --write to save it)
+```
+
+`pha bundle` carries the sidecar with the document; `pha bundle --move` deletes
+it too.
+
 ### Self-update
 
 `pha update` compares the installed version against the GitHub default branch

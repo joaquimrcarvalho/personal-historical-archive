@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import addresses
+from . import bibliography
 from . import db
 from .config import Config
 from .extract import is_supported, resolve_editor_id, resolve_encoder_id, resolve_palaeographer_id, resolve_prompt, encoder_files_for
@@ -24,6 +25,7 @@ from .ingest import (
     remove_library_artifact,
     remove_render_if_orphaned,
     scan_once,
+    sync_bibliography,
     watch,
     write_document_pages,
 )
@@ -195,6 +197,7 @@ def cmd_page(cfg: Config, args) -> None:
         slug = addresses.doc_slug(rel_path)
         render = addresses.render_path(cfg, doc, args.page, page["source_name"])
         total = doc["page_count"] or 0
+        bib, _bib_warning = bibliography.load_bibliography(doc)
         meta = {
             "document_id": doc["id"],
             "filename": doc["filename"],
@@ -217,6 +220,11 @@ def cmd_page(cfg: Config, args) -> None:
             "page_count": total,
             "prev_page": args.page - 1 if args.page > 1 else None,
             "next_page": args.page + 1 if (total and args.page < total) else None,
+            # The document's bibliographic reference, when it has a sidecar.
+            "reference": bibliography.compose_reference(bib) if bib else None,
+            "reference_source": bib.source_path if bib else None,
+            "reference_verified": (not bib.is_unverified()) if bib else None,
+            "bibliography": bib.to_dict() if bib else None,
             "page_url": addresses.viewer_url(cfg.serve_base_url, slug, args.page),
             "overview_url": addresses.overview_url(cfg.serve_base_url, slug),
         }
@@ -305,7 +313,15 @@ def cmd_cite(cfg: Config, args) -> None:
         slug = addresses.doc_slug(rel_path)
         label = addresses.variant_label(name)
         render = addresses.render_path(cfg, doc, args.page, page["source_name"])
-        citation = f"{doc['filename']} — doc {doc['id']}, p. {args.page} ({label})"
+        # The sidecar on disk is the source of truth, read live so an edited
+        # reference shows up without a scan. Absent a sidecar this is exactly
+        # the citation `pha cite` has always printed.
+        bib, bib_warning = bibliography.load_bibliography(doc)
+        if bib_warning:
+            print(f"warning: {bib_warning}", file=sys.stderr)
+        citation = bibliography.format_citation(
+            bib, doc_id=doc["id"], page_no=args.page, variant_label=label,
+            filename=doc["filename"])
         payload = {
             "ok": True,
             "citation": citation,
@@ -322,6 +338,12 @@ def cmd_cite(cfg: Config, args) -> None:
             "file": variant["file"],
             "render": str(render) if render else None,
             "render_exists": render is not None,
+            # The bibliographic reference behind the citation, so a client can
+            # format its own house style without re-parsing the sidecar.
+            "reference": bibliography.compose_reference(bib) if bib else None,
+            "reference_source": bib.source_path if bib else None,
+            "reference_verified": (not bib.is_unverified()) if bib else None,
+            "bibliography": bib.to_dict() if bib else None,
             # The viewer (not the bare jpg): a citation should land somewhere the
             # reader can page forward/back from.
             "url": addresses.viewer_url(cfg.serve_base_url, slug, args.page),
@@ -334,7 +356,213 @@ def cmd_cite(cfg: Config, args) -> None:
         print(f"  slug:  {slug}")
         print(f"  page:  {args.page}")
         print(f"  file:  {variant['file']}")
+        if bib:
+            print(f"  ref:   {bib.source_path}")
         print(f"  url:   {payload['url']}")
+    finally:
+        conn.close()
+
+
+def _bib_emit(cfg: Config, conn, args) -> None:
+    """`pha bib --to-json | --to-bibtex [<doc>] [--write]` — rewrite a reference
+    in the format that suits its next reader.
+
+    MODS is what Zotero exports (a machine interchange format); JSON is the
+    structured form a person edits; **BibTeX is the one an agent can draft from
+    a scan** with no external tool, and a human can still correct. Without
+    `--write` it prints; with it, the sidecar is written beside the document and
+    the other formats are removed (they would otherwise win the lookup) unless
+    `--keep-others`.
+    """
+    write = bool(getattr(args, "write", False))
+    keep_others = bool(getattr(args, "keep_others", False))
+    qualified = bool(getattr(args, "qualified", False))
+    origin = getattr(args, "origin", None)
+    to_bibtex = bool(getattr(args, "to_bibtex", False))
+    target_fmt = "bib" if to_bibtex else "dc"
+
+    if args.doc:
+        doc, matches = _resolve_doc_for_page(conn, args.doc)
+        if doc is None:
+            if matches:
+                names = ", ".join(f"#{d['id']} {d['filename']}" for d in matches[:8])
+                print(f"ambiguous document {args.doc!r} — matches: {names}", file=sys.stderr)
+            else:
+                print(f"no document matching {args.doc!r}", file=sys.stderr)
+            sys.exit(1)
+        docs = [doc]
+    else:
+        docs = conn.execute("SELECT * FROM documents ORDER BY id").fetchall()
+
+    converted = 0
+    skipped = 0
+    for doc in docs:
+        bib, _warning = bibliography.load_bibliography(doc)
+        if bib is None:
+            if args.doc:
+                print(f"{doc['filename']}: no reference to convert", file=sys.stderr)
+                sys.exit(1)
+            skipped += 1
+            continue
+        text = (bibliography.to_bibtex(bib, origin=origin) if to_bibtex
+                else bibliography.to_dc_json_text(bib, qualified=qualified))
+        if not write:
+            print(text, end="")
+            return
+        target = bibliography.sidecar_path_for(doc, target_fmt)
+        target.write_text(text, encoding="utf-8")
+        removed = []
+        if not keep_others:
+            for fmt in bibliography.FORMAT_PRECEDENCE:
+                if fmt == target_fmt:
+                    continue
+                other = bibliography.sidecar_path_for(doc, fmt)
+                if other.is_file():
+                    other.unlink()
+                    removed.append(other.name)
+        converted += 1
+        print(f"  {doc['filename']}: wrote {target.name}"
+              + (f" (removed {', '.join(removed)})" if removed else ""))
+    if write:
+        sync_bibliography(cfg, conn, verbose=False)
+        print(f"{converted} written as {'BibTeX' if to_bibtex else 'JSON'}"
+              + (f", {skipped} without a reference" if skipped else ""))
+
+
+def cmd_bib(cfg: Config, args) -> None:
+    """Bibliographic references: coverage, one document's reference, or problems.
+
+    `pha bib`            refresh the stored snapshot and summarise coverage
+    `pha bib <doc>`      one document's reference, field by field
+    `pha bib --check`    report broken / empty / duplicated sidecars (exit 1)
+
+    The sidecar on disk is the source of truth; this reads it live, and also
+    refreshes the DB snapshot that `pha serve` and the MCP tools read.
+    """
+    conn = db.connect(cfg.db_path)
+    try:
+        if getattr(args, "to_json", False) or getattr(args, "to_bibtex", False):
+            _bib_emit(cfg, conn, args)
+            return
+        if getattr(args, "doc", None):
+            doc, matches = _resolve_doc_for_page(conn, args.doc)
+            if doc is None:
+                if matches:
+                    names = ", ".join(f"#{d['id']} {d['filename']}" for d in matches[:8])
+                    print(f"ambiguous document {args.doc!r} — matches: {names}", file=sys.stderr)
+                else:
+                    print(f"no document matching {args.doc!r}", file=sys.stderr)
+                sys.exit(1)
+            path, fmt, conflict = bibliography.find_sidecar(doc)
+            bib, err = bibliography.load_bibliography(doc)
+            warning = conflict or err
+            payload = {
+                "ok": bib is not None,
+                "document_id": doc["id"],
+                "filename": doc["filename"],
+                "collection": doc["dir_path"] or "(root)",
+                "sidecar": str(path) if path else None,
+                "source_format": fmt,
+                "reference": bibliography.compose_reference(bib) if bib else None,
+                "verified": (not bib.is_unverified()) if bib else None,
+                "warning": warning,
+                "bibliography": bib.to_dict() if bib else None,
+            }
+            if getattr(args, "json", False):
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return
+            print(f"{doc['filename']}  (#{doc['id']})")
+            if bib is None:
+                print("  reference: none" + (f" — {warning}" if warning else ""))
+                print("  (pha cite falls back to the filename-only citation)")
+                return
+            print(f"  reference: {payload['reference']}")
+            print(f"  sidecar:   {path}  [{fmt}]")
+            if bib.creators:
+                print("  creators:  " + "; ".join(
+                    n.name + (f" ({n.role})" if n.role else "") for n in bib.creators))
+            rows = (
+                ("volume", bib.part_number),
+                ("host", bib.host.title if bib.host else None),
+                ("imprint", ", ".join(x for x in (bib.place, bib.publisher, bib.date_issued) if x)),
+                ("shelfmark", bib.shelfmark),
+                ("repository", bib.repository),
+                ("identifiers", "; ".join(
+                    f"{i.type}:{i.value}" if i.type else i.value for i in bib.identifiers)),
+                ("origin", bib.record_origin),
+            )
+            for label, value in rows:
+                if value:
+                    print(f"  {label + ':':<11}{value}")
+            print("  verified:  " + ("yes" if payload["verified"]
+                                    else "NO — machine-drafted; confirm it or fix the source"))
+            if warning:
+                print(f"  warning:   {warning}")
+            return
+
+        stats = sync_bibliography(cfg, conn, verbose=False)
+        docs = conn.execute("SELECT * FROM documents ORDER BY id").fetchall()
+        entries: list[dict] = []
+        problems: list[tuple] = []
+        for d in docs:
+            path, fmt, conflict = bibliography.find_sidecar(d)
+            bib, err = bibliography.load_bibliography(d)
+            entries.append({
+                "document_id": d["id"],
+                "filename": d["filename"],
+                "collection": d["dir_path"] or "(root)",
+                "sidecar": str(path) if path else None,
+                "source_format": fmt,
+                "reference": bibliography.compose_reference(bib) if bib else None,
+                "verified": (not bib.is_unverified()) if bib else None,
+                "warning": conflict or err,
+            })
+            if conflict:
+                problems.append((d["id"], d["filename"], "two sidecars", conflict))
+            elif err:
+                problems.append((d["id"], d["filename"], "unreadable sidecar", err))
+            elif path is not None and bib is None:
+                problems.append((d["id"], d["filename"], "empty sidecar", str(path)))
+
+        referenced = [e for e in entries if e["reference"]]
+        unverified = [e for e in entries if e["verified"] is False]
+        missing = [e for e in entries if not e["reference"]]
+
+        if getattr(args, "json", False):
+            print(json.dumps({
+                "ok": not problems,
+                "documents": len(entries),
+                "referenced": len(referenced),
+                "unreferenced": len(missing),
+                "unverified": len(unverified),
+                "refreshed": stats["parsed"],
+                "problems": [{"document_id": i, "filename": f, "kind": k, "detail": det}
+                             for i, f, k, det in problems],
+                "entries": entries,
+            }, ensure_ascii=False, indent=2))
+            return
+
+        if getattr(args, "check", False):
+            if problems:
+                for _i, name, kind, detail in problems:
+                    print(f"{name}: {kind} — {detail}")
+                sys.exit(1)
+            print(f"bibliographic sidecars: {len(referenced)} reference(s), "
+                  f"all readable and unambiguous")
+            return
+
+        print(f"bibliographic references: {len(referenced)}/{len(entries)} documents"
+              f"   ({stats['parsed']} refreshed)")
+        if unverified:
+            print(f"  {len(unverified)} unverified (machine-drafted) — marked in `pha cite`")
+        if problems:
+            print("\nproblems")
+            for _i, name, kind, detail in problems:
+                print(f"  {name}: {kind} — {detail}")
+        if missing:
+            print(f"\nno reference ({len(missing)})")
+            for e in missing:
+                print(f"  #{e['document_id']:<4} {e['collection']}/{e['filename']}")
     finally:
         conn.close()
 
@@ -2335,6 +2563,32 @@ def main(argv: list[str] | None = None) -> None:
                     help="palaeographer id to disambiguate when several transcriptions are filled")
     ct.add_argument("--json", action="store_true", help="structured output for agents/note generators")
     ct.set_defaults(fn=cmd_cite)
+
+    bb = sub.add_parser(
+        "bib",
+        help="bibliographic references: coverage, one document's reference, or problems")
+    bb.add_argument("doc", nargs="?", default=None,
+                    help="document id or filename substring (omit for a coverage report)")
+    bb.add_argument("--check", action="store_true",
+                    help="report only sidecars that are broken, empty or duplicated")
+    bb.add_argument("--to-json", action="store_true",
+                    help="print the reference as an editable JSON sidecar (a Zotero MODS import "
+                         "does not have to be hand-edited as XML)")
+    bb.add_argument("--to-bibtex", action="store_true",
+                    help="print the reference as a BibTeX entry — the format an agent can draft "
+                         "from a scan with no Zotero, and a human can still edit")
+    bb.add_argument("--write", action="store_true",
+                    help="with --to-json/--to-bibtex: write the sidecar beside the document")
+    bb.add_argument("--keep-others", action="store_true",
+                    help="with --write: keep sidecars in other formats (JSON would win the lookup)")
+    bb.add_argument("--origin", default=None,
+                    help="with --to-bibtex: the provenance to record, e.g. "
+                         "agent-drafted-unverified for a reference drafted from a scan")
+    bb.add_argument("--qualified", action="store_true",
+                    help="with --to-json: emit Dublin Core JSON-LD (dcterms:/pha: keys) "
+                         "instead of plain readable keys, for handing to another tool")
+    bb.add_argument("--json", action="store_true", help="structured output for agents")
+    bb.set_defaults(fn=cmd_bib)
 
     op = sub.add_parser(
         "open",

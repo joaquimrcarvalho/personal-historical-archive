@@ -1122,6 +1122,7 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
         "model": doc["palaeographer_model"] or None,
         "editor": doc["editor"] or None,
         "prompt": doc["prompt_source"],
+        **_bibliography_front_matter(doc),
     }
     for p in pages:
         fm = dict(base)
@@ -1225,6 +1226,7 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
         "palaeographer": doc["palaeographer"] or None,
         "editor": editor_id,
         "model": doc["editor_model"] or None,
+        **_bibliography_front_matter(doc),
     }
     for e in db.edits_for_document(conn, doc_id, editor_id):
         p = conn.execute("SELECT page_no, source_name, reviewed_at FROM pages WHERE id = ?", (e["page_id"],)).fetchone()
@@ -2519,6 +2521,13 @@ def scan_once(
                 ingest_file(cfg, conn, clients[key][0], f, clients[key][1],
                             explicit_prompt, reprocess, verbose, sidecar=sc)
             )
+        # Refresh bibliographic references LAST, so documents added by this scan
+        # are covered too. This is metadata only: it never touches page text,
+        # document status or sha256, so a new/edited sidecar cannot mark a
+        # document for re-transcription.
+        bib_stats = sync_bibliography(cfg, conn, verbose=verbose)
+        for _doc_id, name, warning in bib_stats["warnings"]:
+            print(f"  warning: {name}: {warning}", flush=True)
         return {"scanned": len(files), "results": results}
     finally:
         conn.close()
@@ -2573,6 +2582,87 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
     finally:
         conn.close()
         _release_scan_lock(cfg)
+
+
+def _bibliography_front_matter(doc) -> dict:
+    """Front-matter keys carrying a document's bibliographic reference.
+
+    Written into every library page file so whoever reads the page knows the
+    work it belongs to. Returns ``{}`` when the document has no sidecar, so the
+    front matter of an unreferenced document is byte-for-byte unchanged.
+    """
+    from . import bibliography as biblib
+
+    bib, _warning = biblib.load_bibliography(doc)
+    if bib is None:
+        return {}
+    out: dict = {"bibliographic_reference": biblib.compose_reference(bib)}
+    if bib.is_unverified():
+        out["bibliographic_reference_unverified"] = True
+    if bib.record_id:
+        out["bibliographic_record_id"] = bib.record_id
+    return out
+
+
+def sync_bibliography(cfg: Config, conn, doc_id: int | None = None,
+                      verbose: bool = False) -> dict:
+    """Refresh stored bibliographic references from document sidecars.
+
+    Cheap and idempotent: a sidecar is re-parsed only when its content hash
+    changed. A reference is *metadata*, so this never marks a document for
+    re-transcription and never alters its content hash, status or pages —
+    editing a sidecar cannot trigger a re-scan.
+
+    A document with no sidecar, or with a malformed/empty one, keeps no
+    reference, so `pha cite` falls back to its original filename-only string.
+    """
+    from . import bibliography as biblib
+
+    if doc_id is not None:
+        row = db.get_document(conn, doc_id)
+        docs = [row] if row is not None else []
+    else:
+        docs = conn.execute("SELECT * FROM documents").fetchall()
+    stats: dict = {"parsed": 0, "unchanged": 0, "cleared": 0, "warnings": []}
+    for doc in docs:
+        path, _fmt, warning = biblib.find_sidecar(doc)
+        if warning:
+            stats["warnings"].append((doc["id"], doc["filename"], warning))
+        stored = db.get_bibliography(conn, doc["id"])
+        if path is None:
+            if stored is not None:
+                db.clear_bibliography(conn, doc["id"])
+                stats["cleared"] += 1
+            continue
+        sha = biblib.sidecar_sha(path)
+        if (stored is not None and stored["sidecar_sha"] == sha
+                and stored["sidecar_path"] == str(path)):
+            stats["unchanged"] += 1
+            continue
+        loaded, err = biblib.load_bibliography(doc)
+        if err:
+            stats["warnings"].append((doc["id"], doc["filename"], err))
+        if loaded is None:
+            if stored is not None:
+                db.clear_bibliography(conn, doc["id"])
+                stats["cleared"] += 1
+            continue
+        db.set_bibliography(
+            conn, doc["id"],
+            sidecar_path=str(path),
+            sidecar_sha=sha,
+            source_format=loaded.source_format,
+            citation=biblib.compose_reference(loaded),
+            parsed_json=json.dumps(loaded.to_dict(), ensure_ascii=False),
+            record_origin=loaded.record_origin,
+        )
+        stats["parsed"] += 1
+    if stats["parsed"] or stats["cleared"]:
+        conn.commit()
+    if verbose and (stats["parsed"] or stats["cleared"]):
+        print(f"  bibliography: {stats['parsed']} parsed, "
+              f"{stats['cleared']} cleared", flush=True)
+    return stats
 
 
 def _documents_under(cfg: Config, conn, path: str) -> list | None:
