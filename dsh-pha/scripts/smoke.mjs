@@ -94,7 +94,8 @@ check(/require\(["']react["']\)/.test(bundle), 'client bundle keeps react extern
 check(bundle.includes('function slugifyPath'), 'client bundle inlines the link helpers')
 check(bundle.includes('function restorePlan'), 'client bundle inlines the reading-position memory')
 check(bundle.includes('function askContext'), 'client bundle inlines the ask-context helper')
-check(!/from\s*["']\.\/(links|viewmemory|askcontext)\.js["']/.test(bundle), 'client bundle has no leftover inline-module import')
+check(bundle.includes('function parseNumberQuery'), 'client bundle inlines the document-number query rule')
+check(!/from\s*["']\.\/(links|viewmemory|askcontext|query)\.js["']/.test(bundle), 'client bundle has no leftover inline-module import')
 check(!/^\s*import\s/m.test(bundle), 'client bundle imports nothing')
 
 console.log('')

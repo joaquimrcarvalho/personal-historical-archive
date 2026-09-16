@@ -172,6 +172,18 @@ nothing else. The CLI re-validates the path, so it can never reach outside `inbo
 `../` path, an absolute path or a dot-path is refused before anything moves, and a bare GET
 is rejected without an explicit confirmation.
 
+### Finding a document by number
+
+Every pha command — and most archive feedback — names a document by its number
+(`pha page 18 74`, "doc #18"). The view therefore shows that number on every row of the
+document list and of the search results (`#18  [status]  filename`), and the search box
+accepts it directly: typing **`#18`** opens document 18 instead of searching. A number that
+does not exist says so in the list rather than silently searching.
+
+Bare digits remain a full-text search on purpose — `1553` is a year and a perfectly good
+query — so only the explicit `#` form means "this document". (`src/client/query.js`,
+unit-tested by `node scripts/check-view.mjs`.)
+
 ### Ask about what you are reading
 
 The harness's **composer belongs to the session shell**, so the message box is already there

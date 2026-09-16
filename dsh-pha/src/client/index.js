@@ -7,6 +7,7 @@ import React from 'react'
 import { classifyLink, docSlugFor, parseWikilink, resolveNoteName, slugifyPath } from './links.js'
 import { restorePlan, seedState, seedUi, snapshotView } from './viewmemory.js'
 import { askContext, mergeDraft } from './askcontext.js'
+import { docNumberLabel, parseNumberQuery } from './query.js'
 
 async function get(path) {
   const res = await fetch(path)
@@ -304,6 +305,7 @@ const CSS = [
   '.pha-doc:hover{background:var(--dsw-alias-bg-layer-1,#f2f2f2)}',
   '.pha-doc.sel{background:var(--dsw-alias-bg-layer-2,#e8e8e8);border-color:var(--dsw-alias-border-l2,#999)}',
   '.pha-doc.sub{padding-left:22px}',
+  '.pha-doc-id{flex:0 0 auto;min-width:30px;text-align:right;font-size:11px;opacity:.55;font-variant-numeric:tabular-nums}',
   '.pha-ref{margin:3px 0 0;font-size:12.5px;line-height:1.4;color:var(--dsw-alias-label-secondary,inherit)}',
   '.pha-bib{border:1px solid var(--dsw-alias-border-l1,#333);border-radius:6px;padding:8px 10px;font-size:12px}',
   '.pha-bib-table{border-collapse:collapse;margin-top:6px}',
@@ -745,6 +747,15 @@ function PhaView(props) {
   async function doSearch() {
     const q = searchText.trim()
     if (!q) return
+    // `#18` names a document the way the feedback does (and the way every pha command
+    // does); bare digits stay a full-text search, so `1553` is still a year.
+    const wanted = parseNumberQuery(q)
+    if (wanted !== null) {
+      const doc = (state.docs || []).find((d) => Number(d.id) === wanted)
+      if (doc) { setState((s) => ({ ...s, docsErr: null })); openDoc(doc.id); return }
+      setState((s) => ({ ...s, docsErr: 'no document #' + wanted + ' in this archive' + (state.docs ? '' : ' (the document list has not loaded yet)') }))
+      return
+    }
     setState((s) => ({ ...s, searchMode: true, hits: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, noteMode: false, selectedNote: null, inboxSel: null }))
     const r = await get('/pha/search?q=' + encodeURIComponent(q) + '&limit=20')
     setState((s) => ({ ...s, hits: r && r.ok ? r.results : null }))
@@ -814,7 +825,7 @@ function PhaView(props) {
   )
 
   const searchHeader = h('div', { className: 'pha-search' },
-    h('input', { className: 'pha-input', placeholder: 'search the archive…', value: searchText, onChange: (e) => setSearchText(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') doSearch() } }),
+    h('input', { className: 'pha-input', placeholder: 'search the archive…  (#18 = document number)', value: searchText, onChange: (e) => setSearchText(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') doSearch() } }),
     h('button', { className: 'pha-btn primary', onClick: doSearch }, 'Search'),
     searchMode ? h('button', { className: 'pha-btn small', title: 'clear search', onClick: clearSearch }, '✕') : null,
   )
@@ -892,7 +903,8 @@ function PhaView(props) {
   if (searchMode) {
     body = (s.hits && s.hits.length) ? groups.map((g) => h('div', { className: 'pha-group', key: g.key },
       h('div', { className: 'pha-group-h' }, g.key + '  (' + g.docs.length + ')'),
-      g.docs.map((d) => h('div', { className: 'pha-doc' + (s.selectedId === d.id ? ' sel' : ''), key: d.id, onClick: () => openSearchDoc(d.id) },
+      g.docs.map((d) => h('div', { className: 'pha-doc' + (s.selectedId === d.id ? ' sel' : ''), key: d.id, title: 'doc #' + d.id, onClick: () => openSearchDoc(d.id) },
+        h('span', { className: 'pha-doc-id' }, docNumberLabel(d.id)),
         h('span', { className: 'pha-chip busy' }, d.count + ' hit' + (d.count > 1 ? 's' : '')),
         h('span', { className: 'pha-doc-name', title: d.filename }, d.filename),
       )),
@@ -901,7 +913,8 @@ function PhaView(props) {
     body = s.docsErr ? h('div', { className: 'pha-err' }, s.docsErr) : (s.docs ? h('div', null,
       groups.map((g) => h('div', { className: 'pha-group', key: g.key },
         h('div', { className: 'pha-group-h' }, g.key + '  (' + g.docs.length + ')'),
-        g.docs.map((d) => h('div', { className: 'pha-doc' + (s.selectedId === d.id ? ' sel' : ''), key: d.id, onClick: () => openDoc(d.id) },
+        g.docs.map((d) => h('div', { className: 'pha-doc' + (s.selectedId === d.id ? ' sel' : ''), key: d.id, title: 'doc #' + d.id, onClick: () => openDoc(d.id) },
+          h('span', { className: 'pha-doc-id' }, docNumberLabel(d.id)),
           h('span', { className: 'pha-chip ' + statusClass(d.status) }, d.status || '?'),
           h('span', { className: 'pha-doc-name', title: d.filename }, d.filename),
           // A reference is marked from the sidecar's presence on disk (right even before the

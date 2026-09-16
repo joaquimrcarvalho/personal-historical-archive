@@ -9,6 +9,7 @@
 // pin the round trip: what is remembered, what is seeded back synchronously, and what
 // still has to be loaded.
 import { askContext, mergeDraft } from '../src/client/askcontext.js'
+import { docNumberLabel, parseNumberQuery } from '../src/client/query.js'
 import { restorePlan, seedState, seedUi, snapshotView } from '../src/client/viewmemory.js'
 
 let failures = 0
@@ -89,6 +90,24 @@ eq(mergeDraft('', 'CTX'), 'CTX\n\n', 'empty draft: context first, room to type')
 eq(mergeDraft('  \n', 'CTX'), 'CTX\n\n', 'whitespace-only draft counts as empty')
 eq(mergeDraft('What does this say?', 'CTX'), 'What does this say?\n\nCTX\n\n', 'their question stays, context follows')
 eq(mergeDraft(null, 'CTX'), 'CTX\n\n', 'no draft at all')
+
+console.log('parseNumberQuery — "#18" is a document, "1553" is a search')
+eq(parseNumberQuery('#18'), 18, 'the form the feedback uses')
+eq(parseNumberQuery('  # 7 '), 7, 'whitespace and a space after # are tolerated')
+eq(parseNumberQuery('#0'), null, 'document numbers start at 1')
+eq(parseNumberQuery('18'), null, 'bare digits stay a full-text search (a year is a query)')
+eq(parseNumberQuery('1553'), null, 'a year is not a document number')
+eq(parseNumberQuery('#18a'), null, 'only digits after #')
+eq(parseNumberQuery('#'), null, 'a bare # is not a number')
+eq(parseNumberQuery('#18 extra'), null, 'nothing may follow the number')
+eq(parseNumberQuery(''), null, 'empty query')
+eq(parseNumberQuery(null), null, 'no query')
+
+console.log('docNumberLabel — the badge every row carries')
+eq(docNumberLabel(18), '#18', 'the archive number')
+eq(docNumberLabel('18'), '#18', 'accepts the string form the JSON gives')
+eq(docNumberLabel(0), '', 'no badge for a missing id')
+eq(docNumberLabel(null), '', 'no badge without an id')
 
 console.log('')
 if (failures > 0) {

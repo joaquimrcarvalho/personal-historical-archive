@@ -30,7 +30,7 @@ body = body.replace(/^import[^\n]*from\s*['"]react['"];?\s*\n/m, '')
 // A few pieces of pure logic live in their own dependency-free modules so
 // scripts/check-*.mjs can unit-test them directly (src/client/links.js, viewmemory.js).
 // The served bundle must stay ONE self-contained module, so inline each of them here.
-for (const name of ['links.js', 'viewmemory.js', 'askcontext.js']) {
+for (const name of ['links.js', 'viewmemory.js', 'askcontext.js', 'query.js']) {
   const modulePath = join(root, 'src/client', name)
   let source = readFileSync(modulePath, 'utf8')
   if (/^\s*import\s/m.test(source)) {
