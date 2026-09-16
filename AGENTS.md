@@ -504,10 +504,10 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   Sweep any leftovers with `pha prune [--dry-run]` (a content-cache GC; it
   never touches the DB or `library/`). **`pha prune --library-variants
   [--dry-run]` is the exception**: it deletes a bare `edited-<editor>` folder
-  that only duplicates its `@<model>` sibling, and only when every page in it is
-  exactly what the DB holds — a folder holding a different reading is reported
-  and kept. Never hand-delete a bare folder yourself; run the sweep and read its
-  report.
+  whose pages all survive elsewhere — exactly what the DB holds, or
+  byte-identical to its `@<model>` sibling — and reports (never deletes) a
+  folder holding a different reading. Never hand-delete a bare folder yourself;
+  run the sweep and read its report.
 - **After changing config**: re-run the matching pass (`pha scan`, `pha edit`,
   `pha encode`) so staleness-by-mtime picks up the change, then confirm with
   `pha status` / `pha_extraction_status`.

@@ -514,9 +514,14 @@ def _db_edited_bodies(conn, doc_id: int, editor: str) -> dict[str, str]:
     return out
 
 
+def _library_body(path: Path) -> str:
+    """A library page file's text without its front matter ("" if unreadable)."""
+    return (((_parse_library_file(path) or (None, ""))[1]) or "").strip()
+
+
 def prune_redundant_edited_dirs(cfg: Config, conn, dry_run: bool = False,
                                 verbose: bool = True) -> dict:
-    """Delete a bare ``edited-<rules>`` folder that is provably a stale alias.
+    """Delete a bare ``edited-<rules>`` folder that is provably a duplicate.
 
     The duplicate-edited-variants bug wrote one variant into two folders:
     ``edited-<rules>`` (while ``documents.editor_model`` was transiently NULL)
@@ -524,23 +529,32 @@ def prune_redundant_edited_dirs(cfg: Config, conn, dry_run: bool = False,
     folder, so the bare one is inert — but it still occupies disk and misleads
     anyone reading ``library/`` by hand.
 
-    The guard is the database: a bare folder is deleted **only when every page
-    file in it is exactly what the DB holds** for that document + editor, so it
-    is regenerable by ``pha export`` and holds nothing unique. Anything that
-    differs is reported and kept. Measured on jesuit-archive (2026-09-16): 25 of
-    34 pairs are identical (deletable), 9 hold a different reading (an extra
-    ``*waiting*`` partial run, a whole alternate OCR pass, or one page in another
-    translation generation).
+    A bare folder is deleted **only when nothing lives in it alone**. That is
+    proved two ways, and either is enough:
+
+    * every page file is exactly what the DB holds for that document + editor
+      (so ``pha export`` regenerates it), or
+    * every page file is body-identical to the same file in a model-qualified
+      sibling (so that folder keeps the same text byte for byte).
+
+    Anything else is a different reading — an abandoned ``*waiting*`` partial
+    run, a whole alternate OCR pass, one page of another translation generation,
+    or a page the DB has since moved on from — and is reported, never deleted.
+    Measured on jesuit-archive (2026-09-16): 25 of 34 pairs are duplicates
+    (deletable), 9 are different readings.
 
     Only a bare folder with a model-qualified sibling is considered — a
     bare-only variant is the document's only edited output — and never one that
     *is* the document's current model-less output. Returns
-    ``{"removed": [...], "refused": [...], "kept_bare_only": n, "bytes": n}``.
+    ``{"removed": [...], "refused": [...], "failed": [...], "kept_bare_only": n,
+    "bytes": n}``; a folder that could not be deleted is reported in ``failed``
+    rather than counted as removed.
     """
     from .addresses import parse_variant
 
     removed: list[dict] = []
     refused: list[dict] = []
+    failed: list[dict] = []
     kept_bare_only = 0
     total_bytes = 0
     for doc in db.list_documents(conn, limit=100000):
@@ -560,44 +574,65 @@ def prune_redundant_edited_dirs(cfg: Config, conn, dry_run: bool = False,
             if not qualified:
                 kept_bare_only += len(bare)  # the only edited output — keep
                 continue
-            folder = doc_dir / bare[0]
             # A model-less current editor writes the bare name: its qualified
             # sibling is the OLDER reading, so this folder must stay.
             if (_doc_field(doc, "editor") or None) == editor \
                     and not (_doc_field(doc, "editor_model") or None):
-                refused.append({"path": str(folder), "document_id": doc["id"],
+                refused.append({"path": str(doc_dir / bare[0]), "document_id": doc["id"],
                                 "reason": "current model-less variant"})
                 if verbose:
-                    print(f"  keep     {folder}  (the current model-less variant)")
+                    print(f"  keep     {doc_dir / bare[0]}  (the current model-less variant)")
                 continue
             bodies = _db_edited_bodies(conn, doc["id"], editor)
+            twins = [doc_dir / n for n in qualified]
             for name in bare:
                 folder = doc_dir / name
                 files = sorted(folder.glob("*.md"))
-                differing = sum(
-                    1 for f in files
-                    if bodies.get(f.name) != (
-                        (_parse_library_file(f) or (None, ""))[1] or "").strip()
-                )
-                if differing or not files:
+                if not files:
                     refused.append({"path": str(folder), "document_id": doc["id"],
-                                    "reason": ("no page files to compare" if not files
-                                               else "content differs from the database"),
+                                    "reason": "no page files to compare",
+                                    "differing": 0, "pages": 0})
+                    continue
+                local = {f.name: _library_body(f) for f in files}
+                from_db = all(bodies.get(n) == b for n, b in local.items())
+                twin = next((t.name for t in twins if all(
+                    (t / n).is_file() and _library_body(t / n) == b
+                    for n, b in local.items())), None)
+                if not from_db and twin is None:
+                    differing = sum(1 for n, b in local.items() if bodies.get(n) != b)
+                    refused.append({"path": str(folder), "document_id": doc["id"],
+                                    "reason": "content lives nowhere else",
                                     "differing": differing, "pages": len(files)})
                     if verbose:
                         print(f"  keep     {folder}  ({differing}/{len(files)} page(s) differ "
-                              f"from the database — inspect by hand)")
+                              f"from the database and no sibling holds them — inspect by hand)")
                     continue
                 nbytes = sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())
+                why = "identical to the database" if from_db else f"identical to {twin}"
                 if not dry_run:
-                    shutil.rmtree(folder, ignore_errors=True)
-                removed.append({"path": str(folder), "document_id": doc["id"],
-                                "editor": editor, "pages": len(files), "bytes": nbytes})
+                    # Never swallow the error: a sweep that reports "removed" while
+                    # the folder is still there is worse than no sweep at all.
+                    try:
+                        shutil.rmtree(folder)
+                    except OSError as e:
+                        failed.append({"path": str(folder), "document_id": doc["id"],
+                                       "reason": str(e)})
+                        if verbose:
+                            print(f"  FAILED   {folder}  could not delete: {e}")
+                        continue
+                    if folder.exists():
+                        failed.append({"path": str(folder), "document_id": doc["id"],
+                                       "reason": "still present after rmtree"})
+                        if verbose:
+                            print(f"  FAILED   {folder}  still present after delete")
+                        continue
+                removed.append({"path": str(folder), "document_id": doc["id"], "editor": editor,
+                                "pages": len(files), "bytes": nbytes, "why": why})
                 total_bytes += nbytes
                 if verbose:
                     print(f"  {'[dry-run] would remove' if dry_run else 'removed '} {folder}"
-                          f"  ({len(files)} pages, {nbytes / 1e6:.1f} MB — identical to the database)")
-    return {"removed": removed, "refused": refused,
+                          f"  ({len(files)} pages, {nbytes / 1e6:.1f} MB — {why})")
+    return {"removed": removed, "refused": refused, "failed": failed,
             "kept_bare_only": kept_bare_only, "bytes": total_bytes}
 
 

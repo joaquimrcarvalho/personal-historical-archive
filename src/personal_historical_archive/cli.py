@@ -1696,6 +1696,10 @@ def cmd_prune(cfg: Config, args) -> None:
             if res["kept_bare_only"]:
                 print(f"kept {res['kept_bare_only']} bare folder(s) with no model-qualified "
                       f"sibling (the document's only edited output)")
+            if res["failed"]:
+                print(f"FAILED to delete {len(res['failed'])} folder(s) — they are still on "
+                      f"disk (the reason is printed above each path)")
+                sys.exit(3)
             return
         n = prune_orphan_renders(cfg, conn, dry_run=args.dry_run, verbose=True)
         verb = "would remove" if args.dry_run else "removed"

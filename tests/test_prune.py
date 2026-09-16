@@ -4,6 +4,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from personal_historical_archive import cli
 from personal_historical_archive import db as _db
 from personal_historical_archive.config import Config
@@ -194,6 +196,24 @@ def test_prune_library_variants_removes_a_provably_redundant_folder(tmp_path):
     conn.close()
 
 
+def test_prune_library_variants_removes_a_folder_the_sibling_still_holds(tmp_path):
+    """A bare folder byte-identical to its `@model` sibling is a duplicate even
+    when the DB has moved on from both (the doc-54 case on jesuit-archive): the
+    surviving sibling keeps every page, so nothing is lost."""
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    doc_id, _pid = _variant_doc(cfg, conn, db_text="the DB moved on")
+    bare = _write_variant(cfg, conn, doc_id, "edited-mod", "an older export")
+    qual = _write_variant(cfg, conn, doc_id, "edited-mod@m1", "an older export")
+
+    res = prune_redundant_edited_dirs(cfg, conn, verbose=False)
+    assert [r["editor"] for r in res["removed"]] == ["mod"]
+    assert res["removed"][0]["why"] == "identical to edited-mod@m1"
+    assert not bare.parent.exists()
+    assert qual.exists()
+    conn.close()
+
+
 def test_prune_library_variants_keeps_a_different_reading(tmp_path):
     """A bare folder that is NOT the DB text is a different reading (an older
     OCR pass, another translation) — it must never be deleted."""
@@ -236,6 +256,39 @@ def test_prune_library_variants_dry_run_deletes_nothing(tmp_path):
     res = prune_redundant_edited_dirs(cfg, conn, dry_run=True, verbose=False)
     assert len(res["removed"]) == 1 and res["bytes"] > 0
     assert bare.exists()  # still there
+    conn.close()
+
+
+def test_prune_library_variants_reports_a_failed_delete(tmp_path, monkeypatch, capsys):
+    """A delete that does not happen must never be reported as removed (the first
+    run of this sweep did exactly that: `rmtree(ignore_errors=True)` swallowed a
+    permission error and still counted 25 folders as gone)."""
+    import personal_historical_archive.ingest as ingest
+
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    doc_id, _pid = _variant_doc(cfg, conn)
+    bare = _write_variant(cfg, conn, doc_id, "edited-mod", "same text")
+    _write_variant(cfg, conn, doc_id, "edited-mod@m1", "same text")
+
+    def boom(path, *a, **k):
+        raise OSError("Operation not permitted")
+
+    monkeypatch.setattr(ingest.shutil, "rmtree", boom)
+    res = prune_redundant_edited_dirs(cfg, conn, verbose=True)
+    assert res["removed"] == [] and res["bytes"] == 0
+    assert len(res["failed"]) == 1 and "Operation not permitted" in res["failed"][0]["reason"]
+    assert bare.exists()
+    assert "FAILED" in capsys.readouterr().out
+
+    # and the CLI turns that into a non-zero exit
+    conn.close()
+    conn = _db.connect(cfg.db_path)
+    monkeypatch.setattr(ingest.shutil, "rmtree", boom)
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_prune(cfg, SimpleNamespace(dry_run=False, library_variants=True))
+    assert exc.value.code == 3
+    assert bare.exists()
     conn.close()
 
 
