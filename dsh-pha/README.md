@@ -152,6 +152,27 @@ present and reports no stored references when it is not, rather than failing the
 read. `tests/test_dsh_pha_sql.py` runs the plugin's embedded SQL program against both
 schemas — the unmigrated one is what a real archive looked like when this was added.
 
+### What is not in the archive yet
+
+The left pane distinguishes three things a reader needs to keep apart, and all of them come
+from **one `pha status --json` call** (the CLI's own answer, so the view applies no rules of
+its own — a directory-of-images is one document, a sidecar is not a document, the inbox is
+excluded from the dropbox walk):
+
+- **documents** — rows in the archive, grouped by collection;
+- **`new in dropbox — not scanned`** — in the dropbox but with no row yet. Not selectable
+  (there is nothing to read yet), with a count per collection and an **Ask to scan** button
+  that drafts *"Scan the dropbox items that are not in the archive yet — 6 document(s):
+  inacio-loyola (2), …"* into the message box. The view never starts a scan itself: scanning
+  takes a model-server lock;
+- **`inbox — on hold`** — parked documents, selectable, with the **Move to Dropbox** action
+  (`pha inbox --plan`/`--move` still own that).
+
+Before this, the inbox was read with its own walk and un-scanned dropbox items were invisible
+entirely — so a collection that had never been scanned simply did not exist as far as the
+view was concerned, which is exactly what made `tacchi-venturi` and `inacio-loyola` impossible
+to find.
+
 ### The inbox (parked documents)
 
 The left pane lists the archive's `inbox/` — the sibling of `dropbox/` where documents

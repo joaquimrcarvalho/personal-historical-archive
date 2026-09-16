@@ -8,6 +8,7 @@ import { classifyLink, docSlugFor, parseWikilink, resolveNoteName, slugifyPath }
 import { restorePlan, seedState, seedUi, snapshotView } from './viewmemory.js'
 import { askContext, mergeDraft } from './askcontext.js'
 import { docNumberLabel, parseNumberQuery } from './query.js'
+import { scanRequestText, statusInbox, statusUnscanned } from './statusview.js'
 
 async function get(path) {
   const res = await fetch(path)
@@ -305,6 +306,7 @@ const CSS = [
   '.pha-doc:hover{background:var(--dsw-alias-bg-layer-1,#f2f2f2)}',
   '.pha-doc.sel{background:var(--dsw-alias-bg-layer-2,#e8e8e8);border-color:var(--dsw-alias-border-l2,#999)}',
   '.pha-doc.sub{padding-left:22px}',
+  '.pha-doc.static{cursor:default}',
   '.pha-doc-id{flex:0 0 auto;min-width:30px;text-align:right;font-size:11px;opacity:.55;font-variant-numeric:tabular-nums}',
   '.pha-ref{margin:3px 0 0;font-size:12.5px;line-height:1.4;color:var(--dsw-alias-label-secondary,inherit)}',
   '.pha-bib{border:1px solid var(--dsw-alias-border-l1,#333);border-radius:6px;padding:8px 10px;font-size:12px}',
@@ -394,7 +396,7 @@ function PhaView(props) {
   const inputActions = props ? props.inputActions : null
   const inputState = (props && typeof props.useInput === 'function') ? props.useInput((s) => s) : null
   const h = React.createElement
-  const [state, setState] = React.useState(() => seedState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null, inbox: null, inboxErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null }, viewBoot))
+  const [state, setState] = React.useState(() => seedState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null, status: null, statusErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null }, viewBoot))
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -419,7 +421,7 @@ function PhaView(props) {
         get('/pha/notes').then((r) => setState((s) => ({ ...s, notes: r && r.ok ? r.notes : [] }))).catch(() => {})
         get('/pha/defs').then((r) => setState((s) => ({ ...s, defs: r && r.ok ? r.defs : [] }))).catch(() => {})
         get('/pha/collectionEncoders').then((r) => setState((s) => ({ ...s, collEncoders: r && r.ok ? r.encoders : [] }))).catch(() => {})
-        refreshInbox()
+        refreshStatus()
       })
     // Back from another tab: the selection is already seeded, so this only loads the
     // content behind it (a document's detail + page, a note, a definition, an inbox item).
@@ -548,12 +550,15 @@ function PhaView(props) {
       setState((s) => ({ ...s, defMsg: (r && r.ok) ? ('opened: ' + (r.path || d.path) + ' — save in your editor, then Refresh') : ((r && r.error) || 'open failed') }))
     } catch (e) { setState((s) => ({ ...s, defMsg: String((e && e.message) || e) })) }
   }
-  async function refreshInbox() {
+  // `pha status` is the source for BOTH lists the left pane shows from the dropbox and
+  // the inbox: it is the archive's own answer ("new", "on hold"), computed with the
+  // CLI's rules, so the view never re-derives what a document is.
+  async function refreshStatus() {
     try {
-      const r = await get('/pha/inbox')
-      setState((s) => ({ ...s, inbox: (r && r.ok) ? r : null, inboxErr: (r && !r.ok) ? ((r && r.error) || 'inbox read failed') : null }))
+      const r = await get('/pha/status')
+      setState((s) => ({ ...s, status: (r && r.ok) ? r : null, statusErr: (r && !r.ok) ? ((r && r.error) || 'status read failed') : null }))
     } catch (e) {
-      setState((s) => ({ ...s, inbox: null, inboxErr: String((e && e.message) || e) }))
+      setState((s) => ({ ...s, status: null, statusErr: String((e && e.message) || e) }))
     }
   }
 
@@ -609,7 +614,7 @@ function PhaView(props) {
             + (first ? ': ' + first.from + '  →  ' + first.to : '')
             + ' — run `pha scan` to ingest them',
         }))
-        refreshInbox()
+        refreshStatus()
       } else {
         setState((s) => ({ ...s, inboxBusy: false, inboxErr: (r && r.error) || 'the move failed' }))
       }
@@ -621,6 +626,31 @@ function PhaView(props) {
   // Put the page on screen into the composer as context, so a question asked from here
   // is about exactly this document + page + variant. It drafts rather than sends: the
   // reader can edit or extend it before pressing Enter.
+  // Draft a message into the composer (the shell owns the input; a conversation target
+  // gets its actions as standard props). Falls back to the clipboard.
+  function draftToComposer(text, note) {
+    const draft = (inputState && inputState.draft) || ''
+    if (inputActions && typeof inputActions.setDraft === 'function') {
+      try {
+        inputActions.setDraft(mergeDraft(draft, text))
+        setState((s) => ({ ...s, editMsg: note }))
+        return
+      } catch (e) { /* fall through to the clipboard */ }
+    }
+    try {
+      if (navigator && navigator.clipboard) navigator.clipboard.writeText(text)
+      setState((s) => ({ ...s, editMsg: 'composer not reachable from this view — the text is on your clipboard, paste it into the message box' }))
+    } catch (e) {
+      setState((s) => ({ ...s, editMsg: 'cannot reach the composer from this view' }))
+    }
+  }
+
+  function askToScan() {
+    const text = scanRequestText(state.status)
+    if (!text) return
+    draftToComposer(text, 'drafted in the composer below — press Enter to ask for the scan')
+  }
+
   function askAboutThis() {
     const d = state.detail && state.detail.doc
     if (!d) return
@@ -634,20 +664,7 @@ function PhaView(props) {
       reference: (state.bib && state.bib.found && state.bib.reference) || d.reference || null,
       unverified: !!(state.bib && state.bib.found && state.bib.verified === false),
     })
-    const draft = (inputState && inputState.draft) || ''
-    if (inputActions && typeof inputActions.setDraft === 'function') {
-      try {
-        inputActions.setDraft(mergeDraft(draft, ctx))
-        setState((s) => ({ ...s, editMsg: 'drafted in the composer below — edit it, then press Enter to ask' }))
-        return
-      } catch (e) { /* fall through to the clipboard */ }
-    }
-    try {
-      if (navigator && navigator.clipboard) navigator.clipboard.writeText(ctx)
-      setState((s) => ({ ...s, editMsg: 'composer not reachable from this view — the context is on your clipboard, paste it into the message box' }))
-    } catch (e) {
-      setState((s) => ({ ...s, editMsg: 'cannot reach the composer from this view' }))
-    }
+    draftToComposer(ctx, 'drafted in the composer below — edit it, then press Enter to ask')
   }
 
   async function openConfig() {
@@ -821,7 +838,7 @@ function PhaView(props) {
     h('span', { className: 'pha-title' }, 'pha archive'),
     h('span', { className: 'pha-muted' }, s.archive || '…'),
     h('span', { className: 'pha-spacer' }),
-    h('button', { className: 'pha-btn', onClick: () => { if (s.searchMode) clearSearch(); get('/pha/documents').then((r) => setState((x) => ({ ...x, docs: r && r.ok ? r.documents : null }))); get('/pha/notes').then((r) => setState((x) => ({ ...x, notes: r && r.ok ? r.notes : [] }))); get('/pha/defs').then((r) => setState((x) => ({ ...x, defs: r && r.ok ? r.defs : [] }))); get('/pha/collectionEncoders').then((r) => setState((x) => ({ ...x, collEncoders: r && r.ok ? r.encoders : [] }))); refreshInbox() } }, '⟳ Refresh'),
+    h('button', { className: 'pha-btn', onClick: () => { if (s.searchMode) clearSearch(); get('/pha/documents').then((r) => setState((x) => ({ ...x, docs: r && r.ok ? r.documents : null }))); get('/pha/notes').then((r) => setState((x) => ({ ...x, notes: r && r.ok ? r.notes : [] }))); get('/pha/defs').then((r) => setState((x) => ({ ...x, defs: r && r.ok ? r.defs : [] }))); get('/pha/collectionEncoders').then((r) => setState((x) => ({ ...x, collEncoders: r && r.ok ? r.encoders : [] }))); refreshStatus() } }, '⟳ Refresh'),
   )
 
   const searchHeader = h('div', { className: 'pha-search' },
@@ -831,30 +848,52 @@ function PhaView(props) {
   )
 
   const inboxSelKey = s.inboxSel ? (s.inboxSel.kind + ':' + s.inboxSel.rel_path) : null
-  const inboxUnit = (u) => h('div', {
+  // Both lists come from one `pha status` read: what is in the dropbox but not in the
+  // archive yet, and what is parked in the inbox ("on hold").
+  const inboxGroups = statusInbox(s.status)
+  const unscannedGroups = statusUnscanned(s.status)
+  const countOf = (gs) => gs.reduce((n, g) => n + g.count, 0)
+  const inboxUnitRow = (u) => h('div', {
     className: 'pha-doc sub' + (inboxSelKey === 'document:' + u.rel_path ? ' sel' : ''),
     key: 'ibu-' + u.rel_path,
     title: 'inbox/' + u.rel_path,
-    onClick: () => openInbox({ kind: 'document', rel_path: u.rel_path, label: u.name, kindOf: u.kind, bytes: u.bytes, files: 1, documents: 1 }),
+    onClick: () => openInbox({ kind: 'document', rel_path: u.rel_path, label: u.name, kindOf: u.kind, files: 1, documents: 1 }),
   },
     h('span', { className: 'pha-chip dim' }, u.kind || 'file'),
     h('span', { className: 'pha-doc-name' }, u.name),
-    h('span', { className: 'pha-doc-meta' }, fmtBytes(u.bytes)),
   )
-  const inboxList = (s.inbox && s.inbox.documents) ? h('div', { className: 'pha-group' },
-    h('div', { className: 'pha-group-h' }, 'inbox  (' + s.inbox.documents + ' document' + (s.inbox.documents === 1 ? '' : 's') + ' on hold)'),
-    (s.inbox.collections || []).map((c) => [
+  const unscannedList = unscannedGroups.length ? h('div', { className: 'pha-group' },
+    h('div', { className: 'pha-group-h' }, 'new in dropbox — not scanned (' + countOf(unscannedGroups) + ')'),
+    unscannedGroups.map((g) => [
+      h('div', { className: 'pha-doc static', key: 'un-' + (g.rel_path || 'root'), title: 'in the dropbox but not in the archive yet' },
+        h('span', { className: 'pha-chip busy' }, 'new'),
+        h('span', { className: 'pha-doc-name' }, g.label),
+        h('span', { className: 'pha-doc-meta' }, g.count + ' doc' + (g.count === 1 ? '' : 's')),
+      ),
+      g.units.map((u) => h('div', { className: 'pha-doc sub static', key: 'unu-' + u.rel_path, title: 'dropbox/' + u.rel_path },
+        h('span', { className: 'pha-chip dim' }, u.kind || 'file'),
+        h('span', { className: 'pha-doc-name' }, u.name),
+      )),
+    ]),
+    h('div', { className: 'pha-doc static', key: 'un-actions' },
+      h('button', { className: 'pha-btn small primary', title: 'put a scan request in the message box', onClick: askToScan }, 'Ask to scan'),
+      h('span', { className: 'pha-muted', style: { marginLeft: 6 } }, 'pha scan'),
+    ),
+  ) : null
+  const inboxList = inboxGroups.length ? h('div', { className: 'pha-group' },
+    h('div', { className: 'pha-group-h' }, 'inbox — on hold (' + countOf(inboxGroups) + ')'),
+    inboxGroups.map((g) => [
       h('div', {
-        className: 'pha-doc' + (inboxSelKey === 'collection:' + c.rel_path ? ' sel' : ''),
-        key: 'ibc-' + (c.rel_path || 'root'),
-        title: 'inbox/' + c.rel_path + '  →  ' + c.move_target,
-        onClick: () => openInbox({ kind: 'collection', rel_path: c.rel_path, label: c.label, bytes: c.bytes, files: c.files, documents: c.documents }),
+        className: 'pha-doc' + (inboxSelKey === 'collection:' + g.rel_path ? ' sel' : ''),
+        key: 'ibc-' + (g.rel_path || 'root'),
+        title: 'inbox/' + g.rel_path + '  →  dropbox/' + g.rel_path,
+        onClick: () => openInbox({ kind: 'collection', rel_path: g.rel_path, label: g.label, files: g.count, documents: g.count }),
       },
         h('span', { className: 'pha-chip busy' }, 'collection'),
-        h('span', { className: 'pha-doc-name' }, c.label),
-        h('span', { className: 'pha-doc-meta' }, c.documents + ' doc' + (c.documents === 1 ? '' : 's') + ' · ' + fmtBytes(c.bytes)),
+        h('span', { className: 'pha-doc-name' }, g.label),
+        h('span', { className: 'pha-doc-meta' }, g.count + ' doc' + (g.count === 1 ? '' : 's')),
       ),
-      (c.units || []).map((u) => inboxUnit(u)),
+      g.units.map((u) => inboxUnitRow(u)),
     ]),
   ) : null
   const noteList = (s.notes && s.notes.length) ? h('div', { className: 'pha-group' },
@@ -928,6 +967,7 @@ function PhaView(props) {
           h('span', { className: 'pha-doc-meta' }, (d.page_count || 0) + 'p' + (d.palaeographer ? ' · ' + d.palaeographer : '')),
         )),
       )),
+      unscannedList,
       inboxList,
       noteList,
       defGroups,
@@ -948,9 +988,10 @@ function PhaView(props) {
       ),
       h('div', { className: 'pha-muted' },
         (sel.kind === 'collection'
-          ? sel.documents + ' document(s) · ' + sel.files + ' file(s)'
-          : (sel.kindOf || 'file') + ' · 1 file')
-        + ' · ' + fmtBytes(sel.bytes) + ' · on hold — never scanned'),
+          ? sel.documents + ' document(s) in this collection'
+          : (sel.kindOf || 'file') + ' · one document')
+        + (sel.bytes === undefined ? '' : ' · ' + fmtBytes(sel.bytes))
+        + ' · on hold — never scanned'),
       h('div', { className: 'pha-muted' },
         'moving it puts it in ' + (sel.rel_path ? 'dropbox/' + sel.rel_path : 'the dropbox') + '; run `pha scan` afterwards to ingest it'),
       h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
@@ -958,12 +999,12 @@ function PhaView(props) {
         plan ? h('button', { className: 'pha-btn', disabled: !!s.inboxBusy, onClick: doInboxMove },
           'Confirm move (' + plan.files + ' file' + (plan.files === 1 ? '' : 's') + ')') : null,
         plan ? h('button', { className: 'pha-btn', disabled: !!s.inboxBusy, onClick: () => setState((x) => ({ ...x, inboxPlan: null })) }, 'Cancel') : null,
-        h('button', { className: 'pha-btn small', onClick: refreshInbox }, '⟳ Refresh inbox'),
+        h('button', { className: 'pha-btn small', onClick: refreshStatus }, '⟳ Refresh'),
       ),
       plan ? h('div', { className: 'pha-muted' },
         (plan.would_move || []).map((m, k) => h('div', { key: 'ibp' + k }, 'will move ' + m.files + ' file(s): ' + m.from + '  →  ' + m.to))
           .concat([h('div', { key: 'ibp-hint' }, 'nothing has moved yet — confirm to do it')])) : null,
-      s.inboxErr ? h('div', { className: 'pha-err' }, s.inboxErr) : null,
+      s.statusErr ? h('div', { className: 'pha-err' }, s.statusErr) : null,
       h('div', { className: 'pha-content' },
         h('div', { className: 'pha-md' },
           h('p', null, 'The inbox mirrors the dropbox: a parked collection lives at ',

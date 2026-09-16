@@ -608,7 +608,6 @@ function apply(ctx) {
       // document has no sidecar (presence-only — a reference is never inherited).
       return Object.assign({}, d, { ok: true, found: !!d.reference })
     })],
-    ['/pha/inbox', json(async (p) => await runInbox(p, 'list'))],
     ['/pha/inbox/plan', json(async (p) => await runInbox(p, 'plan'))],
     ['/pha/inbox/move', json(async (p, req) => {
       // A move is a filesystem mutation, so it must be asked for explicitly: POST, or
@@ -653,7 +652,20 @@ function apply(ctx) {
       if (r.code !== 0) throw new Error('note not found')
       return { ok: true, name, path, content: String(r.out) }
     })],
-    ['/pha/status', json(async () => ({ ok: true, text: String((await phaRun(['status'])).out || '') }))],
+    ['/pha/status', json(async () => {
+      // One call answers both "what is in the dropbox but not in the archive yet" and
+      // "what is parked in the inbox": `pha status` already applies the CLI's own rules
+      // (a directory-of-images is ONE document, sidecars are not documents, the inbox is
+      // excluded from the dropbox walk), so the view must not re-derive any of it.
+      const r = await phaRun(['status', '--json'])
+      if (r.code === 0) {
+        try {
+          return Object.assign({ ok: true }, parseJson(r.out))
+        } catch (e) { /* an older pha without --json: fall through to the text form */ }
+      }
+      const t = await phaRun(['status'])
+      return { ok: true, text: String(t.out || ''), structured: false }
+    })],
     ['/pha/archive', json(async () => ({ ok: true, archive: await discover().then(() => archiveDir) }))],
   ]
   // Register the routes once a webserver exists. `ctx.inject` (not this plugin's

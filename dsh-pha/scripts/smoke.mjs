@@ -80,7 +80,7 @@ for (const t of tools) {
 // 4. The same-origin routes the view fetches.
 const EXPECTED_ROUTES = ['/pha/status', '/pha/archive', '/pha/documents', '/pha/document', '/pha/page',
   '/pha/search', '/pha/pageImage', '/pha/open', '/pha/pending', '/pha/config', '/pha/notes', '/pha/note',
-  '/pha/defs', '/pha/def', '/pha/collectionEncoders', '/pha/bib', '/pha/inbox', '/pha/inbox/plan', '/pha/inbox/move']
+  '/pha/defs', '/pha/def', '/pha/collectionEncoders', '/pha/bib', '/pha/inbox/plan', '/pha/inbox/move']
 for (const path of EXPECTED_ROUTES) check(routes.includes(path), 'route ' + path)
 
 // 5. The client half stays loadable as a harness client module.
@@ -95,7 +95,8 @@ check(bundle.includes('function slugifyPath'), 'client bundle inlines the link h
 check(bundle.includes('function restorePlan'), 'client bundle inlines the reading-position memory')
 check(bundle.includes('function askContext'), 'client bundle inlines the ask-context helper')
 check(bundle.includes('function parseNumberQuery'), 'client bundle inlines the document-number query rule')
-check(!/from\s*["']\.\/(links|viewmemory|askcontext|query)\.js["']/.test(bundle), 'client bundle has no leftover inline-module import')
+check(bundle.includes('function statusUnscanned'), 'client bundle inlines the status-derived sections')
+check(!/from\s*["']\.\/(links|viewmemory|askcontext|query|statusview)\.js["']/.test(bundle), 'client bundle has no leftover inline-module import')
 check(!/^\s*import\s/m.test(bundle), 'client bundle imports nothing')
 
 console.log('')

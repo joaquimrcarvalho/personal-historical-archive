@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from types import SimpleNamespace
 
@@ -206,3 +207,50 @@ def test_status_surfaces_done_document_with_no_index(tmp_path, capsys):
     assert "961 page(s)" in out
     assert "pha reindex" in out
 
+
+
+def test_status_json_carries_the_same_numbers_as_the_report(tmp_path, capsys):
+    """`pha status --json` is the view's source of truth: the same computation as the
+    text report, structured — so a caller never re-derives what is unscanned (document
+    units, image-directories and the inbox exclusion are the CLI's rules) nor has to
+    walk the inbox itself."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+
+    col = cfg.dropbox / "collections" / "COLX"
+    col.mkdir(parents=True)
+    scanned = col / "scanned.pdf"
+    scanned.write_bytes(b"%PDF scanned")
+    conn = _db.connect(cfg.db_path)
+    _db.add_document(conn, filename="scanned.pdf", path=str(scanned),
+                     sha256=sha256_of(scanned), size_bytes=1, mtime=1, kind="pdf",
+                     now=time.time(), dir_path="collections/COLX")
+    conn.commit()
+    conn.close()
+    (col / "new.pdf").write_bytes(b"%PDF new")           # in the dropbox, never scanned
+    held = cfg.inbox / "collections" / "COLX"
+    held.mkdir(parents=True)
+    (held / "held.pdf").write_bytes(b"%PDF held")        # parked in the inbox
+
+    cli.cmd_status(cfg, SimpleNamespace(json=True))
+    data = json.loads(capsys.readouterr().out)
+
+    assert data["ok"] is True
+    assert data["documents"] == 1
+    assert data["new"] == 1 and data["on_hold"] == 1
+    assert data["unscanned"] == [
+        {"dir_path": "collections/COLX", "count": 1, "documents": ["new.pdf"]}]
+    assert data["in_inbox"] == [
+        {"dir_path": "collections/COLX", "count": 1, "documents": ["held.pdf"]}]
+    assert data["collections"] == [
+        {"dir_path": "collections/COLX", "documents": 1, "new": 1}]
+    assert data["archive"].endswith("archive.db")
+
+
+def test_status_json_is_quiet_about_an_empty_archive(tmp_path, capsys):
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    cli.cmd_status(cfg, SimpleNamespace(json=True))
+    data = json.loads(capsys.readouterr().out)
+    assert data["documents"] == 0 and data["new"] == 0 and data["on_hold"] == 0
+    assert data["unscanned"] == [] and data["in_inbox"] == []

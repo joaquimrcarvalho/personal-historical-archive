@@ -1028,6 +1028,40 @@ def cmd_status(cfg: Config, args) -> None:
         except Exception:
             pending = []
 
+        if getattr(args, "json", False):
+            # The same numbers the text report below shows, from the same computation —
+            # so an agent or a view never has to re-derive "what is not scanned yet"
+            # (document units, image-directories, sidecars and the inbox exclusion are
+            # the CLI's rules, not a caller's).
+            keys = sorted(set(archived) | set(unscanned), key=lambda k: (k == "(root)", k))
+            print(json.dumps({
+                "ok": True,
+                "archive": str(cfg.db_path),
+                "documents": total_docs,
+                "statuses": docs_status,
+                "pages": s["pages_done"],
+                "chunks": s["chunks"],
+                "chunks_embedded": s["chunks_embedded"],
+                "new": total_new,
+                "on_hold": total_hold,
+                "pending_review": len(pending),
+                "collections": [
+                    {"dir_path": k,
+                     "documents": sum(archived.get(k, {}).values()),
+                     "new": len(unscanned.get(k, []))}
+                    for k in keys
+                ],
+                "unscanned": [
+                    {"dir_path": k, "count": len(v), "documents": sorted(v)}
+                    for k, v in sorted(unscanned.items(), key=lambda kv: (kv[0] == "(root)", kv[0]))
+                ],
+                "in_inbox": [
+                    {"dir_path": k, "count": len(v), "documents": sorted(v)}
+                    for k, v in sorted(holds.items(), key=lambda kv: (kv[0] == "(inbox root)", kv[0]))
+                ],
+            }, ensure_ascii=False, indent=2))
+            return
+
         # ---- render ------------------------------------------------------
         print(f"archive: {cfg.db_path}")
         print()
@@ -2578,6 +2612,8 @@ def main(argv: list[str] | None = None) -> None:
     q.set_defaults(fn=cmd_search)
 
     st = sub.add_parser("status", help="archive summary")
+    st.add_argument("--json", action="store_true",
+                    help="structured output for agents and the view")
     st.set_defaults(fn=cmd_status)
 
     inf = sub.add_parser(

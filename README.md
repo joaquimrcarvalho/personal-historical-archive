@@ -1027,7 +1027,8 @@ pha config [--doc DOC] [--json] [--write]
                                 #   is inherited, resolved stages/encoders); --write generates one
                                 #   from the legacy configuration, but only when none is in scope
 pha info [--json]               # archive paths + versions, without walking the library
-pha status
+pha status [--json]            # archive summary; --json is the PHA view's source for what
+                               #   is not scanned yet and what is parked in the inbox
 pha export
 pha reindex [--path collections/COLX]
                           # re-embed; takes the single-model lock, and a document

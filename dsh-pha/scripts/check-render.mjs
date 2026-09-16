@@ -10,8 +10,8 @@
 //
 // It evaluates the real source with a stubbed React and DOM (no browser, no network),
 // renders a note containing every link shape, and walks the produced tree.
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readFileSync, readdirSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 
@@ -28,9 +28,15 @@ let src = readFileSync(sourcePath, 'utf8')
 src = src.replace(/^import[^\n]*\n/gm, '')   // drop react + ./links.js imports
 src = src.replace(/^export\s+/gm, '')        // export keywords (cordis face is re-attached by the build)
 
-// Mirror scripts/build-client.mjs: the link helpers are a separate dependency-free
-// module that the served bundle inlines, so the check inlines it too.
-const links = readFileSync(join(dirname(sourcePath), 'links.js'), 'utf8').replace(/^export\s+/gm, '')
+// Mirror scripts/build-client.mjs: the pure helpers live in their own dependency-free
+// modules that the served bundle inlines, so inline every sibling module here too
+// (a hard-coded list silently rots as soon as one is added).
+const clientDir = dirname(sourcePath)
+const inlined = readdirSync(clientDir)
+  .filter((f) => f.endsWith('.js') && f !== basename(sourcePath))
+  .sort()
+  .map((f) => readFileSync(join(clientDir, f), 'utf8').replace(/^export\s+/gm, ''))
+  .join('\n')
 const runtime = 'let React = globalThis.React;'
 
 const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) })
@@ -49,7 +55,7 @@ const sandbox = {
 }
 sandbox.globalThis = sandbox
 vm.createContext(sandbox)
-vm.runInContext(`${runtime}\n${links}\n${src}\n;globalThis.__pha = { inline, renderMd, renderNote, classifyLink, parseWikilink, resolveNoteName, PhaView };`,
+vm.runInContext(`${runtime}\n${inlined}\n${src}\n;globalThis.__pha = { inline, renderMd, renderNote, classifyLink, parseWikilink, resolveNoteName, PhaView };`,
   sandbox, { filename: sourcePath })
 
 const { renderNote, renderMd, PhaView } = sandbox.__pha

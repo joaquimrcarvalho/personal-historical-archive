@@ -10,6 +10,7 @@
 // still has to be loaded.
 import { askContext, mergeDraft } from '../src/client/askcontext.js'
 import { docNumberLabel, parseNumberQuery } from '../src/client/query.js'
+import { scanRequestText, statusInbox, statusUnscanned } from '../src/client/statusview.js'
 import { restorePlan, seedState, seedUi, snapshotView } from '../src/client/viewmemory.js'
 
 let failures = 0
@@ -108,6 +109,37 @@ eq(docNumberLabel(18), '#18', 'the archive number')
 eq(docNumberLabel('18'), '#18', 'accepts the string form the JSON gives')
 eq(docNumberLabel(0), '', 'no badge for a missing id')
 eq(docNumberLabel(null), '', 'no badge without an id')
+
+console.log('statusUnscanned / statusInbox — shaped from pha status, never re-counted')
+const STATUS = {
+  new: 3,
+  on_hold: 1,
+  unscanned: [
+    { dir_path: 'collections/tacchi-venturi', count: 1, documents: ['tacchi-venturi.pdf'] },
+    { dir_path: '(root)', count: 2, documents: ['a.pdf', 'b.jpg'] },
+  ],
+  in_inbox: [{ dir_path: 'collections/COLX', count: 1, documents: ['held.pdf'] }],
+}
+const un = statusUnscanned(STATUS)
+eq(un.length, 2, 'one row per unscanned collection')
+eq(un[0], { rel_path: 'collections/tacchi-venturi', label: 'tacchi-venturi', count: 1,
+  units: [{ rel_path: 'collections/tacchi-venturi/tacchi-venturi.pdf', name: 'tacchi-venturi.pdf', kind: 'pdf' }] },
+  'collection label has the collections/ prefix stripped, unit keeps the full relative path')
+eq(un[1].label, '(dropbox root)', 'dropbox-root rows are labelled')
+eq(un[1].units[0].rel_path, 'a.pdf', 'root units have no leading slash')
+eq(un[1].units[1].kind, 'jpg', 'the kind chip comes from the name')
+const ib = statusInbox(STATUS)
+eq(ib[0].rel_path, 'collections/COLX', 'the inbox row carries the path `pha inbox --move` needs')
+eq(ib[0].label, 'COLX', 'inbox label')
+eq(statusInbox({ in_inbox: [{ dir_path: '(inbox root)', count: 1, documents: ['x.pdf'] }] })[0].rel_path, '',
+  'the inbox root maps to "" (move the whole inbox)')
+eq(statusUnscanned(null), [], 'no status -> no rows')
+eq(statusInbox({}), [], 'a status without the key -> no rows')
+
+console.log('scanRequestText — the message the view drafts, not a scan it starts')
+eq(scanRequestText(STATUS), 'Scan the dropbox items that are not in the archive yet — 3 document(s): tacchi-venturi (1), (dropbox root) (2).',
+  'names every collection with its document count')
+eq(scanRequestText({ unscanned: [] }), '', 'nothing new -> nothing drafted')
 
 console.log('')
 if (failures > 0) {
