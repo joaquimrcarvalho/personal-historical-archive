@@ -35,7 +35,11 @@ def test_document_rel_path_and_slug(cfg, add_document):
     assert addresses.document_slug(cfg, doc) == "colx-d"
 
 
-def test_variant_files_flags_the_waiting_stub(cfg, add_document, write_variant):
+def test_variant_files_never_lists_a_bare_alias_beside_its_model(cfg, add_document, write_variant):
+    """`edited-french-ocr` and `edited-french-ocr@deepseek-v4-flash` are ONE
+    variant: the bare name only means the model was unknown when it was written.
+    Listing both made `pha cite --edited` refuse to choose between a reading and
+    itself (the duplicate-variant bug)."""
     doc_id = add_document()
     write_variant(doc_id, "edited-french-ocr", 1, None)  # empty -> *waiting*
     write_variant(doc_id, "edited-french-ocr@deepseek-v4-flash", 1, "real text")
@@ -49,16 +53,49 @@ def test_variant_files_flags_the_waiting_stub(cfg, add_document, write_variant):
 
     variants = addresses.variant_files(cfg, doc, 1)
     assert set(variants) == {
-        "edited-french-ocr",
         "edited-french-ocr@deepseek-v4-flash",
         "transcription-ocr@liteparse-fra",
     }
-    assert variants["edited-french-ocr"]["filled"] is False
     assert variants["edited-french-ocr@deepseek-v4-flash"]["filled"] is True
     assert variants["edited-french-ocr@deepseek-v4-flash"]["stage"] == "edited"
     assert variants["edited-french-ocr@deepseek-v4-flash"]["id"] == "french-ocr"
     assert variants["edited-french-ocr@deepseek-v4-flash"]["model"] == "deepseek-v4-flash"
     assert variants["transcription-ocr@liteparse-fra"]["stage"] == "transcription"
+
+
+def test_variant_files_keeps_a_bare_variant_with_no_qualified_sibling(cfg, add_document, write_variant):
+    doc_id = add_document(editor="null", editor_model=None)
+    write_variant(doc_id, "edited-null", 1, "verbatim")
+    conn = _db.connect(cfg.db_path)
+    try:
+        doc = _db.get_document(conn, doc_id)
+    finally:
+        conn.close()
+    assert set(addresses.variant_files(cfg, doc, 1)) == {"edited-null"}
+
+
+def test_collapse_variant_aliases():
+    """Only the bare-vs-qualified pair is an alias; two real models both stay."""
+    assert addresses.collapse_variant_aliases(
+        ["edited-x", "edited-x@m1", "transcription-y"]) == \
+        ["edited-x@m1", "transcription-y"]
+    # the current, model-less variant keeps its bare directory
+    assert addresses.collapse_variant_aliases(
+        ["edited-x", "edited-x@m1"], current={"edited": ("x", None)}) == \
+        ["edited-x", "edited-x@m1"]
+    # two models of one id are two readings, not an alias
+    assert addresses.collapse_variant_aliases(
+        ["edited-x@m1", "edited-x@m2"]) == ["edited-x@m1", "edited-x@m2"]
+    # non-variant names pass through
+    assert addresses.collapse_variant_aliases([".filter-stamps"]) == [".filter-stamps"]
+
+
+def test_pick_variant_prefers_the_recorded_model():
+    names = ["edited-x", "edited-x@m1", "edited-x@m2"]
+    assert addresses.pick_variant(names, want_model="m2", known=True) == "edited-x@m2"
+    assert addresses.pick_variant(names, want_model=None, known=True) == "edited-x"
+    # unknown state: the model-qualified name wins over the bare alias
+    assert addresses.pick_variant(names) == "edited-x@m1"
 
 
 def test_variant_files_empty_without_a_library_dir(cfg, add_document):

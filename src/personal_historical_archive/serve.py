@@ -203,7 +203,9 @@ class _Index:
                 try:
                     rows = conn.execute(
                         "SELECT d.id, d.filename, d.path, d.dir_path, d.sha256, d.page_count, "
-                        "d.status, d.created_at, b.citation AS reference, "
+                        "d.status, d.created_at, d.palaeographer, d.palaeographer_model, "
+                        "d.editor, d.editor_model, "
+                        "b.citation AS reference, "
                         "b.parsed_json AS reference_json, b.source_format AS reference_format, "
                         "b.record_origin AS reference_origin "
                         "FROM documents d LEFT JOIN document_bibliography b "
@@ -214,7 +216,8 @@ class _Index:
                     # serve everything else, just without references.
                     rows = conn.execute(
                         "SELECT id, filename, path, dir_path, sha256, page_count, status, "
-                        "created_at FROM documents"
+                        "created_at, palaeographer, palaeographer_model, editor, editor_model "
+                        "FROM documents"
                     ).fetchall()
             except sqlite3.Error as exc:
                 rows, degraded, error = [], True, str(exc)
@@ -264,13 +267,24 @@ class _Index:
 
 
 def _document_variants(cfg: Config, doc: dict) -> list[str]:
-    """The document's variant directory names (cheap: one directory listing)."""
+    """The document's variant directory names (cheap: one directory listing).
+
+    ``edited-X`` is never listed beside ``edited-X@Y``: they are one variant, so
+    the overview must not show a reading twice (see
+    ``enhancements/pha-duplicate-edited-variants-bug-report.md``).
+    """
+    from . import addresses
     from .ingest import _library_doc_dir
 
     doc_dir = _library_doc_dir(cfg, doc)
     if doc_dir is None or not doc_dir.is_dir():
         return []
-    return sorted(d.name for d in doc_dir.iterdir() if d.is_dir())
+    names = [d.name for d in doc_dir.iterdir() if d.is_dir()]
+    current = {
+        "edited": (doc.get("editor"), doc.get("editor_model")),
+        "transcription": (doc.get("palaeographer"), doc.get("palaeographer_model")),
+    }
+    return sorted(addresses.collapse_variant_aliases(names, current=current))
 
 
 def _reference_of(doc: dict) -> str | None:

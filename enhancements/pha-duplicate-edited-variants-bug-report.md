@@ -1,7 +1,8 @@
 # Bug — one edited variant is exported twice, as `edited-<rules>` and `edited-<rules>@<model>`
 
-**Status:** draft, not implemented. Found and measured on `jesuit-archive`,
-2026-09-16.
+**Status:** **FIXED (A + B, §8).** C — deleting the redundant bare folders on an
+archive that already has them — remains a documented operator step (§6), not
+automation. Found and measured on `jesuit-archive`, 2026-09-16.
 **Severity:** medium-high — breaks `pha cite --edited` for **every affected
 document**, and can serve a *stale* generation of the edited text as if it were
 current.
@@ -171,3 +172,50 @@ pha cite <doc> <page> --edited          # prompts with two variants
 Analysis script used for the numbers above: `analyse-dupes.py` in the archive
 root (`jesuit-archive`), which reads `archive.db` read-only and prints the
 pairing, the divergence and the DB-match counts.
+
+## 8. What landed (A + B)
+
+Both fixes are in, with the identity rule living in one place (`addresses.py`):
+
+- **A — the writer takes the resolved model.** `write_edited_pages()` now has a
+  keyword-only `model` parameter and never reads `documents.editor_model`. Every
+  call site passes the model it resolved: `edit_document()` (both the
+  page-by-page growth write and the final one), `_edit_null` (`model=None` — the
+  null editor has no model), `pha export`, and `bundle` import. The front matter
+  `model:` now records the model of the pass, not the transient column, so the
+  `model: null` bare folders are not produced again.
+- **B — one variant, one name.** `addresses.parse_variant()` /
+  `pick_variant()` / `collapse_variant_aliases()` decide the identity, and every
+  surface uses them: `variant_files()` (`pha cite`, `pha page --json`, MCP
+  `pha_get_page`), `ingest._pages_dir_for()` / `library_page_path()` (search
+  hits, `pha page`, filter context), `serve._document_variants()` (the served
+  overview and `meta.json`), and `bundle` import. The directory matching the
+  document's recorded model wins; otherwise the model-qualified name wins over
+  the bare alias. Two *qualified* names of one id are two real models and both
+  stay, and a bare name that **is** the current, model-less output (a legacy
+  inline interface) keeps its directory.
+
+**Deviations from the draft (§4):**
+
+1. "Prefer the qualified one, never present both" is refined in the two cases
+   just named. The draft assumed a bare edited folder could only come from this
+   bug, but a legacy inline-interface editor still writes bare, and two models
+   of one id are two readings rather than one variant.
+2. `serve`'s SQLite snapshot did not select `editor` / `editor_model` (nor the
+   palaeographer pair), so it could not tell which directory was current; the
+   four columns are now selected in both the normal and the pre-bibliography
+   fallback query.
+3. `bundle` import always treated the `@model` suffix as part of the editor id
+   (`edited-x@y` came back as an editor named `x@y`); it now parses the variant
+   with `parse_variant()` and re-exports under the qualified name.
+
+**C is not automated.** `pha prune` and the library were left alone: §6's guard
+(refuse to delete a bare folder whose content does not match the DB) needs a
+per-pair human decision on the six divergent pairs, and the bare folders no
+longer affect anything pha does.
+
+Test coverage: `tests/test_ingest.py` (one directory per pass, the writer names
+by the resolved model, both resolution helpers), `tests/test_addresses.py` (the
+collapse and the pick rules), `tests/test_cli_cite.py` (no prompt between a
+reading and its own alias) and `tests/test_serve.py` (`meta.json` lists the
+variant once). All four new ingest assertions fail against the pre-fix source.

@@ -495,6 +495,50 @@ def prune_orphan_renders(cfg: Config, conn, dry_run: bool = False, verbose: bool
     return removed
 
 
+def _doc_field(doc, key):
+    """``doc[key]`` or None — a row/dict without that column is not an error."""
+    try:
+        return doc[key]
+    except (IndexError, KeyError, TypeError):
+        return None
+
+
+def _variant_dirs(base: Path, variant: str) -> list[str]:
+    """The directory names under `base` that are ONE logical variant.
+
+    ``edited-french-ocr`` and ``edited-french-ocr@deepseek-v4-flash`` are the
+    same variant — the bare name only records that the model was unknown when
+    it was written (see ``enhancements/pha-duplicate-edited-variants-bug-report.md``).
+    A name outside the grammar falls back to the literal directory.
+    """
+    from .addresses import parse_variant
+
+    parsed = parse_variant(variant)
+    if parsed is None:
+        return [variant] if (base / variant).is_dir() else []
+    stage, ident = parsed[0], parsed[1]
+    out: list[str] = []
+    for d in sorted(base.iterdir()):
+        p = parse_variant(d.name)
+        if d.is_dir() and p and p[0] == stage and p[1] == ident:
+            out.append(d.name)
+    return out
+
+
+def _pick_pages_dir(base: Path, variant: str, doc) -> Path | None:
+    """The library directory for one variant, never the older bare alias."""
+    from .addresses import pick_variant
+
+    stage = variant.split("-", 1)[0] if variant else ""
+    ident = variant.split("-", 1)[1] if "-" in variant else variant
+    cur_id = _doc_field(doc, "editor" if stage == "edited" else "palaeographer")
+    cur_model = _doc_field(
+        doc, "editor_model" if stage == "edited" else "palaeographer_model")
+    picked = pick_variant(_variant_dirs(base, variant), want_model=cur_model,
+                          known=(cur_id == ident and bool(ident)))
+    return (base / picked) if picked else None
+
+
 def library_page_path(
     cfg: Config,
     doc,
@@ -530,15 +574,14 @@ def library_page_path(
         ed = editor_id or doc.get("editor") or None
         if not ed:
             return None
-        prefix = f"edited-{ed}"
+        variant_name = f"edited-{ed}"
     else:
         pal = doc.get("palaeographer") or "default"
-        prefix = f"transcription-{pal}"
-    variant_dir = None
-    for d in doc_dir.iterdir():
-        if d.is_dir() and d.name.startswith(prefix):
-            variant_dir = d
-            break
+        variant_name = f"transcription-{pal}"
+    # The bare name and its `@<model>` sibling are ONE variant (the bare one only
+    # means the model was unknown when it was written): the directory matching
+    # the document's recorded model wins, and the older bare alias never does.
+    variant_dir = _pick_pages_dir(doc_dir, variant_name, doc)
     if variant_dir is None:
         return None
     name = f"{source_name}.md" if source_name else f"page-{page_no:03d}.md"
@@ -1035,14 +1078,18 @@ def _split_page_blocks(text: str) -> list[tuple[int, str]]:
 
 
 def _pages_dir_for(cfg: Config, doc, variant: str) -> Path | None:
-    """The library folder for one variant (`transcription-<pal>` / `edited-<ed>`)."""
+    """The library folder for one variant (`transcription-<pal>` / `edited-<ed>`).
+
+    The bare `variant` and its `variant@<model>` sibling are ONE variant, so the
+    directory matching the document's recorded model wins and the bare one is
+    only used when it *is* the current (model-less) output — it is never
+    preferred merely for sorting first, which used to serve an older generation
+    of `*waiting*` placeholders (docs 47/50 in the bug report).
+    """
     base = cfg.library / Path(doc["dir_path"] or "") / _doc_slug(doc)
-    exact = base / variant
-    if exact.is_dir():
-        return exact
-    # the folder may carry an @model suffix (transcription-x@model)
-    hits = sorted(p for p in base.glob(f"{variant}*") if p.is_dir()) if base.is_dir() else []
-    return hits[0] if hits else None
+    if not base.is_dir():
+        return None
+    return _pick_pages_dir(base, variant, doc)
 
 
 def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
@@ -1156,12 +1203,21 @@ def _edit_needed(
     return False
 
 
-def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path | None:
-    """Write the editor's per-page output to library/.../edited-<editor>/."""
+def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str,
+                       *, model: str | None) -> Path | None:
+    """Write the editor's per-page output to library/.../edited-<editor>[@<model>].
+
+    ``model`` is the RESOLVED model for this pass, passed by the caller — the
+    directory name is the variant's identity, so it must not be read back from
+    ``documents.editor_model``, which is transiently NULL while an editor change
+    is being recorded. Reading it there wrote one logical variant into two
+    directories, ``edited-<rules>`` and ``edited-<rules>@<model>`` (see
+    ``enhancements/pha-duplicate-edited-variants-bug-report.md``).
+    """
     doc = db.get_document(conn, doc_id)
     if not doc:
         return None
-    ed_model = doc["editor_model"] or None
+    ed_model = model or None
     slug = _doc_slug(doc)
     rel_dir = Path(doc["dir_path"] or "")
     out_dir = cfg.library / rel_dir / slug / (f"edited-{editor_id}" + (f"@{ed_model}" if ed_model else ""))
@@ -1174,7 +1230,7 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str) -> Path |
         "pages_total": doc["page_count"],
         "palaeographer": doc["palaeographer"] or None,
         "editor": editor_id,
-        "model": doc["editor_model"] or None,
+        "model": ed_model,
         **_bibliography_front_matter(doc),
     }
     for e in db.edits_for_document(conn, doc_id, editor_id):
@@ -1549,11 +1605,11 @@ def _edit_null(cfg: Config, conn, doc_id: int, resolved: str,
         db.set_page_edit(conn, p["id"], resolved, text=raw, raw_sha=_raw_sha(raw))
         edited += 1
         conn.commit()
-        write_edited_pages(cfg, conn, doc_id, resolved)
+        write_edited_pages(cfg, conn, doc_id, resolved, model=None)
     if doc["editor"] != resolved:
         db.update_document(conn, doc_id, editor=resolved, editor_model=None)
         conn.commit()
-    write_edited_pages(cfg, conn, doc_id, resolved)
+    write_edited_pages(cfg, conn, doc_id, resolved, model=None)
     return {"action": "edited", "filename": doc["filename"], "editor": resolved, "pages": edited}
 
 
@@ -1732,14 +1788,17 @@ def edit_document(
                 except (ModelError, FilterError) as e:
                     db.set_page_edit(conn, p["id"], resolved, error=str(e), raw_sha=_raw_sha(raw))
             conn.commit()
-            write_edited_pages(cfg, conn, doc_id, resolved)  # grow output page by page
+            # grow output page by page — with the RESOLVED model, so the
+            # directory is the same one the final write below produces even
+            # while `editor_model` is still unset on the document row.
+            write_edited_pages(cfg, conn, doc_id, resolved, model=editor.model_ref or None)
     finally:
         client.close()
     if doc["editor"] != resolved or (doc["editor_model"] or None) != (editor.model_ref or None):
         db.update_document(conn, doc_id, editor=resolved,
                            editor_model=editor.model_ref or None)
         conn.commit()
-    write_edited_pages(cfg, conn, doc_id, resolved)
+    write_edited_pages(cfg, conn, doc_id, resolved, model=editor.model_ref or None)
     return {"action": "edited", "filename": doc["filename"], "editor": resolved, "pages": edited}
 
 

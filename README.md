@@ -1340,6 +1340,16 @@ a NEW document row (with a new date), so versions never collide and the old
 folder stays on disk. Pages of a directory-of-images document are named after
 their source scan (`502V.md`); PDF pages use `page-NNN.md`.
 
+A variant folder may carry a **model suffix** — `edited-<editor>@<model>` — so
+the same stage run with a different model keeps both readings side by side. The
+bare `edited-<editor>` and `edited-<editor>@<model>` names are **one variant**:
+the bare name only means the model was unknown when that folder was written, so
+pha lists and resolves only the model-qualified one and never cites or serves
+the bare alias. An older pha could write both (`pha cite --edited` then refused
+to choose between a reading and itself); the leftover bare folder is harmless —
+delete it by hand if you like, and any re-run/`pha export` writes the qualified
+name only.
+
 ### Reviewing and correcting transcriptions
 
 The library files are meant to be READ and CORRECTED by a historian. Each

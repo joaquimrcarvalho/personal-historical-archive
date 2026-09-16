@@ -382,7 +382,7 @@ def test_review_import_handles_edited_variant_scoped(tmp_path):
         _db.set_page_edit(conn, pid, "mod", text=f"EDITED {n}", raw_sha="x")
     _db.set_document_status(conn, doc_id, "done")
     conn.commit()
-    out = write_edited_pages(cfg, conn, doc_id, "mod")
+    out = write_edited_pages(cfg, conn, doc_id, "mod", model=None)
 
     _t.sleep(0.05)
     f1 = out / "page-001.md"
@@ -445,7 +445,7 @@ def test_unreview_import_scopes_page_and_restores_reprocess(tmp_path):
     _db.set_document_status(conn, doc_id, "done")
     conn.commit()
     out = write_document_pages(cfg, conn, doc_id)
-    edit_out = write_edited_pages(cfg, conn, doc_id, "mod")
+    edit_out = write_edited_pages(cfg, conn, doc_id, "mod", model=None)
 
     _t.sleep(0.05)
     for n in (1, 2):
@@ -1138,7 +1138,8 @@ def test_library_page_path_resolves_raw_and_edited(tmp_path):
     ed_f = cfg.library / "doc_1970-01-01" / "edited-latin-english@minimax" / "page-007.md"
     ed_f.write_text("edited")
     doc = {"path": "/x/doc.pdf", "dir_path": "", "created_at": 0,
-           "palaeographer": "default", "editor": "latin-english"}
+           "palaeographer": "default", "editor": "latin-english",
+           "palaeographer_model": "qwen", "editor_model": "minimax"}
     assert library_page_path(cfg, doc, 7) == raw_f
     assert library_page_path(cfg, doc, 7, variant="edited", editor_id="latin-english") == ed_f
     assert library_page_path(cfg, doc, 99) is None
@@ -1148,6 +1149,140 @@ def test_library_page_path_resolves_raw_and_edited(tmp_path):
     (old / "transcription-default" / "page-001.md").write_text("x")
     doc2 = dict(doc, created_at=1_700_000_000)  # slug doc_2023-11-14 -> not on disk
     assert library_page_path(cfg, doc2, 1) == old / "transcription-default" / "page-001.md"
+
+
+def test_library_page_path_prefers_the_model_qualified_alias(tmp_path):
+    """`edited-X` and `edited-X@Y` are one variant: the bare alias must not win
+    the page just because it sorts/first appears earlier (docs 47/50 served 610
+    pages of `*waiting*` that way)."""
+    from personal_historical_archive.ingest import library_page_path
+
+    cfg = SimpleNamespace(library=tmp_path / "library")
+    doc_dir = cfg.library / "doc_1970-01-01"
+    (doc_dir / "edited-mod").mkdir(parents=True)
+    (doc_dir / "edited-mod" / "page-001.md").write_text("*waiting*")
+    (doc_dir / "edited-mod@minimax").mkdir(parents=True)
+    real = doc_dir / "edited-mod@minimax" / "page-001.md"
+    real.write_text("real text")
+    doc = {"path": "/x/doc.pdf", "dir_path": "", "created_at": 0,
+           "palaeographer": "default", "palaeographer_model": "qwen",
+           "editor": "mod", "editor_model": "minimax"}
+    assert library_page_path(cfg, doc, 1, variant="edited", editor_id="mod") == real
+    # a model-less current editor keeps its bare directory (the qualified
+    # sibling is an older, different reading)
+    doc_none = dict(doc, editor_model=None)
+    (doc_dir / "edited-mod" / "page-001.md").write_text("model-less text")
+    assert library_page_path(cfg, doc_none, 1, variant="edited",
+                             editor_id="mod") == doc_dir / "edited-mod" / "page-001.md"
+
+
+def test_write_edited_pages_names_the_directory_from_the_resolved_model(tmp_path):
+    """The writer must not re-read the nullable `editor_model` column: while an
+    editor change is being recorded it is NULL, and reading it there wrote the
+    same variant into `edited-mod` *and* `edited-mod@m1`."""
+    import time as _t
+
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import write_edited_pages
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    src_dir = cfg.dropbox / "collections" / "tcol"
+    src_dir.mkdir(parents=True)
+    src = src_dir / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/tcol", now=_t.time(),
+                              editor="mod", editor_model=None)  # NULL on purpose
+    pid = _db.add_page(conn, doc_id, 1)
+    _db.set_page_result(conn, pid, raw_text="raw page one with plenty of text")
+    _db.set_page_edit(conn, pid, "mod", text="EDITED", raw_sha="x")
+    _db.update_document(conn, doc_id, page_count=1)
+    conn.commit()
+
+    out = write_edited_pages(cfg, conn, doc_id, "mod", model="m1")
+    assert out.name == "edited-mod@m1"
+    parent = out.parent
+    assert sorted(d.name for d in parent.iterdir() if d.is_dir()) == ["edited-mod@m1"]
+    # the front matter names the model the pass actually used, not the NULL column
+    assert "model: m1" in (out / "page-001.md").read_text(encoding="utf-8")
+    conn.close()
+
+
+def test_edit_document_writes_exactly_one_edited_directory(tmp_path, monkeypatch):
+    """The pre-fix write grew a bare `edited-default` directory page by page and
+    the final write added `edited-default@<model>` — two directories for one
+    variant. One pass must produce one directory, named with the model."""
+    import time as _t
+
+    from personal_historical_archive.config import Config
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import _doc_slug, edit_document
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    cfg = Config.load(root)
+    src_dir = cfg.dropbox / "collections" / "tcol"
+    src_dir.mkdir(parents=True)
+    src = src_dir / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="doc.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/tcol", now=_t.time(),
+                              editor_model=None)  # NULL at the start of the pass
+    for n in (1, 2):
+        pid = _db.add_page(conn, doc_id, n)
+        _db.set_page_result(
+            conn, pid, raw_text=f"raw page {n} with more than forty characters of text")
+    _db.update_document(conn, doc_id, page_count=2)
+    conn.commit()
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def close(self):
+            pass
+
+        def chat_text(self, model, prompt, temperature, max_tokens, thinking):
+            return "edited"
+
+    monkeypatch.setattr("personal_historical_archive.ingest.ModelClient", FakeClient)
+    res = edit_document(cfg, conn, doc_id, editor_id="default")
+    assert res["pages"] == 2
+
+    doc = _db.get_document(conn, doc_id)
+    assert doc["editor_model"]  # the pass recorded the model it used
+    doc_dir = cfg.library / "collections" / "tcol" / _doc_slug(doc)
+    dirs = sorted(d.name for d in doc_dir.iterdir() if d.is_dir())
+    assert dirs == [f"edited-default@{doc['editor_model']}"], dirs
+    conn.close()
+
+
+def test_pages_dir_for_prefers_the_model_qualified_alias(cfg, add_document):
+    """`_pages_dir_for` must return `@Y` when both `edited-X` and `edited-X@Y`
+    exist — the bare one sorts first and used to win."""
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import _doc_slug, _pages_dir_for
+
+    doc_id = add_document(editor="french-ocr", editor_model="deepseek-v4-flash")
+    conn = _db.connect(cfg.db_path)
+    try:
+        doc = _db.get_document(conn, doc_id)
+    finally:
+        conn.close()
+    base = cfg.library / "collections" / "COLX" / _doc_slug(doc)
+    (base / "edited-french-ocr").mkdir(parents=True)
+    (base / "edited-french-ocr@deepseek-v4-flash").mkdir(parents=True)
+    assert _pages_dir_for(cfg, doc, "edited-french-ocr") == \
+        base / "edited-french-ocr@deepseek-v4-flash"
 
 
 # --------------------------------------------------------------------------- discover: a single-file --path

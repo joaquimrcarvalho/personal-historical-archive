@@ -58,6 +58,8 @@ def test_health(cfg, add_document, server):
 
 def test_meta_json(cfg, add_document, write_variant, server):
     doc_id = add_document(pages=(1, 2))
+    # the bare directory is the same variant as the @model one — listed once
+    write_variant(doc_id, "edited-french-ocr", 1, None)
     write_variant(doc_id, "edited-french-ocr@deepseek-v4-flash", 1, "text")
     status, _, body = server.get("/doc/colx-d/meta.json")
     assert status == 200

@@ -1630,7 +1630,8 @@ def cmd_export(cfg: Config, args) -> None:
             if out:
                 n += 1
             if d["editor"]:
-                write_edited_pages(cfg, conn, d["id"], d["editor"])
+                write_edited_pages(cfg, conn, d["id"], d["editor"],
+                                   model=d["editor_model"] or None)
         print(f"exported {n} document(s) to {cfg.library}")
     finally:
         conn.close()

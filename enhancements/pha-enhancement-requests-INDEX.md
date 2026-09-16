@@ -7,8 +7,9 @@ and meant to be read together. Implemented so far: **stable page addresses**
 + overview), **stage filters** (framework + six reference filters — see below),
 **endpoint-scoped locking** (one model per model-server: `server:` on the model
 interface, user-global keyed locks with declared capacity, and the search
-degrade that no longer evicts a running job's model), and both **bug reports**
-below (review scope, embed loss — 0.19.0) plus **scan resilience / `done`
+degrade that no longer evicts a running job's model), and the **bug reports**
+below (review scope, embed loss — 0.19.0; duplicate edited variants) plus
+**scan resilience / `done`
 honesty**. Still to do:
 **notes search**, the `extends` composition directive, the encoder structure
 prescan, **replaying `post` filters
@@ -17,8 +18,8 @@ and **re-reading one page with a chosen palaeographer/model** (read a big
 volume with a cheap model, then fix the pages it got wrong with a better one —
 without re-extracting the volume).
 
-Both bug reports were blocking prerequisites for the remaining work, which is
-why they went first:
+The first two bug reports were blocking prerequisites for the remaining work,
+which is why they went first:
 
 - **review scope** — `pha review` stamped the whole library, freezing any
   document against re-processing. `FILTERS_PLAN.md` §8 assumes a filter change
@@ -50,7 +51,7 @@ The remaining items are independent and can land in any order.
 |---|---|---|
 | `pha-review-scope-bug-report.md` | **`pha review`** | **FIXED (0.18.0).** `pha review` stamped the *whole* library as **reviewed** instead of only the pending files, so one run froze the archive against any later `pha scan`/`pha edit` — **even `--reprocess`**. Now imports only the pending set; `--all` keeps the blanket behaviour as an opt-in; `--unset [--doc N [--page P]]` lifts the stamp (text kept) so a frozen archive is recoverable. Reproduced on 0.17.0: 14 572 pages stamped after `pha status` had reported **5** pending. |
 | `pha-embed-loss-bug-report.md` | **`pha reindex` / indexing** | **FIXED.** `index_document()` cleared a document's chunks *before* embedding, so a failed `embed()` (120 s batch timeout) fell back to text-only indexing having already deleted the stored vectors — `status=done`, no error, invisible except in the embedded count. **13 885 chunks** lost their vectors this way on `jesuit-archive` while two jobs overlapped. Now embeds first and leaves a document with vectors completely untouched on failure (reported; `pha reindex` exits 3), and `pha reindex` takes the single-model lock. Repair of the incident data = re-embedding 4 documents. |
-| `pha-duplicate-edited-variants-bug-report.md` | **library variants / `pha cite`** | **OPEN.** `write_edited_pages()` names its output directory from `documents.editor_model` *as read at call time* (`ingest.py:1167`), and the edit path **NULLs that column on an editor change** (`:1554`) before writing, while the incremental path sets it (`:1740`) — so one logical variant is exported **twice**, as `edited-<rules>` (front matter `model: null`) and `edited-<rules>@<model>`. Measured on `jesuit-archive` 2026-09-16 — 41 documents with an editor: **28 byte-identical pairs**, 6 divergent, 1 bare-only, 7 `@model`-only, **35 bare dirs / 52.7 MB**; transcription dirs unaffected (**0** bare vs 56 `@model`), so it is specific to the edited stage. Two symptoms: `pha cite <doc> <page> --edited` **refuses to cite** ("several filled edited variants … choose one"); and because `_pages_dir_for()` returns `sorted(...)[0]` the *bare* name wins, which on docs 47/50 is **610/618 and 627/660 pages of `*waiting*` placeholders** while the `@model` dir holds the real, DB-matching text. Proposes (A) pass the resolved model into the writer so the name never depends on a transient NULL, (B) treat `edited-X` and `edited-X@Y` as **one variant** in enumeration/resolution (prefer the qualified one) so existing trees stop being ambiguous, (C) an opt-in dedupe that **refuses to delete** a bare dir whose content does not match the DB — the 6 divergent pairs are not duplicates (doc 44's qualified dir is `@minimax-m2-5`, a different model). |
+| `pha-duplicate-edited-variants-bug-report.md` | **library variants / `pha cite`** | **FIXED (A + B).** `write_edited_pages()` named its output directory from `documents.editor_model` *as read at call time* (`ingest.py:1167`), and the edit path **NULLs that column on an editor change** (`:1554`) before writing, while the incremental path sets it (`:1740`) — so one logical variant was exported **twice**, as `edited-<rules>` (front matter `model: null`) and `edited-<rules>@<model>`. Measured on `jesuit-archive` 2026-09-16 — 41 documents with an editor: **28 byte-identical pairs**, 6 divergent, 1 bare-only, 7 `@model`-only, **35 bare dirs / 52.7 MB**; transcription dirs unaffected (**0** bare vs 56 `@model`), so it was specific to the edited stage. Two symptoms: `pha cite <doc> <page> --edited` **refused to cite** ("several filled edited variants … choose one"); and because `_pages_dir_for()` returned `sorted(...)[0]` the *bare* name won, which on docs 47/50 was **610/618 and 627/660 pages of `*waiting*` placeholders** while the `@model` dir held the real, DB-matching text. Now **(A)** the writer takes the resolved model as a required keyword (`edit_document`, `_edit_null`, `pha export`, `bundle` all pass it) and never reads the nullable column (front matter included), and **(B)** `addresses.parse_variant/pick_variant/collapse_variant_aliases` treat `edited-X` and `edited-X@Y` as **one variant** everywhere — `variant_files` (cite/page/MCP), `_pages_dir_for`/`library_page_path`, `serve` variants/meta, and `bundle` import (which also stopped folding `@model` into the editor id); the recorded model's directory wins, two *qualified* models of one id stay two readings, and a bare name that is the current model-less output keeps its directory. **(C)** deleting the redundant bare folders on an existing archive stays a manual step (§6 — the 6 divergent pairs are not duplicates; doc 44's qualified dir is `@minimax-m2-5`, a different model). |
 
 ## Implementation plans
 

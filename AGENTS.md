@@ -223,7 +223,13 @@
   in `library/<dir>/<stem>_<YYYY-MM-DD>/` (creation date; a content change
   creates a new row/date, so old folders stay). Pages of a directory-of-images
   document are named after the source scan (`502V.md`); PDF pages use
-  `page-NNN.md`.
+  `page-NNN.md`. A variant folder may carry a model suffix
+  (`edited-<editor>@<model>`); the bare `edited-<editor>` and its `@<model>`
+  sibling are **one variant** — the bare name only records that the model was
+  unknown when that folder was written — so pha lists/resolves only the
+  qualified one and a leftover bare folder (an older pha wrote both) is ignored,
+  never cited or served. Read a variant through `pha cite` / `pha page` rather
+  than globbing the folders yourself.
 - **Review round-trip (historians correct the files)**: the library `.md`
   files are the human review surface. A historian edits a page body; `pha
   status` reports un-imported corrections (timestamp-based: file mtime newer

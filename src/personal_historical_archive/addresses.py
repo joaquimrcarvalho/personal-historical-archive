@@ -27,7 +27,76 @@ from .ingest import _library_doc_dir
 # Library variant directories:
 #   transcription-<palaeographer>[@<model>]   the raw reading
 #   edited-<editor>[@<model>]                 an editor's output
+#
+# The bare and the `@<model>` name are ONE logical variant: the bare one only
+# records that the model was unknown at write time (see
+# enhancements/pha-duplicate-edited-variants-bug-report.md), so enumeration and
+# resolution must never present both. `pick_variant` /
+# `collapse_variant_aliases` are the single place that decides which name wins.
 _VARIANT_RE = re.compile(r"^(transcription|edited)-([^@]+)(?:@(.+))?$")
+
+
+def parse_variant(name: str) -> tuple[str, str, str | None] | None:
+    """``edited-french-ocr@deepseek-v4-flash`` -> ``("edited", "french-ocr",
+    "deepseek-v4-flash")``; None for a name that is not a variant directory."""
+    m = _VARIANT_RE.match(name)
+    return (m.group(1), m.group(2), m.group(3)) if m else None
+
+
+def variant_model(name: str) -> str | None:
+    """The ``@<model>`` part of a variant directory name (None when bare)."""
+    parsed = parse_variant(name)
+    return parsed[2] if parsed else None
+
+
+def pick_variant(names, want_model: str | None = None, known: bool = False) -> str | None:
+    """Of several names for ONE logical variant, the directory to use.
+
+    ``known`` says the caller knows the document's current state for this
+    variant, so ``want_model`` is authoritative — including None, which means
+    "the current variant has no model" (the null editor, a legacy inline
+    interface) and therefore favours the bare name. Without that knowledge the
+    model-qualified name wins over the bare alias, because the bare one is
+    frequently the older generation (docs 47/50: 610/627 pages of ``*waiting*``
+    beside the real text).
+    """
+    names = sorted(names)
+    if not names:
+        return None
+    if known:
+        hit = [n for n in names if variant_model(n) == (want_model or None)]
+        if hit:
+            return hit[0]
+    qualified = [n for n in names if variant_model(n)]
+    return (qualified or names)[0]
+
+
+def collapse_variant_aliases(names, current=None) -> list[str]:
+    """Drop a bare alias when the same variant also exists model-qualified.
+
+    ``current`` optionally maps a stage (``"edited"`` / ``"transcription"``) to
+    ``(id, model)`` — the document's current selection. The bare name is kept
+    when it *is* the current one (a model-less editor), because then the
+    qualified siblings are older, genuinely different readings; two qualified
+    names of one id are two models and both stay. Only the bare-vs-qualified
+    pair is an alias. Non-variant names (``.filter-stamps``) pass through.
+    """
+    groups: dict[tuple[str, str], list[str]] = {}
+    for name in names:
+        parsed = parse_variant(name)
+        if parsed:
+            groups.setdefault((parsed[0], parsed[1]), []).append(name)
+    drop: set[str] = set()
+    for (stage, ident), cands in groups.items():
+        bare = [n for n in cands if variant_model(n) is None]
+        qualified = [n for n in cands if variant_model(n)]
+        if not bare or not qualified:
+            continue  # nothing to collapse, or two real models — keep both
+        if current and stage in current and current[stage] == (ident, None):
+            continue  # the bare name is the current, model-less output
+        drop.update(bare)
+    return [n for n in names if n not in drop]
+
 
 # The body an export writes for a page that has no text yet (see
 # ingest.write_document_pages / write_edited_pages).
@@ -152,6 +221,10 @@ def variant_files(
     ``filled`` is False for a variant whose page file is missing or still the
     ``*waiting*`` stub — the difference between a citation that cites something
     and one that cites nothing.
+
+    A bare ``edited-X`` directory is never listed beside ``edited-X@Y``: they
+    are one variant (see ``collapse_variant_aliases``), so `pha cite` cannot be
+    told to "choose one" between a reading and itself.
     """
     d = _as_dict(doc)
     doc_dir = _library_doc_dir(cfg, d)
@@ -178,7 +251,11 @@ def variant_files(
             "filled": bool(exists and _is_filled(f)),
             "file": str(f) if exists else None,
         }
-    return out
+    keep = set(collapse_variant_aliases(list(out), current={
+        "edited": (d.get("editor"), d.get("editor_model")),
+        "transcription": (d.get("palaeographer"), d.get("palaeographer_model")),
+    }))
+    return {k: v for k, v in out.items() if k in keep}
 
 
 def variant_label(name: str) -> str:

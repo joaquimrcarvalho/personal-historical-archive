@@ -33,6 +33,19 @@ def test_cite_prefers_the_filled_variant(cfg, add_document, write_variant, capsy
     assert "edited: french-ocr@deepseek-v4-flash" in data["citation"]
 
 
+def test_cite_does_not_prompt_between_a_reading_and_its_bare_alias(cfg, add_document, write_variant, capsys):
+    """With both directories filled with the same text, `pha cite --edited` used
+    to exit 2 ("choose one") — between a reading and itself (28 such pairs were
+    measured on jesuit-archive). The model-qualified name is the one it cites."""
+    doc_id = add_document()
+    write_variant(doc_id, "edited-french-ocr", 1, "real text")
+    write_variant(doc_id, "edited-french-ocr@deepseek-v4-flash", 1, "real text")
+    cli.cmd_cite(cfg, _args(doc=doc_id, edited=True))
+    data = json.loads(capsys.readouterr().out)
+    assert data["variant"] == "edited-french-ocr@deepseek-v4-flash"
+    assert data["file"].endswith("edited-french-ocr@deepseek-v4-flash/page-001.md")
+
+
 def test_cite_exits_when_the_only_variant_is_empty(cfg, add_document, write_variant, capsys):
     doc_id = add_document()
     write_variant(doc_id, "edited-french-ocr", 1, None)

@@ -48,7 +48,7 @@ import shutil
 import time
 from pathlib import Path
 
-from . import db
+from . import addresses, db
 from .extract import (
     encoder_files_for,
     is_supported,
@@ -674,14 +674,23 @@ def _import_document(cfg, conn, bundle_dir: Path, md: dict, embed_client, verbos
             pages_ok += 1
     conn.commit()
 
-    # --- edits (editor output) from edited-<editor>/ files
-    editors: set[str] = set()
+    # --- edits (editor output) from edited-<editor>[@<model>]/ files
+    # The dir name carries the variant's identity: `edited-X` and `edited-X@Y`
+    # are ONE variant (the bare name means the model was unknown at write time),
+    # so parse the `@model` suffix off instead of storing it as part of the
+    # editor id. Sorted order puts the bare dir first, so a qualified one wins
+    # the row writes; the recorded model is what B should re-export with.
+    editors: dict[str, str | None] = {}
     if blib_dir.is_dir():
         for edir in sorted(blib_dir.glob("edited-*")):
             if not edir.is_dir():
                 continue
-            editor = edir.name[len("edited-"):]
-            editors.add(editor)
+            parsed_variant = addresses.parse_variant(edir.name)
+            if parsed_variant is None or parsed_variant[0] != "edited":
+                continue
+            editor, ed_model = parsed_variant[1], parsed_variant[2]
+            if editor not in editors or ed_model:
+                editors[editor] = ed_model
             for f in sorted(edir.glob("*.md")):
                 parsed = _parse_library_file(f)
                 if not parsed:
@@ -746,8 +755,8 @@ def _import_document(cfg, conn, bundle_dir: Path, md: dict, embed_client, verbos
     #     paths, and exported_at is stamped (so `pha status` won't report the
     #     freshly written files as pending corrections).
     write_document_pages(cfg, conn, doc_id)
-    for editor in editors:
-        write_edited_pages(cfg, conn, doc_id, editor)
+    for editor, ed_model in editors.items():
+        write_edited_pages(cfg, conn, doc_id, editor, model=ed_model)
     for encoder in encoders:
         write_records_file(cfg, conn, doc_id, encoder)
 

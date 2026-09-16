@@ -84,7 +84,7 @@ def _seed_archive_a(cfg: Config, tmp_path: Path) -> Config:
     _db.set_document_status(conn, doc_id, "done")
     conn.commit()
     write_document_pages(cfg, conn, doc_id)
-    write_edited_pages(cfg, conn, doc_id, "e1")
+    write_edited_pages(cfg, conn, doc_id, "e1", model=None)
     write_records_file(cfg, conn, doc_id, "enc1")
     conn.close()
 
