@@ -495,6 +495,112 @@ def prune_orphan_renders(cfg: Config, conn, dry_run: bool = False, verbose: bool
     return removed
 
 
+def _db_edited_bodies(conn, doc_id: int, editor: str) -> dict[str, str]:
+    """``{page file name: the text pha wrote for it}`` for one document + editor.
+
+    Mirrors ``write_edited_pages`` exactly — including the ``*waiting*`` stub for
+    an empty or failed row — so a library file can be compared to what the
+    database holds.
+    """
+    out: dict[str, str] = {}
+    for r in conn.execute(
+        "SELECT pe.text, p.page_no, p.source_name FROM page_edits pe "
+        "JOIN pages p ON p.id = pe.page_id "
+        "WHERE p.document_id = ? AND pe.editor = ?",
+        (doc_id, editor),
+    ):
+        name = f"{r['source_name']}.md" if r["source_name"] else f"page-{r['page_no']:03d}.md"
+        out[name] = ((r["text"] or "") or "*waiting*").strip()
+    return out
+
+
+def prune_redundant_edited_dirs(cfg: Config, conn, dry_run: bool = False,
+                                verbose: bool = True) -> dict:
+    """Delete a bare ``edited-<rules>`` folder that is provably a stale alias.
+
+    The duplicate-edited-variants bug wrote one variant into two folders:
+    ``edited-<rules>`` (while ``documents.editor_model`` was transiently NULL)
+    and ``edited-<rules>@<model>``. Resolution now always prefers the qualified
+    folder, so the bare one is inert — but it still occupies disk and misleads
+    anyone reading ``library/`` by hand.
+
+    The guard is the database: a bare folder is deleted **only when every page
+    file in it is exactly what the DB holds** for that document + editor, so it
+    is regenerable by ``pha export`` and holds nothing unique. Anything that
+    differs is reported and kept. Measured on jesuit-archive (2026-09-16): 25 of
+    34 pairs are identical (deletable), 9 hold a different reading (an extra
+    ``*waiting*`` partial run, a whole alternate OCR pass, or one page in another
+    translation generation).
+
+    Only a bare folder with a model-qualified sibling is considered — a
+    bare-only variant is the document's only edited output — and never one that
+    *is* the document's current model-less output. Returns
+    ``{"removed": [...], "refused": [...], "kept_bare_only": n, "bytes": n}``.
+    """
+    from .addresses import parse_variant
+
+    removed: list[dict] = []
+    refused: list[dict] = []
+    kept_bare_only = 0
+    total_bytes = 0
+    for doc in db.list_documents(conn, limit=100000):
+        doc_dir = _library_doc_dir(cfg, doc)
+        if doc_dir is None or not doc_dir.is_dir():
+            continue
+        groups: dict[str, list[str]] = {}
+        for entry in sorted(doc_dir.iterdir()):
+            parsed = parse_variant(entry.name)
+            if entry.is_dir() and parsed and parsed[0] == "edited":
+                groups.setdefault(parsed[1], []).append(entry.name)
+        for editor, names in sorted(groups.items()):
+            bare = sorted(n for n in names if parse_variant(n)[2] is None)
+            qualified = sorted(n for n in names if parse_variant(n)[2])
+            if not bare:
+                continue
+            if not qualified:
+                kept_bare_only += len(bare)  # the only edited output — keep
+                continue
+            folder = doc_dir / bare[0]
+            # A model-less current editor writes the bare name: its qualified
+            # sibling is the OLDER reading, so this folder must stay.
+            if (_doc_field(doc, "editor") or None) == editor \
+                    and not (_doc_field(doc, "editor_model") or None):
+                refused.append({"path": str(folder), "document_id": doc["id"],
+                                "reason": "current model-less variant"})
+                if verbose:
+                    print(f"  keep     {folder}  (the current model-less variant)")
+                continue
+            bodies = _db_edited_bodies(conn, doc["id"], editor)
+            for name in bare:
+                folder = doc_dir / name
+                files = sorted(folder.glob("*.md"))
+                differing = sum(
+                    1 for f in files
+                    if bodies.get(f.name) != (
+                        (_parse_library_file(f) or (None, ""))[1] or "").strip()
+                )
+                if differing or not files:
+                    refused.append({"path": str(folder), "document_id": doc["id"],
+                                    "reason": ("no page files to compare" if not files
+                                               else "content differs from the database"),
+                                    "differing": differing, "pages": len(files)})
+                    if verbose:
+                        print(f"  keep     {folder}  ({differing}/{len(files)} page(s) differ "
+                              f"from the database — inspect by hand)")
+                    continue
+                nbytes = sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())
+                if not dry_run:
+                    shutil.rmtree(folder, ignore_errors=True)
+                removed.append({"path": str(folder), "document_id": doc["id"],
+                                "editor": editor, "pages": len(files), "bytes": nbytes})
+                total_bytes += nbytes
+                if verbose:
+                    print(f"  {'[dry-run] would remove' if dry_run else 'removed '} {folder}"
+                          f"  ({len(files)} pages, {nbytes / 1e6:.1f} MB — identical to the database)")
+    return {"removed": removed, "refused": refused,
+            "kept_bare_only": kept_bare_only, "bytes": total_bytes}
+
+
 def _doc_field(doc, key):
     """``doc[key]`` or None — a row/dict without that column is not an error."""
     try:
@@ -1352,9 +1458,26 @@ def _pending_scan(conn, targets: list[tuple[int, Path]]) -> list[dict]:
                 variants = sorted(it, key=lambda e: e.name)
         except OSError:
             continue
+        # A bare `edited-X` folder is the same variant as `edited-X@Y` (the bare
+        # name only records that the model was unknown when it was written), so
+        # its files must not be read back as human corrections: a stale alias
+        # would otherwise be imported over good text and stamped `reviewed`.
+        # Same rule as every other read path (addresses.collapse_variant_aliases).
+        from .addresses import collapse_variant_aliases
+
+        doc = db.get_document(conn, doc_id)
+        keep = set(collapse_variant_aliases(
+            [e.name for e in variants if e.is_dir()],
+            current={
+                "edited": (_doc_field(doc, "editor"), _doc_field(doc, "editor_model")),
+                "transcription": (_doc_field(doc, "palaeographer"),
+                                  _doc_field(doc, "palaeographer_model")),
+            })) if doc else None
         for vdir in variants:
             variant = vdir.name
             if not vdir.is_dir():
+                continue
+            if keep is not None and variant not in keep:
                 continue
             if not (variant.startswith("transcription-") or variant.startswith("edited-")):
                 continue

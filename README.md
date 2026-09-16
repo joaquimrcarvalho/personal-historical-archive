@@ -266,6 +266,14 @@ Model notes for a new machine:
   render folders are deleted automatically when no other document still uses
   their content hash. Anything left behind (pre-existing orphans, manual
   deletions) can be swept with `pha prune` (`--dry-run` to preview).
+- **Duplicate edited folders**: an older pha could write one edited variant into
+  two folders, `edited-<editor>` and `edited-<editor>@<model>` (the bare name
+  recorded that the model was unknown at write time). They are one variant and
+  pha only ever reads the model-qualified one, so the leftovers are harmless but
+  waste disk. `pha prune --library-variants [--dry-run]` deletes a bare folder
+  **only when every page in it is exactly what the database holds**, so nothing
+  unique can be lost; a folder holding a different reading (an older OCR pass,
+  another translation generation) is reported and kept for you to look at.
 
 ### Uploading documents & collections
 
@@ -1050,6 +1058,10 @@ pha review [--doc N] [--all] [--unset [--page N]]
 pha edit [--reprocess] [--path collections/COLX] [--page N]
 pha rm ID|NAME            # remove document(s) from the index
 pha prune [--dry-run]     # delete orphaned render image caches (no registered document)
+pha prune --library-variants [--dry-run]
+                          # delete a bare `edited-<rules>` folder that only duplicates its
+                          #   `@<model>` sibling AND matches the DB (a folder holding a
+                          #   different reading is reported, never deleted)
 pha prompts [file]
 pha palaeographer [file]
 pha editor [file]

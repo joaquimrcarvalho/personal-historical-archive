@@ -9,6 +9,7 @@ from personal_historical_archive import db as _db
 from personal_historical_archive.config import Config
 from personal_historical_archive.ingest import (
     prune_orphan_renders,
+    prune_redundant_edited_dirs,
     remove_render_dir,
     remove_render_if_orphaned,
     sha256_of,
@@ -147,6 +148,112 @@ def test_prune_missing_renders_dir(tmp_path):
     # renders dir never created
     assert prune_orphan_renders(cfg, conn, verbose=False) == 0
     conn.close()
+
+
+# --- `pha prune --library-variants`: the guarded duplicate-folder sweep -------
+
+def _variant_doc(cfg, conn, *, editor="mod", editor_model="m1", db_text="same text"):
+    """A document with one edited variant in two folders + a matching edit row."""
+    src = cfg.dropbox / "collections" / "COLX" / "d.pdf"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"%PDF d")
+    doc_id = _db.add_document(conn, filename="d.pdf", path=str(src), sha256=sha256_of(src),
+                              size_bytes=1, mtime=1, kind="pdf", now=time.time(),
+                              dir_path="collections/COLX", editor=editor,
+                              editor_model=editor_model)
+    pid = _db.add_page(conn, doc_id, 1)
+    _db.set_page_result(conn, pid, raw_text="raw text")
+    _db.set_page_edit(conn, pid, editor, text=db_text, raw_sha="x")
+    conn.commit()
+    return doc_id, pid
+
+
+def _write_variant(cfg, conn, doc_id, dirname, body):
+    from personal_historical_archive.ingest import _doc_slug
+
+    doc = dict(conn.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone())
+    d = cfg.library / "collections" / "COLX" / _doc_slug(doc) / dirname
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "page-001.md"
+    f.write_text(f"---\ndocument_id: {doc_id}\npage: 1\n---\n\n{body}\n", encoding="utf-8")
+    return f
+
+
+def test_prune_library_variants_removes_a_provably_redundant_folder(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    doc_id, _pid = _variant_doc(cfg, conn)
+    bare = _write_variant(cfg, conn, doc_id, "edited-mod", "same text")
+    qual = _write_variant(cfg, conn, doc_id, "edited-mod@m1", "same text")
+
+    res = prune_redundant_edited_dirs(cfg, conn, verbose=False)
+    assert [r["editor"] for r in res["removed"]] == ["mod"]
+    assert res["refused"] == []
+    assert not bare.parent.exists()          # deleted: it is exactly the DB text
+    assert qual.exists()                     # the current variant stays
+    conn.close()
+
+
+def test_prune_library_variants_keeps_a_different_reading(tmp_path):
+    """A bare folder that is NOT the DB text is a different reading (an older
+    OCR pass, another translation) — it must never be deleted."""
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    doc_id, _pid = _variant_doc(cfg, conn)
+    bare = _write_variant(cfg, conn, doc_id, "edited-mod", "a different reading")
+    _write_variant(cfg, conn, doc_id, "edited-mod@m1", "same text")
+
+    res = prune_redundant_edited_dirs(cfg, conn, verbose=False)
+    assert res["removed"] == []
+    assert len(res["refused"]) == 1 and res["refused"][0]["differing"] == 1
+    assert bare.exists()
+    conn.close()
+
+
+def test_prune_library_variants_keeps_a_model_less_current_variant(tmp_path):
+    """When the document's editor has no model, the BARE folder is the current
+    output and the qualified sibling is the older reading: keep it."""
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    doc_id, _pid = _variant_doc(cfg, conn, editor_model=None)
+    bare = _write_variant(cfg, conn, doc_id, "edited-mod", "same text")
+    _write_variant(cfg, conn, doc_id, "edited-mod@old", "same text")
+
+    res = prune_redundant_edited_dirs(cfg, conn, verbose=False)
+    assert res["removed"] == []
+    assert res["refused"][0]["reason"] == "current model-less variant"
+    assert bare.exists()
+    conn.close()
+
+
+def test_prune_library_variants_dry_run_deletes_nothing(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    doc_id, _pid = _variant_doc(cfg, conn)
+    bare = _write_variant(cfg, conn, doc_id, "edited-mod", "same text")
+    _write_variant(cfg, conn, doc_id, "edited-mod@m1", "same text")
+
+    res = prune_redundant_edited_dirs(cfg, conn, dry_run=True, verbose=False)
+    assert len(res["removed"]) == 1 and res["bytes"] > 0
+    assert bare.exists()  # still there
+    conn.close()
+
+
+def test_cmd_prune_library_variants(tmp_path, capsys):
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    doc_id, _pid = _variant_doc(cfg, conn)
+    bare = _write_variant(cfg, conn, doc_id, "edited-mod", "same text")
+    _write_variant(cfg, conn, doc_id, "edited-mod@m1", "same text")
+    conn.close()
+
+    cli.cmd_prune(cfg, SimpleNamespace(dry_run=True, library_variants=True))
+    assert bare.exists()
+    assert "would remove 1 redundant edited folder(s)" in capsys.readouterr().out
+
+    cli.cmd_prune(cfg, SimpleNamespace(dry_run=False, library_variants=True))
+    assert not bare.exists()
+    assert "removed 1 redundant edited folder(s)" in capsys.readouterr().out
 
 
 def test_cmd_prune_removes_orphans(tmp_path, capsys):

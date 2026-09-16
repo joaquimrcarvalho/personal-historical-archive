@@ -21,6 +21,7 @@ from .ingest import (
     encode_all,
     make_vision_client,
     prune_orphan_renders,
+    prune_redundant_edited_dirs,
     reindex_all,
     remove_library_artifact,
     remove_render_if_orphaned,
@@ -1681,9 +1682,21 @@ def cmd_rm(cfg: Config, args) -> None:
 
 def cmd_prune(cfg: Config, args) -> None:
     """Remove orphaned generated artifacts (render image caches whose document
-    is gone or was superseded)."""
+    is gone or was superseded), or with `--library-variants` the bare
+    `edited-<rules>` folders that only duplicate their `@<model>` sibling."""
     conn = db.connect(cfg.db_path)
     try:
+        if getattr(args, "library_variants", False):
+            res = prune_redundant_edited_dirs(cfg, conn, dry_run=args.dry_run, verbose=True)
+            verb = "would remove" if args.dry_run else "removed"
+            print(f"{verb} {len(res['removed'])} redundant edited folder(s) "
+                  f"({res['bytes'] / 1e6:.1f} MB)")
+            if res["refused"]:
+                print(f"kept {len(res['refused'])} folder(s) that are not provably redundant")
+            if res["kept_bare_only"]:
+                print(f"kept {res['kept_bare_only']} bare folder(s) with no model-qualified "
+                      f"sibling (the document's only edited output)")
+            return
         n = prune_orphan_renders(cfg, conn, dry_run=args.dry_run, verbose=True)
         verb = "would remove" if args.dry_run else "removed"
         print(f"{verb} {n} orphaned render folder(s)")
@@ -2792,6 +2805,10 @@ def main(argv: list[str] | None = None) -> None:
     prn = sub.add_parser("prune", help="remove orphaned render image caches (no registered document)")
     prn.add_argument("--dry-run", action="store_true",
                      help="report what would be removed without deleting")
+    prn.add_argument("--library-variants", action="store_true",
+                     help="instead of renders: delete a bare `edited-<rules>` folder that only "
+                          "duplicates its `@<model>` sibling AND matches the database — one that "
+                          "holds a different reading is reported, never deleted")
     prn.set_defaults(fn=cmd_prune)
 
     pr = sub.add_parser("prompts", help="show prompt resolution")

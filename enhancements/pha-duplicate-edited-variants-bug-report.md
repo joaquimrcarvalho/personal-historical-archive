@@ -135,31 +135,49 @@ Recommendation: **A + B**, with C as a documented operator step (§6).
   `@Y` directory (today it returns the bare one).
 - A bare directory that is stale/placeholder is never the one served.
 
-## 6. Remediation of the existing archive (measured 2026-09-16)
+## 6. Remediation of the existing archive
+
+**Re-measured 2026-09-16 (later the same day, after the archive had been
+re-edited), superseding the original snapshot. 34 documents carry a bare +
+qualified pair — 25 identical, 9 divergent** (the first measurement found 28/6;
+three `jesuit-cat4` pairs had since diverged). The *qualified* folder matched the
+database on every page of every divergent pair; the bare one is not a duplicate
+in any of the nine:
 
 | group | count | action |
 |---|---|---|
-| identical except `model:` | **28** | bare dir is redundant — delete |
-| divergent, `@model` matches the DB | **5** | bare is stale — delete after per-pair check |
-| divergent, neither matches the DB | **1** (doc 21) | inspect by hand before touching |
-| bare-only | **1** | keep as is |
-| `@model`-only | **7** | keep as is |
+| identical except `model:` | **25** | bare dir is redundant — delete (this is what `pha prune --library-variants` does) |
+| divergent | **9** | never deleted automatically; each is reported by the sweep |
+| bare-only (no qualified sibling) | **1** | keep — the document's only edited output |
+| `@model`-only | **43** | keep as is |
 
-Sizes: 35 bare dirs, 52.7 MB total. Deleting the redundant ones is safe only
-with the identity check above — the six divergent pairs are *not* duplicates:
+Sizes: 35 bare dirs, 52.7 MB total. The 25 identical pairs differ *only* in the
+front-matter line (`model: null` on the bare side):
 
-| doc | bare | qualified | pages differing | DB matches |
-|---|---|---|---|---|
-| 19 | `edited-latin-to-english` | `…@deepseek-v4-flash` | 1 / 1011 | bare 0, qual 1 |
-| 21 | `edited-modern-portuguese` | `…@deepseek-v4-flash` | 1 / 622 | bare 0, qual 0 |
-| 44 | `edited-modern-portuguese` | `…@minimax-m2-5` | 1 / 192 | bare 0, qual 1 |
-| 47 | `edited-french-ocr` | `…@deepseek-v4-flash` | 610 / 618 | bare 0, qual 8 (bare is 610 × `*waiting*`) |
-| 50 | `edited-french-ocr` | `…@deepseek-v4-flash` | 627 / 660 | bare 0, qual 8 (bare is 627 × `*waiting*`) |
-| 56 | `edited-documenta-indica-ocr` | `…@deepseek-v4-flash` | 722 / 725 | bare 0, qual 8 |
+```diff
+- model: null
++ model: deepseek-v4-flash
+```
 
-Note doc 44's qualified directory is `@minimax-m2-5` — a *different model* from
-the document's current `editor_model`, i.e. the pair spans two generations of
-the same variant.
+The nine divergent pairs, with what the bare folder actually holds:
+
+| doc | bare → qualified | pages differ | what the bare side is |
+|---|---|---|---|
+| 47 | `edited-french-ocr` → `…@deepseek-v4-flash` | 610 / 618 | 610 `*waiting*` placeholders + 8 filled — an abandoned partial run |
+| 50 | `edited-french-ocr` → `…@deepseek-v4-flash` | 627 / 660 | same, 627 placeholders |
+| 56 | `edited-documenta-indica-ocr` → `…@deepseek-v4-flash` | 722 / 725 | a **different complete OCR pass** (dropped page numbers, different Notes, Latin kept where the qualified translated) |
+| 19 | `edited-latin-to-english` → `…@deepseek-v4-flash` | 1 / 1011 | on that page the **Latin original**, where the qualified has the English |
+| 44 | `edited-modern-portuguese` → `…@minimax-m2-5` | 1 / 192 | a different modernization (`só faço este viaje` vs `somente faço este viagem`) |
+| 29 | `edited-jesuit-cat4` → `…@minimax-m2-5` | 1 / 16 | a page in another translation generation (Spanish kept vs Portuguese) |
+| 30 | `edited-jesuit-cat4` → `…@minimax-m2-5` | 1 / 10 | same, Spanish where the qualified has Portuguese |
+| 27 | `edited-jesuit-cat4` → `…@minimax-m2-5` | 1 / 8 | same, a different Portuguese rendering (+1 `*waiting*`) |
+| 21 | `edited-modern-portuguese` → `…@deepseek-v4-flash` | 1 / 622 | one extra blank line (cosmetic, but a byte-compare flags it) |
+
+That is why deleting is a **content** decision, never a filename one: a rule like
+"same rules id ⇒ the bare folder is redundant" would have discarded a whole
+alternate OCR pass (doc 56) and one page in another translation on five more
+documents. The safe automation is the guard in §8 — delete only what the DB can
+regenerate — which authorises exactly the 25 identical pairs and refuses all 9.
 
 ## 7. Reproduction
 
@@ -208,14 +226,33 @@ Both fixes are in, with the identity rule living in one place (`addresses.py`):
 3. `bundle` import always treated the `@model` suffix as part of the editor id
    (`edited-x@y` came back as an editor named `x@y`); it now parses the variant
    with `parse_variant()` and re-exports under the qualified name.
+4. The **review round-trip** was a read path the draft did not list, and it still
+   walked both folders: `ingest._pending_scan()` (behind `pha status` /
+   `pha review`) is mtime-based per file, not variant-resolving, so a stale bare
+   file whose mtime beat the stored `exported_at` would have been imported as a
+   human correction — over good text, stamped `reviewed`. It now skips a bare
+   directory that has a model-qualified sibling (same `collapse_variant_aliases`
+   rule everywhere). Measured before the change: of 17,392 bare files with a
+   stored `exported_at`, **0** were newer, so the archive was quiet — the fix
+   closes the hole rather than repairing damage.
 
-**C is not automated.** `pha prune` and the library were left alone: §6's guard
-(refuse to delete a bare folder whose content does not match the DB) needs a
-per-pair human decision on the six divergent pairs, and the bare folders no
-longer affect anything pha does.
+**C is shipped, guarded.** `pha prune --library-variants [--dry-run]`
+(`ingest.prune_redundant_edited_dirs`) deletes a bare folder **only when every
+page file in it is exactly what the database holds**, i.e. it is regenerable by
+`pha export` and holds nothing unique. Anything that differs — the nine
+divergent pairs of §6 — is reported and kept, as are bare-only variants and a
+bare folder that is the document's current model-less output. That is §6's guard
+made mechanical: it authorises the 25 identical pairs and refuses all nine
+readings. It is deliberately a separate opt-in sweep, not something `pha scan`
+or `pha edit` does on its own, because it is the only pha operation that deletes
+from `library/`.
 
 Test coverage: `tests/test_ingest.py` (one directory per pass, the writer names
 by the resolved model, both resolution helpers), `tests/test_addresses.py` (the
 collapse and the pick rules), `tests/test_cli_cite.py` (no prompt between a
-reading and its own alias) and `tests/test_serve.py` (`meta.json` lists the
-variant once). All four new ingest assertions fail against the pre-fix source.
+reading and its own alias), `tests/test_serve.py` (`meta.json` lists the variant
+once), `tests/test_cli_pending.py` (the review scan ignores a bare alias) and
+`tests/test_prune.py` (the sweep removes a redundant folder, keeps a different
+reading, a model-less current variant and everything in a dry run). All four new
+ingest assertions and the pending-scan assertion fail against the pre-fix
+source.

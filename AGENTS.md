@@ -502,7 +502,12 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   deleted when a changed file is re-scanned, on `pha rm`, and on `pha bundle
   --move` — but only once no live document still shares that content hash.
   Sweep any leftovers with `pha prune [--dry-run]` (a content-cache GC; it
-  never touches the DB or `library/`).
+  never touches the DB or `library/`). **`pha prune --library-variants
+  [--dry-run]` is the exception**: it deletes a bare `edited-<editor>` folder
+  that only duplicates its `@<model>` sibling, and only when every page in it is
+  exactly what the DB holds — a folder holding a different reading is reported
+  and kept. Never hand-delete a bare folder yourself; run the sweep and read its
+  report.
 - **After changing config**: re-run the matching pass (`pha scan`, `pha edit`,
   `pha encode`) so staleness-by-mtime picks up the change, then confirm with
   `pha status` / `pha_extraction_status`.

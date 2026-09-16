@@ -161,6 +161,41 @@ def test_pending_legacy_edited_compares_bodies(tmp_path):
     conn.close()
 
 
+def test_pending_ignores_a_bare_alias_of_a_model_qualified_variant(tmp_path):
+    """`edited-X` is the same variant as `edited-X@Y`: a stale bare file must not
+    be reported as a human correction, or `pha review` would import it over good
+    text and stamp it `reviewed`."""
+    import os
+
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    doc_id, doc = _add_doc_with_page(cfg, page_no=1, exported_at=None)
+    conn = _db.connect(cfg.db_path)
+    page = conn.execute("SELECT id FROM pages WHERE document_id=? AND page_no=?",
+                        (doc_id, 1)).fetchone()
+    _db.update_document(conn, doc_id, editor="french-ocr", editor_model="deepseek-v4-flash")
+    _db.set_page_edit(conn, page["id"], "french-ocr", text="real text")
+    conn.commit()
+    doc = dict(conn.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone())
+
+    qual = _write_page_file(cfg, doc, 1, variant="edited-french-ocr@deepseek-v4-flash",
+                            body="real text")
+    bare = _write_page_file(cfg, doc, 1, variant="edited-french-ocr", body="stale text")
+    conn.execute("UPDATE page_edits SET exported_at=? WHERE editor='french-ocr'",
+                 (qual.stat().st_mtime,))
+    conn.commit()
+    future = qual.stat().st_mtime + 100
+    os.utime(bare, (future, future))  # the alias looks newer than the stamp
+
+    assert pending_review_files(cfg, conn) == []
+
+    # the qualified file still reports when it is genuinely edited
+    os.utime(qual, (future + 100, future + 100))
+    pend = pending_review_files(cfg, conn)
+    assert len(pend) == 1 and pend[0]["variant"] == "edited-french-ocr@deepseek-v4-flash"
+    conn.close()
+
+
 # --- `pha review` scope: pending only, --all opt-in, --unset undo ------------
 
 def _review_args(doc=None, page=None, all=False, unset=False):
