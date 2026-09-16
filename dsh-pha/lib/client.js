@@ -463,15 +463,23 @@ function inline(t, o) {
             key,
             onClick: o.onAnchor ? (ev) => { ev.preventDefault(); o.onAnchor(c.id) } : undefined,
           }, label))
-        } else if (c.kind === 'citation' && o.onCitation) {
-          // A `pha cite` footnote: open the page in THIS view (image + text) instead of
-          // leaving the harness for the pha serve viewer.
+        } else if (c.kind === 'citation') {
+          // A `pha cite` footnote carries a real address: the page on the pha serve viewer.
+          // A plain click follows it (a new tab, exactly what Obsidian does with the same
+          // note) and ⌘/Ctrl-click opens the page in THIS view instead — image + text, and
+          // no server needed. The href is always the honest URL, so middle-click works too.
+          const pageTag = c.page === null ? 'the document' : 'p.' + c.page
           out.push(React.createElement('a', {
             className: 'pha-page-link',
             href,
+            target: '_blank',
+            rel: 'noopener noreferrer',
             key,
-            title: 'open p.' + (c.page === null ? '?' : c.page) + ' of ' + c.slug + ' in this view',
-            onClick: (ev) => { ev.preventDefault(); o.onCitation(c) },
+            title: pageTag + ' — opens ' + href
+              + (o.onCitation ? ' · ⌘/Ctrl-click to read it in this view' : ''),
+            onClick: o.onCitation
+              ? (ev) => { if (ev.metaKey || ev.ctrlKey) { ev.preventDefault(); o.onCitation(c) } }
+              : undefined,
           }, label, c.page === null ? null : React.createElement('span', { className: 'pha-link-tag' }, 'p.' + c.page)))
         } else if (c.kind === 'note' && o.onNote) {
           out.push(React.createElement('a', {

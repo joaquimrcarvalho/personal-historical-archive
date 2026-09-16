@@ -252,7 +252,7 @@ archive's own conventions produce is routed deliberately:
 | `[[Note]]`, `[[Note|alias]]`, `[[Note.md]]` | opens that note; matching is case-, space- and accent-insensitive (`[[the strait]]` finds `The-Strait.md`) |
 | `[[Note#Heading]]`, `[text](#id)` | opens the note (if needed) and scrolls to the heading |
 | `[[missing-note]]` | rendered as an *unresolved* (amber, dotted) link instead of failing silently |
-| `[p. 437](http://127.0.0.1:8765/doc/<slug>/p437)` — a `pha cite` footnote | opens **that page of that document in this view** (image + text), resolved by the same slug rule `pha serve` uses — no `pha serve`, no leaving the harness |
+| `[p. 437](http://127.0.0.1:8765/doc/<slug>/p437)` — a `pha cite` footnote | **follows the URL** (a new tab on the `pha serve` viewer — the same thing Obsidian does with that note); **⌘/Ctrl-click** opens that page *in this view* instead (image + text, no server needed). Middle-click follows the URL natively, and the tooltip states both |
 | `[other](other-note.md)` | opens `other` in the notes viewer |
 | any other `http(s)://`, `mailto:` | a new tab, so the harness page (and the conversation) stays put |
 

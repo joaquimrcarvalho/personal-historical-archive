@@ -117,7 +117,10 @@ walk(tree)
 
 const anchors = nodes.filter((n) => n.type === 'a')
 const byClass = (c) => anchors.filter((n) => String(n.props.className || '').includes(c))
-const click = (n) => { if (n.props.onClick) n.props.onClick({ preventDefault() {} }); }
+let prevented = 0
+const click = (n, mods) => {
+  if (n.props.onClick) n.props.onClick(Object.assign({ preventDefault() { prevented++ } }, mods || {}))
+}
 
 check(nodes.some((n) => n.type === 'h1' && n.props.id), 'headings carry an id (anchor targets)')
 check(byClass('pha-note-link').length >= 5, 'wikilinks render as note links')
@@ -133,8 +136,13 @@ check(!!alias, '[[Malaca|the strait]] renders the alias as its label')
 if (alias) { click(alias); }
 const dangling = byClass('pha-note-link dangling').find((n) => String(n.children.join('')) === 'missing-note')
 if (dangling) { click(dangling) }
+// A citation link keeps the served URL and a plain click follows it (a new tab, like
+// Obsidian); ⌘/Ctrl-click is what opens it in this view.
 const citation = byClass('pha-page-link')[0]
-if (citation) { citation.props.onClick({ preventDefault() {} }) }
+const preventedBefore = prevented
+if (citation) { click(citation) }                       // plain click: follow the URL
+const plainFollowed = prevented === preventedBefore
+if (citation) { click(citation, { metaKey: true }) }     // modifier: read it here
 const anchorLink = anchors.find((n) => n.props.href === '#Heading-one')
 if (anchorLink) { anchorLink.props.onClick({ preventDefault() {} }) }
 
@@ -142,8 +150,13 @@ check(JSON.stringify(clicks[0]) === JSON.stringify(['note', 'Malaca', null]),
   'clicking an alias wikilink asks for the note, not the alias')
 check(JSON.stringify(clicks[1]) === JSON.stringify(['note', 'missing-note', null]),
   'clicking a dangling link still tries the note (the pane then explains why)')
+check(byClass('pha-page-link').every((n) => n.props.target === '_blank' && String(n.props.rel).includes('noopener')),
+  'a citation link opens in a new tab (its href is the served page)')
+check(byClass('pha-page-link').every((n) => String(n.props.href).indexOf('/doc/') > 0),
+  'a citation link keeps the real served URL')
+check(plainFollowed, 'a plain click on a citation does NOT divert — the URL is followed')
 check(JSON.stringify(clicks[2]) === JSON.stringify(['cite', 'colx-d', 437]),
-  'clicking a citation asks for slug + page')
+  '⌘/Ctrl-clicking a citation opens that page in this view')
 check(JSON.stringify(clicks[3]) === JSON.stringify(['anchor', 'Heading-one']),
   'clicking an anchor scrolls instead of navigating')
 
