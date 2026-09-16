@@ -37,12 +37,14 @@ transcriptions with a text model, and indexes them for full-text search.
 - This file and `AGENTS.md` are the first things an AI agent should read
   before operating on this archive.
 
+> [!IMPORTANT]
 > **Agents:** the person you are working with here is most likely a
 > **historian, not a programmer**. Explain in plain language what you are
 > going to do before you do it, and explain plainly what you need — and what
 > it will change — before asking for any extra permission on their computer.
 > See `AGENTS.md`, section "Who you are talking to".
 
+> [!TIP]
 > **Where is `pha` on THIS machine?** → **`pha-location.md`**, next to this
 > file. The last pha run wrote it, so it names the exact executable, a
 > PATH-proof fallback (`<python> -m personal_historical_archive`), the version
@@ -104,6 +106,7 @@ export PHA_ARCHIVE_DIR="<path-to-this-directory>"
 If `pha` ever reports "No pha archive is configured or found", this step is
 missing (or the path is wrong): run `pha set archive-dir` with this directory.
 
+> [!WARNING]
 > Do NOT run `pha` against the project checkout's default archive — this
 > directory is the data root; the checkout directory is only where the code
 > lives.
@@ -324,6 +327,31 @@ edit, delete or add skills freely.
   `editor` files are the fallback.
 - Full usage: see the pha README (in the source repository linked above, or
   the README.md in this directory).
+
+## Installing a local OCR engine (only if a collection uses one)
+
+Some collections are read by a **local OCR engine** — Tesseract, or LiteParse —
+instead of a vision model; the palaeographer's model file then declares
+`engine: tesseract` or `engine: liteparse`. These are ordinary local programs,
+not AI models. Probe first with `pha doctor` (it reports what is missing and
+how to install it) and install only what is actually needed.
+
+- **LiteParse** (`lit parse`, ships the `lit` CLI): install the **Python**
+  package — `pip install liteparse` (or `pipx install liteparse` /
+  `uv tool install liteparse`). That is the recommended route and it works on
+  Windows. `npm i -g @llamaindex/liteparse` is the alternative, but it
+  **frequently fails on Windows** (and can leave the wrong `lit` on PATH): if
+  it fails, do NOT give up and do not tell the historian that OCR is
+  unavailable — install the Python package instead. The `lit` CLI is the SAME
+  either way, so install one, not both. A bare `command -v lit` hit is not
+  proof (`lit` is a common name, e.g. LLVM's test runner): `lit --version`
+  must print a LiteParse version. LiteParse bundles its own Tesseract.
+- **Tesseract**: macOS `brew install tesseract tesseract-lang`; Debian/Ubuntu
+  `apt-get install tesseract-ocr tesseract-ocr-por` (one package per language);
+  Windows `choco install tesseract` or the UB-Mannheim installer.
+- Install it on the machine that keeps the archive, then run `pha doctor`
+  again to confirm. A non-English `liteparse_lang`/`tesseract_lang` needs that
+  language's data installed too.
 
 ## Writing a note in `notes/`
 

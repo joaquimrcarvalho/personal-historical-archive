@@ -27,6 +27,16 @@ def test_archive_docs_tell_agents_the_user_is_a_historian():
     assert "narrower permission" in agents
 
 
+def test_archive_agents_md_carries_the_ocr_install_advice():
+    """The OCR engines are installed BY the agent running in the archive, so
+    the Python-package-first LiteParse advice lives in the archive AGENTS.md
+    (not in the historian-facing guide)."""
+    agents = ai.ARCHIVE_AGENTS_MD
+    assert "pip install liteparse" in agents
+    assert "frequently fails on Windows" in agents
+    assert "do NOT give up" in agents
+
+
 def test_init_archive_stamps_the_docs(tmp_path):
     p = tmp_path / "arc"
     ai.init_archive(p)

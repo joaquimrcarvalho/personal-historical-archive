@@ -113,6 +113,7 @@ A:
 [<the JSON array you built for sample 2>]
 ```
 
+> [!IMPORTANT]
 > `pages` uses **PDF page numbers** — the position in the PDF, NOT the number
 > printed on the page. E.g. Pfister's chronological table is printed i–xv but
 > occupies PDF pages 1-15, so `pages: 1-15`. A document with several

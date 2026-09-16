@@ -1,5 +1,6 @@
 # personal-historical-archive (pha)
 
+> [!TIP]
 > **For human historians:** this README is the technical reference. If you
 > just want to get your documents into the archive and ask your AI assistant
 > questions about them, head to
@@ -131,11 +132,13 @@ pha serve                   # read-only render server: /doc/<slug>/p037.jpg
 pha mcp
 ```
 
+> [!TIP]
 > **`pha` is not on PATH?** Don't guess a path. Run `command -v pha`. If it's
 > empty, either install it globally (`uv tool install --editable .`) or call it
 > by its venv's full path, e.g. `.venv/bin/pha status`. See
 > [Troubleshooting: `pha` not on PATH](#troubleshooting-pha-not-on-path) below.
->
+
+> [!NOTE]
 > **First run / no archive yet?** On a fresh install pha detects that no
 > archive is configured and asks where your archive is: point at an existing
 > one (`pha set archive-dir <path>`) or create a new one under `~/pha-home`
@@ -570,6 +573,7 @@ with `_`, so they are never loaded until you copy one):
 Latin/Portuguese/Spanish: running head, apparatus, footnote blocks). Both are
 content-only: copy, rename, pair with a model in `pha.yaml`.
 
+> [!NOTE]
 > **A palaeographer doesn't have to be an LLM — local OCR/parse engines.** A
 > model interface with an `engine` replaces the vision call with a **local**
 > OCR/parse tool (not an LLM, no endpoint/api key). Supported engines:
@@ -579,6 +583,7 @@ content-only: copy, rename, pair with a model in `pha.yaml`.
 | `tesseract` | `engine: tesseract`, `tesseract_lang` (e.g. `por`/`lat`/`por+lat`), optional `tesseract_psm` | `tesseract` + language data (`brew install tesseract tesseract-lang`) |
 | `liteparse` | `engine: liteparse`, `liteparse_lang` (e.g. `por`/`fra`), optional `liteparse_dpi`; plus `liteparse_ocr` (`fresh`/`embedded`/`prefer-embedded`) and `liteparse_format` (`text`/`markdown`/`json`) | `lit` CLI — install the **Python** package `pip install liteparse` (recommended; works on Windows). `npm i -g @llamaindex/liteparse` is the alternative but often fails on Windows — see below |
 
+> [!TIP]
 > **Installing the engines** (on the machine that runs pha). Probe first with
 > `pha doctor` (`--engine liteparse` requires a specific engine; `--json` for
 > machine-readable output; MCP: `pha_doctor()`) — it checks the binaries pha
@@ -605,6 +610,7 @@ content-only: copy, rename, pair with a model in `pha.yaml`.
 > language's `.traineddata` reachable (offline: point `TESSDATA_PREFIX` at the
 > folder containing them).
 
+> [!NOTE]
 > An OCR engine has no `base_url`/`model` — set `engine` and the engine's
 > settings instead. Select it per document/collection exactly like any other
 > model:
@@ -1206,6 +1212,7 @@ is available, offers to install it:
   --ff-only` and the new version is active immediately; otherwise it is
   reinstalled from the repository.
 
+> [!NOTE]
 > **Archive agent docs refresh automatically.** An archive created with
 > `pha init-archive` carries its own `README.md` + `AGENTS.md`. Each `pha`
 > run refreshes them in your archive to the current templates, so after a pha

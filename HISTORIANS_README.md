@@ -5,9 +5,30 @@ maps in a local archive: you drop files into a folder, a vision model reads
 each page, a text model can modernize or translate the transcriptions, and
 everything becomes searchable by your AI assistant.
 
-You do not need to touch the command line yourself — you work through **your
-favourite AI agent** (Claude, ChatGPT, Cursor, …). The steps below tell you
-what to ask, and each section has a block you can copy straight into the chat.
+The workflow, left to right:
+
+```mermaid
+flowchart LR
+    A["Documents<br/>(PDF, JPG)"] --> B["Palaeographer<br/>(reads each page)"]
+    B --> C["Transcription<br/>(faithful reading)"]
+    C --> D["Editor<br/>(optional)"]
+    D --> E["Edited / translated text<br/>(modernization)"]
+    C --> F["Global index<br/>(the searchable archive)"]
+    E --> F
+```
+
+You do not need to touch the command line yourself, and you never need to
+learn a command — you work through **your favourite AI agent**, for example
+Claude, ChatGPT, DeepSeek (including DeepSeek Harness), Kimi, Cursor, Gemini
+or Copilot. The steps below tell you what to ask, in ordinary language.
+Wherever a technical step is needed there is a block like this one
+
+```
+… a message you copy into the chat …
+```
+
+and your agent does the rest. Everything in a block is for the agent, not
+for you.
 
 ---
 
@@ -67,6 +88,52 @@ installation), and any prompts you write later for your own collections.
 
 ---
 
+## How your pages can be read: the ladder
+
+There are **four ways** to turn a page into text. Think of them as a ladder:
+the simplest and cheapest rung at the bottom, the most capable — and most
+expensive — at the top.
+
+| Rung | Method | What it is | What it costs |
+|------|--------|------------|---------------|
+| 1 | **Builtin text** | The text already stored inside the PDF, reused as it is. | Free and instant; only when the file already has good text |
+| 2 | **OCR text** | An OCR program recognises the shapes of printed letters. No AI model at all. | Free and instant; printed text only, no notes |
+| 3 | **Local vision model** | An AI model on your own computer reads the page, with context and brief reading notes. | Free; needs a capable computer; nothing leaves it |
+| 4 | **Remote vision model** | A very large AI model, reached over the internet, reads the page like a scholar. | Page images are sent to a provider; paid per page |
+
+Start at the **lowest rung that does the job** for a given collection, and
+climb only as far as you must:
+
+1. **Builtin text — check this first.** Many PDFs already carry their own text
+   (files created digitally, and scans a library has already processed). When
+   that text is good there is nothing to compute. When it is the leftovers of
+   an old, poor OCR pass it is worse than useless — so pha tests its quality
+   page by page and quietly falls back to OCR when it fails.
+   *Best for:* digital-born PDFs and well-made library scans of printed text.
+2. **OCR text** — an OCR engine (Tesseract, or LiteParse which bundles it)
+   looks at the shapes of the letters and types them out. It runs entirely on
+   your computer, with no AI model. Fast and dependable on clean **printed or
+   typeset** pages. It cannot read handwriting, and it gives no reading notes.
+   *Best for:* printed books, typewritten letters, printed tables.
+3. **Local vision model** — an AI model on your own computer reads the page as
+   a scholar does: it follows the layout, resolves a damaged or difficult word
+   **from context**, and can add brief reading notes (language, script,
+   difficult words). Nothing leaves your computer.
+   *Best for:* old printed text and the easier hands — use it whenever it is
+   good enough.
+4. **Remote vision model** — a much larger AI model, over the internet. This
+   is the strongest reading available and today the only rung that reliably
+   handles **difficult handwriting**, but the page images are sent to the
+   provider and it **costs money per page**.
+   *Best for:* handwritten manuscripts, secretary hands, damaged or heavily
+   annotated pages.
+
+Your choice is made **collection by collection**, so a printed book and a
+folder of letters can be read differently, and nothing is permanent — you can
+change a collection's method and read it again at any time.
+
+---
+
 ## 1. Set up the models and install pha
 
 You can ask your agent to do all of it. Three short steps, in order (step 1a —
@@ -102,31 +169,25 @@ Steps:
 ```
 
 **Your agent will ask where your archive is — expect it.** A freshly
-installed pha does not know any archive yet: the first real command (like
-`pha status`) reports *"No pha archive is configured or found"* and stops,
-and the agent then asks you for the archive's location. The answer is the
-**workspace folder you created in the previous step** — your agent will
-normally suggest it, because that is the folder you designated as the
-archive's home. Confirm it: the agent runs the two commands of step 4
-(create the archive inside that folder and remember its location for every
-future command), and `pha status` then works. If that folder already has
-files in it (pha refuses to create an archive there), tell the agent to
-create the archive in an empty subfolder inside it instead.
+installed pha does not know any archive yet, so on its first real action it
+stops and asks you for the archive's location. The answer is the **workspace
+folder you created in the previous step**; your agent will normally suggest
+it, because that is the folder you designated as the archive's home. Confirm
+it, and the agent creates the archive inside that folder and remembers the
+location for every future session. If that folder already has files in it,
+tell the agent to create the archive in an empty subfolder inside it instead.
 
 What you should see afterwards: a short report that the archive is ready and
-which palaeographers and editors are configured (`qwen-local` by default,
-plus a `modern-portuguese` editor). Installing pha before choosing the models
-lets your agent check your actual setup (defaults, `pha status`, `pha
-palaeographer`) when it makes the recommendations below.
+which reading and editing helpers are configured. Installing pha before
+choosing the models lets your agent check your actual setup when it makes the
+recommendations below.
 
-**Windows note:** the commands are the same, only the environment folder
-differs (`Scripts\python.exe` instead of `bin/python`). Your agent will
-handle this.
+**Windows note:** everything works on Windows too; only some folder names
+inside the computer differ. Your agent will handle this.
 
 ### 1c. Choose the best models for your documents
 
-pha is now installed, so your agent can first look at your actual setup — run
-`pha palaeographer` and `pha status` to see what is already configured — and
+pha is now installed, so your agent can first look at your actual setup and
 then research with that in hand.
 
 Different vision and text models are better for different material, and you are
@@ -143,8 +204,11 @@ Two important facts in September 2026:
   is not on your machine yet. For **old printed / typeset text**, by contrast,
   a local vision model (or OCR — see below) is normally fine; printed letters
   and shapes don't need that much judgement.
-- **Editing/translating text is much lighter**, and a local text model is often
-  enough (it can also be remote if you prefer).
+- **Editing/translating text is lighter than reading a page** — no images are
+  involved, so a local text model is often enough (it can also be remote if you
+  prefer). It is a **separate choice** from the reader: if you need a
+  translation out of a language you do not read (Latin, classical Greek, …),
+  that calls for a model with strong ability in that language.
 - **Remote image processing costs money.** A page image is a lot of tokens, so
   a remote vision model bills more per page than a local one (this is a
   current limitation of how vision models are priced). It is usually worth it
@@ -214,13 +278,14 @@ If you would rather not write all that, ask your agent to run the
 questions and produces the model + rules files for you, local or remote, and
 safely stores the API key.
 
+> [!TIP]
 > **Model Helper prompt for your agent.** A ready-to-use interview prompt that
 > guides an agent through configuring any pha model — local (LM Studio /
 > Ollama) or remote (MiniMax, OpenRouter, OpenAI, …) — is in
 > `prompts/model-helper.md`. Have the agent read that file and follow it: it
-> asks for the provider, the endpoint and model name, whether it needs vision,
-> and (for remote) safely stores the API key with `pha key --set` and writes
-> the model + rules + `pha.yaml` files for you.
+> asks you for the provider, the endpoint and the model name, whether the model
+> needs to see images, and (for a remote model) stores your API key safely and
+> writes the configuration files for you.
 
 ---
 
@@ -267,10 +332,10 @@ Two kinds of "helpers" read and improve your documents:
   abbreviations, convert to modern Portuguese, translate to English,
   normalize names, …
 
-Each is a single text file in the `palaeographers/` or `editors/` folder
-(content rules only — it references a model via `model: <id>`). **To add one,
-you duplicate the `_sample.md` file, rename it, and edit it** — your agent can
-do this for you from a plain-language description.
+Each is a small instruction file kept in your archive — one describing how to
+**read** a page, one describing how to **edit** the reading. You never have to
+write them yourself: describe in plain language what you need, and your agent
+writes the file and tells pha to use it.
 
 Tell your agent:
 
@@ -299,104 +364,46 @@ Show me the result of:
 
 Notes:
 
-- The **file name** (without extension) is the id used for selection — e.g. a
-  file `palaeographers/portuguese-secretary.md` is selected with
-  `palaeographer: {rules: portuguese-secretary}` in `pha.yaml`.
-- You can use a different palaeographer/editor per **collection** — that is
-  how a historian's editorial choice is expressed.
-- The base prompt in a palaeographer file defines the output format; the
-  document/collection prompt only adds specific aspects (e.g. which fields
-  matter, whether to modernize spelling).
+- These choices are made **collection by collection**, so one collection can
+  be read by one specialist and another by a different one. That is how your
+  editorial choice is recorded.
+- You can change any of it later just by describing what you want; your agent
+  updates the archive for you.
 
-### How pha reads a page: LLM vision vs OCR
+### Choosing the rung: let your agent test it
 
-There are two ways pha can turn a page image into a transcription, and they
-behave very differently. You choose per collection in `pha.yaml`.
+You do not have to guess. If the agent you are working with **can see images
+itself** — a local agent with vision, such as DeepSeek or Kimi running with a
+vision model — it can look at a few pages and settle the question for you:
 
-**1. Vision model (an LLM that reads images) — the default.**
-
-A *vision language model* (e.g. `qwen/qwen3-vl-8b`) reads the page like a
-scholar: it sees the whole layout, follows the hand, recognises a damaged or
-difficult word *from context*, and writes brief reading notes (language,
-script, difficult words). It can transcribe dense handwriting, marginalia and
-interlinear notes that plain OCR cannot. It runs on a **local vision model**
-(LM Studio) **or a remote one** — see section 1c. Reading difficult manuscripts
-today most often needs a remote vision model, because the model strong enough
-is too big for a normal computer.
-
-*Best for:* handwritten manuscripts, secretary hands, old scripts, pages full
-of annotations — anything where judgement and context matter.
-
-**2. OCR (optical character recognition) — Tesseract or LiteParse.**
-
-An OCR engine matches characters to shapes. It is fast, deterministic, and
-runs **locally without any model or LM Studio**. It is excellent at **clean
-printed or typeset text** (printed books, typewritten letters, printed
-tables). It does **not** use context: it struggles with handwriting, unusual
-scripts, damaged or touching letters, and produces no reading notes.
-
-*Best for:* printed/typed documents where you want speed and simplicity, and
-don't need paleographic judgement.
-
-**Choosing:** printed books and typewritten text → OCR. Handwritten manuscripts
-or pages with notes you want explained → a vision model. You can even use OCR
-for one collection and a vision model for another.
-
-**The settings, in pha terms** — both are set exactly the same way: as the
-`palaeographer` for a collection, in the `pha.yaml` next to the documents. The
-only difference is the model file you point at.
-
-| What | Vision model (LLM) | Tesseract OCR | LiteParse OCR |
-|------|--------------------|---------------|---------------|
-| Needs LM Studio / a local model | maybe* | no | no |
-| Understands handwriting & context | yes | weak | weak |
-| Reads marginalia / gives reading notes | yes | no | no |
-| Great on printed/typeset text | yes | yes | yes |
-| Runs on | your machine *or* a remote provider | your machine | your machine |
-
-\* A vision model runs locally (LM Studio/Ollama) **or** remotely (via an API
-key). Only the local option needs LM Studio; a remote one needs a key instead.
-
-In the model file (`models/<id>.md`):
-
-- **Vision model** — `base_url` (an LM Studio/Ollama address for a local model,
-  or a provider's API root, e.g. `https://api.minimax.io/v1`, for a remote one,
-  plus `api_key` as `"${VARNAME}"`), `model` (the server-side model name),
-  optional `max_vision_px` (largest page image sent; keep ≤ the model's
-  window), `vision_jpeg_quality`, `api_style`, `context_tokens`, `thinking`.
-- **Tesseract** — `engine: tesseract`, `tesseract_lang` (the language(s), e.g.
-  `por`, `lat`, `por+lat`), optional `tesseract_psm` (page-segmentation mode).
-  Needs the `tesseract` program installed (and its language data).
-- **LiteParse** — `engine: liteparse`, `liteparse_lang` (OCR language, e.g.
-  `por`, `fra`), optional `liteparse_dpi` (resolution; use `300` for quality);
-  `liteparse_ocr` chooses what is read: `fresh` (always OCR the page image),
-  `embedded` (always use the PDF's own text layer, if it has one) or
-  `prefer-embedded` (use that text layer only when it is good quality,
-  otherwise OCR).
-  Needs the `lit` program installed. **Ask for the Python version** —
-  `pip install liteparse` (your assistant can run this for you). That is the
-  recommended way, and it works on Windows. The other way,
-  `npm i -g @llamaindex/liteparse`, often fails on Windows: if your assistant
-  tries it and it does not work, do not give up — the Python version does the
-  same job. pha finds engines the same way your
-  Terminal does (its own PATH, then the PATH your login shell would provide),
-  so any normal install just works. Verify
-  with `lit --version` (it must print a LiteParse version, not some other
-  `lit`). LiteParse bundles its own Tesseract. When unsure whether an engine
-  is installed, run `pha doctor` — it reports what is missing and how to
-  install it.
-
-Select it for a collection exactly like any other model:
-
-```yaml
-# dropbox/collections/COLX/pha.yaml
-palaeographer:
-  rules: <rules-file-id>
-  model: tesseract        # or: liteparse, or a vision-model id
+```
+Use your vision to read a few reference pages and test what is the best
+method for reading the document:
+1. Pick a few representative pages of the document (one easy, one hard).
+2. Read those pages yourself first, so you know what they really say.
+3. Use `pha test` on those same pages to try each reading method in the
+   ladder order — the file's builtin text, OCR, a local vision model, and a
+   remote vision model — overriding the palaeographer and model for each run
+   (e.g. pha test <document> --pages 3 --palaeographer <rules> --model <id>).
+   `pha test` works on a sample and changes nothing in my archive, so it is
+   safe to repeat; it prints a report, and `pha test --show` re-prints the
+   last one.
+4. Compare each result with your own reading, and tell me in plain language
+   which method is best for the result, the time and the money.
+5. Set the collection up to use the method you recommend, and show me the
+   comparison.
 ```
 
-then run `pha scan`. The editor and encoder stages afterwards are unchanged —
-they still run on the text/LLM model of your choice.
+If your agent cannot see images, it can still make the same test through pha
+and report the results — just ask it to *"test the reading methods on a few
+pages of this document and recommend the best one"*.
+
+The reading method is chosen per collection. The **editing** that follows is a
+completely separate choice: the editor only ever works on the text, so it does
+not need to see images, and it can be a different model altogether. Choose it
+for what *editing* demands, not for how the page was read — and above all, if
+you want a translation out of a language you do not read (Latin, classical
+Greek, …), choose a model with strong ability in that language.
 
 ---
 
@@ -412,26 +419,25 @@ Then, when it finishes:  pha edit
 Then show me:  pha status
 ```
 
-- `pha scan` reads every page with the palaeographer(s).
-- `pha edit` runs the editor over the transcriptions (modernize/translate).
-- Large books take time; the work is resumable — if the computer sleeps or is
-  restarted, just run `pha scan` again and it continues where it stopped.
+- The first pass reads every page with the reading method you chose.
+- The second pass edits the readings (modernise / translate).
+- Large books take time; the work can be resumed — if the computer sleeps or is
+  restarted, ask your agent to carry on and it continues where it stopped.
 
 ### Searching
 
-Ask in plain language, e.g.:
+Ask in plain language, for example:
 
 - *"Search the archive for mentions of Malacca."*
 - *"In the collection missons-do-oriente, find the pages about Francis Xavier."*
 - *"Show me the full transcription of that page."*
 
-Your agent can answer directly if it is connected to the archive (see below),
-or you can ask it to run: `pha search "Malacca" --collection missons-do-oriente`
+Your agent answers these directly when it is connected to the archive (below).
 
 ### Letting your agent query directly (MCP)
 
-For agents that support MCP (Claude Desktop, Cursor, …), the archive exposes
-its search as tools. Ask your agent:
+For agents that support MCP (Claude Desktop, Cursor, DeepSeek, Kimi, …), the
+archive exposes its search as tools. Ask your agent:
 
 ```
 Connect to the local MCP server "personal-historical-archive" using:
@@ -461,18 +467,13 @@ and tell me the address this computer's network uses (e.g. 192.168.1.20).
 documents folder.)
 ```
 
-From the other machine, an agent can then connect and, among other things:
-
-- **Upload a document / collection**: send the file to
-  `http://<this-machine>:8000/sse` and use the `pha_upload` tool (e.g.
-  `pha_upload("document", "myfile.pdf", <base64>)`).
-- **See how documents are processed**: `pha_palaeographers`, `pha_editors`,
-  `pha_encoders`, `pha_collection_config`.
-- **Search**: `pha_search`, `pha_get_document`, `pha_list_documents`.
+From the other machine, an agent can then connect and, among other things,
+add a document to the archive, ask how a collection is being processed, and
+search what is already transcribed.
 
 Keep the network address internal (home/office network or a VPN). The archive
-is designed so the heavy AI models only ever run on **your** machine.
-See `MCP_CLIENTS.md` for the detailed setup.
+is designed so the heavy AI models only ever run on **your** machine. The file
+`MCP_CLIENTS.md` has the detailed setup for a technical helper.
 
 ---
 
@@ -546,21 +547,22 @@ another tool unchanged. All the fields:
 | `citation` | an exact citation string to use verbatim, instead of the assembled one |
 | `record_origin` | where the reference came from (see below) |
 
-Then:
+Then ask your agent to check the file and show you a citation:
 
-```bash
-pha bib <document>              # check what pha read from it
-pha cite <doc> <page>           # your citation now names the work
+```
+Check the reference file beside "<document>" and tell me what pha understood
+from it. Then show me how a citation of one of its pages reads now, and fix
+anything I wrote wrongly.
 ```
 
-**If your reference came from Zotero** (which exports MODS, an XML format meant
-for machines, not people), you do not have to edit XML. Convert it once and edit
-the JSON from then on:
+**If your reference came from Zotero** (which exports an XML format meant for
+machines, not people), you do not have to edit XML. Ask your agent to convert it
+once, and edit the readable file from then on:
 
-```bash
-pha bib <doc> --to-json              # print the JSON for one document
-pha bib <doc> --to-json --write      # write it beside the document
-pha bib --to-json --write            # do this for every document that has one
+```
+The reference beside "<document>" is a Zotero export in XML. Convert it to the
+readable JSON form and save it beside the document, then show me the result.
+Do the same for every other document that has an XML reference.
 ```
 
 ### BibTeX, if you prefer it
@@ -587,26 +589,28 @@ Zotero involved:
 `year`, `edition`, `language`, `pages`, `isbn`, `url`, `series`+`number` and
 `keywords` are all understood; `shelfmark`, `repository`, `record_id` and
 `record_origin` are additions of ours. LaTeX accents (`{\'o}`, `\c{c}`) and
-UTF-8 both work, so a record pasted from anywhere reads correctly. To convert an
-existing reference into BibTeX, use `pha bib <doc> --to-bibtex [--write]`.
+UTF-8 both work, so a record pasted from anywhere reads correctly. To turn an
+existing reference into BibTeX, just ask your agent to convert it.
 
 **If an assistant drafted the reference, it must say so.** Drafting a reference
-from a scan is allowed and useful, but the entry must carry
-`record_origin = {agent-drafted-unverified}`:
+from the scan itself (reading the title page) is allowed and useful, but it must
+be marked as drafted and unverified:
 
-```bash
-pha bib <doc> --to-bibtex --origin agent-drafted-unverified --write
+```
+Draft a bibliographic reference for "<document>" from its title page, save it
+as a BibTeX file beside the document, and mark it as drafted and unverified
+(pha bib <doc> --to-bibtex --origin agent-drafted-unverified --write) so that
+every citation of it carries an "unverified reference" warning until I check it.
 ```
 
-which makes every citation end with `[unverified reference]` until a person
-checks it. Never remove that marker without checking the reference against the
-book — an invented publisher, volume or shelf mark looks exactly like a right
-one. Once you have checked it, change the line to `record_origin = {human-supplied}`
-(or `human-confirmed`).
+That warning stays on every citation until a person checks the reference against
+the book. Never remove it without checking — an invented publisher, volume or
+shelf mark looks exactly like a right one. Once you have checked it, ask your
+agent to mark it as confirmed by you.
 
 **Nothing is inherited.** A document with no reference file simply keeps the
 old filename citation — pha never borrows a neighbouring document's reference,
-because a wrong citation is worse than a plain one. `pha bib` lists which
+because a wrong citation is worse than a plain one. Your agent can list which
 documents still have no reference.
 
 `record_origin` says where the reference came from. A reference marked
@@ -614,73 +618,76 @@ documents still have no reference.
 every citation until a human confirms it. A reference merely *imported*
 (`fetched-from-zotero-unverified`, or a `.bib` with no `record_origin` at all)
 is **not** warned about in citations, because it is library data rather than a
-model's guess; `pha bib` reports it as not yet reviewed, and you can change
-`record_origin` to `human-confirmed` as you check it.
+model's guess; your agent can report which references are not yet reviewed, and
+you can mark them confirmed as you check them.
 
 ---
 
 ## Reviewing and correcting the transcriptions
 
-You can read the library files and correct them. There are **two page
-variants**, and which one you correct changes what happens next:
+You can read the library files and correct them. Each page is stored twice,
+and **which one you correct changes what happens next**:
 
-- `transcription-<palaeographer>/` — the palaeographer's **original reading**.
-  Correcting this fixes a misreading at the source; the editor must then re-run
-  to use your corrected text.
-- `edited-<editor>/` — the editor's transformed text (modernized / translated).
-  Correcting this fixes the final output and pha leaves it as you wrote it.
+- the **transcription** — the reading taken from the page image. Correcting it
+  fixes a misreading at the source; the editor must then run again to use your
+  corrected text.
+- the **edited text** — the modernised or translated version. Correcting it
+  fixes the final output, and pha then leaves it exactly as you wrote it.
 
-**You corrected the TRANSCRIPTION (e.g. you spotted an OCR or reading error):**
+**If you corrected the TRANSCRIPTION** (for example you spotted a reading
+error):
 
-1. **Edit the transcription file** — open
-   `library/.../transcription-<palaeographer>/502V.md` and correct the text
-   under the header (keep the header as it is).
-2. **Check pending work** — run `pha status`; it tells you how many pages have
-   corrections that are not imported yet (✏️ message).
-3. **Import your correction** — run `pha review`. Your text becomes the page's
-   transcription and the page is marked *reviewed*: `pha scan` will never
-   re-read it, even with `--reprocess`.
-4. **Let the editor redo that page** — run `pha edit`. It detects the
-   transcription changed and re-processes **only that page** from your
-   corrected text (nothing else is re-edited).
-5. **Make search use the results** — run `pha reindex`.
+1. Open the transcription page file and correct the text under the header
+   (leave the header itself as it is).
+2. Ask your agent:
 
-**You corrected the EDITED text (the editor's final output):**
+```
+I corrected the transcription of page <N> in "<document>". Import my
+correction, re-run the editor for that one page so it uses my text, and update
+the search index. Tell me how many pages you imported, and the result.
+```
 
-1. Open `library/.../edited-<editor>/502V.md` and correct the text under the
-   header.
-2. Run `pha status`, then `pha review`. The corrected edit is marked
-   *reviewed*, so neither `pha scan` nor `pha edit` will overwrite it.
-3. Run `pha reindex`.
+Your corrected text becomes the page's reading, and pha will never read that
+page from the image again.
 
-Reviewed pages show `reviewed: true` in their header.
+**If you corrected the EDITED text** (the editor's final output):
 
-`pha review` imports **only the pages you actually changed** since pha last
-wrote them — the ones the ✏️ message counts — and leaves every other page
-alone. If you ever need to hand a page back to the machine (for example before
-re-running a new reading model over it), run `pha review --unset`; your text
-stays exactly as you wrote it and only the *reviewed* protection is removed.
-Ask the archive operator to do that, since it is a deliberate step.
+1. Open the edited page file and correct the text under the header.
+2. Ask your agent:
+
+```
+I corrected the edited text of page <N> in "<document>". Import my correction
+and update the search index. Tell me the result.
+```
+
+That page is then protected: neither a new reading pass nor a new editing pass
+will overwrite your wording. Corrected pages are marked as *reviewed* in their
+file.
+
+Your agent imports **only the pages you actually changed**, and leaves every
+other page alone. If you ever need to hand a page back to the machine — for
+example before reading it again with a new method — ask the archive operator to
+release it. Your text stays exactly as you wrote it; only the protection is
+removed.
 
 ---
 
 ## Troubleshooting (quick)
 
-- **Nothing happens / errors about a model** → for a **local** model, make sure
-  LM Studio is open and its server is running (port 1234); your agent can test
-  it. For a **remote** model, check that the API key was stored (`pha key`) and
-  that it is set on the model file (`api_key: "${VARNAME}"`). Then run `pha
-  test` to confirm the model responds.
-- **"No pha archive is configured or found"** → the archive was never set up
-  or its location was forgotten. Point pha at the workspace folder you created
-  at the beginning: `pha init-archive "<folder>"` if it is still empty,
-  `pha set archive-dir "<folder>"` otherwise, then run `pha status` again.
-- **Extraction seems stuck** → it is probably waiting while the computer
-  slept; run `pha scan` again, it resumes.
-- **Search returns nothing** → the extraction may not be finished; check
-  `pha status`.
-- **Windows** → everything works; only the environment paths differ, which
-  your agent handles.
+- **Nothing happens, or an error mentions a model** → for a **local** model,
+  ask your agent to check that LM Studio is open and running. For a **remote**
+  model, ask it to check that your API key was stored and is being used. Then
+  ask it to test the model on a page and tell you the result.
+- **"No pha archive is configured or found"** → the archive was never set up,
+  or its location has been forgotten. Point your agent at the workspace folder
+  you created at the beginning; it will create or reconnect the archive and
+  report back.
+- **The reading seems stuck** → it is probably waiting because the computer
+  slept. Ask your agent to continue; the work resumes where it stopped.
+- **Search returns nothing** → the reading may not be finished yet. Ask your
+  agent how far it has got.
+- **Windows** → everything works; only some internal paths differ, which your
+  agent handles.
 
 ---
 

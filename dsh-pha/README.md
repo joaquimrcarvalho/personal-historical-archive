@@ -1,5 +1,6 @@
 # dsh-pha — DeepSeek Harness plugin for personal-historical-archive (pha)
 
+> [!TIP]
 > Quick-start and what-you-get: see [`DSH_PLUGIN.md`](../DSH_PLUGIN.md) at the repo root.
 > This file is the full install/development reference.
 
@@ -63,6 +64,7 @@ mkdir -p "$DSH_HOME/profiles/<name>/node_modules/@personal-historical-archive"
 ln -s /path/to/repo/dsh-pha "$DSH_HOME/profiles/<name>/node_modules/@personal-historical-archive/dsh-pha"
 ```
 
+> [!NOTE]
 > The plugin has **no dependencies** and imports nothing, on purpose: a linked install is
 > resolved to this repository, so a bare import of a harness package would be looked up here
 > — outside the profile's `node_modules` — and fail. Since one unloadable row makes the whole
@@ -293,6 +295,7 @@ node dsh-pha/scripts/build-client.mjs   # -> lib/client.js
 
 then commit `lib/client.js` so the change ships.
 
+> [!WARNING]
 > The `dsh.client.inject` list is a best-effort guess against the installed version's
 > client module contract (`@deepseek-ai/dsh-client-ui-slots`). If the view doesn't mount,
 > adjust that inject list to the client APIs the module actually uses; the host data layer
