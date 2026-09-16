@@ -33,7 +33,10 @@
   definitions), `palaeographers/`, `editors/`, `encoders/` (content rules),
   `notes/` (Obsidian-compatible research notes generated from archive queries),
   `skills/` (the pha-specific agent skills, seeded by pha and never
-  overwritten), `library/`, `renders/`, `archive.db` (generated). The project
+  overwritten), `library/`, `renders/`, `archive.db` (generated), plus
+  `pha-location.md` + `.pha/` (machine-local: WHERE the `pha` tool is on THIS
+  machine — written on every run, gitignored, never archive content; see
+  "`pha` not on PATH?" under Remote / machine-to-machine). The project
   dir holds only code, `prompts/`, `schema/` and the `_sample.md` templates. Precedence:
   `PHA_ARCHIVE_DIR` env > `paths.archive_dir` in `config.yaml` (written by
   `pha set archive-dir`; this is the tracked, reviewable home for the
@@ -515,11 +518,24 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   dropbox. Start on the archive machine with
   `pha mcp --transport sse --host <LAN-IP> --port 8000` (no auth — use a
   private LAN/VPN/SSH tunnel). See MCP_CLIENTS.md for the full wiring.
-- **`pha` not on PATH?** It is often installed in a venv that isn't activated.
-  Don't guess a path. Run `command -v pha`; if empty, call it by its venv's
-  full path (e.g. `personal-historical-archive/.venv/bin/pha status`) or
-  install it globally once with `uv tool install --editable .` so plain `pha`
-  works in every shell.
+- **`pha` not on PATH? Look in the archive first, don't guess.** Every pha run
+  leaves a machine-local trace of where the tool lives on THIS machine:
+  **`<archive>/pha-location.md`** (visible; the archive's `README.md`/`AGENTS.md`
+  point at it) and **`<archive>/.pha/location.json`** (the machine-readable
+  twin). Both record the resolved executable, the version, the source checkout,
+  the MCP commands and — the part that always works — the PATH-proof
+  interpreter form `<python> -m personal_historical_archive`, which needs no
+  PATH entry and no activated venv and so works from any shell, cron job or
+  agent runtime. Run it with the archive passed explicitly:
+  `PHA_ARCHIVE_DIR=<archive> <python> -m personal_historical_archive status`.
+  `pha info` prints the same tool fields (`pha_command`, `pha_version`,
+  `location_file`) from inside pha. Only if that file is absent (pha has never
+  run in this directory on this machine) install it — `uv tool install
+  --editable .` makes plain `pha` work in every shell. The trace describes ONE
+  machine (`hostname` + `written_at`): after a reinstall or a move the recorded
+  path may be stale, so fall back to the interpreter form rather than trusting
+  it blindly. It is gitignored — never commit it, and never let a copied
+  archive inherit it.
 - **`pha` reports "No pha archive is configured or found"** — this is a fresh
   install with no archive_dir set. Don't guess. Either point it at the real
   archive (`pha set archive-dir <path>`) or create one

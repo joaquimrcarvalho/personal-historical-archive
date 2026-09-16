@@ -43,6 +43,14 @@ transcriptions with a text model, and indexes them for full-text search.
 > it will change — before asking for any extra permission on their computer.
 > See `AGENTS.md`, section "Who you are talking to".
 
+> **Where is `pha` on THIS machine?** → **`pha-location.md`**, next to this
+> file. The last pha run wrote it, so it names the exact executable, a
+> PATH-proof fallback (`<python> -m personal_historical_archive`), the version
+> and the MCP command for this machine — try it before installing anything. If
+> the file is absent, pha has never run in this directory on this machine: use
+> the install steps below. (It is machine-specific and gitignored, so it says
+> nothing about any other machine.)
+
 ## Quick start for agents (and humans)
 
 `pha` is the only tool that reads and writes this archive. If it is not
@@ -111,6 +119,7 @@ missing (or the path is wrong): run `pha set archive-dir` with this directory.
 | `library/` | generated per-page transcriptions and edited text — the human review surface |
 | `notes/` | Obsidian-compatible markdown notes generated from queries to this archive (see `notes/README.md`) |
 | `skills/` | pha-specific agent skills — read the matching `skills/<name>/SKILL.md` before operating (see `skills/README.md`) |
+| `pha-location.md`, `.pha/` | machine-local: where pha is installed on THIS machine (auto-generated, gitignored — see above) |
 | `renders/`, `archive.db` | generated cache and index (do not edit) |
 
 ## Everyday commands
@@ -221,8 +230,15 @@ technical steps. Unless they tell you otherwise:
 
 ## Before anything else: make sure `pha` is available and pointed here
 
-`pha` is the tool that reads and writes this archive. If it is not installed
-(or not on PATH) on this machine, install it first:
+`pha` is the tool that reads and writes this archive. **On this machine it is
+probably already installed** — the last pha run recorded the exact path in
+**`pha-location.md`** (this directory), together with a PATH-proof fallback
+(`<python> -m personal_historical_archive`) that works from any shell, and the
+MCP command. Read that file FIRST: it is machine-local and gitignored, so if it
+is absent, pha has never run in this directory on this machine and you do need
+to install it as below.
+
+If it is not installed (or not on PATH) on this machine, install it first:
 
 1. Check whether it is already available: `command -v pha`. If that prints a
    path, skip to step 4.
@@ -380,6 +396,10 @@ scan.lock
 
 # OS cruft
 .DS_Store
+
+# pha: machine-local tool location (describes THIS machine, not archive content)
+.pha/
+pha-location.md
 
 # NOTE: dropbox/, library/, palaeographers/, editors/, encoders/, notes/ and
 # skills/ are kept (they are the user-facing documents, transcriptions,

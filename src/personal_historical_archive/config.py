@@ -758,6 +758,18 @@ class Config:
                 seed_archive_skills(self.archive_dir)
         except Exception:  # noqa: BLE001 - seeding skills must never break a command
             pass
+        # leave a machine-local trace of WHERE this pha lives — the reverse of
+        # the tool's own archive_dir pointer. An agent dropped into the archive
+        # from a minimal-PATH shell can then find the executable (and the
+        # PATH-proof `python -m` fallback) instead of "command not found".
+        # Machine-specific, regenerated on every run, gitignored, and skipped
+        # when the archive IS the project dir (legacy single-dropbox layout).
+        try:
+            from .location import write_location
+            if self.archive_dir.resolve() != self.root.resolve():
+                write_location(self)
+        except Exception:  # noqa: BLE001 - the trace must never break a command
+            pass
 
 
 def _parse_palaeographers(

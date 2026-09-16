@@ -204,13 +204,32 @@ pha search "your query"
 is not activated and its `bin` dir is not exported into PATH (a very common
 setup on a shared/archive machine). Do NOT guess or invent a path.
 
-1. Confirm it is actually missing: `command -v pha` → if it prints nothing,
+1. **Look in the archive first — it probably already knows.** Every pha run
+   leaves a machine-local trace of where the tool lives on THIS machine:
+   - `<archive>/pha-location.md` — plain language: the exact executable, the
+     version, the source checkout, the MCP commands, and a PATH-proof fallback.
+   - `<archive>/.pha/location.json` — the same record, machine-readable.
+
+   Both are written by pha itself (refreshed on every run) and gitignored: they
+   describe one machine, and a copied archive must not inherit them. The
+   fallback always works — it needs neither PATH nor an activated venv, because
+   it names the interpreter and passes the archive explicitly:
+   ```bash
+   PHA_ARCHIVE_DIR=/path/to/this-archive \
+     /path/to/python -m personal_historical_archive status
+   ```
+   `pha info` prints the same tool fields (`pha_command`, `pha_version`,
+   `pha_module_command`, `location_file`) once pha does run. Since the file is
+   machine-local, a reinstall or a move can leave it stale — if the recorded
+   path fails, use the interpreter form just above.
+2. Confirm it is actually missing: `command -v pha` → if it prints nothing,
    `pha` is not on PATH.
-2. Find the real executable instead of guessing. It will be the `pha` file
-   inside whichever Python venv it was installed into, e.g.:
+3. If the archive carries no trace (pha has never run in that directory on this
+   machine), find the real executable instead of guessing. It will be the `pha`
+   file inside whichever Python venv it was installed into, e.g.:
    - project-local dev venv: `personal-historical-archive/.venv/bin/pha`
    - pipx/uv global tool: `~/.local/bin/pha` (or `~/.local/pipx/venvs/.../bin/pha`)
-3. Then either:
+4. Then either:
    - **Recommended (permanent fix):** make it available everywhere:
      ```bash
      cd /path/to/personal-historical-archive

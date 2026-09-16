@@ -30,6 +30,13 @@ processed (palaeographer / editor / encoder).
 - Python + the venv with this package installed: `.venv/bin/pha` (see README →
   New machine setup). Paths below assume the project lives at
   `/path/to/personal-historical-archive` — use your real path on each machine.
+- **Already running pha on this machine? Don't reconstruct the paths by hand.**
+  The archive itself records them: `<archive>/pha-location.md` and
+  `<archive>/.pha/location.json` (`mcp.stdio` / `mcp.sse` are ready to paste into
+  a client config, with the right `command`, `args` and both env vars; the JSON
+  is written and refreshed on every pha run). It is machine-local and
+  gitignored, so it describes ONLY the machine that last ran pha there — if it
+  is absent, pha has never run in that directory on this machine.
 - For **search** (hybrid/semantic) an embedding model must be served — e.g. LM
   Studio `text-embedding-nomic-embed-text-v1.5` on `http://127.0.0.1:1234`.
   Keyword search works without it.

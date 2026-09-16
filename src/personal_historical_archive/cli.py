@@ -730,6 +730,21 @@ def cmd_info(cfg: Config, args) -> None:
         "encoders": str(cfg.encoders_dir),
         "filters": str(cfg.filters_dir),
     }
+    # WHERE the tool itself is on this machine: the archive's agent-facing
+    # trace (pha-location.md / .pha/location.json) says the same thing, but an
+    # agent that can already run pha should not have to read a file to learn
+    # how to run pha. Best-effort: never let discovery break `pha info`.
+    try:
+        from .location import build_location
+
+        loc = build_location(cfg)
+        info["pha_version"] = loc["pha"]["version"]
+        info["pha_command"] = loc["pha"]["command"] or " ".join(loc["pha"]["module"])
+        info["pha_module_command"] = " ".join(loc["pha"]["module"])
+        info["pha_python"] = loc["pha"]["python"]
+        info["location_file"] = loc["location_file"]
+    except Exception:  # noqa: BLE001 - info must stay read-only and unbreakable
+        pass
     if getattr(args, "json", False):
         print(json.dumps(info, ensure_ascii=False, indent=2))
         return
