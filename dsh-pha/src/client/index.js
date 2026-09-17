@@ -364,7 +364,9 @@ const CSS = [
   '.pha-content{display:flex;gap:12px;align-items:flex-start}',
   '.pha-media{flex:0 0 45%;max-width:45%;position:sticky;top:0}',
   '.pha-text{flex:1;min-width:0}',
-  '.pha-img{max-width:100%;max-height:72vh;object-fit:contain;border:1px solid var(--dsw-alias-border-l1,#333);border-radius:6px;background:var(--dsw-alias-bg-layer-1,transparent)}',
+  '.pha-img{width:100%;height:auto;max-height:86vh;object-fit:contain;border:1px solid var(--dsw-alias-border-l1,#333);border-radius:6px;background:var(--dsw-alias-bg-layer-1,transparent)}',
+  '.pha-vsplit{width:6px;flex:0 0 6px;align-self:stretch;cursor:col-resize;background:var(--dsw-alias-border-l1,#333);border-radius:3px;touch-action:none}',
+  '.pha-vsplit:hover,.pha-vsplit.drag{background:var(--dsw-alias-brand-primary,#0b5fff)}',
   '.pha-pages{display:flex;flex-direction:column;gap:6px}',
   '.pha-jump{display:flex;gap:6px;align-items:center;flex-wrap:wrap}',
   '.pha-num{font:inherit;font-size:12px;padding:2px 6px;width:64px;border-radius:5px;border:1px solid var(--dsw-alias-border-l2,#666);background:var(--dsw-alias-bg-layer-1,#fff);color:inherit}',
@@ -409,7 +411,9 @@ function PhaView(props) {
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
   const [leftPct, setLeftPct] = React.useState(() => seedUi(viewBoot).leftPct)
+  const [mediaPct, setMediaPct] = React.useState(() => seedUi(viewBoot).mediaPct)
   const [dragging, setDragging] = React.useState(false)
+  const [draggingMedia, setDraggingMedia] = React.useState(false)
   const [showImg, setShowImg] = React.useState(() => seedUi(viewBoot).showImg)
   const [textOn, setTextOn] = React.useState(() => seedUi(viewBoot).textOn)
   const [imgData, setImgData] = React.useState(null)
@@ -449,7 +453,7 @@ function PhaView(props) {
   // Keep this session's reading position, so switching tabs and coming back lands on the
   // same document and page.
   React.useEffect(() => {
-    viewMemory.set(sid, snapshotView(state, { textOn: textOn, showImg: showImg, leftPct: leftPct }))
+    viewMemory.set(sid, snapshotView(state, { textOn: textOn, showImg: showImg, leftPct: leftPct, mediaPct: mediaPct }))
   })
 
   const pageNo = state.pageReq ? state.pageReq.page : null
@@ -835,6 +839,17 @@ function PhaView(props) {
     setLeftPct(Math.min(66, Math.max(16, Math.round(((e.clientX - rect.left) / rect.width) * 100))))
   }
   function endDrag() { setDragging(false) }
+  // The image/text divider works like the pane splitter, including the buttons guard that
+  // keeps a hover from resizing anything.
+  function startMediaDrag(e) { e.currentTarget.setPointerCapture(e.pointerId); setDraggingMedia(true) }
+  function dragMediaMove(e) {
+    if (!draggingMedia || e.buttons === 0) return
+    const par = e.currentTarget.parentElement
+    const rect = par ? par.getBoundingClientRect() : null
+    if (!rect || rect.width === 0) return
+    setMediaPct(Math.min(85, Math.max(15, Math.round(((e.clientX - rect.left) / rect.width) * 100))))
+  }
+  function endMediaDrag() { setDraggingMedia(false) }
   function goTo(v) {
     const total = s.detail ? Math.max(1, (s.detail.pages || []).length) : 0
     const page = Number(v)
@@ -1112,9 +1127,28 @@ function PhaView(props) {
     const pendingSet = new Set((s.pendingPages || []).map((x) => x.page_no))
     const pendingCount = (s.pendingPages || []).length
     // image-only mode: let the render fill the pane instead of sharing half with text
+    // The image always takes the width it is given: the whole pane when the text is off,
+    // and the divider's share when both are shown (the <img> itself is width:100%, so it
+    // expands to the right margin instead of sitting at its natural size).
     const mediaBlock = showImg
-      ? h('div', { className: 'pha-media', style: textOn ? null : { flex: '0 0 auto', maxWidth: '94%' } },
+      ? h('div', {
+          className: 'pha-media',
+          style: textOn
+            ? { flex: '0 0 ' + mediaPct + '%', maxWidth: mediaPct + '%' }
+            : { flex: '1 1 auto', maxWidth: '100%' },
+        },
           imgData ? h('img', { className: 'pha-img', src: imgData, alt: 'page' }) : h('div', { className: 'pha-empty' }, 'No render image'))
+      : null
+    const mediaSplit = (showImg && textOn)
+      ? h('div', {
+          className: 'pha-vsplit' + (draggingMedia ? ' drag' : ''),
+          title: 'drag to resize the image',
+          onPointerDown: startMediaDrag,
+          onPointerMove: dragMediaMove,
+          onPointerUp: endMediaDrag,
+          onPointerCancel: endMediaDrag,
+          onLostPointerCapture: endMediaDrag,
+        })
       : null
     let textBlock = null
     if (textOn) {
@@ -1202,6 +1236,7 @@ function PhaView(props) {
       s.editMsg ? h('div', { className: 'pha-muted', style: { fontSize: 12 } }, s.editMsg) : null,
       h('div', { className: 'pha-content' },
         mediaBlock,
+        mediaSplit,
         textBlock,
         (!mediaBlock && !textBlock) ? h('div', { className: 'pha-empty' }, 'Nothing to show — toggle image or text.') : null,
       ),

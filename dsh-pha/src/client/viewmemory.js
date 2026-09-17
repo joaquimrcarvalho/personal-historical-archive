@@ -33,6 +33,7 @@ export function snapshotView(state, ui) {
       textOn: u.textOn !== false,
       showImg: !!u.showImg,
       leftPct: Number(u.leftPct) > 0 ? Number(u.leftPct) : 38,
+      mediaPct: Number(u.mediaPct) > 0 ? Number(u.mediaPct) : 45,
     },
   }
 }
@@ -67,6 +68,7 @@ export function seedUi(memory) {
     textOn: u.textOn !== false,
     showImg: !!u.showImg,
     leftPct: Number(u.leftPct) > 0 ? Number(u.leftPct) : 38,
+    mediaPct: Number(u.mediaPct) > 0 ? Number(u.mediaPct) : 45,
   }
 }
 
