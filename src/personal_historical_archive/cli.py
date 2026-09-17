@@ -1687,7 +1687,8 @@ def cmd_prune(cfg: Config, args) -> None:
     conn = db.connect(cfg.db_path)
     try:
         if getattr(args, "library_variants", False):
-            res = prune_redundant_edited_dirs(cfg, conn, dry_run=args.dry_run, verbose=True)
+            res = prune_redundant_edited_dirs(cfg, conn, dry_run=args.dry_run, verbose=True,
+                                              doc_id=getattr(args, "doc", None))
             verb = "would remove" if args.dry_run else "removed"
             print(f"{verb} {len(res['removed'])} redundant edited folder(s) "
                   f"({res['bytes'] / 1e6:.1f} MB)")
@@ -2810,9 +2811,11 @@ def main(argv: list[str] | None = None) -> None:
     prn.add_argument("--dry-run", action="store_true",
                      help="report what would be removed without deleting")
     prn.add_argument("--library-variants", action="store_true",
-                     help="instead of renders: delete a bare `edited-<rules>` folder that only "
-                          "duplicates its `@<model>` sibling AND matches the database — one that "
-                          "holds a different reading is reported, never deleted")
+                     help="instead of renders: delete a bare `edited-<rules>` folder whose pages "
+                          "all survive elsewhere (the database, or its `@<model>` sibling) — a "
+                          "folder holding a different reading is reported, never deleted")
+    prn.add_argument("--doc", type=int, default=None,
+                     help="with --library-variants: sweep only this document id")
     prn.set_defaults(fn=cmd_prune)
 
     pr = sub.add_parser("prompts", help="show prompt resolution")

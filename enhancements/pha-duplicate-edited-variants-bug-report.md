@@ -147,7 +147,8 @@ in any of the nine:
 | group | count | action |
 |---|---|---|
 | identical except `model:` | **25** | bare dir is redundant — delete (this is what `pha prune --library-variants` does) |
-| divergent | **9** | never deleted automatically; each is reported by the sweep |
+| divergent, real content | **7** | keep — a real page exists only there |
+| divergent, placeholder shell | **2** (docs 47, 50) | delete — every real page survives; the rest is `*waiting*` |
 | bare-only (no qualified sibling) | **1** | keep — the document's only edited output |
 | `@model`-only | **43** | keep as is |
 
@@ -176,18 +177,36 @@ The nine divergent pairs, with what the bare folder actually holds:
 That is why deleting is a **content** decision, never a filename one: a rule like
 "same rules id ⇒ the bare folder is redundant" would have discarded a whole
 alternate OCR pass (doc 56) and one page in another translation on five more
-documents. The safe automation is the guard in §8 — delete only what the DB can
-regenerate — which authorises exactly the 25 identical pairs and refuses all 9.
+documents. The safe automation is the guard in §8 — delete only what survives
+elsewhere — which authorises the 25 identical pairs and refuses the 7 with real
+unique content.
 
-**Removal performed** on `jesuit-archive`, later the same day: 25 folders /
-43.6 MB deleted, the 9 divergent readings and the 1 bare-only variant kept, and
-a re-run is a no-op. Only 19 of the 25 were git-tracked (the rest sit in a
-gitignored `library/` subtree), so git is not the safety net here — the proof
-is: every deleted page had been shown to be either the DB's exact text or
-byte-identical to the surviving sibling. Verified after the sweep — doc 20's
-`@deepseek-v4-flash` folder holds all 418 pages, doc 54's all 880, and
-`pha status` is unchanged (48 documents, 24 947 pages, 93 569 chunks, no pending
-corrections).
+Docs 47/50 are the interesting middle: their `pages differ` counts are huge only
+because of placeholders. Doc 47's bare folder is 618 files of which **8 carry
+text** (pages 11, 13, 39, 601, 609, 611, 614, 616) and **610 are `*waiting*`**;
+doc 50's is 660 files with **33 real** (3–10, 12, 16, 17, 19, 21, 22, 25, then
+614–659) and **627 `*waiting*`**. Every one of those 8/33 pages is byte-identical
+to the qualified folder and the DB, and a `*waiting*` file is the *absence* of a
+page, not a reading — so both folders hold nothing at all, and §8's rule treats a
+stub as empty rather than as content (it was refusing them at first). They are
+fossils: written 2026-09-11 12:35 / 14:20, about 12 h before the qualified
+folders, from a pass that had text for only those pages; no `page_edits` row now
+predates them.
+
+**Removal performed** on `jesuit-archive`, later the same day, in two passes:
+the 25 identical folders (43.6 MB), then docs 47 and 50 once placeholders were
+counted as empty (0.5 MB of file bytes; ~5 MB of allocated blocks, since each
+tiny stub occupies a 4 KB block). Bare folders went **35 → 8**: the 7 different
+readings (19, 21, 27, 29, 30, 44, 56) and the 1 bare-only variant (vol08). A
+re-run is a no-op.
+
+Only 19 of the 27 deleted folders were git-tracked (the rest sit in a gitignored
+`library/` subtree), so git is not the safety net — the proof is that every
+deleted page had been shown to be either the DB's exact text or byte-identical
+to the surviving sibling. Verified after each pass: doc 20's
+`@deepseek-v4-flash` folder holds all 418 pages, doc 54's all 880, the Pfister
+`@deepseek-v4-flash` folders all 618 / 660, and `pha status` is unchanged (48
+documents, 24 947 pages, 93 569 chunks, no pending corrections).
 
 ## 7. Reproduction
 
@@ -246,21 +265,31 @@ Both fixes are in, with the identity rule living in one place (`addresses.py`):
    stored `exported_at`, **0** were newer, so the archive was quiet — the fix
    closes the hole rather than repairing damage.
 
-**C is shipped, guarded.** `pha prune --library-variants [--dry-run]`
+**C is shipped, guarded.** `pha prune --library-variants [--dry-run] [--doc N]`
 (`ingest.prune_redundant_edited_dirs`) deletes a bare folder **only when nothing
-lives in it alone**, proved either way: every page file is exactly what the
-database holds (regenerable by `pha export`), **or** every page file is
+lives in it alone**, proved either way: every page file *with text* is exactly
+what the database holds (regenerable by `pha export`), **or** every such file is
 body-identical to the same file in a model-qualified sibling (that folder keeps
-the same text byte for byte). Anything that differs from both — the nine
-divergent pairs of §6 — is reported and kept, as are bare-only variants and a
-bare folder that is the document's current model-less output. One refinement
-over §4C's wording came from running it: a folder can be identical to its
-sibling yet differ from the DB (doc 54 — the DB moved on after both folders were
-written), and deleting it is still safe because the sibling survives, so
-"matches the DB" alone would have been needlessly conservative and would have
-left one of the 25 duplicates behind. The sweep is deliberately separate and
-opt-in, not something `pha scan` or `pha edit` does on its own, because it is
-the only pha operation that deletes from `library/`.
+the same text byte for byte). A `*waiting*` stub counts as **no page at all** —
+it is what pha writes for a page it has no text for, so a folder of placeholders
+holds nothing and stubs never block a delete (this is what unblocked docs 47/50;
+without it the sweep was conservatively refusing a folder whose only content was
+already next door). Anything that differs from both — the 7 real readings of §6 —
+is reported and kept, as are bare-only variants and a bare folder that is the
+document's current model-less output.
+
+Two refinements over §4C's wording came from running it:
+
+1. A folder can be identical to its sibling yet differ from the DB (doc 54 — the
+   DB moved on after both folders were written), and deleting it is still safe
+   because the sibling survives, so "matches the DB" alone would have been
+   needlessly conservative and would have left one of the 25 duplicates behind.
+2. Placeholders are not content (docs 47/50), so they must not make a redundant
+   folder look unique.
+
+The sweep is deliberately separate and opt-in, not something `pha scan` or
+`pha edit` does on its own, because it is the only pha operation that deletes
+from `library/`. `--doc N` narrows it to one document, like `pha review --doc N`.
 
 Test coverage: `tests/test_ingest.py` (one directory per pass, the writer names
 by the resolved model, both resolution helpers), `tests/test_addresses.py` (the
@@ -269,9 +298,10 @@ reading and its own alias), `tests/test_serve.py` (`meta.json` lists the variant
 once), `tests/test_cli_pending.py` (the review scan ignores a bare alias) and
 `tests/test_prune.py` (the sweep removes a redundant folder, removes one the
 sibling still holds, keeps a different reading and a model-less current variant,
-deletes nothing in a dry run, and **reports a failed delete instead of counting
-it as removed** — the first real run of the sweep hit a permission error,
-`rmtree(ignore_errors=True)` swallowed it, and it announced 25 removals while
-nothing had been deleted; the CLI now exits 3). All four new ingest assertions,
-the pending-scan assertion and the failed-delete assertion fail against the
-pre-fix source.
+ignores `*waiting*` stubs, still refuses a real page that survives nowhere, can
+target one document with `doc_id=`, deletes nothing in a dry run, and **reports a
+failed delete instead of counting it as removed** — the first real run of the
+sweep hit a permission error, `rmtree(ignore_errors=True)` swallowed it, and it
+announced 25 removals while nothing had been deleted; the CLI now exits 3). All
+four new ingest assertions, the pending-scan assertion and the failed-delete
+assertion fail against the pre-fix source.

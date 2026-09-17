@@ -495,6 +495,11 @@ def prune_orphan_renders(cfg: Config, conn, dry_run: bool = False, verbose: bool
     return removed
 
 
+# What `write_edited_pages` writes for a page whose edit row has no text yet: the
+# absence of a page, not content, so a folder holding only these holds nothing.
+_WAITING_STUB = "*waiting*"
+
+
 def _db_edited_bodies(conn, doc_id: int, editor: str) -> dict[str, str]:
     """``{page file name: the text pha wrote for it}`` for one document + editor.
 
@@ -510,7 +515,7 @@ def _db_edited_bodies(conn, doc_id: int, editor: str) -> dict[str, str]:
         (doc_id, editor),
     ):
         name = f"{r['source_name']}.md" if r["source_name"] else f"page-{r['page_no']:03d}.md"
-        out[name] = ((r["text"] or "") or "*waiting*").strip()
+        out[name] = ((r["text"] or "") or _WAITING_STUB).strip()
     return out
 
 
@@ -520,7 +525,7 @@ def _library_body(path: Path) -> str:
 
 
 def prune_redundant_edited_dirs(cfg: Config, conn, dry_run: bool = False,
-                                verbose: bool = True) -> dict:
+                                verbose: bool = True, doc_id: int | None = None) -> dict:
     """Delete a bare ``edited-<rules>`` folder that is provably a duplicate.
 
     The duplicate-edited-variants bug wrote one variant into two folders:
@@ -532,20 +537,22 @@ def prune_redundant_edited_dirs(cfg: Config, conn, dry_run: bool = False,
     A bare folder is deleted **only when nothing lives in it alone**. That is
     proved two ways, and either is enough:
 
-    * every page file is exactly what the DB holds for that document + editor
-      (so ``pha export`` regenerates it), or
-    * every page file is body-identical to the same file in a model-qualified
-      sibling (so that folder keeps the same text byte for byte).
+    * every page file with text is exactly what the DB holds for that document +
+      editor (so ``pha export`` regenerates it), or
+    * every page file with text is body-identical to the same file in a
+      model-qualified sibling (so that folder keeps it byte for byte).
 
-    Anything else is a different reading — an abandoned ``*waiting*`` partial
-    run, a whole alternate OCR pass, one page of another translation generation,
-    or a page the DB has since moved on from — and is reported, never deleted.
-    Measured on jesuit-archive (2026-09-16): 25 of 34 pairs are duplicates
-    (deletable), 9 are different readings.
+    A ``*waiting*`` stub counts as *no page at all*: a folder that is nothing but
+    placeholders holds nothing to preserve, and stubs never block a delete (docs
+    47/50 on jesuit-archive are 610/627 stubs around a few real pages, all of
+    which the qualified folder also has). Anything else is a different reading —
+    a whole alternate OCR pass, one page of another translation generation, or a
+    page the DB has since moved on from — and is reported, never deleted.
 
     Only a bare folder with a model-qualified sibling is considered — a
     bare-only variant is the document's only edited output — and never one that
-    *is* the document's current model-less output. Returns
+    *is* the document's current model-less output. ``doc_id`` narrows the sweep
+    to one document, like ``pha review --doc N``. Returns
     ``{"removed": [...], "refused": [...], "failed": [...], "kept_bare_only": n,
     "bytes": n}``; a folder that could not be deleted is reported in ``failed``
     rather than counted as removed.
@@ -557,7 +564,12 @@ def prune_redundant_edited_dirs(cfg: Config, conn, dry_run: bool = False,
     failed: list[dict] = []
     kept_bare_only = 0
     total_bytes = 0
-    for doc in db.list_documents(conn, limit=100000):
+    if doc_id is None:
+        docs = db.list_documents(conn, limit=100000)
+    else:
+        one = db.get_document(conn, int(doc_id))
+        docs = [one] if one else []
+    for doc in docs:
         doc_dir = _library_doc_dir(cfg, doc)
         if doc_dir is None or not doc_dir.is_dir():
             continue
@@ -594,21 +606,33 @@ def prune_redundant_edited_dirs(cfg: Config, conn, dry_run: bool = False,
                                     "differing": 0, "pages": 0})
                     continue
                 local = {f.name: _library_body(f) for f in files}
-                from_db = all(bodies.get(n) == b for n, b in local.items())
+                # A `*waiting*` stub is the ABSENCE of a page, not content: there
+                # is nothing in it to preserve, so it never blocks a delete. Docs
+                # 47/50 on jesuit-archive are 610/627 stubs wrapped around a
+                # handful of real pages.
+                real = {n: b for n, b in local.items() if b and b != _WAITING_STUB}
+                from_db = all(bodies.get(n) == b for n, b in real.items())
                 twin = next((t.name for t in twins if all(
                     (t / n).is_file() and _library_body(t / n) == b
-                    for n, b in local.items())), None)
-                if not from_db and twin is None:
-                    differing = sum(1 for n, b in local.items() if bodies.get(n) != b)
+                    for n, b in real.items())), None)
+                if real and not from_db and twin is None:
+                    differing = sum(1 for n, b in real.items() if bodies.get(n) != b)
                     refused.append({"path": str(folder), "document_id": doc["id"],
                                     "reason": "content lives nowhere else",
                                     "differing": differing, "pages": len(files)})
                     if verbose:
-                        print(f"  keep     {folder}  ({differing}/{len(files)} page(s) differ "
+                        print(f"  keep     {folder}  ({differing}/{len(real)} real page(s) differ "
                               f"from the database and no sibling holds them — inspect by hand)")
                     continue
                 nbytes = sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())
-                why = "identical to the database" if from_db else f"identical to {twin}"
+                stubs = len(local) - len(real)
+                if not real:
+                    why = f"only {stubs} placeholder(s)"
+                elif from_db:
+                    why = ("identical to the database" if not stubs
+                           else f"{len(real)} real page(s) identical to the database, {stubs} stub(s)")
+                else:
+                    why = f"identical to {twin}"
                 if not dry_run:
                     # Never swallow the error: a sweep that reports "removed" while
                     # the folder is still there is worse than no sweep at all.

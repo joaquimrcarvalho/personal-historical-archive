@@ -270,12 +270,13 @@ Model notes for a new machine:
   two folders, `edited-<editor>` and `edited-<editor>@<model>` (the bare name
   recorded that the model was unknown at write time). They are one variant and
   pha only ever reads the model-qualified one, so the leftovers are harmless but
-  waste disk. `pha prune --library-variants [--dry-run]` deletes a bare folder
-  **only when nothing lives in it alone** — every page is either exactly what
-  the database holds, or byte-identical to the same page in the `@<model>`
-  folder — so nothing unique can be lost; a folder holding a different reading
-  (an older OCR pass, another translation generation) is reported and kept for
-  you to look at.
+  waste disk. `pha prune --library-variants [--dry-run] [--doc N]` deletes a bare
+  folder **only when nothing lives in it alone** — every page with text is either
+  exactly what the database holds, or byte-identical to the same page in the
+  `@<model>` folder — so nothing unique can be lost; a folder holding a different
+  reading (an older OCR pass, another translation generation) is reported and
+  kept for you to look at. A `*waiting*` file is a placeholder, not text, so a
+  folder that is only placeholders (plus pages the sibling also has) is deleted.
 
 ### Uploading documents & collections
 
@@ -1060,9 +1061,10 @@ pha review [--doc N] [--all] [--unset [--page N]]
 pha edit [--reprocess] [--path collections/COLX] [--page N]
 pha rm ID|NAME            # remove document(s) from the index
 pha prune [--dry-run]     # delete orphaned render image caches (no registered document)
-pha prune --library-variants [--dry-run]
+pha prune --library-variants [--dry-run] [--doc N]
                           # delete a bare `edited-<rules>` folder whose pages all
-                          #   survive elsewhere (the DB, or its `@<model>` sibling);
+                          #   survive elsewhere (the DB, or its `@<model>` sibling;
+                          #   `*waiting*` stubs count as no page at all);
                           #   a folder holding a different reading is reported, not deleted
 pha prompts [file]
 pha palaeographer [file]

@@ -154,12 +154,13 @@ def test_prune_missing_renders_dir(tmp_path):
 
 # --- `pha prune --library-variants`: the guarded duplicate-folder sweep -------
 
-def _variant_doc(cfg, conn, *, editor="mod", editor_model="m1", db_text="same text"):
+def _variant_doc(cfg, conn, *, editor="mod", editor_model="m1", db_text="same text",
+                 filename="d.pdf"):
     """A document with one edited variant in two folders + a matching edit row."""
-    src = cfg.dropbox / "collections" / "COLX" / "d.pdf"
+    src = cfg.dropbox / "collections" / "COLX" / filename
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_bytes(b"%PDF d")
-    doc_id = _db.add_document(conn, filename="d.pdf", path=str(src), sha256=sha256_of(src),
+    doc_id = _db.add_document(conn, filename=filename, path=str(src), sha256=sha256_of(src),
                               size_bytes=1, mtime=1, kind="pdf", now=time.time(),
                               dir_path="collections/COLX", editor=editor,
                               editor_model=editor_model)
@@ -170,14 +171,15 @@ def _variant_doc(cfg, conn, *, editor="mod", editor_model="m1", db_text="same te
     return doc_id, pid
 
 
-def _write_variant(cfg, conn, doc_id, dirname, body):
+def _write_variant(cfg, conn, doc_id, dirname, body, page_no=1):
     from personal_historical_archive.ingest import _doc_slug
 
     doc = dict(conn.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone())
     d = cfg.library / "collections" / "COLX" / _doc_slug(doc) / dirname
     d.mkdir(parents=True, exist_ok=True)
-    f = d / "page-001.md"
-    f.write_text(f"---\ndocument_id: {doc_id}\npage: 1\n---\n\n{body}\n", encoding="utf-8")
+    f = d / f"page-{page_no:03d}.md"
+    f.write_text(f"---\ndocument_id: {doc_id}\npage: {page_no}\n---\n\n{body}\n",
+                 encoding="utf-8")
     return f
 
 
@@ -289,6 +291,61 @@ def test_prune_library_variants_reports_a_failed_delete(tmp_path, monkeypatch, c
         cli.cmd_prune(cfg, SimpleNamespace(dry_run=False, library_variants=True))
     assert exc.value.code == 3
     assert bare.exists()
+    conn.close()
+
+
+def test_prune_library_variants_ignores_waiting_stubs(tmp_path):
+    """A `*waiting*` file is the ABSENCE of a page, not a reading: a bare folder
+    whose real pages all survive elsewhere is redundant even when the rest of it
+    is placeholders (docs 47/50 on jesuit-archive)."""
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    doc_id, pid = _variant_doc(cfg, conn)
+    _db.add_page(conn, doc_id, 2)
+    bare = _write_variant(cfg, conn, doc_id, "edited-mod", "same text")
+    _write_variant(cfg, conn, doc_id, "edited-mod@m1", "same text")
+    _write_variant(cfg, conn, doc_id, "edited-mod", "*waiting*", page_no=2)
+    _write_variant(cfg, conn, doc_id, "edited-mod@m1", "the DB text for page 2", page_no=2)
+
+    res = prune_redundant_edited_dirs(cfg, conn, verbose=False)
+    assert [r["editor"] for r in res["removed"]] == ["mod"]
+    assert not bare.parent.exists()
+    conn.close()
+
+
+def test_prune_library_variants_keeps_a_real_page_that_survives_nowhere(tmp_path):
+    """A real page unique to the bare folder still blocks the delete, however many
+    stubs sit beside it."""
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    doc_id, _pid = _variant_doc(cfg, conn)
+    _db.add_page(conn, doc_id, 2)
+    bare = _write_variant(cfg, conn, doc_id, "edited-mod", "same text")
+    _write_variant(cfg, conn, doc_id, "edited-mod@m1", "same text")
+    _write_variant(cfg, conn, doc_id, "edited-mod", "a reading of page 2", page_no=2)
+    _write_variant(cfg, conn, doc_id, "edited-mod@m1", "*waiting*", page_no=2)
+
+    res = prune_redundant_edited_dirs(cfg, conn, verbose=False)
+    assert res["removed"] == [] and res["refused"][0]["differing"] == 1
+    assert bare.exists()
+    conn.close()
+
+
+def test_prune_library_variants_can_target_one_document(tmp_path):
+    """`--doc N` sweeps one document, leaving an identical case elsewhere alone."""
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    keep_id, _ = _variant_doc(cfg, conn, filename="keep.pdf", db_text="same text")
+    kill_id, _ = _variant_doc(cfg, conn, filename="kill.pdf", db_text="same text")
+    keep = _write_variant(cfg, conn, keep_id, "edited-mod", "same text")
+    kill = _write_variant(cfg, conn, kill_id, "edited-mod", "same text")
+    for doc_id in (keep_id, kill_id):
+        _write_variant(cfg, conn, doc_id, "edited-mod@m1", "same text")
+
+    res = prune_redundant_edited_dirs(cfg, conn, verbose=False, doc_id=kill_id)
+    assert [r["document_id"] for r in res["removed"]] == [kill_id]
+    assert not kill.parent.exists()
+    assert keep.exists()
     conn.close()
 
 
