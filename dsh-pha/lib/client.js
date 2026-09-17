@@ -721,7 +721,11 @@ const CSS = [
   '.pha-content{display:flex;gap:12px;align-items:flex-start}',
   '.pha-media{flex:0 0 45%;max-width:45%;position:sticky;top:0}',
   '.pha-text{flex:1;min-width:0}',
-  '.pha-img{width:100%;height:auto;max-height:86vh;object-fit:contain;border:1px solid var(--dsw-alias-border-l1,#333);border-radius:6px;background:var(--dsw-alias-bg-layer-1,transparent)}',
+  // Width is the layout's decision (the whole pane, or the divider's share) and the image
+  // obeys it exactly: no max-height and no object-fit, both of which gave the element a
+  // second, shorter box that letterboxed the page inside it (the dark bands either side).
+  // A tall page simply scrolls.
+  '.pha-img{display:block;width:100%;height:auto;border:1px solid var(--dsw-alias-border-l1,#333);border-radius:6px;background:var(--dsw-alias-bg-layer-1,transparent)}',
   '.pha-vsplit{width:6px;flex:0 0 6px;align-self:stretch;cursor:col-resize;background:var(--dsw-alias-border-l1,#333);border-radius:3px;touch-action:none}',
   '.pha-vsplit:hover,.pha-vsplit.drag{background:var(--dsw-alias-brand-primary,#0b5fff)}',
   '.pha-pages{display:flex;flex-direction:column;gap:6px}',

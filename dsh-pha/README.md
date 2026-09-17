@@ -230,11 +230,13 @@ clipboard instead of failing silently (`src/client/askcontext.js`, unit-tested b
 
 ### Reading the page image
 
-The image **always expands to the width it is given** — the whole pane when the text is off,
-and the divider's share when both are shown — instead of sitting at its natural size, with the
-aspect ratio preserved (`width:100%`, and a height cap that shrinks the width proportionally
-when a very tall page would otherwise dominate). Text-only and image-only modes are unchanged;
-the image is a toggle beside the text, never a replacement for it.
+The image **fills the width it is given** — the whole pane when the text is off, the divider's
+share when both are shown — instead of sitting at its natural size. Width is the layout's
+decision and the image obeys it exactly: `width:100%`, `height:auto`, and deliberately **no**
+`max-height`/`object-fit`, because either one gives the element a second, shorter box that
+letterboxes the page inside it (dark bands either side) and quietly overrides the divider. A
+tall page simply scrolls. Text-only and image-only modes are unchanged; the image is a toggle
+beside the text, never a replacement for it.
 
 When both are visible a **vertical divider** between them resizes the image (drag it, 15–85% of
 the pane — it works like the pane splitter, including refusing to move on a hover), and that
