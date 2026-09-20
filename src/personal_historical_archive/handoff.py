@@ -101,13 +101,25 @@ class Lease:
         return max(0.0, (now or time.time()) - self.created_at)
 
 
-def new_handoff_id(label: str = "") -> str:
-    """A sortable id, e.g. `DI-vol04-20260920T2130Z`."""
+def new_handoff_id(label: str = "", taken: set[str] | None = None) -> str:
+    """A sortable, UNIQUE id, e.g. `DI-vol04-20260920T2130Z`.
+
+    The stamp is minute-resolution, which is not unique enough: handing the
+    same collection out twice within a minute (a retry after a mistake, or two
+    documents in sequence) would reuse the id and the second lease would
+    overwrite the first. `taken` disambiguates with a numeric suffix.
+    """
     stamp = time.strftime("%Y%m%dT%H%MZ", time.gmtime())
     base = "".join(
         c if (c.isalnum() or c in "-_") else "-" for c in (label or "handoff")
     ).strip("-")
-    return f"{base or 'handoff'}-{stamp}"
+    stem = f"{base or 'handoff'}-{stamp}"
+    if not taken or stem not in taken:
+        return stem
+    n = 2
+    while f"{stem}-{n}" in taken:
+        n += 1
+    return f"{stem}-{n}"
 
 
 def write_lease(cfg: Config, lease: Lease) -> Path:
@@ -384,7 +396,10 @@ def export_handoff(
                 if verbose:
                     print(f"  superseded hand-over {old}", flush=True)
 
-        handoff_id = new_handoff_id(_label_for(targets[0]))
+        handoff_id = new_handoff_id(
+            _label_for(targets[0]),
+            taken={p.stem for p in handoff_dir(cfg).glob("*.json")},
+        )
         res = export_bundle(cfg, targets, out, force=force, verbose=verbose)
 
         renders = out / "renders"
@@ -823,16 +838,79 @@ CONFLICT = "conflict"
 SKIPPED = "skipped"
 
 
-def _merge_page(conn, doc_id: int, wp: dict, counts: dict, verbose: bool) -> None:
-    """Apply one worker page onto the local document (R5/R6, and §3.5).
+def _decide_merge(conn, local, wp: dict) -> tuple[str, dict | None]:
+    """Decide what a worker page means here WITHOUT writing anything.
+
+    This is the whole of §3.5/R5/R6 as a pure function of the local row and the
+    worker's page, so `fetch --dry-run` reports the same numbers the real apply
+    produces. Returns `(outcome, detail)`; `detail` is non-None only for
+    TOOK_WORKER and carries what would be written.
 
     A locally `reviewed` page is never overwritten by machine work; a worker
     page that is itself `reviewed` is carried back as a human correction. Two
     different human readings are a CONFLICT — reported, never resolved.
+
+    `local` may be a synthetic `{"id": None, ...}` for a page this archive has
+    never had (the caller decides whether to create it).
+    """
+    w_text = (wp.get("raw_text") or "").strip()
+    w_reviewed = wp.get("reviewed_at")
+    l_reviewed = local["reviewed_at"]
+    l_text = (local["raw_text"] or "").strip()
+
+    if l_reviewed and w_reviewed:
+        # two human readings: identical is agreement, different is a conflict
+        return (KEPT_LOCAL, None) if l_text == w_text else (CONFLICT, None)
+    if l_reviewed:
+        return KEPT_LOCAL, None
+    if not w_text:
+        return SKIPPED, None
+
+    lid = local["id"]
+    edits: list[tuple[str, dict | None]] = []
+    for we in wp.get("edits") or []:
+        editor = we.get("editor")
+        text = (we.get("text") or "").strip()
+        if not editor or not text:
+            continue
+        row = db.get_page_edit(conn, lid, editor) if lid else None
+        if row is not None and row["reviewed_at"]:
+            edits.append((KEPT_LOCAL, None))  # a human edit here: never overwrite
+            continue
+        # the edit must belong to the raw text we just applied, or it was made
+        # from a different reading and is meaningless here
+        if we.get("raw_sha") and we["raw_sha"] != _raw_sha(w_text):
+            edits.append((SKIPPED, None))
+            continue
+        edits.append((TOOK_WORKER, {
+            "editor": editor, "text": text, "filters": we.get("filters"),
+            "reviewed_at": we.get("reviewed_at"),
+        }))
+    return TOOK_WORKER, {
+        "raw_text": w_text, "filters": wp.get("filters"),
+        "reviewed_at": w_reviewed, "edits": edits,
+    }
+
+
+def _tally_decisions(decided: list[tuple[str, dict | None]], counts: dict) -> None:
+    """Fold a list of (outcome, detail) into `counts`, including edit outcomes."""
+    for outcome, detail in decided:
+        counts[outcome] += 1
+        for e_outcome, _ in (detail or {}).get("edits") or []:
+            counts[e_outcome] += 1
+
+
+def _merge_page(conn, doc_id: int, wp: dict, counts: dict,
+                verbose: bool) -> int | None:
+    """Apply one worker page onto the local document (R5/R6, and §3.5).
+
+    Returns the page number when the merge was a CONFLICT (both sides hold a
+    human reading), so the caller can name it — a bare count is not enough to
+    act on.
     """
     pno = int(wp.get("page_no") or 0)
     if not pno:
-        return
+        return None
     local = conn.execute(
         "SELECT * FROM pages WHERE document_id = ? AND page_no = ?", (doc_id, pno)
     ).fetchone()
@@ -842,56 +920,57 @@ def _merge_page(conn, doc_id: int, wp: dict, counts: dict, verbose: bool) -> Non
         local_id = db.add_page(conn, doc_id, pno, source_name=wp.get("source_name"))
         local = conn.execute("SELECT * FROM pages WHERE id = ?", (local_id,)).fetchone()
 
-    w_text = (wp.get("raw_text") or "").strip()
-    w_reviewed = wp.get("reviewed_at")
-    l_reviewed = local["reviewed_at"]
-    l_text = (local["raw_text"] or "").strip()
+    outcome, detail = _decide_merge(conn, local, wp)
+    _tally_decisions([(outcome, detail)], counts)
+    if outcome != TOOK_WORKER or detail is None:
+        return pno if outcome == CONFLICT else None
+
     lid = int(local["id"])
-
-    if l_reviewed and w_reviewed:
-        if l_text == w_text:
-            counts[KEPT_LOCAL] += 1
-            return
-        counts[CONFLICT] += 1
-        return  # default: keep local (decision 3)
-    if l_reviewed:
-        counts[KEPT_LOCAL] += 1
-        return
-    if not w_text:
-        counts[SKIPPED] += 1
-        return
-
-    db.set_page_result(conn, lid, raw_text=w_text, filters=wp.get("filters"))
-    if w_reviewed:
+    db.set_page_result(conn, lid, raw_text=detail["raw_text"], filters=detail["filters"])
+    if detail["reviewed_at"]:
         # a human corrected this on the worker: carry it back as reviewed,
         # with THEIR timestamp
         conn.execute(
-            "UPDATE pages SET reviewed_at = ? WHERE id = ?", (w_reviewed, lid)
+            "UPDATE pages SET reviewed_at = ? WHERE id = ?", (detail["reviewed_at"], lid)
         )
-    counts[TOOK_WORKER] += 1
-
-    for we in wp.get("edits") or []:
-        editor = we.get("editor")
-        text = (we.get("text") or "").strip()
-        if not editor or not text:
+    for e_outcome, e_detail in detail["edits"]:
+        if e_outcome != TOOK_WORKER or e_detail is None:
             continue
-        row = db.get_page_edit(conn, lid, editor)
-        if row is not None and row["reviewed_at"]:
-            counts[KEPT_LOCAL] += 1  # a human edit here: never overwrite
-            continue
-        # the edit must belong to the raw text we just applied, or it was made
-        # from a different reading and is meaningless here
-        if we.get("raw_sha") and we["raw_sha"] != _raw_sha(w_text):
-            counts[SKIPPED] += 1
-            continue
-        db.set_page_edit(conn, lid, editor, text=text,
-                         raw_sha=_raw_sha(w_text), filters=we.get("filters"))
-        if we.get("reviewed_at"):
+        db.set_page_edit(conn, lid, e_detail["editor"], text=e_detail["text"],
+                         raw_sha=_raw_sha(detail["raw_text"]),
+                         filters=e_detail["filters"])
+        if e_detail["reviewed_at"]:
             conn.execute(
                 "UPDATE page_edits SET reviewed_at = ? WHERE page_id = ? AND editor = ?",
-                (we["reviewed_at"], lid, editor),
+                (e_detail["reviewed_at"], lid, e_detail["editor"]),
             )
-        counts[TOOK_WORKER] += 1
+
+
+def _decide_records(conn, doc_id: int, result_doc: dict) -> int:
+    """How many of the worker's records would actually be applied (no writes).
+
+    The same "newest run wins" rule as `_apply_records`, so the dry run and the
+    real apply agree.
+    """
+    incoming = result_doc.get("records") or []
+    if not incoming:
+        return 0
+    total = 0
+    by_encoder: dict[str, list[dict]] = {}
+    for r in incoming:
+        by_encoder.setdefault(str(r.get("encoder") or ""), []).append(r)
+    for encoder, rows in by_encoder.items():
+        if not encoder:
+            continue
+        newest = max((float(r.get("created_at") or 0) for r in rows), default=0.0)
+        have = conn.execute(
+            "SELECT MAX(created_at) m FROM records WHERE document_id = ? AND encoder = ?",
+            (doc_id, encoder),
+        ).fetchone()
+        if have is not None and (have["m"] or 0) >= newest:
+            continue  # the local run is at least as new
+        total += len(rows)
+    return total
 
 
 def _apply_records(conn, doc, result_doc: dict, counts: dict) -> None:
@@ -982,20 +1061,41 @@ def apply_result(
                 local = db.get_document(conn, doc_id)
             doc_id = int(local["id"])
 
+            # R9: note it when the worker produced under a different config.
+            # Read-only, so the dry run reports it too.
+            if rd.get("config_signature"):
+                cur = _config_signature(cfg, cfg.dropbox / rel, local)
+                if cur and cur != rd["config_signature"]:
+                    stale.append(rel)
+
             if dry_run:
+                # the same decisions the real apply makes, minus every write
+                decided: list[tuple[str, dict | None]] = []
+                for wp in rd.get("pages") or []:
+                    pno = int(wp.get("page_no") or 0)
+                    if not pno:
+                        continue
+                    lp = conn.execute(
+                        "SELECT * FROM pages WHERE document_id = ? AND page_no = ?",
+                        (doc_id, pno),
+                    ).fetchone()
+                    if lp is None:
+                        lp = {"id": None, "raw_text": None, "reviewed_at": None}
+                    outcome, detail = _decide_merge(conn, lp, wp)
+                    decided.append((outcome, detail))
+                    if outcome == CONFLICT:
+                        conflicts.append({"relpath": rel, "page": pno})
+                _tally_decisions(decided, counts)
+                counts["records"] += _decide_records(conn, doc_id, rd)
                 applied.append({"relpath": rel, "id": doc_id,
                                 "pages": len(rd.get("pages") or [])})
                 continue
 
             for wp in rd.get("pages") or []:
-                _merge_page(conn, doc_id, wp, counts, verbose)
+                conflicted = _merge_page(conn, doc_id, wp, counts, verbose)
+                if conflicted is not None:
+                    conflicts.append({"relpath": rel, "page": conflicted})
             _apply_records(conn, local, rd, counts)
-
-            # R9: note it when the worker produced under a different config
-            if rd.get("config_signature") and lease is not None:
-                cur = _config_signature(cfg, cfg.dropbox / rel, local)
-                if cur and cur != rd["config_signature"]:
-                    stale.append(rel)
 
             expected = int(rd.get("page_count") or 0)
             have = conn.execute(
@@ -1014,7 +1114,15 @@ def apply_result(
                             "page_count": expected})
 
         if dry_run:
-            return {"handoff_id": handoff_id, "dry_run": True, "documents": applied}
+            return {
+                "handoff_id": handoff_id,
+                "dry_run": True,
+                "documents": applied,
+                "counts": counts,
+                "conflicts": conflicts,
+                "refused": refused,
+                "stale": stale,
+            }
 
         release(cfg, handoff_id, STATE_APPLIED)
         return {
@@ -1034,13 +1142,3 @@ def _all_editors(conn, doc_id: int):
         "SELECT DISTINCT editor FROM page_edits WHERE page_id IN "
         "(SELECT id FROM pages WHERE document_id = ?)", (doc_id,)
     ).fetchall()
-
-
-def _conflict_notes(result: dict) -> list[str]:
-    """Human-readable list of the conflicts a result would raise."""
-    out: list[str] = []
-    for rd in result.get("documents") or []:
-        for p in rd.get("pages") or []:
-            if p.get("reviewed_at"):
-                out.append(f"{rd.get('relpath')} p.{p.get('page_no')}")
-    return out

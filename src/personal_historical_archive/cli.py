@@ -1660,7 +1660,10 @@ def cmd_handoff(cfg: Config, args) -> None:
                     print("  conflicts (both sides corrected differently; local kept):",
                           file=sys.stderr)
                     for c2 in res["conflicts"]:
-                        print(f"    {c2}", file=sys.stderr)
+                        where = c2.get("relpath") or "?"
+                        page = c2.get("page")
+                        print(f"    {where}" + (f" p.{page}" if page else ""),
+                              file=sys.stderr)
                 if res["stale"]:
                     print(f"  ! {len(res['stale'])} document(s) were processed under a "
                           f"different config; their pages are stale under the current "

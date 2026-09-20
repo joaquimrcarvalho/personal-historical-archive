@@ -264,6 +264,39 @@ def make_server(cfg: Config) -> FastMCP:
             client.close()
 
     @mcp.tool()
+    def pha_handoff_status() -> dict:
+        """Documents currently OUT on a hand-over to another machine.
+
+        Read-only, and the way an agent driving this archive learns that work
+        is in flight elsewhere: while a document is out, `pha scan` / `pha edit`
+        / `pha encode` / `pha reindex` skip it here, so an "unfinished" document
+        may simply be leased. Mutations still go through the `pha` CLI
+        (`pha handoff out|in|work|back|fetch|cancel`).
+        """
+        try:
+            from . import handoff
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"hand-off support unavailable: {e}"}
+        leases = handoff.active_leases(cfg)
+        return {
+            "out": [
+                {
+                    "handoff_id": l.handoff_id,
+                    "worker": l.worker,
+                    "created_at": l.created_at,
+                    "age_s": round(l.age_s(), 1),
+                    "documents": [
+                        {"relpath": d.get("relpath"), "sha256": d.get("sha256"),
+                         "doc_id": d.get("doc_id")}
+                        for d in l.documents
+                    ],
+                }
+                for l in leases
+            ],
+            "count": len(leases),
+        }
+
+    @mcp.tool()
     def pha_extraction_status() -> dict:
         """Summary of the archive: documents by status, pages extracted, chunks indexed."""
         conn = db.connect(cfg.db_path)
