@@ -135,11 +135,11 @@
 - **One model per model-server at a time.** A server that loads models just in
   time keeps a single one resident — loading two (e.g. qwen vision + amalia
   editor) causes swap/page-out that fills the disk and wedges the server.
-  So `pha scan`, `pha edit`, `pha reindex`, `pha test` and `pha unbundle` each
-  take a lock on **every model-server they will talk to** and refuse if one is
-  busy, naming the server and the holding job. Two jobs may run concurrently
-  **iff their servers are disjoint**, so a job on a remote model does not block
-  a local one. Keys are declared per model file:
+  So `pha scan`, `pha edit`, `pha reindex`, `pha test`, `pha unbundle` and
+  `pha handoff fetch` each take a lock on **every model-server they will talk
+  to** and refuse if one is busy, naming the server and the holding job. Two
+  jobs may run concurrently **iff their servers are disjoint**, so a job on a
+  remote model does not block a local one. Keys are declared per model file:
   `models/<id>.md` may carry `server: mac-studio`; an **unlabelled** model file
   takes the wildcard, which serialises with everything (the old global rule),
   and the embedding model uses `embeddings.server:` or its endpoint. Declare
@@ -505,12 +505,13 @@ came from (a dropbox `editor` file, a config default, or nowhere).
 ### Operating discipline (avoid breaking the machine)
 
 - **One model per model-server at a time.** `pha scan`, `pha edit`,
-  `pha reindex`, `pha test` and `pha unbundle` take a lock on each server they
-  will use and refuse if one is busy (naming it and the holding job); jobs on
-  disjoint servers run together. Never start `pha edit`/re-edit/reindex while a
-  `pha_scan_now` is running **against the same server** (two models there →
-  swap → disk fill → hang, and for reindex → `embed()` timeouts that can cost a
-  document its vectors). Check `pha_extraction_status` and `pha doctor` (which
+  `pha reindex`, `pha test`, `pha unbundle` and `pha handoff fetch` take a lock
+  on each server they will use and refuse if one is busy (naming it and the
+  holding job); jobs on disjoint servers run together. Never start `pha
+  edit`/re-edit/reindex while a `pha_scan_now` is running **against the same
+  server** (two models there → swap → disk fill → hang, and for reindex →
+  `embed()` timeouts that can cost a document its vectors). Check
+  `pha_extraction_status` and `pha doctor` (which
   lists the keys and the lock dir) before starting a pass.
 - **Quit LM Studio when not ingesting** — its model page-out is what eats disk
   space. Do not leave a vision + editor model loaded at the same time.

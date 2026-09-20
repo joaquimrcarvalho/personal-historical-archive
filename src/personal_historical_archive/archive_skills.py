@@ -140,9 +140,10 @@ palaeographer / editor / prompt / encoders), inspect, don't re-run:
 ### 3. Respect the model-server lock
 
 A job holds a lock on **every model-server it will use** (`pha scan`,
-`pha edit`, `pha test`, `pha reindex`, `pha unbundle`): a server that loads
-models just in time keeps one resident, and loading two there swaps/page-out
-and fills the disk. Jobs whose servers are disjoint may run together. Never
+`pha edit`, `pha test`, `pha reindex`, `pha unbundle`, `pha handoff fetch`): a
+server that loads models just in time keeps one resident, and loading two there
+swaps/page-out and fills the disk. Jobs whose servers are disjoint may run
+together. Never
 start one while another is using the same server — check `pha status` /
 `pha_extraction_status` first, and if a pass is running, wait (or, in Profile
 D, poll `pha_job_status`). `pha doctor` lists the servers and their capacity.

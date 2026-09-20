@@ -218,9 +218,9 @@ folder once and never overwrites it — edit or extend it freely.
 - Editing a page file under `library/` is a human correction: run `pha review`
   to import it, then `pha reindex`.
 - **One model per model-server at a time** — `pha scan`, `pha edit`,
-  `pha reindex`, `pha test` and `pha unbundle` lock every model-server they
-  will use and refuse if one is busy; jobs on different servers may run
-  together. Running two models on one server fills the disk and hangs the
+  `pha reindex`, `pha test`, `pha unbundle` and `pha handoff fetch` lock every
+  model-server they will use and refuse if one is busy; jobs on different
+  servers may run together. Running two models on one server fills the disk and hangs the
   machine. `pha doctor` shows the servers and their capacity.
   Quit LM Studio when not ingesting.
 - Full usage and troubleshooting: see the pha README in the source repository

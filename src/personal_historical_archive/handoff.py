@@ -46,6 +46,7 @@ from .bundle import (
     _resolve_target,
     export_bundle,
 )
+from . import locks
 from .config import Config
 from .ingest import (index_document, sha256_of, sha256_of_dir,
                      write_document_pages, write_edited_pages)
@@ -1031,6 +1032,19 @@ def apply_result(
 
     conn = db.connect(cfg.db_path)
     try:
+        # Applying merges rows and then RE-INDEXES the document
+        # (`index_document` embeds), so the only model server this touches is
+        # the embedding model's — the same single lock `pha unbundle` takes, and
+        # for the same reason. Without it a fetch can run alongside `pha scan`
+        # or `pha reindex` and the two fight over the embed model. A dry run
+        # writes nothing, so it must not be refused because that server is busy.
+        lock = None
+        if not dry_run:
+            lock = locks.acquire(cfg, [locks.embed_key(cfg)],
+                                 label="pha handoff fetch")
+            if not lock.ok:
+                raise HandoffError(lock.reason())
+
         counts = {KEPT_LOCAL: 0, TOOK_WORKER: 0, CONFLICT: 0, SKIPPED: 0, "records": 0}
         stale: list[str] = []
         applied: list[dict] = []
@@ -1135,6 +1149,7 @@ def apply_result(
         }
     finally:
         conn.close()
+        locks.release(lock)
 
 
 def _all_editors(conn, doc_id: int):

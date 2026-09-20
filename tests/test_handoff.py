@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from personal_historical_archive import db as _db
-from personal_historical_archive import handoff
+from personal_historical_archive import handoff, locks
 from personal_historical_archive.config import Config
 from personal_historical_archive.ingest import (
     _raw_sha,
@@ -283,6 +283,46 @@ def test_fetch_refuses_a_result_with_no_lease_here(tmp_path, monkeypatch):
         handoff.apply_result(a, back, verbose=False)
     # the lease exists but is no longer open, so the result must still be refused
     assert "already cancelled" in str(e.value)
+
+
+def test_fetch_takes_the_embedding_server_lock(tmp_path, monkeypatch):
+    """`fetch` re-indexes the document it merges, so it must hold the embedding
+    server's lock — the same single lock `pha unbundle` takes. A refusal must
+    leave the lease OPEN so the apply can be retried, and a dry run (which
+    writes nothing) must not be refused just because that server is busy."""
+    monkeypatch.chdir(tmp_path)
+    a = _cfg(tmp_path, "projA")
+    _document(a, pages=1, done=1)
+    out = tmp_path / "ho"
+    handoff.export_handoff(a, ["collections/DI"], out, verbose=False)
+    b = _cfg(tmp_path, "projB")
+    handoff.import_handoff(b, out, verbose=False)
+    back = tmp_path / "ho-back"
+    handoff.build_result(b, out, back, verbose=False)
+    hid = handoff.read_result(back)["handoff_id"]
+
+    # another live job holds the embedding server
+    monkeypatch.setattr(locks, "_pid_alive", lambda pid: True)
+    planted = locks._slot_path(locks.embed_key(a), 1)
+    planted.parent.mkdir(parents=True, exist_ok=True)
+    planted.write_text("999999 pha scan", encoding="utf-8")
+
+    with pytest.raises(handoff.HandoffError) as e:
+        handoff.apply_result(a, back, verbose=False)
+    assert "busy" in str(e.value)
+    assert "pha scan" in str(e.value)          # names the job holding the server
+    assert [l.handoff_id for l in handoff.active_leases(a)] == [hid], \
+        "a refused fetch must not consume the lease"
+
+    # a dry run touches nothing, so a busy embed server is not its problem
+    res = handoff.apply_result(a, back, verbose=False, dry_run=True)
+    assert res["dry_run"] is True
+
+    planted.unlink()
+    handoff.apply_result(a, back, verbose=False)
+    assert handoff.active_leases(a) == []
+    # and the lock it took is released, not leaked
+    assert not locks._slot_path(locks.embed_key(a), 1).exists()
 
 
 # -------------------------------------------------------------------- dry runs

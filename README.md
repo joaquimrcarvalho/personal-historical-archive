@@ -555,8 +555,9 @@ model: qwen/qwen3-vl-8b
 ---
 ```
 
-`pha scan`, `pha edit`, `pha reindex`, `pha test` and `pha unbundle` each take a
-lock on **every model-server they will talk to** and refuse if one is busy,
+`pha scan`, `pha edit`, `pha reindex`, `pha test`, `pha unbundle` and
+`pha handoff fetch` each take a lock on **every model-server they will talk to**
+and refuse if one is busy,
 naming the server and the holding job; two jobs may run concurrently **iff
 their servers are disjoint** — so a job against a remote model no longer blocks
 a local one, and two archives on one machine that share a server serialise
