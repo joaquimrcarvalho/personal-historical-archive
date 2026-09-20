@@ -172,6 +172,30 @@ D, poll `pha_job_status`). `pha doctor` lists the servers and their capacity.
 | Inspect config | `pha editor/palaeographer/prompts <file>` | `pha_collection_config(<path>)` | `pha_collection_config(<path>)` |
 | Verify | `pha status`, `pha page` | `pha_status`, `pha_page` | `pha_extraction_status`, `pha_get_page` |
 | Get a page's text | `pha page <doc> <page> [--edited]` | `pha_page(id, page)` | `pha_get_page(id, page)` |
+| Handed out to another machine | `pha handoff status` / `pha handoff fetch` | — | `pha_handoff_status()` |
+
+## If the document is leased (out on hand-over)
+
+A re-run that reports **nothing to do** for a document that clearly needs work
+may not be a staleness problem: the document can be **leased** to a second
+machine (`pha handoff`). `pha scan` / `pha edit` / `pha encode` / `pha reindex`
+deliberately skip a leased document, printing the hand-off id and its age.
+
+- Confirm with `pha status` (an "out on hand-over" section) or `pha handoff
+  status [--json]`, and check `pha_handoff_status()` over MCP.
+- When the second machine's work comes back, apply it with `pha handoff fetch
+  <result-dir>` — not with a re-run. A page corrected here afterwards is kept
+  and reported as a conflict.
+- Release an abandoned loan with `pha handoff cancel <id>`; the document
+  becomes usable here again, and any late result for it is then refused.
+- Only override deliberately: `--include-leased` makes a scan/edit/encode/
+  reindex touch a leased document anyway, which is how two machines end up
+  transcribing the same pages.
+
+On the **other** machine (the one that received the payload) nothing is leased:
+`pha handoff in <payload>` imports the document and leaves it resumable, then a
+plain `pha scan`/`edit`/`encode --path <doc>` finishes it and `pha handoff back`
+writes the return payload.
 
 ## When not to use this skill
 

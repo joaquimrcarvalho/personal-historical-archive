@@ -158,6 +158,36 @@ A document is a dropbox-relative subpath: `collections/COLX`, `documents/`
 (individual files), or a directory-of-images document (`documents/ms123`).
 `pha scan`/`pha edit`/`pha test` share the single-model lock — run one at a time.
 
+## Working on a handed-out document (`pha handoff`)
+
+A document may have been lent to this machine from another archive because this
+machine can reach the models (or is simply available). You will be given a
+**hand-out payload directory**; the whole job is four commands:
+
+```bash
+pha handoff in   ~/x/DI.pha-handoff     # import it here (no models needed)
+pha handoff work ~/x/DI.pha-handoff     # scan -> edit -> encode; or run those
+                                        #   three `--path <doc>` commands yourself
+pha handoff back ~/x/DI.pha-handoff     # build the return payload
+```
+
+Then send the `…-back` directory back. Notes:
+
+- `pha handoff status` here shows nothing; the lease lives in the **owner's**
+  archive. Do not worry that no lease appears.
+- The import is left **resumable**: pages the owner had already finished come
+  in done, the rest are pending, so `pha scan --path <doc>` finishes exactly
+  those. `work` is only a wrapper over `pha scan/edit/encode --path <doc>`;
+  prefer the explicit commands when you need `--pages`, `--reprocess` or
+  `--page N`.
+- Only the finished work travels back (page text, edits, records) — never the
+  source PDF or the renders, which the owner already has. The document's
+  identity across the two machines is its content hash plus its dropbox path,
+  not its id, so you do not need to match ids.
+- A page corrected by a human HERE is carried back as a reviewer's correction;
+  the owner keeps their own correction if both sides changed the same page, and
+  reports it as a conflict.
+
 ## Bundled agent skills (`skills/`)
 
 This archive carries its own **pha-specific agent skills** — read the matching

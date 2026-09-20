@@ -1094,6 +1094,13 @@ pha mcp [--transport stdio|sse] [--port 8000]
 pha bundle TARGET... [--out DIR] [--force] [--move]  # export collections/docs as a portable bundle
                                                      #   (--move: delete them from THIS archive too)
 pha unbundle BUNDLE [--force]                # import a bundle into THIS archive (no re-scan/edit)
+pha handoff out TARGET... [--out DIR] [--worker NAME] [--force]
+                                             # lend docs to a second machine (they stay HERE)
+pha handoff in DIR                           # (worker) import a hand-out and leave it resumable
+pha handoff work DIR [--dry-run]             # (worker) scan -> edit -> encode the lent docs
+pha handoff back DIR [--out DIR] [--dry-run] # (worker) build the return payload
+pha handoff fetch DIR [--dry-run]            # (owner) merge the returned work into the same doc
+pha handoff status [--json] | cancel ID      # what is out, and how to take it back
 pha update [--check] [--yes]  # check GitHub for a newer pha and install it
 ```
 
@@ -1490,6 +1497,78 @@ Caveats:
   skipped).
 - The `library/` files in B are regenerated from the imported rows, so their
   front matter carries B's `document_id`s and paths.
+
+### Lending a document out to a second machine (`pha handoff`)
+
+`pha bundle` **copies** documents to another archive and gives them **new ids**
+— that is what you want for sharing or archiving. `pha handoff` is the other
+shape: the document stays where it lives, and a second machine (a big GPU box,
+a colleague's laptop, a machine that *can* reach the model server) does the slow
+transcription/editing. The work comes back and is merged into the **same
+document**, so there is no duplicate and no new id. Use it when the archive
+machine cannot reach the models but the document must not be duplicated.
+
+It is the same three-stage pipeline on both sides — nothing is skipped, it is
+just run somewhere else:
+
+```bash
+# on the archive that OWNS the document (A):
+pha handoff out collections/DI --worker mac-studio -o ~/x/DI.pha-handoff
+# transfer the payload directory (rsync / zip / USB)
+
+# on the WORKING machine (B):
+pha handoff in ~/x/DI.pha-handoff      # import it here, left resumable
+pha handoff work ~/x/DI.pha-handoff    # scan -> edit -> encode (thin wrapper over the three)
+pha handoff back ~/x/DI.pha-handoff    # write the return payload (…-back)
+# transfer the *-back directory back to A
+
+# back on A:
+pha handoff fetch ~/x/DI.pha-handoff-back   # merge the work into the same document
+```
+
+`work` is only a convenience: it runs `pha scan --path …`, `pha edit --path …`
+and `pha encode --path …` in order, printing each stage's own result. Run those
+commands yourself (with `--pages`, `--reprocess`, `--page`, whatever the job
+needs) when you want control — nothing about `pha handoff` requires `work`.
+
+What travels:
+
+- **A → B**: the source document(s), the pages A already finished, the renders,
+  and the model definitions in use. Papers not yet extracted in A are sent as
+  the document itself, not as placeholder text, so B resumes exactly the pages
+  that are outstanding.
+- **B → A**: only the finished work (page text, edits, encoder records) — never
+  the source bytes or renders, which A already has. Bibliographic sidecars
+  travel too (harmless; they are small and presence-only).
+
+Identity is by content, not by id: a hand-off matches documents on `sha256` plus
+the dropbox-relative path, because the two machines have independent databases
+and ids mean nothing across them.
+
+**The document is leased while it is out.** `pha scan`, `pha edit`, `pha
+encode` and `pha reindex` skip a leased document (naming the hand-off and its
+age) so the two machines cannot both transcribe it; `pha status` lists what is
+out under "out on hand-over". `pha reindex` matters here: re-embedding while the
+worker holds the document is how you get vectors for a document that is about to
+change underneath you. To deliberately work on a leased document anyway, pass
+`--include-leased`. The lease ends at `pha handoff fetch` (applied) or `pha
+handoff cancel <id>` (abandoned — the document becomes usable here again, and
+any returned payload for it is refused afterwards).
+
+**Conflicts keep your local reading.** If a page (or an edited page) was
+corrected *here* after the hand-out and the worker also produced text for it,
+the local version is kept and reported as a conflict — the reviewer's correction
+is never silently overwritten by a machine. A page a human corrected *on the
+worker* arrives still marked `reviewed` (with their timestamp), so it counts as
+a reviewer's correction here too; ordinary machine output comes back unmarked,
+exactly as if it had been produced locally. A document processed under a
+different palaeographer/editor than A now uses is reported as `stale` so you can
+re-run the pass rather than trust it.
+
+Leases live in `<archive>/.pha/handoffs/<id>.json` — machine-local, gitignored,
+never archive content. `pha handoff status --json` gives the machine-readable
+form, and the read-only MCP tool `pha_handoff_status()` returns the same for a
+remote agent.
 
 ## Notes on quality & performance
 

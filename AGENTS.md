@@ -542,6 +542,24 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   `pha bundle --move` additionally DELETES the bundled documents from the
   source archive once the bundle is written (the bundle is the backup). See
   the README section "Moving / sharing collections between archives".
+- **Lending a document to a second machine and taking the work back**:
+  `pha handoff` is the other shape from `bundle` — the document stays in its
+  own archive (same id, no copy) and a second machine does the slow
+  scan/edit/encode. On the owner: `pha handoff out <target> [--worker NAME]`
+  writes a payload and **leases** the document, so `pha scan`/`edit`/`encode`/
+  `reindex` skip it (name+age shown, `pha status` lists it under "out on
+  hand-over"; `--include-leased` overrides). On the worker: `pha handoff in
+  <payload>`, then `pha scan/edit/encode --path <doc>` (or the `pha handoff
+  work` wrapper), then `pha handoff back`. Back on the owner: `pha handoff
+  fetch <result>` merges the work into the SAME document — local human
+  corrections are kept and reported as conflicts, and a document processed
+  under a different palaeographer/editor is reported `stale`. Identity across
+  machines is `sha256` + dropbox-relative path (ids are per-machine and mean
+  nothing across them); only the finished work travels back, never the source
+  bytes. Leases live in `<archive>/.pha/handoffs/<id>.json` (machine-local,
+  gitignored). `pha handoff status [--json]` / MCP `pha_handoff_status()` show
+  what is out; `pha handoff cancel <id>` releases it and refuses a later
+  result.
 - The MCP server runs on the machine that owns the dropbox and models. A
   client on another machine needs only an MCP connection — no local models or
   dropbox. Start on the archive machine with
