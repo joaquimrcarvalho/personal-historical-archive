@@ -169,3 +169,66 @@ side-effects of the fix:
 The incident archive (`jesuit-archive`) had already been recovered with the §8
 workaround; its current stamps (4 pages, 2 edits) are genuine human
 corrections and must be preserved, so no blanket `--unset` was run against it.
+
+## 11. Addendum (2026-09-18) — the scope test still fails against a scan in progress
+
+**Status:** reproducible on 0.28.0. The §10 fix imports "only the pending set",
+and it does — but the pending test is **mtime-based per library file**, and a
+running `pha scan` *grows* the library page by page (`write_document_pages()`
+inside the page loop). So every page the scan has produced so far looks newer
+than the database's record of it and is imported and stamped as a human
+correction.
+
+### What happened
+
+`pha review` was run on `jesuit-archive` while `pha scan --path
+collections/documenta-indica` was mid-volume on doc 69
+(`DOCUMENTA-INDICA-1553-1557.pdf`, 961 pages). The genuinely pending corrections
+were **4 pages** — doc 53 pp. 53/65 (Franco, Lisboa 1717) and doc 67 pp. 3/4
+(bpe). The run reported:
+
+```
+reviewed: 435 transcription page(s), 0 edit(s) from 435 candidate file(s)
+```
+
+Stamped pages by document immediately after: **doc 69: 431**, doc 53: 2,
+doc 67: 2, docs 27/29/30/44: 1 each (the pre-existing genuine stamps).
+`431 + 2 + 2 + 1×4 = 439` matches the archive's `reviewed` count. Every one of
+doc 69's 431 is a page the scan had *just written*; none was edited by a human.
+
+No text was harmed — the imported bodies came from the database in the first
+place, and doc 69 kept all its text (`857` pages with text, `0` empty at the
+time). The damage is the false **review record**, which (a) misreports
+provenance: the archive now claims a human reviewed 431 pages nobody opened;
+and (b) freezes those pages against re-processing, since a reviewed row outranks
+`--reprocess` (§2). That is the §5 failure mode, at the scale of one volume per
+review run.
+
+Recovery was itself blocked by the same running scan: `pha review --unset --doc
+69` returned *"the archive database is busy: another pha job … is writing right
+now"* while the scan held the lock, so the unset had to be queued behind it.
+
+### Suggested fix
+
+1. **Refuse by default while another job is writing.** `pha review` takes no
+   scan lock and does not check for one. If `scan.lock` is held, or a target
+   document has `status='processing'`, decline unless `--force`, and say why. A
+   review is a human act; running it during a scan is never intended.
+2. **Compare content, not just mtime.** A scan-written file's body *equals* the
+   database text; a human correction's does not. Defining "pending" as "body
+   differs from the stored text, or the page is not exported yet" would have
+   reduced this run from 435 candidates to 4, and keeps working when mtimes are
+   disturbed by a sync client, a backup restore or an editor that rewrites on
+   save. `--all` still covers the deliberate blanket case.
+3. Optional: have `pha review` print the candidate set *before* importing when
+   it exceeds some fraction of the archive, so a mis-scoped run is visible in
+   the output rather than discovered afterwards.
+
+### Workaround
+
+Run `pha review` only when no `scan`/`edit`/`test` is running — the same
+single-job rule as everywhere else, except that here violating it corrupts
+provenance rather than merely contending for a model. If it has already
+happened, `pha review --unset --doc N` lifts the stamps for the affected
+document and keeps the text (queue it behind the running job if the database is
+locked).
