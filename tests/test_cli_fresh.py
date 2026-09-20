@@ -130,6 +130,19 @@ def test_help_overview_points_to_docs(tmp_path, capsys, monkeypatch):
     assert "pha-home" in out
 
 
+def test_help_overview_lists_the_machine_to_machine_commands(tmp_path, capsys,
+                                                             monkeypatch):
+    """`pha help` is the first thing an operator or agent runs, and its COMMON
+    COMMANDS list is curated (not every command belongs there), so a new
+    headline command has to be added by hand — and `pha handoff` was not."""
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    cfg, _ = _make_cfg(tmp_path, ".")
+    cli.cmd_help(cfg, type("A", (), {"topic": None})())
+    out = capsys.readouterr().out
+    for cmd in ("pha bundle", "pha unbundle", "pha handoff out|in|back|fetch"):
+        assert cmd in out, f"`pha help` does not mention {cmd!r}"
+
+
 def test_help_topic_prints_path(tmp_path, capsys, monkeypatch):
     monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
     cfg, _ = _make_cfg(tmp_path, ".")

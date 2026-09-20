@@ -2515,6 +2515,8 @@ def cmd_help(cfg: Config, args) -> None:
     print("  pha mcp                       run the MCP server (stdio)")
     print("  pha bundle <collections...>   export collections for another archive (no re-scan there)")
     print("  pha unbundle <bundle>         import a bundle into THIS archive (no re-scan/edit)")
+    print("  pha handoff out|in|back|fetch lend a document to another machine, take the work back")
+    print("  pha handoff status            what is out on hand-over; `cancel <id>` releases it")
     print("  pha test [target] [--pages N] [--random]  test a config on a sample; --show/--list/--clean manage reports")
     print("  pha update                    check GitHub for a newer pha and install it")
     print("  pha help <topic>              details on readme|mcp|historians|agents")
