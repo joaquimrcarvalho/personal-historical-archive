@@ -23,6 +23,7 @@ processed (palaeographer / editor / encoder).
 | `pha_collection_status(collection)` | per-collection status report: documents with recorded vs resolved pal/editor/encoders, progress (pages done/total), pipeline stage (transcribed / edited / encoded), and render phase (rendering / transcribing / complete) |
 | `pha_scan_now()` | ingest files that were dropped / uploaded into the dropbox |
 | `pha_extraction_status()` | ingestion summary |
+| `pha_handoff_status()` | documents lent to another machine (`pha handoff`): hand-off id, worker, state, age and the documents — read-only; applying a returned result is a CLI step (`pha handoff fetch`) |
 | `pha_schema()` | real SQLite schema: columns per table + the foreign-key joins (read this before writing your own SQL) |
 
 ## Requirements

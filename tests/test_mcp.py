@@ -362,3 +362,34 @@ def test_reference_is_marked_when_machine_drafted(tmp_path):
     fns = _tools(mcp_server.make_server(cfg))
     page = fns["pha_get_page"](document_id=ids["doc1"], page_no=1)
     assert page["reference_verified"] is False
+
+
+def test_pha_handoff_status_reports_leases_and_is_read_only(tmp_path):
+    """The tool an agent uses to learn that a document is not stuck but LENT:
+    while it is out, scan/edit/encode/reindex skip it here. Read-only by
+    design — applying a returned result stays a CLI step."""
+    import asyncio
+
+    from personal_historical_archive import handoff
+
+    cfg = _make_config(tmp_path)
+    _seed(cfg)
+    fns = {t.name: t.fn
+           for t in asyncio.run(mcp_server.make_server(cfg).list_tools())}
+
+    assert fns["pha_handoff_status"]() == {"out": [], "count": 0}
+
+    out = tmp_path / "ho"
+    res = handoff.export_handoff(cfg, ["collections/testcol"], out,
+                                 worker="studio", verbose=False)
+
+    got = fns["pha_handoff_status"]()
+    assert got["count"] == 1
+    lease = got["out"][0]
+    assert lease["handoff_id"] == res["handoff_id"]
+    assert lease["worker"] == "studio"
+    assert lease["age_s"] >= 0
+    assert [d["relpath"] for d in lease["documents"]] == ["collections/testcol/doc.pdf"]
+
+    # read-only: the lease is untouched and still open
+    assert [l.handoff_id for l in handoff.active_leases(cfg)] == [res["handoff_id"]]
