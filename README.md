@@ -1009,6 +1009,15 @@ pha test --clean [target]   # delete test report scratch dirs (--dry-run to prev
   tune a prompt or model, re-run, and diff the outputs. Every stage's effective
   prompt is written to the scratch dir (`prompt-transcription.md`,
   `prompt-edit.md`, `prompt-encode-<name>.md`).
+- Alongside those, `prompts-sent/` holds the **exact text handed to the model**,
+  written verbatim and undecorated: `transcription-p<NNN>.md`, `edit-p<NNN>.md`
+  and `encode-<name>.md`. The two sets differ on purpose — the `prompt-*.md`
+  files document the *effective* prompt and where it came from, while these are
+  what the model actually received, including the `Document: … / Page: n of m`
+  header and (for the editor) the transcription being edited. Use them to
+  explain or reproduce an output; a reading is not reproducible without them.
+  An `engine` palaeographer (tesseract/liteparse) sends no prompt, so it gets
+  no `transcription-p<NNN>.md`.
 - `pha test --show [target]` re-prints the most recent test report without
   running the models again.
 - Each run leaves a scratch dir under `<archive_dir>/.pha-test/`. `pha test

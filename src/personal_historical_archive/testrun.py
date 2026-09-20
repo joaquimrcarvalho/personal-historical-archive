@@ -320,6 +320,20 @@ def _write(path: Path, text: str) -> Path:
     return path
 
 
+def _write_sent(out_dir: Path, name: str, prompt_txt: str) -> Path:
+    """Record the EXACT text handed to the model, byte for byte.
+
+    The sibling `prompt-*.md` files document the *effective* prompt and its
+    sources, but they stop at the composed prompt: they omit the per-page
+    wrapper built by `build_page_prompt()` (`Document: … / Page: n of m`) and,
+    on the editor stage, the page payload as well. What was actually sent is a
+    different string, and it is the one that explains an output — so it is
+    written verbatim under `prompts-sent/`, never decorated, never reflowed,
+    with no header and no fence added.
+    """
+    return _write(out_dir / "prompts-sent" / name, prompt_txt)
+
+
 def _pf_repr(stage) -> dict:
     return {
         "id": getattr(stage, "id", None),
@@ -381,7 +395,9 @@ def _test_doc(
            f"# Effective transcription prompt (palaeographer {pal.id})\n"
            f"model: {pal.model}\nmodel_ref: {pal.model_ref}\n"
            f"temperature: {pal.temperature} max_tokens: {pal.max_tokens}\n"
-           f"source: {pal_src} / prompt file: {prompt_source}\n\n---\n\n{composed}")
+           f"source: {pal_src} / prompt file: {prompt_source}\n"
+           f"exact text sent to the model (one per page): "
+           f"prompts-sent/transcription-p<NNN>.md\n\n---\n\n{composed}")
 
     # --- render + transcribe ------------------------------------------------
     units = _page_units(cfg, path, selected, scratch_renders)
@@ -395,6 +411,11 @@ def _test_doc(
             if verbose:
                 print(f"  page {page_no}/{total}: transcribing ...", flush=True)
             prompt_txt = build_page_prompt(composed, path.name, page_no, total)
+            if vision_client is not None:
+                # An engine (tesseract/liteparse) never receives a prompt, so
+                # there is nothing to record for it — only a real LLM call has
+                # one, and that is the one a reading must be able to cite.
+                _write_sent(out_dir, f"transcription-p{page_no:03d}.md", prompt_txt)
             try:
                 raw = transcribe_page(vision_client, pal, prompt_txt, img,
                                       source=path, page_no=page_no, total=total)
@@ -415,7 +436,10 @@ def _test_doc(
                f"# Effective editor prompt ({plan.editor.id})\n"
                f"model: {plan.editor.model}\nmodel_ref: {plan.editor.model_ref}\n"
                f"temperature: {plan.editor.temperature} max_tokens: {plan.editor.max_tokens}\n"
-               f"source: {plan.source}\n\n---\n\n{plan.editor.prompt_text}")
+               f"source: {plan.source}\n"
+               f"exact text sent to the model (one per page, includes the "
+               f"transcription being edited): prompts-sent/edit-p<NNN>.md\n\n---\n\n"
+               f"{plan.editor.prompt_text}")
         eclient = ModelClient(plan.editor.base_url, timeout_s=plan.editor.timeout_s,
                               api_key=plan.editor.api_key, api_style=plan.editor.api_style)
         try:
@@ -427,6 +451,7 @@ def _test_doc(
                     f"Document: {path.name}\nPage: {page_no} of {total}\n\n"
                     f"Transcription to edit:\n{raw}"
                 )
+                _write_sent(out_dir, f"edit-p{page_no:03d}.md", edit_prompt)
                 try:
                     out = eclient.chat_text(plan.editor.model, edit_prompt,
                                             plan.editor.temperature, plan.editor.max_tokens,
@@ -482,12 +507,15 @@ def _test_doc(
         _write(out_dir / f"prompt-encode-{eid}.md",
                f"# Effective encoder prompt ({eid})\nmodel: {enc.model}\n"
                f"model_ref: {enc.model_ref}\ntemperature: {enc.temperature} "
-               f"max_tokens: {enc.max_tokens}\nsource: {src}\n\n---\n\n{base}")
+               f"max_tokens: {enc.max_tokens}\nsource: {src}\n"
+               f"exact text sent to the model (includes the page payload): "
+               f"prompts-sent/encode-{eid}.md\n\n---\n\n{base}")
         block = "\n\n".join(f"--- page {pno} ---\n{t}" for pno, t in texts)
         prompt_txt = (
             f"{base}\n\n"
             f"Document: {path.name}\nPages: {texts[0][0]}-{texts[-1][0]}\n\n{block}"
         )
+        _write_sent(out_dir, f"encode-{eid}.md", prompt_txt)
         eclient = ModelClient(enc.base_url, timeout_s=enc.timeout_s, api_key=enc.api_key,
                               api_style=enc.api_style)
         try:

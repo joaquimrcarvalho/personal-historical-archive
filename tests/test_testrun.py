@@ -236,3 +236,85 @@ def test_clean_runs_all_removes_root(tmp_path):
     assert res["removed"] == 2
     assert tr.list_runs(cfg) == []
     assert not tr._run_dir(cfg).exists()  # empty .pha-test root removed too
+
+
+# --------------------------------------------------------------------------- recorded prompts
+
+class _RecordingClient:
+    """A ModelClient stand-in that records every prompt it is handed, so the
+    test can prove what was WRITTEN is byte-identical to what was SENT."""
+
+    seen: list[tuple[str, str]] = []
+
+    def __init__(self, *a, **kw):
+        pass
+
+    def chat_vision(self, model, prompt, img, *a, **kw):
+        type(self).seen.append(("vision", prompt))
+        return "IESVS.\nPadres, y hermanos dela Prouincia."
+
+    def chat_text(self, model, prompt, *a, **kw):
+        type(self).seen.append(("text", prompt))
+        return '{"letter": "IESVS."}'
+
+    def close(self):
+        pass
+
+
+def _png(path: Path, shade: int = 0) -> None:
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 8, 8), False)
+    pix.set_rect(fitz.IRect(0, 0, 8, 8), (shade, shade, shade))
+    pix.save(str(path))
+
+
+def test_testrun_records_the_exact_prompt_sent(tmp_path, monkeypatch):
+    """`pha test` must save the exact text handed to the model, not just the
+    composed 'effective prompt': the per-page wrapper and the editor payload
+    are part of what the model actually saw, and a reading cannot be explained
+    or reproduced without them."""
+    cfg = _make_cfg(tmp_path)
+    col = cfg.dropbox / "collections" / "colx"
+    doc = col / "docsv"
+    doc.mkdir(parents=True)
+    _png(doc / "a.jpg")
+    (col / "pha.yaml").write_text(
+        "palaeographer:\n  rules: default\n  model: default\n"
+        "editor:\n  rules: default\n  model: default\n"
+        "encoders:\n- rules: table\n  model: default\n"
+    )
+    (col / "encoders").mkdir()
+    (col / "encoders" / "table.md").write_text("Extract the rows as a JSON array.\n")
+
+    _RecordingClient.seen = []
+    monkeypatch.setattr(tr, "ModelClient", _RecordingClient)
+
+    scratch = tmp_path / "scratch"
+    tr._test_doc(cfg, doc, scratch, tmp_path / "renders", 1, False, None,
+                 None, None, None, None, None, None, None, False)
+
+    sent_dir = scratch / "docsv" / "prompts-sent"
+    vision_prompt = next(p for kind, p in _RecordingClient.seen if kind == "vision")
+    text_prompts = [p for kind, p in _RecordingClient.seen if kind == "text"]
+
+    # The transcription prompt: recorded verbatim, including the page wrapper.
+    stored = (sent_dir / "transcription-p001.md").read_text(encoding="utf-8")
+    assert stored == vision_prompt
+    # (a directory-of-images document is named by its directory, not by the
+    # image inside it — the header is part of what was sent either way)
+    assert stored.startswith("Document: docsv\nPage: 1 of 1\n\n")
+    # ...and the page wrapper is exactly what the 'effective prompt' file omits,
+    # which is why the two files must exist side by side.
+    assert stored != (scratch / "docsv" / "prompt-transcription.md").read_text(encoding="utf-8")
+
+    # The editor payload travels with the editor prompt (one file per page).
+    edit = (sent_dir / "edit-p001.md").read_text(encoding="utf-8")
+    assert edit in text_prompts
+    assert "Transcription to edit:" in edit
+    assert "IESVS." in edit
+
+    # The encoder prompt carries the page block; named after the encoder id.
+    enc = list(sent_dir.glob("encode-*.md"))
+    assert len(enc) == 1
+    assert enc[0].name == "encode-table.md"
+    assert enc[0].read_text(encoding="utf-8") in text_prompts
+    assert "--- page 1 ---" in enc[0].read_text(encoding="utf-8")

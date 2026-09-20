@@ -439,6 +439,16 @@ collection's processing = the resolved **palaeographer**, **editor**, and
   lists saved runs, `pha test --clean [target] [--dry-run]` deletes the `.pha-test`
   scratch dirs (run dirs accumulate one per run). It takes the same
   model-server locks as `pha scan`/`pha edit` (one model per server).
+  The run dir holds BOTH the *effective* prompt per stage
+  (`prompt-transcription.md`, `prompt-edit.md`, `prompt-encode-<name>.md` —
+  the composed prompt plus its sources, for a human tuning it) AND
+  `prompts-sent/` with the **exact text handed to the model**, verbatim:
+  `transcription-p<NNN>.md`, `edit-p<NNN>.md`, `encode-<name>.md`. They differ
+  by design — the `prompt-*.md` files omit the `Document: … / Page: n of m`
+  wrapper (and, for the editor, the transcription being edited) — so an agent
+  recording provenance for a reading must cite `prompts-sent/`, never
+  `prompt-*.md`. An `engine` palaeographer (tesseract/liteparse) sends no
+  prompt and therefore has no `transcription-p<NNN>.md`.
 - **Remotely / connected via MCP** (agent on another machine):
   - `pha_collection_config("collections/COLX")` returns **one object** with
     the resolved `palaeographer`, `editor` (or `{id: None, ...}` when none is
