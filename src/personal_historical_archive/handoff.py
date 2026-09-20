@@ -38,6 +38,7 @@ from pathlib import Path
 from . import db
 from .bundle import (
     _copy_dropbox_payload,
+    _raw_sha,
     _document_units,
     _install_defs,
     _is_waiting_stub,
@@ -46,7 +47,8 @@ from .bundle import (
     export_bundle,
 )
 from .config import Config
-from .ingest import sha256_of, sha256_of_dir
+from .ingest import (index_document, sha256_of, sha256_of_dir,
+                     write_document_pages, write_edited_pages)
 from .sidecar import resolve_sidecar
 
 HANDOFF_FORMAT = "pha-handoff"
@@ -594,9 +596,11 @@ def _import_one(cfg: Config, conn, handoff_dir_path: Path, doc: dict,
                 page_id = db.add_page(conn, doc_id, int(pno), source_name=source_name)
                 db.set_page_result(conn, page_id, raw_text=body)
                 if fm.get("reviewed"):
+                    # carry the WORKER's stamp (not "now"), so a reviewer can
+                    # see when the correction was actually made
                     conn.execute(
                         "UPDATE pages SET reviewed_at = ? WHERE id = ?",
-                        (time.time(), page_id),
+                        (float(fm.get("reviewed_at") or time.time()), page_id),
                     )
                 pages_done += 1
 
@@ -628,3 +632,415 @@ def _import_one(cfg: Config, conn, handoff_dir_path: Path, doc: dict,
         "page_count": expected,
         "stubs_ignored": stubs,
     }
+
+
+# --------------------------------------------------- worker result (back)
+
+def _worker_document(conn, sha: str):
+    return conn.execute(
+        "SELECT * FROM documents WHERE sha256 = ?", (sha,)
+    ).fetchone()
+
+
+def _page_payload(conn, page_row) -> dict:
+    """One page's text + provenance, as the archive machine will apply it."""
+    pid = int(page_row["id"])
+    edits = [
+        {
+            "editor": r["editor"],
+            "text": r["text"],
+            "raw_sha": r["raw_sha"],
+            "filters": r["filters"],
+            "status": r["status"],
+            "reviewed_at": r["reviewed_at"],
+        }
+        for r in conn.execute(
+            "SELECT editor, text, raw_sha, filters, status, reviewed_at "
+            "FROM page_edits WHERE page_id = ? ORDER BY editor",
+            (pid,),
+        )
+    ]
+    return {
+        "page_no": int(page_row["page_no"]),
+        "source_name": page_row["source_name"],
+        "status": page_row["status"],
+        "raw_text": page_row["raw_text"],
+        "filters": page_row["filters"],
+        "reviewed_at": page_row["reviewed_at"],
+        "edits": edits,
+    }
+
+
+def build_result(
+    cfg: Config, handoff_dir_path: Path, out: Path, verbose: bool = True,
+    dry_run: bool = False,
+) -> dict:
+    """Build the return payload from the WORKER's DB rows.
+
+    Rows, not library files: the DB is where per-page provenance lives
+    (palaeographer/editor, the filter chain, `raw_sha`, `reviewed_at`), and the
+    archive machine regenerates its own library files on apply. No source bytes
+    and no renders travel back — the archive already has both.
+
+    `dry_run` reports what would travel (page/edit counts per document) and
+    writes nothing.
+    """
+    payload = read_manifest(handoff_dir_path)
+    handoff_id = str(payload.get("handoff_id") or "")
+    out = Path(out)
+
+    conn = db.connect(cfg.db_path)
+    try:
+        docs_out: list[dict] = []
+        missing: list[str] = []
+        for d in payload.get("documents") or []:
+            sha = str(d.get("sha256") or "")
+            doc = _worker_document(conn, sha) if sha else None
+            if doc is None:
+                missing.append(str(d.get("relpath") or sha[:12]))
+                continue
+            pages = [
+                _page_payload(conn, p)
+                for p in conn.execute(
+                    "SELECT * FROM pages WHERE document_id = ? ORDER BY page_no",
+                    (int(doc["id"]),),
+                )
+            ]
+            records = _records_payload(conn, int(doc["id"]))
+            docs_out.append({
+                "relpath": d.get("relpath"),
+                "sha256": sha,
+                "status": doc["status"],
+                "page_count": int(doc["page_count"] or 0),
+                "palaeographer": doc["palaeographer"],
+                "palaeographer_model": doc["palaeographer_model"],
+                "editor": doc["editor"],
+                "editor_model": doc["editor_model"],
+                "config_signature": d.get("config_signature"),
+                "pages": pages,
+                "records": records,
+            })
+        counts = {
+            "documents": len(docs_out),
+            "pages": sum(len(d["pages"]) for d in docs_out),
+            "pages_done": sum(
+                1 for d in docs_out for p in d["pages"] if p["status"] == "done"
+            ),
+            "edits": sum(len(p["edits"]) for d in docs_out for p in d["pages"]),
+            "reviewed": sum(
+                1 for d in docs_out for p in d["pages"] if p["reviewed_at"]
+            ),
+            "records": sum(len(d["records"]) for d in docs_out),
+        }
+        if dry_run:
+            return {"handoff_id": handoff_id, "dry_run": True, "counts": counts,
+                    "missing": missing}
+        if not docs_out:
+            raise HandoffError(
+                "none of the hand-off's documents are in this archive; run "
+                "`pha handoff in` here first"
+            )
+        result = {
+            "format": HANDOFF_FORMAT,
+            "version": HANDOFF_VERSION,
+            "kind": "result",
+            "handoff_id": handoff_id,
+            "worker": cfg.archive_dir.name,
+            "created_at": time.time(),
+            "documents": docs_out,
+            "counts": counts,
+        }
+        out.mkdir(parents=True, exist_ok=True)
+        (out / RESULT_NAME).write_text(
+            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        if verbose:
+            print(
+                f"  back: {counts['documents']} document(s), "
+                f"{counts['pages_done']}/{counts['pages']} pages done, "
+                f"{counts['edits']} edit(s), {counts['reviewed']} reviewed",
+                flush=True,
+            )
+            for m in missing:
+                print(f"  ! {m}: not in this archive; skipped", flush=True)
+        return {"handoff_id": handoff_id, "out": str(out), "counts": counts,
+                "missing": missing}
+    finally:
+        conn.close()
+
+
+def _records_payload(conn, doc_id: int) -> list[dict]:
+    """The worker's encoder records, with the timestamp that judges staleness."""
+    try:
+        rows = conn.execute(
+            "SELECT encoder, kind, data, source, created_at FROM records "
+            "WHERE document_id = ? ORDER BY id",
+            (doc_id,),
+        ).fetchall()
+    except Exception:  # noqa: BLE001 - records are optional
+        return []
+    out: list[dict] = []
+    for r in rows:
+        try:
+            data = json.loads(r["data"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        out.append({
+            "encoder": r["encoder"],
+            "kind": r["kind"],
+            "source": r["source"],
+            "created_at": r["created_at"],
+            "record": data,
+        })
+    return out
+
+
+def read_result(result_dir: Path) -> dict:
+    """Read and validate a return payload."""
+    p = Path(result_dir) / RESULT_NAME
+    if not p.exists():
+        raise HandoffError(f"not a hand-off result (no {RESULT_NAME}): {result_dir}")
+    try:
+        payload = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise HandoffError(f"unreadable {p}: {e}") from e
+    if payload.get("format") != HANDOFF_FORMAT or payload.get("kind") != "result":
+        raise HandoffError(f"not a pha hand-off result: {result_dir}")
+    if int(payload.get("version") or 0) > HANDOFF_VERSION:
+        raise HandoffError(
+            f"result version {payload.get('version')} is newer than this pha "
+            f"understands ({HANDOFF_VERSION}); upgrade this machine's pha"
+        )
+    return payload
+
+
+# ------------------------------------------------------ apply in place (fetch)
+
+# merge outcomes, reported per page
+KEPT_LOCAL = "kept-local"
+TOOK_WORKER = "took-worker"
+CONFLICT = "conflict"
+SKIPPED = "skipped"
+
+
+def _merge_page(conn, doc_id: int, wp: dict, counts: dict, verbose: bool) -> None:
+    """Apply one worker page onto the local document (R5/R6, and §3.5).
+
+    A locally `reviewed` page is never overwritten by machine work; a worker
+    page that is itself `reviewed` is carried back as a human correction. Two
+    different human readings are a CONFLICT — reported, never resolved.
+    """
+    pno = int(wp.get("page_no") or 0)
+    if not pno:
+        return
+    local = conn.execute(
+        "SELECT * FROM pages WHERE document_id = ? AND page_no = ?", (doc_id, pno)
+    ).fetchone()
+    if local is None:
+        # the archive never had this page (a document handed out before its
+        # first scan): create it, so the result is not silently dropped
+        local_id = db.add_page(conn, doc_id, pno, source_name=wp.get("source_name"))
+        local = conn.execute("SELECT * FROM pages WHERE id = ?", (local_id,)).fetchone()
+
+    w_text = (wp.get("raw_text") or "").strip()
+    w_reviewed = wp.get("reviewed_at")
+    l_reviewed = local["reviewed_at"]
+    l_text = (local["raw_text"] or "").strip()
+    lid = int(local["id"])
+
+    if l_reviewed and w_reviewed:
+        if l_text == w_text:
+            counts[KEPT_LOCAL] += 1
+            return
+        counts[CONFLICT] += 1
+        return  # default: keep local (decision 3)
+    if l_reviewed:
+        counts[KEPT_LOCAL] += 1
+        return
+    if not w_text:
+        counts[SKIPPED] += 1
+        return
+
+    db.set_page_result(conn, lid, raw_text=w_text, filters=wp.get("filters"))
+    if w_reviewed:
+        # a human corrected this on the worker: carry it back as reviewed,
+        # with THEIR timestamp
+        conn.execute(
+            "UPDATE pages SET reviewed_at = ? WHERE id = ?", (w_reviewed, lid)
+        )
+    counts[TOOK_WORKER] += 1
+
+    for we in wp.get("edits") or []:
+        editor = we.get("editor")
+        text = (we.get("text") or "").strip()
+        if not editor or not text:
+            continue
+        row = db.get_page_edit(conn, lid, editor)
+        if row is not None and row["reviewed_at"]:
+            counts[KEPT_LOCAL] += 1  # a human edit here: never overwrite
+            continue
+        # the edit must belong to the raw text we just applied, or it was made
+        # from a different reading and is meaningless here
+        if we.get("raw_sha") and we["raw_sha"] != _raw_sha(w_text):
+            counts[SKIPPED] += 1
+            continue
+        db.set_page_edit(conn, lid, editor, text=text,
+                         raw_sha=_raw_sha(w_text), filters=we.get("filters"))
+        if we.get("reviewed_at"):
+            conn.execute(
+                "UPDATE page_edits SET reviewed_at = ? WHERE page_id = ? AND editor = ?",
+                (we["reviewed_at"], lid, editor),
+            )
+        counts[TOOK_WORKER] += 1
+
+
+def _apply_records(conn, doc, result_doc: dict, counts: dict) -> None:
+    """Import the worker's encoder records for a document, newest run wins."""
+    incoming = result_doc.get("records") or []
+    if not incoming:
+        return
+    doc_id = int(doc["id"])
+    by_encoder: dict[str, list[dict]] = {}
+    for r in incoming:
+        by_encoder.setdefault(str(r.get("encoder") or ""), []).append(r)
+    for encoder, rows in by_encoder.items():
+        if not encoder:
+            continue
+        newest = max((float(r.get("created_at") or 0) for r in rows), default=0.0)
+        have = conn.execute(
+            "SELECT MAX(created_at) m FROM records WHERE document_id = ? AND encoder = ?",
+            (doc_id, encoder),
+        ).fetchone()
+        if have is not None and (have["m"] or 0) >= newest:
+            continue  # the local run is at least as new
+        db.clear_records(conn, doc_id, encoder)
+        for r in rows:
+            db.add_record(
+                conn, doc_id, encoder,
+                str(r.get("kind") or "record"),
+                json.dumps(r.get("record") or {}, ensure_ascii=False),
+                str(r.get("source") or ""),
+            )
+        counts["records"] += len(rows)
+
+
+def apply_result(
+    cfg: Config, result_dir: Path, verbose: bool = True, dry_run: bool = False,
+) -> dict:
+    """Apply a returned hand-off onto THIS archive, in place.
+
+    Joins by `sha256`, so the document keeps its id, slug, library version and
+    citations. Per page the merge follows the design's table (locally reviewed
+    wins; a worker's human correction is carried back as reviewed; two human
+    readings are a conflict). Then the library files are regenerated from the
+    DB, the affected documents are re-indexed, and the lease is cleared.
+
+    `dry_run` prints the plan and touches nothing.
+    """
+    result = read_result(result_dir)
+    handoff_id = str(result.get("handoff_id") or "")
+    lease = read_lease(cfg, handoff_id)
+    if lease is None:
+        raise HandoffError(
+            f"no lease for hand-off {handoff_id!r} in this archive — refusing to "
+            f"apply a result that does not belong here"
+        )
+    if lease.state != STATE_OUT:
+        raise HandoffError(
+            f"hand-off {handoff_id!r} is already {lease.state}; nothing to apply"
+        )
+
+    conn = db.connect(cfg.db_path)
+    try:
+        counts = {KEPT_LOCAL: 0, TOOK_WORKER: 0, CONFLICT: 0, SKIPPED: 0, "records": 0}
+        stale: list[str] = []
+        applied: list[dict] = []
+        conflicts: list[dict] = []
+        refused: list[str] = []
+
+        for rd in result.get("documents") or []:
+            rel = str(rd.get("relpath") or "")
+            sha = str(rd.get("sha256") or "")
+            local = db.get_document_by_path(conn, str(cfg.dropbox / rel)) if rel else None
+            if local is not None and sha and local["sha256"] != sha:
+                refused.append(rel or sha[:12])
+                continue  # the source was replaced while it was away
+            if local is None:
+                # a document the archive never had: create it from the result
+                src = cfg.dropbox / rel
+                if not src.exists():
+                    refused.append(rel or sha[:12])
+                    continue
+                doc_id = db.add_document(
+                    conn, filename=src.name, path=str(src), sha256=sha or _doc_sha(cfg, src),
+                    size_bytes=src.stat().st_size, mtime=src.stat().st_mtime,
+                    kind="dir" if src.is_dir() else ("pdf" if src.suffix.lower() == ".pdf" else "image"),
+                    now=time.time(),
+                    dir_path=str(Path(rel).parent) if str(Path(rel).parent) != "." else "",
+                    palaeographer=rd.get("palaeographer"), editor=rd.get("editor"),
+                )
+                local = db.get_document(conn, doc_id)
+            doc_id = int(local["id"])
+
+            if dry_run:
+                applied.append({"relpath": rel, "id": doc_id,
+                                "pages": len(rd.get("pages") or [])})
+                continue
+
+            for wp in rd.get("pages") or []:
+                _merge_page(conn, doc_id, wp, counts, verbose)
+            _apply_records(conn, local, rd, counts)
+
+            # R9: note it when the worker produced under a different config
+            if rd.get("config_signature") and lease is not None:
+                cur = _config_signature(cfg, cfg.dropbox / rel, local)
+                if cur and cur != rd["config_signature"]:
+                    stale.append(rel)
+
+            expected = int(rd.get("page_count") or 0)
+            have = conn.execute(
+                "SELECT COUNT(*) n FROM pages WHERE document_id = ? AND status = 'done'",
+                (doc_id,),
+            ).fetchone()["n"]
+            db.set_document_status(
+                conn, doc_id, "done" if (expected and have >= expected) else "processing"
+            )
+            conn.commit()
+            write_document_pages(cfg, conn, doc_id)
+            for row in _all_editors(conn, doc_id):
+                write_edited_pages(cfg, conn, doc_id, row["editor"], model=None)
+            index_document(cfg, conn, doc_id, verbose=False)
+            applied.append({"relpath": rel, "id": doc_id, "pages_done": have,
+                            "page_count": expected})
+
+        if dry_run:
+            return {"handoff_id": handoff_id, "dry_run": True, "documents": applied}
+
+        release(cfg, handoff_id, STATE_APPLIED)
+        return {
+            "handoff_id": handoff_id,
+            "documents": applied,
+            "counts": counts,
+            "conflicts": conflicts,
+            "refused": refused,
+            "stale": stale,
+        }
+    finally:
+        conn.close()
+
+
+def _all_editors(conn, doc_id: int):
+    return conn.execute(
+        "SELECT DISTINCT editor FROM page_edits WHERE page_id IN "
+        "(SELECT id FROM pages WHERE document_id = ?)", (doc_id,)
+    ).fetchall()
+
+
+def _conflict_notes(result: dict) -> list[str]:
+    """Human-readable list of the conflicts a result would raise."""
+    out: list[str] = []
+    for rd in result.get("documents") or []:
+        for p in rd.get("pages") or []:
+            if p.get("reviewed_at"):
+                out.append(f"{rd.get('relpath')} p.{p.get('page_no')}")
+    return out
