@@ -59,7 +59,8 @@ def cmd_scan(cfg: Config, args) -> None:
                   path=getattr(args, "path", None))
             return
         res = scan_once(cfg, client, pal, explicit_prompt=args.prompt, reprocess=args.reprocess,
-                        path=getattr(args, "path", None))
+                        path=getattr(args, "path", None),
+                        include_leased=getattr(args, "include_leased", False))
     finally:
         client.close()
     summary = {"ingested": 0, "skipped": 0, "error": 0}
@@ -1131,6 +1132,19 @@ def cmd_status(cfg: Config, args) -> None:
                 print(_fit(prefix + listing + ")", width))
             print("  →  run `pha inbox --move` to put them in the dropbox, then `pha scan`")
 
+        # Documents lent to another machine (: the model-server lock cannot span
+        # two boxes, so a lease is how this archive knows to keep its hands off.
+        try:
+            from . import handoff as _ho
+            out_lines = _ho.status_lines(cfg)
+        except Exception:  # noqa: BLE001 - never let status fail over this
+            out_lines = []
+        if out_lines:
+            print()
+            print("out on hand-over")
+            for line in out_lines:
+                print(f"  {line}")
+
         if pending:
             print()
             for line in _pending_summary_lines(pending, lambda d_id: db.get_document(conn, d_id)):
@@ -1555,6 +1569,130 @@ def cmd_review(cfg: Config, args) -> None:
     print(f"reviewed: {res['pages']} transcription page(s), {res['edits']} edit(s) "
           f"from {res['scanned']} candidate file(s){scope} "
           f"(skipped {res['skipped']} unparsed{extra})")
+
+
+def cmd_handoff(cfg: Config, args) -> None:
+    """`pha handoff ...` — lend a document to a second machine and take the
+    results back. See the hand-off section in README.md."""
+    from . import handoff as _ho
+
+    sub = getattr(args, "handoff_cmd", None)
+
+    def _fail(e):
+        print(f"! {e}", file=sys.stderr)
+        sys.exit(2)
+
+    if sub == "status":
+        lines = _ho.status_lines(cfg)
+        if getattr(args, "json", False):
+            print(json.dumps({
+                "handoffs": [
+                    {"handoff_id": l.handoff_id, "worker": l.worker, "state": l.state,
+                     "created_at": l.created_at, "documents": l.documents}
+                    for l in _ho.active_leases(cfg)
+                ]
+            }, indent=2, ensure_ascii=False))
+            return
+        if not lines:
+            print("no documents are out on hand-over")
+            return
+        print("out on hand-over")
+        for line in lines:
+            print(f"  {line}")
+        return
+
+    if sub == "cancel":
+        try:
+            lease = _ho.release(cfg, args.handoff_id, _ho.STATE_CANCELLED)
+        except _ho.HandoffError as e:
+            _fail(e)
+        print(f"released {lease.handoff_id} ({len(lease.documents)} document(s)); "
+              f"they are usable on this machine again")
+
+    elif sub == "out":
+        out = Path(args.out) if args.out else Path.cwd() / f"{Path(args.targets[0]).name}.pha-handoff"
+        try:
+            res = _ho.export_handoff(cfg, args.targets, out, worker=args.worker,
+                                     force=args.force, verbose=True)
+        except (_ho.HandoffError, FileExistsError) as e:
+            _fail(e)
+        print(f"handed out {len(res['documents'])} document(s) as {res['handoff_id']}")
+        if res["stubs_dropped"]:
+            print(f"  {res['stubs_dropped']} not-yet-extracted page(s) left behind "
+                  f"(the worker resumes them)")
+        print(f"  payload: {res['out']}")
+        print(f"  these are now leased: the pipeline skips them until `pha handoff fetch`")
+
+    elif sub in ("in", "back", "fetch"):
+        target = Path(args.directory)
+        dry = getattr(args, "dry_run", False)
+        try:
+            if sub == "in":
+                res = _ho.import_handoff(cfg, target, verbose=True, dry_run=dry)
+                if dry:
+                    print(json.dumps(res, indent=2, ensure_ascii=False))
+                    return
+                print(f"imported hand-off {res['handoff_id']}")
+                for d in res["documents"]:
+                    print(f"  #{d['id']} {d['relpath']}: {d['pages_done']}/"
+                          f"{d['page_count']} pages done ({d['status']})")
+                print("  next: pha scan --path <the document>   # finishes the pending pages")
+            elif sub == "back":
+                out = Path(args.out) if args.out else target.parent / f"{target.name}-back"
+                res = _ho.build_result(cfg, target, out, verbose=True, dry_run=dry)
+                if dry:
+                    print(json.dumps(res, indent=2, ensure_ascii=False))
+                    return
+                print(f"  result directory: {res['out']}")
+            else:
+                res = _ho.apply_result(cfg, target, verbose=True, dry_run=dry)
+                if dry:
+                    print(json.dumps(res, indent=2, ensure_ascii=False))
+                    return
+                c = res["counts"]
+                print(
+                    f"applied {len(res['documents'])} document(s): "
+                    f"{c['took-worker']} page(s)/edit(s) from the worker, "
+                    f"{c['kept-local']} skipped (you had corrected them), "
+                    f"{c['conflict']} conflict(s), {c['skipped']} dropped"
+                )
+                if res["conflicts"]:
+                    print("  conflicts (both sides corrected differently; local kept):",
+                          file=sys.stderr)
+                    for c2 in res["conflicts"]:
+                        print(f"    {c2}", file=sys.stderr)
+                if res["stale"]:
+                    print(f"  ! {len(res['stale'])} document(s) were processed under a "
+                          f"different config; their pages are stale under the current "
+                          f"one: {', '.join(res['stale'])}", file=sys.stderr)
+                if res["refused"]:
+                    print(f"  ! refused: {', '.join(res['refused'])}", file=sys.stderr)
+        except _ho.HandoffError as e:
+            _fail(e)
+
+    elif sub == "work":
+        target = Path(args.directory)
+        try:
+            manifest = _ho.read_manifest(target)
+        except _ho.HandoffError as e:
+            _fail(e)
+        paths = [str(d.get("relpath")) for d in manifest.get("documents") or []]
+        if not paths:
+            print("nothing to work", file=sys.stderr)
+            sys.exit(2)
+        if getattr(args, "dry_run", False):
+            print("would run, for each document:")
+            for p in paths:
+                print(f"  pha scan --path {p} && pha edit --path {p} && pha encode --path {p}")
+            return
+        print("running the explicit stage commands (each reports its own outcome):")
+        for p in paths:
+            for stage in ("scan", "edit", "encode"):
+                print(f"=== pha {stage} --path {p}")
+                rc = subprocess.call([sys.executable, "-m", "personal_historical_archive",
+                                      stage, "--path", p])
+                if rc != 0:
+                    print(f"! pha {stage} failed for {p} (exit {rc})", file=sys.stderr)
 
 
 def cmd_bundle(cfg: Config, args) -> None:
@@ -2618,6 +2756,8 @@ def main(argv: list[str] | None = None) -> None:
                    help="only process this subpath under the dropbox (e.g. "
                         "collections/pfister-notices) instead of the whole dropbox")
     s.add_argument("--reprocess", action="store_true", help="re-extract everything")
+    s.add_argument("--include-leased", action="store_true",
+                        help="also process documents currently out on a hand-over")
     s.set_defaults(fn=cmd_scan)
 
     q = sub.add_parser("search", help="search the extracted text")
@@ -2770,6 +2910,8 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--path", "--collection", default=None,
                    help="only reindex the document or collection at this dropbox subpath "
                         "(e.g. collections/COLX or collections/COLX/doc.pdf); default: every document")
+    r.add_argument("--include-leased", action="store_true",
+                        help="also process documents currently out on a hand-over")
     r.set_defaults(fn=cmd_reindex)
 
     e = sub.add_parser("export", help="regenerate per-page transcription files from the DB")
@@ -2841,6 +2983,8 @@ def main(argv: list[str] | None = None) -> None:
                     help="only edit this page number of each matched document "
                          "(combine with --path to target one page of one document)")
     e2.add_argument("--reprocess", action="store_true", help="re-edit everything matched")
+    e2.add_argument("--include-leased", action="store_true",
+                        help="also process documents currently out on a hand-over")
     e2.set_defaults(fn=cmd_edit)
 
     en = sub.add_parser("encoder", help="show encoder resolution for a file, or create one")
@@ -2851,6 +2995,8 @@ def main(argv: list[str] | None = None) -> None:
 
     ec = sub.add_parser("encode", help="run the encoder pass (structured records) over documents with an encoder")
     ec.add_argument("--reprocess", action="store_true", help="re-encode everything")
+    ec.add_argument("--include-leased", action="store_true",
+                        help="also process documents currently out on a hand-over")
     ec.set_defaults(fn=cmd_encode)
 
     tt = sub.add_parser("test", help="test a configuration on a sample of pages (transcription + editing + encoding)")
@@ -2920,6 +3066,42 @@ def main(argv: list[str] | None = None) -> None:
                      help="MOVE, not copy: delete the bundled documents from THIS archive "
                           "after the bundle is written (the bundle is the backup)")
     bnd.set_defaults(fn=cmd_bundle)
+
+    ho = sub.add_parser(
+        "handoff",
+        help="lend a document to a second machine and take the results back")
+    hsub = ho.add_subparsers(dest="handoff_cmd")
+
+    ho_out = hsub.add_parser("out", help="lease documents and write a hand-out payload")
+    ho_out.add_argument("targets", nargs="+", help="collection or document path(s) under the dropbox")
+    ho_out.add_argument("--out", "-o", default=None, help="payload directory (default: <target>.pha-handoff)")
+    ho_out.add_argument("--worker", default="", help="name of the machine taking the work (for `status`)")
+    ho_out.add_argument("--force", action="store_true", help="supersede an existing hand-out of the same document")
+
+    ho_in = hsub.add_parser("in", help="import a hand-out here (the worker machine) and leave it resumable")
+    ho_in.add_argument("directory", help="the hand-out payload directory")
+    ho_in.add_argument("--dry-run", action="store_true", help="print the plan; touch nothing")
+
+    ho_work = hsub.add_parser("work", help="scan -> edit -> encode the handed-out documents")
+    ho_work.add_argument("directory", help="the hand-out payload directory")
+    ho_work.add_argument("--dry-run", action="store_true", help="print the commands; run nothing")
+
+    ho_back = hsub.add_parser("back", help="build the return payload from this archive's rows")
+    ho_back.add_argument("directory", help="the hand-out payload directory")
+    ho_back.add_argument("--out", "-o", default=None, help="result directory (default: <directory>-back)")
+    ho_back.add_argument("--dry-run", action="store_true", help="report what would travel")
+
+    ho_fetch = hsub.add_parser("fetch", help="apply a returned payload in place")
+    ho_fetch.add_argument("directory", help="the result directory written by `handoff back`")
+    ho_fetch.add_argument("--dry-run", action="store_true", help="print the plan; touch nothing")
+
+    ho_status = hsub.add_parser("status", help="what is out on hand-over")
+    ho_status.add_argument("--json", action="store_true", help="machine-readable output")
+
+    ho_cancel = hsub.add_parser("cancel", help="release a lease without applying a result")
+    ho_cancel.add_argument("handoff_id", help="the hand-off id from `pha handoff status`")
+
+    ho.set_defaults(fn=cmd_handoff)
 
     ub = sub.add_parser("unbundle", help="import a pha bundle into this archive (no re-scan/re-edit)")
     ub.add_argument("bundle", help="path to the bundle directory created by `pha bundle`")

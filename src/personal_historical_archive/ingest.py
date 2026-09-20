@@ -1861,6 +1861,11 @@ def edit_document(
     doc = db.get_document(conn, doc_id)
     if not doc:
         return {"action": "skipped", "filename": "?", "reason": "no document"}
+    lease = _leases(cfg).get(doc["sha256"])
+    if lease is not None:
+        return {"action": "skipped", "filename": doc["filename"],
+                "reason": f"out on hand-over {lease.handoff_id} "
+                          f"(age {_lease_age(lease)})"}
     editor_model = None
     editor_stage = None  # the sidecar stage carrying this editor's filter chains
     if editor_id:
@@ -2406,6 +2411,11 @@ def encode_document(
     doc = db.get_document(conn, doc_id)
     if not doc:
         return {"action": "skipped", "filename": "?", "reason": "no document"}
+    lease = _leases(cfg).get(doc["sha256"])
+    if lease is not None:
+        return {"action": "skipped", "filename": doc["filename"],
+                "reason": f"out on hand-over {lease.handoff_id} "
+                          f"(age {_lease_age(lease)})"}
     doc_path = Path(doc["path"])
 
     if enc_file is not None:
@@ -2695,6 +2705,38 @@ def encode_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> di
         conn.close()
 
 
+def _leases(cfg: Config):
+    """The hand-over lease map, or {} when the feature is not in use.
+
+    Imported lazily: `handoff` imports this module, so a module-level import
+    would be circular. The lease is keyed by sha256, the only identity that
+    means the same on two machines.
+    """
+    try:
+        from . import handoff
+        return handoff.leased_shas(cfg)
+    except Exception:  # noqa: BLE001 - never let the lease machinery break a run
+        return {}
+
+
+def _leased_document(cfg: Config, conn, path: Path, include_leased: bool = False):
+    """The lease holding this path's document, unless overridden."""
+    if include_leased:
+        return None
+    doc = db.get_document_by_path(conn, str(path))
+    if doc is None:
+        return None
+    return _leases(cfg).get(doc["sha256"])
+
+
+def _lease_age(lease) -> str:
+    try:
+        from .handoff import _fmt_age
+        return _fmt_age(lease.age_s())
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
 def scan_once(
     cfg: Config,
     client: ModelClient,
@@ -2703,6 +2745,7 @@ def scan_once(
     reprocess: bool = False,
     verbose: bool = True,
     path: str | None = None,
+    include_leased: bool = False,
 ) -> dict:
     cfg.ensure_dirs()
     # resolve the --path/--collection target to a discovery root under dropbox
@@ -2770,6 +2813,15 @@ def scan_once(
                 clients[key] = (_vision_client(pal), pal)
                 if verbose:
                     print(f"  palaeographer: {pal.id} ({pal.description or pal.model})", flush=True)
+            leased = _leased_document(cfg, conn, f, include_leased)
+            if leased is not None:
+                results.append({
+                    "action": "skipped", "filename": f.name,
+                    "reason": f"out on hand-over {leased.handoff_id} "
+                              f"(age {_lease_age(leased)}); "
+                              f"use --include-leased to override",
+                })
+                continue
             results.append(
                 ingest_file(cfg, conn, clients[key][0], f, clients[key][1],
                             explicit_prompt, reprocess, verbose, sidecar=sc)
@@ -2828,8 +2880,15 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
             docs = db.list_documents(conn, limit=10000)
         counts = {}
         failed: list[dict] = []
+        leases = _leases(cfg)
         for d in docs:
             if d["status"] != "done":
+                continue
+            if d["sha256"] in leases:
+                lease = leases[d["sha256"]]
+                if verbose:
+                    print(f"  - {d['filename']}: out on hand-over {lease.handoff_id}; "
+                          f"skipped", flush=True)
                 continue
             try:
                 counts[d["id"]] = index_document(cfg, conn, d["id"], embed_client=client,
