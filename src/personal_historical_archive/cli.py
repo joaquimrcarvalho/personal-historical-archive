@@ -1865,7 +1865,10 @@ def cmd_key(cfg: Config, args) -> None:
             print(f"OS secret store unavailable; stored {name} in {envp} (gitignored)")
         return
     names = set()
-    for d in (cfg.palaeographers_dir, cfg.editors_dir):
+    # models/ matters as much as the content dirs: a model file is where the
+    # api_key actually lives (palaeographer/editor files are content-only and
+    # carry no key), so scanning only those two missed every wired-up key.
+    for d in (cfg.models_dir, cfg.palaeographers_dir, cfg.editors_dir):
         for f in d.glob("*.md"):
             for line in f.read_text(encoding="utf-8").splitlines():
                 if line.strip().startswith("api_key:"):
@@ -1873,7 +1876,7 @@ def cmd_key(cfg: Config, args) -> None:
                     if m:
                         names.add(m.group(1))
     if not names:
-        print("no ${...} api_key references found in palaeographers/editors")
+        print("no ${...} api_key references found in models/, palaeographers/, editors/")
         return
     for name in sorted(names):
         src = "environment" if os.environ.get(name) else ("OS secret store" if _secret_get(name) else "unset")

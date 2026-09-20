@@ -60,10 +60,17 @@
   `_sample.tesseract.md`, `_sample.liteparse.md`, `_sample.liteparse.fra.md`,
   `_sample.liteparse.spa.md`, `_sample.liteparse.embedded.md`; local LM Studio
   models
-  `_sample.local-qwen3-vl.md`, `_sample.local-gemma4.md`; printed-book rules
+  `_sample.local-qwen3-vl.md`, `_sample.local-gemma4.md`; the **remote**
+  provider `_sample.deepseek.md` (shows the `${PHA_ARCHIVIST}` api_key wiring,
+  vision variant commented — a text and a vision id differ only in
+  `model`/`api_style`/`max_vision_px`); printed-book rules
   `_sample.printed-books.md`, `_sample.printed-critical-edition.md`; and
   `_sample.generic.md` (general-purpose editor). `config.builtin_samples()` is
   the single source of truth; a test asserts the committed files match it.
+  Samples are seeded into the PROJECT by `ensure_dirs` and into a NEW archive
+  by `pha init-archive`; an already-created archive does **not** receive a
+  newly added sample on a later run, so copy one in by hand if it is wanted
+  there.
 - **Stage filters live in the ARCHIVE** (`<archive>/filters/<id>/`), not the
   project: `filter.py` (`run(value, ctx)`) plus an optional `filter.md`
   manifest, referenced from a stage's `pre:`/`post:` in `pha.yaml`
