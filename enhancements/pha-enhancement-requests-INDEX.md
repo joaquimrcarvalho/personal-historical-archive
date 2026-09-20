@@ -7,9 +7,10 @@ flagged where they have.
 
 **Current: pha 0.28.0.** Shipped: stable page addresses, page navigation, stage
 filters, endpoint-scoped locking, per-document bibliographic references, scan
-resilience, and four of the bug reports. Open: **three live defects** (two of
-them measured in production), four feature requests, and three proposals
-awaiting a decision.
+resilience, and four of the bug reports. **Built but not yet merged:
+two-machine hand-over** (`feature/handoff`, 5 commits — see #7). Open: **three
+live defects** (two of them measured in production), three feature requests, and
+three proposals awaiting a decision.
 
 ## At a glance
 
@@ -21,7 +22,7 @@ awaiting a decision.
 | 4 | [`pha-post-filter-replay-enhancement-request.md`](pha-post-filter-replay-enhancement-request.md) | Draft — **unblocked once #1 lands**; procedure already proven by hand |
 | 5 | [`pha-single-page-rescan-enhancement-request.md`](pha-single-page-rescan-enhancement-request.md) | Draft — smallest outstanding feature |
 | 6 | [`pha-notes-search-enhancement-request.md`](pha-notes-search-enhancement-request.md) | Draft — independent, no-op when the notes index is empty |
-| 7 | [`pha-handoff-enhancement-request.md`](pha-handoff-enhancement-request.md) | Draft — largest; carries an independent `unbundle` stub bug |
+| 7 | [`pha-handoff-enhancement-request.md`](pha-handoff-enhancement-request.md) | **IMPLEMENTED on `feature/handoff`** (5 commits, unmerged); its `unbundle` stub bug is fixed |
 | 8 | [`SEARCH_WEB_SPEC.md`](../SEARCH_WEB_SPEC.md) | Draft **for decision** |
 | 9 | [`VLM_BENCHMARK_PLAN.md`](../VLM_BENCHMARK_PLAN.md) + [`VLM_BENCHMARK_INFRA_PLAN.md`](../VLM_BENCHMARK_INFRA_PLAN.md) | Proposal, not implemented (separate repo) |
 | 10 | `extends`, encoder prescan | Draft — **re-measure before building**; filters shrank both |
@@ -37,7 +38,7 @@ awaiting a decision.
 | `pha-post-filter-replay-enhancement-request.md` | **Replay `post` filters without the model** — a `post` filter is deterministic, but changing one re-runs the model for every page, because only the *filtered* text is stored and the model's raw output is discarded. Proposes `pha edit --replay-filters [--dry-run]`. Motivated by `franco-imagens` (~3 597 model calls to recompute what is derivable from the DB); **proven by hand** on 2026-09-18 — 3 575 pages, 2 843 texts changed, **0 model calls**, end-of-line hyphens 59 872 → 2 058. | Draft, not implemented — **effectively blocked by the signature defect (#1)** |
 | `pha-single-page-rescan-enhancement-request.md` | **`pha scan` — one page, chosen palaeographer/model** — the reading model is chosen per *document*, so fixing one bad page costs a whole volume; and `--palaeographer` is dropped by `scan_once()`, contradicting `README.md`. Proposes page-scoped render/transcribe/re-edit/re-index, per-page provenance, and a **pin** so a later bulk pass cannot discard a deliberate reading. | Draft, not implemented |
 | `pha-notes-search-enhancement-request.md` | **Search the notes folder** — make `pha search` cover `notes/` via a separate `notes` + `notes_fts` + embeddings index (NOT `documents` rows, so status/export/bundles/review stay clean), `--source archive\|notes\|all`, and a `kind` discriminator so the PHA view opens a note hit. Rejects indexing the whole Obsidian vault. | Draft, not implemented |
-| `pha-handoff-enhancement-request.md` | **Two-machine hand-over (`pha handoff`)** — lend a document to an always-on LAN machine while the archive machine sleeps, then apply the results into the *same* document. Bundles cannot: they mint new ids, pin-and-skip the imported docs, and import a `*waiting*` stub as **content** (verified: a partly-processed document arrives fully `done`). Proposes a content-keyed round trip (sha256 + `source_name`), a document-scoped lease, and an honest stale-under-current-config report. | Draft, not implemented. Carries an independent `unbundle` stub bug worth fixing regardless |
+| `pha-handoff-enhancement-request.md` | **Two-machine hand-over (`pha handoff`)** — lend a document to an always-on LAN machine while the archive machine sleeps, then apply the results into the *same* document. Bundles cannot: they mint new ids, pin-and-skip the imported docs, and import a `*waiting*` stub as **content** (verified: a partly-processed document arrives fully `done`). Proposes a content-keyed round trip (sha256 + `source_name`), a document-scoped lease, and an honest stale-under-current-config report. | **IMPLEMENTED on `feature/handoff`** (unmerged). Content identity is `sha256` + dropbox-relative path; the lease lives in `<archive>/.pha/handoffs/` and `scan`/`edit`/`encode`/`reindex` skip a leased document (`--include-leased` overrides); the return leg merges into the same document, keeps the local reading on conflict and names the page, and reports a config mismatch as `stale`. The independent `unbundle` stub bug is **fixed** (`bundle.py` no longer imports a waiting stub as text) with a regression test that fails on the old code. Deviations from the doc: `scan`/`edit`/`encode` stay the primary verbs (`work` is a thin wrapper), and no per-page provenance columns were needed |
 | `pha-stage-extends-enhancement-request.md` | **Prompt composition (`extends`)** — a rules file as "base rules + delta", composed at load time. | Draft. **Re-measure first:** with filters carrying the *mechanical* differences, the remaining case for a shared prompt body is thinner than when this was written (~½–1 day if it still holds) |
 | `pha-encoder-tools-enhancement-request.md` | **Encoder tools** — bundled tools that materialise artifacts from records. The artifact half is now the `markdown-from-records` filter. The **structure prescan** (§3.4: per-document layout register deriving page filters/prompt blocks per volume) is not planned and needs a design decision, not just code. | Superseded (artifact half shipped); prescan open |
 | `pha-model-response-resilience-enhancement-request.md` | **Scan resilience / `done` honesty** — a malformed HTTP-200 response raised a raw `TypeError` that escaped the per-page guard and killed the whole scan; `done` was written *before* editing and indexing, so a document could be `done` with 0 chunks while a status-only check reported success. | **The code is shipped** (`_openai_chat` catches `TypeError`; `done` written last; `pha edit` indexes; `status` surfaces done-with-no-chunks). **This doc's header still says "not implemented" — it needs updating** |
@@ -93,9 +94,11 @@ awaiting a decision.
   `README.md` already promises.
 - **Hand-over** shares its subject with `bundle`/`unbundle` but not its
   semantics: bundles *copy* to another archive (new ids), a hand-over *updates*
-  the same document. It is best landed after single-page re-scan, whose
-  per-page provenance columns make a mixed-model hand-over exact rather than
-  document-level.
+  the same document. It was expected to need single-page re-scan's per-page
+  provenance columns; it did not — keying the merge on `sha256` + `reviewed_at`
+  + `raw_sha` was enough, so the two are independent. Single-page re-scan is
+  still worth doing for its own sake (and for the `--palaeographer` fix
+  `README.md` promises).
 
 ### The signature-defect trap worth knowing
 
