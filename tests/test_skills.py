@@ -30,6 +30,38 @@ EXPECTED = {
         "pha_scan_now",
         "dropbox-relative",
     ],
+    "pha-zotero-bibliography": [
+        # the trigger the description has to carry
+        "exported from Zotero",
+        # the three sidecar formats, and the one that wins
+        ".dc.json",
+        ".mods.xml",
+        ".bib",
+        "JSON wins",
+        # route A: the Zotero local API
+        "http://localhost:23119/api/users/0/items/<KEY>?format=mods",
+        "<note>",
+        "Zotero-Server-ID",
+        # the trap: ?itemID= is silently ignored, not a filter
+        "NOT a query filter",
+        # route B: the RDF export package
+        "bib:Memo",
+        "z:Attachment",
+        # writing and verifying the sidecar
+        "pha bib <doc> --to-json --write",
+        "to_dc_json_text",
+        "pha bib --check",
+        "pha cite <doc> <page>",
+        # the anti-hallucination rules
+        "fetched-from-zotero-unverified",
+        "agent-drafted-unverified",
+        "human-confirmed",
+        "Never invent",
+        "Fix the source in Zotero",
+        # presence-only, and metadata never re-transcribes
+        "no inheritance",
+        "never re-transcribes a document",
+    ],
 }
 
 

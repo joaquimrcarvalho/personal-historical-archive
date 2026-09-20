@@ -25,7 +25,7 @@ reach for it), followed by the instructions:
 ## How an agent should use these
 
 **Using the archive:** before the matching task, read
-`skills/<name>/SKILL.md` and follow it. The two seeded here cover the most
+`skills/<name>/SKILL.md` and follow it. The three seeded here cover the most
 common mistakes:
 
 - `pha-search-context` — a search hit is a *snippet*; recover the full page
@@ -33,6 +33,11 @@ common mistakes:
 - `pha-document-operations` — re-scan / re-edit / re-encode one
   **already-ingested** document or collection (`pha scan --path … --reprocess`,
   `pha edit --path … --page N`, `pha test`).
+- `pha-zotero-bibliography` — import a PDF from Zotero with its bibliographic
+  sidecar, or build/refresh one document's reference from the owner's Zotero
+  library (the local API's MODS, an RDF export, `pha bib <doc> --to-json
+  --write`, and the provenance rules that keep an unverified reference from
+  being cited as fact).
 
 **Installing them into an agent runtime:** some runtimes (DeepSeek Harness and
 other tools that read the shared agent-skills convention) discover skills from

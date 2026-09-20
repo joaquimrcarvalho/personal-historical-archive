@@ -169,6 +169,10 @@ one before the task, no pha source checkout needed:
 - `skills/pha-document-operations/SKILL.md` — re-scan / re-edit / re-encode one
   **already-ingested** document or collection (`pha scan --path … --reprocess`,
   `pha edit --path … --page N`, `pha test`).
+- `skills/pha-zotero-bibliography/SKILL.md` — import a PDF from Zotero with its
+  bibliographic sidecar, or build/refresh one document's reference from the
+  owner's Zotero library (local-API MODS, an RDF export,
+  `pha bib <doc> --to-json --write`).
 
 Each skill is `<name>/SKILL.md` with YAML front matter whose `name` matches the
 folder; `skills/README.md` documents the format and how to install a skill into
@@ -298,6 +302,12 @@ it:
   **already-ingested** document or collection (rescan / re-edit / re-encode):
   `pha scan --path collections/COLX [--reprocess]`,
   `pha edit --path collections/COLX --page N`, `pha test collections/COLX --pages 3`.
+- `skills/pha-zotero-bibliography/SKILL.md` — import a PDF from Zotero and give
+  it a bibliographic sidecar, or build/refresh one document's reference from
+  Zotero: the local API's MODS
+  (`curl "http://localhost:23119/api/users/0/items/<KEY>?format=mods"`), a
+  Zotero RDF export package, `pha bib <doc> --to-json --write`, and the
+  provenance rules that keep an unverified reference from being cited as fact.
 
 Each skill is `skills/<name>/SKILL.md` with YAML front matter whose `name`
 matches its folder name. `skills/README.md` documents the format, and how to
