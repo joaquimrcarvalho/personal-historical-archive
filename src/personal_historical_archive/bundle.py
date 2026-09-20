@@ -57,6 +57,7 @@ from .extract import (
     resolve_palaeographer_id,
 )
 from .ingest import (
+    _WAITING_STUB,
     _doc_slug,
     _is_document_dir,
     _parse_library_file,
@@ -81,6 +82,22 @@ BUNDLE_VERSION = 1
 
 
 # --------------------------------------------------------------------------- helpers
+
+def _is_waiting_stub(fm: dict, body: str) -> bool:
+    """Is this library file the ABSENCE of a page rather than its content?
+
+    `write_document_pages()` writes a placeholder for every page that has not
+    been extracted yet: front matter `status: waiting` and body `*waiting*`.
+    Such a file may legitimately travel in a bundle (it is how a partially done
+    document resumes), but its body is NOT text and must never be imported as
+    one — doing so marked the page `done` with `*waiting*` as its transcription,
+    which then made `pha scan` skip the document as unchanged, silently
+    converting pending work into apparent content.
+    """
+    if (body or "").strip() == _WAITING_STUB:
+        return True
+    return str((fm or {}).get("status") or "").strip().lower() == "waiting"
+
 
 def _copy2(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -668,6 +685,12 @@ def _import_document(cfg, conn, bundle_dir: Path, md: dict, embed_client, verbos
             if not source_name and f.stem != f"page-{int(pno):03d}":
                 source_name = f.stem
             page_id = db.add_page(conn, doc_id, int(pno), source_name=source_name)
+            if _is_waiting_stub(fm, body):
+                # Keep the row (so the page number and source stem survive) but
+                # leave it un-extracted: `add_page` defaults to 'pending' and
+                # the document stays short of its page count, so a later
+                # `pha scan` resumes it instead of skipping the document.
+                continue
             db.set_page_result(conn, page_id, raw_text=body)
             if fm.get("reviewed"):
                 conn.execute("UPDATE pages SET reviewed_at = ? WHERE id = ?", (now, page_id))
@@ -705,6 +728,8 @@ def _import_document(cfg, conn, bundle_dir: Path, md: dict, embed_client, verbos
                 ).fetchone()
                 if not page:
                     continue
+                if _is_waiting_stub(fm, body):
+                    continue  # a placeholder edit carries no text either
                 db.set_page_edit(conn, page["id"], editor, text=body,
                                  raw_sha=_raw_sha(page["raw_text"] or ""))
                 if fm.get("reviewed"):

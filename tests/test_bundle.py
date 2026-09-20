@@ -449,3 +449,70 @@ def test_bundle_move_removes_the_bibliographic_sidecar(tmp_path, monkeypatch):
     sidecar.write_text(SIDECAR, encoding="utf-8")
     export_bundle(cfg_a, ["COLX"], out=tmp_path / "bundle", move=True, verbose=False)
     assert not sidecar.exists()
+
+
+def test_unbundle_does_not_import_waiting_stubs_as_text(tmp_path, monkeypatch):
+    """A `*waiting*` placeholder is the ABSENCE of a page, not its content.
+
+    Regression (pha 0.28.0): the importer fed every library page body straight
+    into `set_page_result`, so a partially-processed document arrived fully
+    `done` with `*waiting*` as page text — and the receiving machine's
+    `pha scan` then skipped it as unchanged, silently converting pending work
+    into apparent content. Any handover of a partly-done document hit this.
+    """
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    monkeypatch.setattr("personal_historical_archive.bundle.ModelClient", _NoEmbed)
+    # bundle/import resolve relative dropbox paths against the cwd
+    monkeypatch.chdir(tmp_path)
+
+    cfg_a = _make_cfg(tmp_path, "projA")
+    cfg_a.ensure_dirs()
+    col = cfg_a.dropbox / "collections" / "COLX"
+    col.mkdir(parents=True)
+    src = col / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 partially processed")
+
+    sha = sha256_of(src)
+    conn = _db.connect(cfg_a.db_path)
+    doc_id = _db.add_document(
+        conn, filename="doc.pdf", path=str(src), sha256=sha,
+        size_bytes=src.stat().st_size, mtime=src.stat().st_mtime, kind="pdf",
+        now=time.time(), dir_path="collections/COLX", palaeographer="p1",
+    )
+    _db.set_document_status(conn, doc_id, "processing")
+    # page 1 extracted for real; page 2 never reached (so it gets a stub file)
+    pid = _db.add_page(conn, doc_id, 1)
+    _db.set_page_result(conn, pid, raw_text="PAGE ONE real transcription")
+    # a scan creates a row for EVERY rendered page up front, so an
+    # un-transcribed page exists as a row (and exports as a stub file)
+    _db.add_page(conn, doc_id, 2)
+    _db.update_document(conn, doc_id, page_count=2)
+    conn.commit()
+    write_document_pages(cfg_a, conn, doc_id)   # writes page-002.md as a stub
+    conn.close()
+
+    stub_file = next((cfg_a.library).rglob("page-002.md"))
+    assert "*waiting*" in stub_file.read_text(encoding="utf-8"), "fixture must write a stub"
+
+    bundle_dir = tmp_path / "bundle"
+    export_bundle(cfg_a, ["COLX"], out=bundle_dir, verbose=False)
+
+    # --- import into a fresh archive B
+    cfg_b = _make_cfg(tmp_path, "projB")
+    cfg_b.ensure_dirs()
+    import_bundle(cfg_b, bundle_dir, verbose=False)
+
+    conn_b = _db.connect(cfg_b.db_path)
+    doc = conn_b.execute("SELECT id, status, page_count FROM documents").fetchone()
+    pages = {r["page_no"]: r for r in conn_b.execute(
+        "SELECT page_no, raw_text, status FROM pages ORDER BY page_no")}
+    conn_b.close()
+
+    # the real page arrived
+    assert pages[1]["raw_text"] == "PAGE ONE real transcription"
+    assert pages[1]["status"] == "done"
+    # the placeholder did NOT become content
+    assert pages[2]["raw_text"] in (None, ""), f"stub imported as text: {pages[2]['raw_text']!r}"
+    assert pages[2]["status"] != "done"
+    # and the document is not claimed complete, so a scan resumes it
+    assert doc["status"] != "done", "a partly-carried document must stay resumable"
