@@ -1,102 +1,111 @@
 # pha enhancement requests — index
 
-These are design/spec docs (drafts) for additions to pha, written while
-working on the **Documenta Indica** collection. They are grouped by feature
-and meant to be read together. Implemented so far: **stable page addresses**
-(`pha cite` / `pha serve`), **page navigation for citations** (the served viewer
-+ overview), **stage filters** (framework + six reference filters — see below),
-**endpoint-scoped locking** (one model per model-server: `server:` on the model
-interface, user-global keyed locks with declared capacity, and the search
-degrade that no longer evicts a running job's model), and the **bug reports**
-below (review scope, embed loss — 0.19.0; duplicate edited variants) plus
-**scan resilience / `done`
-honesty**. Still to do:
-**notes search**, the `extends` composition directive, the encoder structure
-prescan, **replaying `post` filters
-without the model** (a deterministic filter change must not force model calls),
-and **re-reading one page with a chosen palaeographer/model** (read a big
-volume with a cheap model, then fix the pages it got wrong with a better one —
-without re-extracting the volume).
+Design/spec docs (drafts) for additions to **pha**, written while working on the
+**Documenta Indica** collection. Statuses below are verified against the code,
+not copied from each doc's own header — a few headers have drifted and are
+flagged where they have.
 
-The first two bug reports were blocking prerequisites for the remaining work,
-which is why they went first:
+**Current: pha 0.28.0.** Shipped: stable page addresses, page navigation, stage
+filters, endpoint-scoped locking, per-document bibliographic references, scan
+resilience, and four of the bug reports. Open: **three live defects** (two of
+them measured in production), four feature requests, and three proposals
+awaiting a decision.
 
-- **review scope** — `pha review` stamped the whole library, freezing any
-  document against re-processing. `FILTERS_PLAN.md` §8 assumes a filter change
-  can re-run a stage over reviewed pages, so this had to land first; `pha
-  review --unset` is now the supported way to do that.
-- **embed loss** — a failed embed destroyed stored vectors and re-indexed
-  text-only, which made *every* pipeline re-run quietly destructive — for
-  filters as much as for reindex. Fixing it is also what made it safe to give
-  `pha reindex` the single-model lock.
+## At a glance
 
-The remaining items are independent and can land in any order.
-
-| doc | feature | one-line summary |
+| # | item | status |
 |---|---|---|
-| `pha-filters-enhancement-request.md` | **Stage filters** | **IMPLEMENTED** (`6829dbf` + `b55889a`; design record in [`FILTERS_PLAN.md`](../FILTERS_PLAN.md), which is annotated with the deviations — Python filters run in-process and staleness is signature-based rather than mtime-based). `pre`/`post` text filters around a stage's model — a stage becomes `input → pre filters → rules model → post filters → output`. Deterministic, chainable scripts; the repo ships six reference filters (`line-numbers`, OCR-separator stripping, whitespace and footnote-marker cleanup, hyphen joining, and the `markdown-from-records` artifact filter). An edited filter re-runs its stage automatically. |
-| `pha-stage-extends-enhancement-request.md` | **Prompt composition (`extends`)** | Let a rules file be "base rules + delta" (`extends:`/`include:` front matter), composed at load time so shared editor/palaeographer/encoder bodies live in one place (e.g. `latin-to-english-ocr` extends `latin-to-english`). Covers ordering, settings cascade, model-not-inherited, and base-file re-edit invalidation. |
-| `pha-encoder-tools-enhancement-request.md` | **Encoder tools** | After an encode, pha runs collection-bundled *tools* that materialise artifacts from the records (e.g. `markdown-from-records`: one markdown file per document/section). Also documents the model-assisted entry detection, character-aware chunking, and the collection **structure prescan** (§3.4: per-document layout register deriving page filters/prompt blocks per volume). **Merged**: the artifact/`markdown-from-records` part is planned as an `encoder.post` **artifact filter** in `FILTERS_PLAN.md`; the prescan part is not yet planned. |
-| `pha-stable-page-addresses-enhancement-request.md` | **Stable page addresses & render serving** | A re-scan-proof way to *link to* a page from outside pha. One canonical `slug` derived from the dropbox-relative path (no date, no hash, unlike `documents.id` / the dated library folder / `renders/<sha256>/`); `pha cite` naming the exact *filled* variant; `pha page --json` gaining `slug`/`rel_path`/`sha256`/`render`/`variants`; and `pha serve` — a read-only loopback endpoint with stable `/doc/{slug}/p{page}.jpg` URLs that resolves the current sha per request. Motivated by Obsidian footnotes; complements `WEB_INTERFACE_PLAN.md` (whose API surface has no render route) and would let `dsh-pha`'s `/pha/pageImage` return bytes instead of a data URL. **Implemented**: `addresses.py` (slug/rel path/render/variants), `pha cite`, `pha serve`, the new `pha page --json` fields, plus tests. |
-| `pha-notes-search-enhancement-request.md` | **Search the notes folder** | Make `pha search` cover `notes/`: a separate `notes` + `notes_fts` + embeddings index (notes are NOT `documents` rows, so `pha status`/`export`/bundles/review stay clean), mtime-based reindex from `pha scan`/`reindex`, `--source archive\|notes\|all`, and a `kind` discriminator in results so the PHA view opens a note hit through its existing `openNote`. Rejects modelling notes as documents and rejects indexing the whole Obsidian vault. |
-| `pha-page-navigation-enhancement-request.md` | **Page navigation for citations** | The follow-on to stable addresses: a citation lands on a static `/doc/{slug}/p{N}.jpg` with no next/previous, no position ("437" but not "437 of 638") and no way back to p. 1 — while the PHA view's reader already navigates. Adds an HTML **page viewer** at `/doc/{slug}/p{N}` (prev/next/first/last, jump box, keyboard, prefetch; works with JS off) and a **document overview** at `/doc/{slug}/` (page ranges, "start reading"), leaves `.jpg` untouched, points citations at the viewer, and adds `page_count`/`prev_page`/`next_page`/`viewer_url` to `meta.json`, `pha page --json`, `pha cite` and MCP `pha_get_page`. **Implemented**: viewer/overview/jump routes in `serve.py`, the `serve: {host, port}` config block, the navigation fields, and tests — the notes' links are migrated to the viewer. |
-| `pha-per-server-model-lock-enhancement-request.md` | **Endpoint-scoped locking** | **IMPLEMENTED** (in `main`, unreleased). One model per **model-server**: a declared `server:` on each `models/*.md`, locks keyed on it in a **user-global** lock dir, two jobs allowed **iff their server sets are disjoint**, declared capacity (`servers: {<id>: {slots: N}}`), and unlabelled files taking the wildcard so today's global behaviour is preserved. Closes two real gaps: two archives on one machine take two different locks and load two models into one LM Studio, and `pha search`/MCP `pha_search` load the embed model with **no lock at all** — now search *observes* the embed server's lock and degrades to keyword results (naming the running job) before loading anything, with `--force` to override. Rejects URL-based local/remote inference (under LM Link a `localhost` request can be served by a remote device). |
-| `pha-post-filter-replay-enhancement-request.md` | **Stage filters — replay `post` without the model** | A `post` filter is deterministic, but changing one re-runs the **model** for every page: only the *filtered* text is stored (`page_edits.text`) and the model's raw output is discarded, so `_edit_needed()`'s `filters_changed` branch has nothing to re-filter. Motivated by `collections/franco-imagens` — the 4 volumes were edited with **no** filters (`filters=''`, so the stored text *is* the model output), and adding one `editor.post` (`join-hyphenated-words`, to drop end-of-line hyphens while keeping the printed lineation) would cost ~**3 597** model calls to compute what is already derivable from the DB. Proposes `pha edit --replay-filters [--dry-run]` (opt-in, takes the scan lock, declines `pre`/rules/model changes and human-reviewed pages): sound on today's schema when the recorded `post` chain is empty (Option A), and durable by persisting the pre-`post` model output in a new column (Option B). **Option A was executed by hand on 2026-09-18** (`.pha-manual/aplicar-filtro-franco.py`, reusing pha's own `apply_filters`/`write_edited_pages` so the result matches what the command must produce): 3 575 pages, **2 843** edited texts changed, **0 model calls**, 1 min 18 s, end-of-line hyphens **59 872 → 2 058**. The command itself is still to implement, and it is **blocked in effect** by the signature defect below (R8). |
-| `pha-single-page-rescan-enhancement-request.md` | **`pha scan` — one page, chosen palaeographer/model** | The reading model is chosen **per document**, never per page, so fixing one bad page means re-extracting the whole volume (and `pha scan --palaeographer` does not even override a collection's `pha.yaml` — `scan_once()` drops the `explicit` argument, contradicting `README.md:629`). Proposes `pha scan --path <one doc> --page N --palaeographer X --model Y`: page-scoped render/transcribe/re-edit/re-index, per-page provenance (new `pages` columns + page front matter), and a **pin** so a later bulk pass or `--reprocess` cannot discard the deliberate reading (`--unpin` releases it, mirroring `pha review --unset`). Motivating use: cheap model over a big volume, better model on the pages it got wrong. Also fixes `--palaeographer` to be a true per-run override and adds `pha test --page N` as a no-write preview. |
-| `pha-model-response-resilience-enhancement-request.md` | **Scan resilience / `done` honesty** | A remote model's HTTP-200-with-null-`message` response raises a raw **`TypeError`** out of `_openai_chat` (the caught tuple had `KeyError, IndexError, AttributeError`; its sibling `_anthropic_chat` catches `TypeError`), which is not a `ModelError`, so it escapes the per-page guard and **kills the whole scan** instead of failing one page. It went unnoticed because `ingest_file` committed `status = done` **before** `edit_document` and `index_document` — and the standalone `pha edit` path never indexed at all. Measured cost on 2026-09-15: doc 57 of `documenta-indica` (961 pp) left `done` with **0 chunks** (editor died at page ~39) while the driver's status-only check reported `ALL DONE`, `unfinished=0`, `rc=0`. Fixed: `ModelError` on a malformed response, `done` written last, `pha edit` indexes (and repairs a missing index), `pha status` surfaces done-with-no-chunks, and `pha scan --path <file.pdf>` no longer scans zero files (`discover()` handled only directory roots). |
+| **1** | [`pha-filter-signature-mismatch-bug-report.md`](pha-filter-signature-mismatch-bug-report.md) | **OPEN — live trap.** Re-runs a stage's model on *every* pass |
+| **2** | [`pha-request-stall-timeout-bug-report.md`](pha-request-stall-timeout-bug-report.md) | **OPEN.** No wall-clock deadline; two stalls of 6 h 30 / 4 h 17 measured |
+| **3** | [`pha-review-scope-bug-report.md`](pha-review-scope-bug-report.md) §11 | **OPEN again.** `pha review` during a scan imports every page written so far |
+| 4 | [`pha-post-filter-replay-enhancement-request.md`](pha-post-filter-replay-enhancement-request.md) | Draft — **unblocked once #1 lands**; procedure already proven by hand |
+| 5 | [`pha-single-page-rescan-enhancement-request.md`](pha-single-page-rescan-enhancement-request.md) | Draft — smallest outstanding feature |
+| 6 | [`pha-notes-search-enhancement-request.md`](pha-notes-search-enhancement-request.md) | Draft — independent, no-op when the notes index is empty |
+| 7 | [`pha-handoff-enhancement-request.md`](pha-handoff-enhancement-request.md) | Draft — largest; carries an independent `unbundle` stub bug |
+| 8 | [`SEARCH_WEB_SPEC.md`](../SEARCH_WEB_SPEC.md) | Draft **for decision** |
+| 9 | [`VLM_BENCHMARK_PLAN.md`](../VLM_BENCHMARK_PLAN.md) + [`VLM_BENCHMARK_INFRA_PLAN.md`](../VLM_BENCHMARK_INFRA_PLAN.md) | Proposal, not implemented (separate repo) |
+| 10 | `extends`, encoder prescan | Draft — **re-measure before building**; filters shrank both |
+
+## Enhancement requests
+
+| doc | feature | status |
+|---|---|---|
+| `pha-filters-enhancement-request.md` | **Stage filters** — `pre`/`post` steps around a stage's model; a stage becomes `input → pre filters → model → post filters → output`, with hooks on `palaeographer.post`, `editor.pre`/`post`, `encoder.pre`/`post`. Ships six reference filters (line-numbers, OCR-separator strip, whitespace/leader collapse, footnote-marker residue, hyphen joining) plus the `markdown-from-records` **artifact** filter. | **SHIPPED** (`6829dbf`, `b55889a`) |
+| `pha-per-server-model-lock-enhancement-request.md` | **Endpoint-scoped locking** — one model per **model-server**, not per archive: `server:` declared per model file, user-global keyed locks, declared capacity, disjoint servers run concurrently, unlabelled files take the wildcard. Closes two real gaps: two archives on one machine sharing one LM Studio, and `pha search` loading the embed model with no lock (now it *observes* the lock and degrades to keyword + a note, `--force` to override). | **SHIPPED, released in 0.28.0** — the doc's header still says "in `main`, unreleased" |
+| `pha-stable-page-addresses-enhancement-request.md` | **Stable page addresses & render serving** — a re-scan-proof `slug` (no date, no hash), `pha cite` naming the exact *filled* variant, `pha page --json` gaining the address fields, and `pha serve` with stable `/doc/{slug}/p{page}.jpg` URLs. | **SHIPPED** |
+| `pha-page-navigation-enhancement-request.md` | **Page navigation for citations** — an HTML page **viewer** (`/doc/{slug}/p{N}`: prev/next/first/last, jump box, position) and a **document overview**, so a citation lands somewhere you can keep reading. | **SHIPPED** |
+| `pha-post-filter-replay-enhancement-request.md` | **Replay `post` filters without the model** — a `post` filter is deterministic, but changing one re-runs the model for every page, because only the *filtered* text is stored and the model's raw output is discarded. Proposes `pha edit --replay-filters [--dry-run]`. Motivated by `franco-imagens` (~3 597 model calls to recompute what is derivable from the DB); **proven by hand** on 2026-09-18 — 3 575 pages, 2 843 texts changed, **0 model calls**, end-of-line hyphens 59 872 → 2 058. | Draft, not implemented — **effectively blocked by the signature defect (#1)** |
+| `pha-single-page-rescan-enhancement-request.md` | **`pha scan` — one page, chosen palaeographer/model** — the reading model is chosen per *document*, so fixing one bad page costs a whole volume; and `--palaeographer` is dropped by `scan_once()`, contradicting `README.md`. Proposes page-scoped render/transcribe/re-edit/re-index, per-page provenance, and a **pin** so a later bulk pass cannot discard a deliberate reading. | Draft, not implemented |
+| `pha-notes-search-enhancement-request.md` | **Search the notes folder** — make `pha search` cover `notes/` via a separate `notes` + `notes_fts` + embeddings index (NOT `documents` rows, so status/export/bundles/review stay clean), `--source archive\|notes\|all`, and a `kind` discriminator so the PHA view opens a note hit. Rejects indexing the whole Obsidian vault. | Draft, not implemented |
+| `pha-handoff-enhancement-request.md` | **Two-machine hand-over (`pha handoff`)** — lend a document to an always-on LAN machine while the archive machine sleeps, then apply the results into the *same* document. Bundles cannot: they mint new ids, pin-and-skip the imported docs, and import a `*waiting*` stub as **content** (verified: a partly-processed document arrives fully `done`). Proposes a content-keyed round trip (sha256 + `source_name`), a document-scoped lease, and an honest stale-under-current-config report. | Draft, not implemented. Carries an independent `unbundle` stub bug worth fixing regardless |
+| `pha-stage-extends-enhancement-request.md` | **Prompt composition (`extends`)** — a rules file as "base rules + delta", composed at load time. | Draft. **Re-measure first:** with filters carrying the *mechanical* differences, the remaining case for a shared prompt body is thinner than when this was written (~½–1 day if it still holds) |
+| `pha-encoder-tools-enhancement-request.md` | **Encoder tools** — bundled tools that materialise artifacts from records. The artifact half is now the `markdown-from-records` filter. The **structure prescan** (§3.4: per-document layout register deriving page filters/prompt blocks per volume) is not planned and needs a design decision, not just code. | Superseded (artifact half shipped); prescan open |
+| `pha-model-response-resilience-enhancement-request.md` | **Scan resilience / `done` honesty** — a malformed HTTP-200 response raised a raw `TypeError` that escaped the per-page guard and killed the whole scan; `done` was written *before* editing and indexing, so a document could be `done` with 0 chunks while a status-only check reported success. | **The code is shipped** (`_openai_chat` catches `TypeError`; `done` written last; `pha edit` indexes; `status` surfaces done-with-no-chunks). **This doc's header still says "not implemented" — it needs updating** |
 
 ## Bug reports
 
-| doc | area | one-line summary |
+| doc | area | status |
 |---|---|---|
-| `pha-review-scope-bug-report.md` | **`pha review`** | **FIXED (0.18.0) — but see the §11 addendum (2026-09-18): still reproducible against a scan in progress.** `pha review` stamped the *whole* library as **reviewed** instead of only the pending files, so one run froze the archive against any later `pha scan`/`pha edit` — **even `--reprocess`**. Now imports only the pending set; `--all` keeps the blanket behaviour as an opt-in; `--unset [--doc N [--page P]]` lifts the stamp (text kept) so a frozen archive is recoverable. Reproduced on 0.17.0: 14 572 pages stamped after `pha status` had reported **5** pending. **The pending test is mtime-based and a running scan grows the library page by page, so a review run during a scan imports every page the scan has written so far**: measured 2026-09-18 on `jesuit-archive` — `pha review` while `pha scan` was mid-volume on `DOCUMENTA-INDICA-1553-1557.pdf` (doc 69) imported **435** pages when only **4** were human corrections, stamping 431 pages of the scanned volume as reviewed (no text harmed; the false review record freezes them). Fix suggested: refuse while `scan.lock` is held or a target document is `processing` (unless `--force`), and make "pending" mean "body differs from the stored text". |
-| `pha-embed-loss-bug-report.md` | **`pha reindex` / indexing** | **FIXED.** `index_document()` cleared a document's chunks *before* embedding, so a failed `embed()` (120 s batch timeout) fell back to text-only indexing having already deleted the stored vectors — `status=done`, no error, invisible except in the embedded count. **13 885 chunks** lost their vectors this way on `jesuit-archive` while two jobs overlapped. Now embeds first and leaves a document with vectors completely untouched on failure (reported; `pha reindex` exits 3), and `pha reindex` takes the single-model lock. Repair of the incident data = re-embedding 4 documents. |
-| `pha-duplicate-edited-variants-bug-report.md` | **library variants / `pha cite`** | **FIXED (A + B).** `write_edited_pages()` named its output directory from `documents.editor_model` *as read at call time* (`ingest.py:1167`), and the edit path **NULLs that column on an editor change** (`:1554`) before writing, while the incremental path sets it (`:1740`) — so one logical variant was exported **twice**, as `edited-<rules>` (front matter `model: null`) and `edited-<rules>@<model>`. Measured on `jesuit-archive` 2026-09-16 — 41 documents with an editor: **28 byte-identical pairs**, 6 divergent, 1 bare-only, 7 `@model`-only, **35 bare dirs / 52.7 MB**; transcription dirs unaffected (**0** bare vs 56 `@model`), so it was specific to the edited stage. Two symptoms: `pha cite <doc> <page> --edited` **refused to cite** ("several filled edited variants … choose one"); and because `_pages_dir_for()` returned `sorted(...)[0]` the *bare* name won, which on docs 47/50 was **610/618 and 627/660 pages of `*waiting*` placeholders** while the `@model` dir held the real, DB-matching text. Now **(A)** the writer takes the resolved model as a required keyword (`edit_document`, `_edit_null`, `pha export`, `bundle` all pass it) and never reads the nullable column (front matter included), and **(B)** `addresses.parse_variant/pick_variant/collapse_variant_aliases` treat `edited-X` and `edited-X@Y` as **one variant** everywhere — `variant_files` (cite/page/MCP), `_pages_dir_for`/`library_page_path`, `serve` variants/meta, and `bundle` import (which also stopped folding `@model` into the editor id); the recorded model's directory wins, two *qualified* models of one id stay two readings, and a bare name that is the current model-less output keeps its directory. **(C)** also shipped, guarded: `pha prune --library-variants [--dry-run] [--doc N]` deletes a bare folder **only when nothing lives in it alone** — every page with text is either exactly what the DB holds (regenerable by `pha export`) or byte-identical to its `@<model>` sibling, and a `*waiting*` stub counts as no page at all. That removed the 25 identical pairs **and** docs 47/50 (placeholder shells whose 8/33 real pages the sibling also holds), while the 7 pairs holding a real different reading (19, 21, 27, 29, 30, 44, 56) and the 1 bare-only variant stay: 35 bare dirs → 8. Two further surfaces were fixed with it: the review scan behind `pha status`/`pha review` now skips a bare alias (it is mtime-based per file, so a stale bare file could have been imported as a human correction), and `bundle` import no longer folds `@model` into the editor id. §6 carries the current per-pair table and the removal record. |
-| `pha-filter-signature-mismatch-bug-report.md` | **stage filters / staleness** | **OPEN.** pha *stores* one filter signature when it runs a chain and *compares* another for the same chain: `apply_filters()` records the params **resolved** with the manifest defaults (`filters.py:438` + `resolve_params()`), while `_configured_filters_signature()` records the **declared** ones (`ingest.py:1138`). `filters_changed()` compares the two strings for equality, so a filter whose manifest declares `params:` and whose sidecar does not repeat them (`editor.post: [join-hyphenated-words]` — the normal spelling) counts as "changed" on **every** pass and the stage's model is re-called for every page, forever: 3 612 pages of deepseek-v4-flash per pass on `collections/franco-imagens`. It also silently defeats `pha edit --replay-filters`, whose point is to store the chain it re-applied. Fix: normalise both sides (preferred: resolve params in `_configured_filters_signature()`), plus a one-shot normaliser for stored signatures and a test that the two agree. Measured 2026-09-18 — configured `…:{}` vs applied `…:{"keep_hyphen_before_enclitic": true, "notsign_as_hyphen": true}`. |
+| `pha-filter-signature-mismatch-bug-report.md` | **stage filters / staleness** | **OPEN — highest priority.** pha *stores* one filter signature and *compares* another: `apply_filters()` records the params **resolved** with the manifest defaults, while `_configured_filters_signature()` records the **declared** ones. A filter whose manifest declares `params:` and whose sidecar leaves them out (the normal spelling, `editor.post: [join-hyphenated-words]`) therefore reads as "changed" on **every** pass. Verified against 0.28.0 — applied `…{"keep_hyphen_before_enclitic": true}` vs configured `…{}`. Fix: resolve params on the configured side (normalise both), plus a one-shot migrator for stored signatures. See the trap note below. |
+| `pha-request-stall-timeout-bug-report.md` | **model calls / `timeout_s`** | **OPEN.** `timeout_s` goes straight into httpx, where it is **per operation**, so a provider that keeps the connection warm with periodic bytes can stall indefinitely; the retry path is defeated because `(retries+1) × timeout_s` never elapses. Measured twice *with* `timeout_s: 600`: **≈6 h 30** and **≈4 h 17**, no page error, no failed status, provider billing flat. Fix: a wall-clock `deadline_s` bound the whole page including retries, and make a stall visible (`status` showing time since the last page write instead of a bare `processing`). |
+| `pha-review-scope-bug-report.md` | **`pha review`** | **FIXED in 0.18.0 … but see §11: OPEN again in a new shape.** The original defect (stamping the whole library instead of the changed files, freezing the archive against all later scan/edit, even `--reprocess`) is fixed: only the pending set is imported, with `--all` and `--unset` as escape hatches. **However** "pending" is mtime-based and a running scan grows the library page by page, so a review run **during a scan** imports everything written so far — measured 2026-09-18: **435** pages imported when **4** were real corrections, 431 pages of a scanned volume falsely stamped reviewed (text unharmed; the review record freezes them). Fix: refuse while a scan holds the lock or the target document is `processing` (unless `--force`), and make "pending" mean "body differs". |
+| `pha-embed-loss-bug-report.md` | **`pha reindex` / indexing** | **FIXED.** `index_document()` cleared chunks *before* embedding, so a failed embed fell back to text-only having already deleted the vectors — `status=done`, no error, invisible except in the embed count. **13 885 chunks** lost their vectors on `jesuit-archive` when two jobs overlapped. Now embeds first and leaves a document with vectors untouched on failure (reported; `reindex` exits 3), and `reindex` takes the model-server lock. |
+| `pha-duplicate-edited-variants-bug-report.md` | **library variants / `pha cite`** | **FIXED (A + B); C shipped too (guarded).** One logical variant was exported twice — `edited-<rules>` and `edited-<rules>@<model>` — because the writer read a column the edit path had just NULLed. On `jesuit-archive`: 35 bare dirs / 52.7 MB, 28 byte-identical pairs; and since the bare name sorted first, `pha cite --edited` refused to cite, or picked 610/618 pages of `*waiting*` placeholders over the real text. Now the writer takes the resolved model as a required argument, and `edited-X` / `edited-X@Y` are treated as **one variant** everywhere (cite/page/MCP/serve/bundle). **(C)** `pha prune --library-variants [--dry-run] [--doc N]` deletes a bare folder only when nothing lives in it alone — present in the CLI. **This doc's header reads as if C were still open**; confirm and tidy. |
 
-## Implementation plans
+## Implementation plans and proposals
 
 - [`FILTERS_PLAN.md`](../FILTERS_PLAN.md) — the stage-filter framework,
-  including **artifact filters** (records→markdown) and the reference filter
-  set. Absorbs the encoder-tools runner (owner ruling: one mechanism).
+  including artifact filters. **Implemented**; annotated in place with the two
+  deviations from the original design (Python filters run *in-process*;
+  staleness is signature-based rather than mtime-based).
+- [`BIBLIOGRAPHY_PLAN.md`](../BIBLIOGRAPHY_PLAN.md) — per-document
+  bibliographic references as sidecars (`.dc.json` / `.bib` / `.mods.xml`),
+  rendered by `pha cite` and inspected with `pha bib`; an agent may draft one
+  only as `agent-drafted-unverified`. **Implemented** (0.28.0).
+- [`SEARCH_WEB_SPEC.md`](../SEARCH_WEB_SPEC.md) — a **public, search-only** web
+  interface over an archive, with its own embedding server and query LLM so it
+  can never disturb a running `pha`. **Draft for decision.**
+- [`VLM_BENCHMARK_PLAN.md`](../VLM_BENCHMARK_PLAN.md) +
+  [`VLM_BENCHMARK_INFRA_PLAN.md`](../VLM_BENCHMARK_INFRA_PLAN.md) — a public
+  benchmark of vision models on historical material, in a separate repository.
+  **Proposal, not implemented**; the *selection of which pages to publish* is
+  deliberately taken before the infra is built.
+- [`HARNESS_INTRODUCTION.md`](../HARNESS_INTRODUCTION.md) — a short orientation
+  to DeepSeek Harness and how pha uses it. Overview, not a plan.
 - [`ENCODER_TOOLS_PLAN.md`](../ENCODER_TOOLS_PLAN.md) — **superseded** by
   `FILTERS_PLAN.md` (kept for history).
 
 ## How they fit together
 
-The three features are complementary and can land independently:
+- **Filters** (shipped) removed the *mechanical* work from prompts — OCR
+  cleanup, line numbers, hyphen joins. That is why the two prompt-level items
+  below are smaller than they look: **`extends`** now shares only the judgment
+  layer, and the **prescan** matters only for layout, not cleanup.
+- **Post-filter replay** assumes a *re-run is safe and cheap*. Both halves have
+  to hold: the embed-loss fix made re-running safe, and the signature defect
+  makes it neither safe nor cheap — so **#1 is a prerequisite in practice**,
+  not just a related bug.
+- **Notes search** is independent and pairs with stable addresses: notes cite
+  the slug and can link the served viewer.
+- **Single-page re-scan** is the machine-side counterpart of the human review
+  round-trip — both exist so one bad page does not cost a whole volume. It is
+  the smallest outstanding feature and carries the `--palaeographer` fix
+  `README.md` already promises.
+- **Hand-over** shares its subject with `bundle`/`unbundle` but not its
+  semantics: bundles *copy* to another archive (new ids), a hand-over *updates*
+  the same document. It is best landed after single-page re-scan, whose
+  per-page provenance columns make a mixed-model hand-over exact rather than
+  document-level.
 
-1. **Filters** ✅ (implemented) — mechanical, source-specific text shaping
-   around a model. It removed OCR cleanup and line-number concerns from
-   prompts and gives per-collection opt-in (`editor.pre: [line-numbers]`).
-2. **`extends`** — avoids duplicating the shared model-prompt body when a
-   variant still needs different *prompt* rules (the judgment layer), after
-   the mechanical bits have moved into filters.
-3. **Artifact filters + prescan** — the artifact half is **done**
-   (`markdown-from-records` as an `encoder.post` filter, `6829dbf`); the
-   structure prescan (multi-volume layout data-driven) remains.
+### The signature-defect trap worth knowing
 
-Suggested reading order: filters → extends → artifact filters/prescan, since
-filters subsume the OCR-cleanup that `extends` and the tools were partly
-motivated by. Any collection can adopt a subset.
-
-`extends` is now the more interesting of the two remaining prompt-level items
-to revisit: with filters carrying the *mechanical* differences between two
-editions, what is left for a shared base prompt body is smaller than when the
-request was written, so the case for it should be re-measured before building
-it (~½–1 day if it still holds).
-
-**Notes search** is independent of those three: it reuses the existing
-chunk/FTS/embedding machinery but adds a new *source* (the `notes/` folder), and
-it pairs with the stable-page-addresses work — notes cite the slug and can embed
-the render URL.
-
-**Single-page re-scan** is independent too, and the smallest of the outstanding
-items: it changes the *granularity* of a scan (one page, an override pair for
-that action) rather than the pipeline. It also carries the fix for the
-`--palaeographer` flag that `README.md:629` already promises, and it is the
-machine-side counterpart of the human review round-trip — both exist so one bad
-page does not cost a whole volume.
+The filter-signature defect (#1) is currently **dormant** on the collection the
+report measured: `franco-imagens` stores the *configured* form (`{}`) on 3 575
+rows because the 2026-09-18 manual replay wrote it that way against the
+sidecar's bare declarations. But a normal `pha edit` pass writes the *resolved*
+form — from then on every pass re-calls the model for ~3 612 pages, forever.
+So the cost is armed by the next routine edit rather than standing. That is why
+it is first in the list despite looking quiet today.
 
 ## Housekeeping notes
 
@@ -104,17 +113,16 @@ Not features — parked decisions that need revisiting rather than implementing.
 
 - [`dot-writing-dir-review.md`](dot-writing-dir-review.md) — the repo-local
   `.writing/` directory (633 per-path markdown snapshots, 4.3 MB) is
-  **gitignored**. Origin now answered by the operator: the Harness
-  writing-tool's **snapshot cache** (reported, not independently verified — two
-  searches of the installed bundle came up empty, and are recorded). Records
-  the counts that decided it (618 identical / 15 stale / 0 orphaned), the
-  deletion case, and the triggers that should reopen it.
+  **gitignored**. Origin answered by the operator: the Harness writing-tool's
+  **snapshot cache** (reported, not independently verified — two searches of
+  the installed bundle came up empty). Records the counts that decided it
+  (618 identical / 15 stale / 0 orphaned) and the triggers that reopen it.
 
 ## Reference implementation notes (in the archive, not the pha repo)
 
 - Documenta Indica editors and encoders live under
-  `dropbox/collections/documenta-indica/` (`editors/latin-to-english.md`,
-  `editors/latin-to-english-ocr.md`, `encoders/`, `prescan/doca_prescan.py`).
-- The Documenta Indica margin **line-numbers** are the motivating case for a
-  `line-numbers` filter; the edited pages show them currently leaking as bare
-  numbers (see `editors/latin-to-english.md` §"Line numbers of the edition").
+  `dropbox/collections/documenta-indica/` (`editors/`, `encoders/`,
+  `prescan/doca_prescan.py`).
+- The Documenta Indica margin **line-numbers** were the motivating case for the
+  `line-numbers` filter; the printed lineation is the reason `franco-imagens`
+  adopted `join-hyphenated-words` as an `editor.post`.
