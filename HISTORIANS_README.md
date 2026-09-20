@@ -5,6 +5,56 @@ maps in a local archive: you drop files into a folder, a vision model reads
 each page, a text model can modernize or translate the transcriptions, and
 everything becomes searchable by your AI assistant.
 
+## What problem **pha** solves
+
+### Ai needs context to be smart
+
+To understand what **pha** does and why it is needed it helps to understand how AI deals with queries and the role of what is called "context". 
+
+"Context" is the information that is provided to the LLM to facilitate answering your queries. The AI has no memory of your conversations nor any capacity to learn from its interactions with you. It knows what it learned during training before being released in the world. Everything that is relevant to answer your query and is not part of its initial training must be provided as context, including the record of your past interactions. 
+
+You can attach a document to a query and ask the LLM to answer a query about it. The information you provide, plus the record of past interactions, plus some generic instructions about how to answer, together, make the so called "context" of the query. 
+
+Moreover, in order to be able to answer queries with updated information, most AI interfaces first search the internet for the topics of the question, collect relevant information, put it in the context along with the record of previous converstations and append your question. The question might have 10 words but the LLM will receive substatially longer text in which to base its answer.
+
+### Context is limited
+
+But here is the catch: the amount of information that is possible to put into the context is limited. You cannot attach the 12 voluments of Documenta Indica and ask a question about its contents. Also, as time goes by, the record of your conversations might not fit in the context.  Processing long context is computationaly expensive, so AI providers need to limit its length, while trying to find new methods to deal with it efficiently. AI forgets things that it remembered before. The size of files you can attach to a query is also strictly limited.
+
+
+### Puting your documents in the context
+
+But what if your relevant information is stored in dozens documents in your computer, such as PDFs and digital images downloaded from digital libraries and archives or scanned by yourself? In that case, it is your local files and not the internet that needs to be searched to create the context that enables the LLM to answer your questions.
+
+This is a common scenario in many organizations and tools exist that search PDFs, word processor documents, spreadsheets and  databases to extract information to compose the context sent with queries to LLMs. The process is kown as "RAG" (Retrieval Augmented Generation) and RAG tools maintain and search repositories of documentsm allowing AI agents to extract meaninfull information for the context of queries.
+
+RAG creates indexes by processing chunks of text into matematical representations similar to those used internally by LLMs, in a process known as "embedding". This allows the tools to gather results that are semantically related to the question posed and not just those that contain the exact words
+
+### Why is historical information special?
+
+Historical documents in computers are special because they consist mainly of images of old books or manuscript documents which cannot be easily searched to extract relevant context. 
+
+Unlike modern PDFs, which are generated from texts produced orignally in computers, historical documents in PDF form are made by scanning or photographing texts. They may contain a layer of text produced by OCR (Optical Character Recognition).  OCR attempts to reconstruct the text from images by identfying the form of characters and embeds the result into the PDF so it can be searched and copied. 
+
+The quality of OCR text varies with the clarity of the original printed text, the quality of the scan and the effiency of the OCR software. Mmany of the digital copies of historical sources available in digital libraries and archives have poor quality embeded text. Manuscripts and many books don't have any text layer at all. 
+
+Moreover, in historical contexts, spelling varies greatly and abreviations are intensively used in writing. Even if good OCR is possible, the result is not ideal for RAG.
+
+### The solution: read the sources, edit the result, store in a semantic index
+
+The solution is to read the documents and the manuscripts using today's technology. OCR software has evolved and may produce more accurate readings that the one included in the documents. But the most relevant breakthrough brough by AI is that some modern LLMs have "vision" capabilities: they are able to generate text from images and can be asked to read old prints and manuscripts provided as context.
+
+LLMs read by reasoning over the image. If adequately instructed they can use background information of what they are reading to clarify dubious content. They operate more like an human reader than the pattern matching OCR softare.
+
+Also LLMs are able to analyse the result of the reading and perform operations like modernization of language, expansion of abrivations, extraction of personal and geographic names, or other named entities and translation from language in which the reader is unfamiliar.
+
+This implies a specific pipeline to create repositories of historical documents that play well with context generation for LLM inference. 
+
+The pipeline consists of:
+1. Identify the best approach to generate text from the document. Options are: use the embeded OCR if adequate; redo the OCR with recent software; use vision enabled models with specific reading prompts; 
+2. Edit the resulting text: modernizing ortography,  extracting named entities (people, places, institutions), translating if relevant. This step may be skipped if text is usable in the original embeded form.
+3. Store the result in a semantic index, searchable by  AI agents for the purpose of providing context of queries to LLMs.
+
 The workflow, left to right:
 
 ```mermaid
@@ -16,6 +66,8 @@ flowchart LR
     C --> F["Global index<br/>(the searchable archive)"]
     E --> F
 ```
+
+*pha* is a tool that makes it simple for AI agents to manage this workflow.
 
 You do not need to touch the command line yourself, and you never need to
 learn a command — you work through **your favourite AI agent**, for example
@@ -37,13 +89,13 @@ for you.
 You need:
 
 - A computer with **macOS or Windows**
-- An AI assistant you trust with file operations
+- An AI assistant you trust with file operations. If you have not used an AI assistant before, or are unsure about it, check our suggestion [Setting up an AI harness in your machine](HARNESS_INTRODUCTION.md).
 - **The AI models pha uses** — the models that read and transform your pages.
   There are two ways to get them, and you can use both side by side:
   - **Local models**, run on your own machine by **LM Studio** (free, from
     lmstudio.ai). Nothing ever leaves your computer, but your hardware limits
-    which models can run.
-  - **Remote models**, hosted by a provider (MiniMax, OpenRouter, OpenAI, …)
+    which models can run and the speed at which they work.
+  - **Remote models**, hosted by a provider (DeepSeek, MiniMax, OpenAI, Anthropic, OpenRouter,…)
     and reached over the internet. They are far more powerful, but you need an
     **API key** from the provider and the page images are sent there. See
     step 1c.
