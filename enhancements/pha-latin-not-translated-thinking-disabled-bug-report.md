@@ -102,6 +102,17 @@ opening paragraph.
 
 ### 4.2 What pha could do
 
+**Status of F2 + F4: FIXED** (2026-09, pha 0.33.0). A rules file
+(`palaeographers/`, `editors/`, `encoders/<id>.md`) may now carry `thinking:
+on|off`; it is a **stage-level override that beats the paired model sheet**,
+because the model file states a capability while the rules file states what
+this pass needs. Omit it to inherit the model — so an existing config is
+unchanged. `pha editor <file>` and `pha palaeographer <file>` now print the
+resolved `temperature`/`max_tokens`/`thinking`, and the `_sample.md` templates
+document the new key. F1 (prompt wording) is a per-archive content change, and
+F3 (page-range editors) and F5 (a language guard) remain open — see
+`pha-enhancement-requests-INDEX.md`.
+
 - **F1 — put the translation instruction where a non-reasoning model sees it.**
   Ship the clause above in the OCR + latin-to-english editor templates (the
   in-repo sample, and any doc that recommends `thinking: disabled` for editing).

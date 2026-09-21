@@ -272,6 +272,12 @@ class Palaeographer:
     prompt_text: str
     prompt_file: Path | None = None
     thinking: bool = True
+    # thinking_override: a RULES file may set `thinking:` itself. It wins over
+    # the paired model's sheet — the model's `thinking` is a capability, but a
+    # stage may need it off (e.g. an OCR-cleanup prompt on an all-Latin page,
+    # where reasoning-on is what makes the model actually reach the
+    # translation step). None = inherit the model's value.
+    thinking_override: bool | None = None
     # api_style: the wire format for ALL calls to this model.
     #   "openai"   (default) - /chat/completions, OpenAI-style messages with
     #              image_url blocks. Works with LM Studio, Ollama, vLLM,
@@ -340,6 +346,12 @@ class Editor:
     prompt_text: str
     prompt_file: Path | None = None
     thinking: bool = True
+    # thinking_override: a RULES file may set `thinking:` itself. It wins over
+    # the paired model's sheet — the model's `thinking` is a capability, but a
+    # stage may need it off (e.g. an OCR-cleanup prompt on an all-Latin page,
+    # where reasoning-on is what makes the model actually reach the
+    # translation step). None = inherit the model's value.
+    thinking_override: bool | None = None
     api_style: str = "openai"
     model_ref: str = ""  # models/<id>.md this editor uses ("" = legacy inline)
     server: str = ""  # declared model-server identity (see Model.server)
@@ -364,6 +376,12 @@ class Encoder:
     prompt_text: str
     prompt_file: Path | None = None
     thinking: bool = True
+    # thinking_override: a RULES file may set `thinking:` itself. It wins over
+    # the paired model's sheet — the model's `thinking` is a capability, but a
+    # stage may need it off (e.g. an OCR-cleanup prompt on an all-Latin page,
+    # where reasoning-on is what makes the model actually reach the
+    # translation step). None = inherit the model's value.
+    thinking_override: bool | None = None
     api_style: str = "openai"
     batch_pages: int = 20
     # context_tokens: the model's input context window in tokens. The encoder
@@ -670,6 +688,11 @@ class Config:
             api_style=m.api_style, thinking=m.thinking, model_ref=m.id,
             server=m.server,
         )
+        # A `thinking:` on the RULES file is a stage-level override: it beats
+        # the model sheet's value, which is only a capability.
+        override = getattr(stage, "thinking_override", None)
+        if override is not None:
+            common["thinking"] = override
         if isinstance(stage, Encoder):
             common["context_tokens"] = m.context_tokens
         if isinstance(stage, Palaeographer):
@@ -1056,6 +1079,7 @@ def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path, models: 
         api_style=m.api_style,
         timeout_s=int(fm.get("timeout_s", 900)),
         thinking=m.thinking,
+        thinking_override=(_thinking(fm) if "thinking" in fm else None),
         max_vision_px=m.max_vision_px,
         vision_jpeg_quality=m.vision_jpeg_quality,
         engine=m.engine or str(fm.get("engine", "")).strip().lower(),
@@ -1097,6 +1121,7 @@ def _editor_from_frontmatter(ed_id: str, text: str, file: Path, models: dict | N
         api_style=m.api_style,
         timeout_s=int(fm.get("timeout_s", 300)),
         thinking=m.thinking,
+        thinking_override=(_thinking(fm) if "thinking" in fm else None),
         temperature=float(fm.get("temperature", 0.1)),
         max_tokens=int(fm.get("max_tokens", 4096)),
         prompt_text=body,
@@ -1125,6 +1150,7 @@ def _encoder_from_frontmatter(enc_id: str, text: str, file: Path, models: dict |
         api_style=m.api_style,
         timeout_s=int(fm.get("timeout_s", 300)),
         thinking=m.thinking,
+        thinking_override=(_thinking(fm) if "thinking" in fm else None),
         context_tokens=m.context_tokens,
         temperature=float(fm.get("temperature", 0.0)),
         max_tokens=int(fm.get("max_tokens", 4096)),
@@ -1714,6 +1740,9 @@ _PAL_SAMPLE = """---
 #     60s). This is what bounds a request whose answer never arrives — a
 #     provider that trickles keep-alive bytes resets timeout_s on every
 #     byte, so timeout_s alone can never end a stall. Set 0 to disable.
+#   thinking: on|off — overrides the paired model's `thinking:` for this stage
+#     only (a model's setting is a capability; these rules may need it off).
+#     Omit to inherit the model file.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example palaeographer — edit me
 temperature: 0.1
@@ -1844,6 +1873,9 @@ _ED_SAMPLE = """---
 #   timeout_s: HTTP timeout per OPERATION in seconds (default 300 for text).
 #   deadline_s: wall-clock ceiling for ONE request (default 2x timeout_s, min
 #     60s) — the knob that bounds a stalled request; 0 disables it.
+#   thinking: on|off — overrides the paired model's `thinking:` for this stage
+#     only (a model's setting is a capability; these rules may need it off).
+#     Omit to inherit the model file.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example editor — edit me
 temperature: 0.0
@@ -1936,6 +1968,9 @@ _ENC_SAMPLE = """---
 #   timeout_s: HTTP timeout per OPERATION in seconds (default 300 for text).
 #   deadline_s: wall-clock ceiling for ONE request (default 2x timeout_s, min
 #     60s) — the knob that bounds a stalled request; 0 disables it.
+#   thinking: on|off — overrides the paired model's `thinking:` for this stage
+#     only (a model's setting is a capability; these rules may need it off).
+#     Omit to inherit the model file.
 #   batch_pages / overlap_pages / extraction_passes: chunking + recall knobs.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example encoder — edit me

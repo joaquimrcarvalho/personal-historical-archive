@@ -20,6 +20,9 @@
 #     60s). This is what bounds a request whose answer never arrives — a
 #     provider that trickles keep-alive bytes resets timeout_s on every
 #     byte, so timeout_s alone can never end a stall. Set 0 to disable.
+#   thinking: on|off — overrides the paired model's `thinking:` for this stage
+#     only (a model's setting is a capability; these rules may need it off).
+#     Omit to inherit the model file.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example palaeographer — edit me
 temperature: 0.1

@@ -2220,6 +2220,8 @@ def cmd_palaeographer(cfg: Config, args) -> None:
         pal = cfg.resolve_model(pal, model_id)
         print(f"palaeographer: {pal.id} ({pal.description or pal.model})")
         print(f"model: {pal.model_ref} ({pal.model})")
+        print(f"params: temperature={pal.temperature} max_tokens={pal.max_tokens} "
+              f"thinking={'off' if not pal.thinking else 'on'}")
         print(f"source: {source or 'config default (vision.palaeographer)'}")
         return
     print(f"default (vision.palaeographer): {cfg.active_palaeographer}")
@@ -2260,6 +2262,11 @@ def cmd_editor(cfg: Config, args) -> None:
             ed = cfg.resolve_model(ed, model_id)
             print(f"editor: {ed.id} ({ed.description or ed.model})")
             print(f"model: {ed.model_ref} ({ed.model})")
+            # The EFFECTIVE parameters, so a silently-wrong setting (e.g.
+            # thinking off on a prompt that must reason to translate) is visible
+            # without reading the model sheet — the 2026-09-21 Latin incident.
+            print(f"params: temperature={ed.temperature} max_tokens={ed.max_tokens} "
+                  f"thinking={'off' if not ed.thinking else 'on'}")
         else:
             print(f"editor: {ed_id or 'none (no editing)'}")
         print(f"source: {source or '(none — no editor configured)'}")

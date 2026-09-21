@@ -527,8 +527,8 @@ Editing a prompt file (sidecar, collection `prompt.md`, or the default)
 A **palaeographer** is a named set of transcription rules (content only). Each
 palaeographer is **one file** in the `palaeographers/` directory (the file
 name, without extension, is the id): YAML front matter holds only
-`temperature`/`max_tokens`/`timeout_s`/`deadline_s`; the body is the base
-prompt. It carries
+`temperature`/`max_tokens`/`timeout_s`/`deadline_s`/`thinking`; the body is the
+base prompt. It carries
 **no model** — the endpoint/model/api-key/resolution limits live in the model
 file, and the pairing is made in `pha.yaml`:
 
@@ -558,6 +558,18 @@ vision_jpeg_quality: 88
 context_tokens: 32768
 ---
 ```
+
+**`thinking:` — a stage-level override that beats the model file.**
+`thinking: on|off` may be set in a rules file (palaeographer, editor or
+encoder) as well as on a model file. Set on the **rules** file it applies to
+that stage only and **wins** over the paired model's value: the model file
+says what the model *can* do, the rules file says what this pass *needs*.
+Omit it to inherit the model's setting. This matters because reasoning is
+not always free — an editor prompt with an OCR-cleanup step followed by a
+translation step, run with reasoning disabled, stopped after the cleanup and
+left the page untranslated. `pha palaeographer` and `pha editor` print the
+resolved `temperature`/`max_tokens`/`thinking`, so the effective value is
+visible without reading either file.
 
 **To add a palaeographer**: duplicate `palaeographers/_sample.md`, rename
 (the name becomes the id), replace the body with your expertise, save. To add

@@ -33,6 +33,9 @@
 #   timeout_s: HTTP timeout per OPERATION in seconds (default 300 for text).
 #   deadline_s: wall-clock ceiling for ONE request (default 2x timeout_s, min
 #     60s) — the knob that bounds a stalled request; 0 disables it.
+#   thinking: on|off — overrides the paired model's `thinking:` for this stage
+#     only (a model's setting is a capability; these rules may need it off).
+#     Omit to inherit the model file.
 #   batch_pages / overlap_pages / extraction_passes: chunking + recall knobs.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example encoder — edit me

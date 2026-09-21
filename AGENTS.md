@@ -54,7 +54,10 @@
   (endpoint, api key, server model name, `api_style`, `max_vision_px`,
   `vision_jpeg_quality`, `context_tokens`); (2) `palaeographers/`, `editors/`,
   `encoders/<id>.md` — CONTENT ONLY (prompt/rules + `temperature`/`max_tokens`
-  + encoder params; they carry NO model); (3) `pha.yaml` sidecars that pair
+  + `thinking` + encoder params; they carry NO model). A `thinking: on|off`
+  on a rules file is a **stage-level override that wins over the paired
+  model's** value (the model file states a capability, the rules file states
+  what this pass needs; omit to inherit); (3) `pha.yaml` sidecars that pair
   each stage's `rules` with its `model` (BOTH required per stage), plus
   per-collection `render` settings. To add one: duplicate `_sample.md`,
   rename, edit, save. The file stem is the id. Legacy files that still inline
