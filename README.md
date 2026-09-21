@@ -598,7 +598,10 @@ servers:
 `pha search` never takes the lock: while a job is using the embedding server it
 answers with keyword results and a `note` rather than loading the embed model
 and evicting the job's model — pass `--force` to embed anyway, or point
-`embeddings.base_url` at a separate server.
+`embeddings.base_url` at a separate server. **Read-only commands keep working
+while a job runs**: `status`, `search`, `page`, `cite`, `config` and `pending`
+open the database read-only (no schema work on connect), so a long scan cannot
+refuse them.
 
 Ready-to-duplicate palaeographer samples also ship as **builtins** (names start
 with `_`, so they are never loaded until you copy one):

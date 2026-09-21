@@ -82,7 +82,7 @@ def make_server(cfg: Config) -> FastMCP:
         if mode not in ("hybrid", "keyword", "semantic"):
             mode = "hybrid"
         limit = max(1, min(int(limit), 50))
-        conn = db.connect(cfg.db_path)
+        conn = db.connect(cfg.db_path, readonly=True)   # query tool: no DDL on connect
         client = ModelClient(cfg.embed_base_url, timeout_s=cfg.embed_timeout_s)
         try:
             res = run_search(conn, client, cfg, query, mode=mode, limit=limit,
@@ -100,7 +100,7 @@ def make_server(cfg: Config) -> FastMCP:
             document_id: id from `search` or `list_documents`.
             max_chars: cap on how many characters of extracted text to return.
         """
-        conn = db.connect(cfg.db_path)
+        conn = db.connect(cfg.db_path, readonly=True)   # query tool: no DDL on connect
         try:
             doc = db.get_document(conn, document_id)
             if not doc:
@@ -150,7 +150,7 @@ def make_server(cfg: Config) -> FastMCP:
         """
         import base64
         from pathlib import Path
-        conn = db.connect(cfg.db_path)
+        conn = db.connect(cfg.db_path, readonly=True)   # query tool: no DDL on connect
         try:
             doc = db.get_document(conn, document_id)
             if not doc:
@@ -235,7 +235,7 @@ def make_server(cfg: Config) -> FastMCP:
         limit = max(1, min(int(limit), 500))
         if status and status not in ("done", "error", "processing", "pending"):
             status = None
-        conn = db.connect(cfg.db_path)
+        conn = db.connect(cfg.db_path, readonly=True)   # query tool: no DDL on connect
         try:
             docs = db.list_documents(conn, status=status, limit=limit, collection=collection)
             refs = db.bibliography_for_documents(conn)
@@ -299,7 +299,7 @@ def make_server(cfg: Config) -> FastMCP:
     @mcp.tool()
     def pha_extraction_status() -> dict:
         """Summary of the archive: documents by status, pages extracted, chunks indexed."""
-        conn = db.connect(cfg.db_path)
+        conn = db.connect(cfg.db_path, readonly=True)   # query tool: no DDL on connect
         try:
             return db.summary(conn)
         finally:
@@ -338,7 +338,7 @@ def make_server(cfg: Config) -> FastMCP:
           - `page_edits` links to `pages` via `page_id` and keys on
             (page_id, editor); it holds the edited `text` and `raw_sha`.
         """
-        conn = db.connect(cfg.db_path)
+        conn = db.connect(cfg.db_path, readonly=True)   # query tool: no DDL on connect
         try:
             return db.schema(conn)
         finally:
@@ -452,7 +452,7 @@ def make_server(cfg: Config) -> FastMCP:
         Use this to debug a scan that is finding 0 documents (e.g. an
         archive_dir / dropbox path mismatch, or files that were moved/removed)."""
         import os
-        conn = db.connect(cfg.db_path)
+        conn = db.connect(cfg.db_path, readonly=True)   # query tool: no DDL on connect
         try:
             docs = db.list_documents(conn, limit=10000)
         finally:
@@ -495,7 +495,7 @@ def make_server(cfg: Config) -> FastMCP:
         A document in the same directory as the dropbox root is reported under
         "(root)"; collections are the subdirectories of collections/.
         """
-        conn = db.connect(cfg.db_path)
+        conn = db.connect(cfg.db_path, readonly=True)   # query tool: no DDL on connect
         try:
             docs = db.list_documents(conn, limit=10000)
             # per-doc done-page counts in one query

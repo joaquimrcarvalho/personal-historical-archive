@@ -98,13 +98,35 @@ def _ensure_optional_indexes(conn: sqlite3.Connection) -> None:
             pass  # read-only / no space: fall back to the slow plan
 
 
-def connect(db_path: Path) -> sqlite3.Connection:
+def connect(db_path: Path, readonly: bool = False) -> sqlite3.Connection:
+    """Open the archive database.
+
+    ``readonly=True`` is for QUERY-ONLY commands. Opening a connection normally
+    runs DDL (`executescript(SCHEMA)`, `migrate()`, `_ensure_optional_indexes()`),
+    which needs a write lock — that is what refused a plain `pha config --doc N`
+    with "the archive database is busy" while a long `pha scan` was writing
+    (measured 2026-09-21, gap G6). A read-only connection skips all of it and
+    sets `PRAGMA query_only=ON`, so a query never waits on a writer and an
+    accidental write fails loudly instead of stalling.
+
+    A database with no schema yet is still initialised normally (a fresh archive
+    must work), and `serve` reaches the same end with `mode=ro`/`immutable=1`.
+    """
+    db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=20000")
     conn.execute("PRAGMA foreign_keys=ON")
+    if readonly:
+        fresh = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='documents'"
+        ).fetchone() is None
+        if not fresh:
+            conn.execute("PRAGMA query_only=ON")
+            return conn
+        # no schema yet: fall through and create it (nothing can be writing)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     migrate(conn)
     _ensure_optional_indexes(conn)

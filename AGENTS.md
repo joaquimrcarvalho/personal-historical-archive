@@ -160,8 +160,10 @@
   macOS), so two archives sharing one server serialise too. `pha search` never
   takes the lock: while a job uses the embedding server it answers with keyword
   results and a `note` instead of loading the embed model (`--force` embeds
-  anyway). **`pha reindex` belongs in that set because re-embedding loads the
-  embed model** — running it alongside a scan/edit is what times out `embed()`
+  anyway). Read-only commands (`status`, `search`, `page`, `cite`, `config`,
+  `pending`, and the FastMCP query tools) open the DB read-only — no schema work
+  on connect — so a running job cannot refuse them. **`pha reindex` belongs in
+  that set because re-embedding loads the embed model** — running it alongside a scan/edit is what times out `embed()`
   (see the vector-loss incident in
   `enhancements/pha-embed-loss-bug-report.md`).
 - **Local OCR/parse engines (`engine: tesseract` / `engine: liteparse`) run

@@ -208,7 +208,7 @@ def _print_page_rescan(r: dict) -> None:
 
 
 def cmd_search(cfg: Config, args) -> None:
-    conn = db.connect(cfg.db_path)
+    conn = db.connect(cfg.db_path, readonly=True)
     client = _client(cfg, cfg.embed_base_url, cfg.embed_timeout_s)
     try:
         res = None
@@ -286,7 +286,7 @@ def cmd_page(cfg: Config, args) -> None:
     """Print the FULL transcription of one page: `pha page <doc> <page> [--edited]`."""
     from .ingest import library_page_path
 
-    conn = db.connect(cfg.db_path)
+    conn = db.connect(cfg.db_path, readonly=True)
     try:
         doc, matches = _resolve_doc_for_page(conn, args.doc)
         if doc is None:
@@ -392,7 +392,7 @@ def cmd_cite(cfg: Config, args) -> None:
     stub) and carries the stable slug — so the footnote survives a re-scan and
     still says which reading the claim rests on.
     """
-    conn = db.connect(cfg.db_path)
+    conn = db.connect(cfg.db_path, readonly=True)
     try:
         doc, matches = _resolve_doc_for_page(conn, args.doc)
         if doc is None:
@@ -809,7 +809,7 @@ def cmd_pending(cfg: Config, args) -> None:
     """
     from .ingest import pending_review_files
 
-    conn = db.connect(cfg.db_path)
+    conn = db.connect(cfg.db_path, readonly=True)
     try:
         pending = pending_review_files(cfg, conn, doc_id=getattr(args, "doc", None))
         needs_edit = any(x["variant"].startswith("transcription-") for x in pending)
@@ -924,7 +924,7 @@ def cmd_config(cfg: Config, args) -> None:
                 print("give --doc <id|filename substring> or --path <dropbox-relative path>",
                       file=sys.stderr)
                 sys.exit(2)
-            conn = db.connect(cfg.db_path)
+            conn = db.connect(cfg.db_path, readonly=True)
             doc, matches = _resolve_doc_for_page(conn, args.doc)
             if doc is None:
                 if matches:
@@ -1118,7 +1118,7 @@ def _snip(names: list[str], width: int, max_names: int = 3, name_len: int = 32) 
 
 
 def cmd_status(cfg: Config, args) -> None:
-    conn = db.connect(cfg.db_path)
+    conn = db.connect(cfg.db_path, readonly=True)
     try:
         width = _term_width()
 

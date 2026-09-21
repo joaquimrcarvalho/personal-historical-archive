@@ -9,7 +9,7 @@ Shipped: stable page addresses, page navigation, stage filters, endpoint-scoped
 locking, per-document bibliographic references, scan resilience, **two-machine
 hand-over** (in `main` since 0.29.0) and **single-page re-scan**. Open: **four
 live defects** (the untranslated-Latin editor, archive-pointer resolution, and
-the hand-over gaps G1/G3/G5/G6), **four feature
+the hand-over gaps G1/G3/G5), **four feature
 requests** (post-filter replay, notes search, `extends`, the encoder prescan)
 and **four proposals awaiting a decision**.
 
@@ -23,7 +23,7 @@ stable IDs referenced from the prose, not ranks.
 | **3** | [`pha-review-scope-bug-report.md`](pha-review-scope-bug-report.md) §11 | **FIXED** (2026-09-21) — the import refuses while a pass writes or a document is `processing` (`--force` overrides), and "pending" now needs a body change, not just an mtime |
 | — | [`pha-latin-not-translated-thinking-disabled-bug-report.md`](pha-latin-not-translated-thinking-disabled-bug-report.md) | **OPEN.** `thinking: disabled` + an all-Latin page = untranslated text stored as `done`; ~1 300 pages measured |
 | — | [`pha-archive-pointer-loss-bug-report.md`](pha-archive-pointer-loss-bug-report.md) | **OPEN (partly mitigated).** Location trace + `archive_source` shipped; D1/D2/D5 remain |
-| — | [`pha-handover-editing-workflow-enhancement-request.md`](pha-handover-editing-workflow-enhancement-request.md) | **OPEN** — G1 (double embedding), G3 (`fetch` cannot wait), G5 (`work --pages/--resume`), G6 (read-only query refused while a job writes). G2/G4 fixed |
+| — | [`pha-handover-editing-workflow-enhancement-request.md`](pha-handover-editing-workflow-enhancement-request.md) | **OPEN** — G1 (double embedding), G3 (`fetch` cannot wait), G5 (`work --pages/--resume`). **G2/G4/G6 fixed** (G6: query commands now open the DB read-only, so a writer cannot refuse them) |
 | 4 | [`pha-post-filter-replay-enhancement-request.md`](pha-post-filter-replay-enhancement-request.md) | Draft — **now unblocked** (#1 is fixed); procedure already proven by hand |
 | 6 | [`pha-notes-search-enhancement-request.md`](pha-notes-search-enhancement-request.md) | Draft — independent, no-op when the notes index is empty |
 | 10 | `extends`, encoder prescan | Draft — **re-measure before building**; filters shrank both |
@@ -57,11 +57,10 @@ recurs, then ergonomics — and cheap fixes that unblock more work early.**
    patched, so the pha-side asks are the general enablers: let a **rules file**
    set `thinking:` (today only the model sheet can), and print the effective
    `thinking`/`temperature`/`max_tokens` in `pha editor`. **~½–1 day.**
-3. **#5's G6 — a read-only command refused while a job writes.** The cheapest fix
-   here, and it restores the PHA view during a long scan. The root cause is
-   sharp: `db.connect()` runs `migrate()` (DDL) on *every* connection, so even a
-   query takes a write lock — give query-only commands a genuinely read-only
-   connection (the DSH plugin already opens `immutable=1`). **~2 h.**
+3. **#5's G6 — a read-only command refused while a job writes. DONE (2026-09-21).**
+   `db.connect(readonly=True)` runs no DDL and sets `PRAGMA query_only`; the
+   query commands (`status`, `search`, `page`, `cite`, `config`, `pending`) and
+   every FastMCP query tool use it, so a writer cannot refuse them. **Shipped.**
 4. **Archive-pointer resolution (D1/D2/D5).** Bad failure mode — pha silently
    treats the source checkout as the archive and a *read-only* command seeds
    files into it — but the machine-local trace and `archive_source` already
