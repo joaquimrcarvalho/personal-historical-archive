@@ -1628,7 +1628,8 @@ def cmd_handoff(cfg: Config, args) -> None:
         dry = getattr(args, "dry_run", False)
         try:
             if sub == "in":
-                res = _ho.import_handoff(cfg, target, verbose=True, dry_run=dry)
+                res = _ho.import_handoff(cfg, target, verbose=True, dry_run=dry,
+                                         keep_defs=getattr(args, "keep_defs", False))
                 if dry:
                     print(json.dumps(res, indent=2, ensure_ascii=False))
                     return
@@ -1636,6 +1637,18 @@ def cmd_handoff(cfg: Config, args) -> None:
                 for d in res["documents"]:
                     print(f"  #{d['id']} {d['relpath']}: {d['pages_done']}/"
                           f"{d['page_count']} pages done ({d['status']})")
+                defs = res.get("installed_defs") or {}
+                for kind, names in (defs.get("replaced") or {}).items():
+                    if names:
+                        print(f"  ~ adopted the hand-out's {kind}: {' '.join(names)}")
+                conflicts = {k: v for k, v in (defs.get("conflicts") or {}).items() if v}
+                if conflicts:
+                    flat = ", ".join(f"{k}/{'/'.join(v)}" for k, v in conflicts.items())
+                    print(f"  ! kept this archive's definitions where they differ "
+                          f"from the hand-out: {flat}", file=sys.stderr)
+                    print("    the worker will process with ITS versions, so the "
+                          "returned pages may be reported stale at `pha handoff fetch`",
+                          file=sys.stderr)
                 print("  next: pha scan --path <the document>   # finishes the pending pages")
             elif sub == "back":
                 out = Path(args.out) if args.out else target.parent / f"{target.name}-back"
@@ -1752,9 +1765,14 @@ def cmd_unbundle(cfg: Config, args) -> None:
     if res["files_skipped"]:
         print(f"  {len(res['files_skipped'])} dropbox file(s) already present, not overwritten "
               f"(--force to overwrite)")
-    for kind, names in res["defs_installed"].items():
+    defs = res["defs_installed"]
+    for kind, names in defs.get("installed", {}).items():
         if names:
             print(f"  installed defs: {kind}: {' '.join(names)}")
+    for kind, names in defs.get("conflicts", {}).items():
+        if names:
+            print(f"  ! def {kind} differ from the bundle; kept this archive's: "
+                  f"{' '.join(names)}")
     print("  search index updated; run `pha reindex` only if embeddings failed above")
 
 
@@ -3086,6 +3104,10 @@ def main(argv: list[str] | None = None) -> None:
     ho_in = hsub.add_parser("in", help="import a hand-out here (the worker machine) and leave it resumable")
     ho_in.add_argument("directory", help="the hand-out payload directory")
     ho_in.add_argument("--dry-run", action="store_true", help="print the plan; touch nothing")
+    ho_in.add_argument("--keep-defs", action="store_true",
+                       help="keep THIS archive's own definition files when they differ "
+                            "from the hand-out's (default: adopt the hand-out's, so the "
+                            "worker resolves the owner's stages exactly)")
 
     ho_work = hsub.add_parser("work", help="scan -> edit -> encode the handed-out documents")
     ho_work.add_argument("directory", help="the hand-out payload directory")

@@ -330,7 +330,7 @@ naming it in its sidecar — DEC-3):
 | `collapse-whitespace` | text pre | collapses justified-print space runs (keeps blank lines / foliation) **and reduces spaced-dot runs (index dotted leaders, `. . . . .`) to a single space; a real ellipsis `...` is preserved** |
 | `footnote-marker-residue` | text pre | removes stray floating `*`/`**`/`°`/`º` superscript residue; keeps footnote blocks and digit refs |
 | `line-numbers` | text pre | MHSI margin line-numbers → `[l. N]` (whole-document aware) |
-| `join-hyphenated-words` | text post | re-joins a word split across a line break: (a) `X-` + lowercase continuation → drop the hyphen (`gover-`/`nador` → `governador`); (b) hyphen at BOTH the end of one line and the start of the next (`X-`/`-Y`) → one word keeping ONE internal hyphen (`Dizer-`/`-vos` → `Dizer-vos`); (c) Portuguese enclitic/mesoclitic pronouns keep their hyphen (`encarecer-vo-`/`s` → `encarecer-vos`) |
+| `join-hyphenated-words` | text post | re-joins a word split across a line break while KEEPING the lineation (the fragment closes the word at the end of the line; the rest of the next line stays its own line): (a) `X-` + lowercase continuation → drop the hyphen (`gover-`/`nador` → `governador`); (b) hyphen at BOTH the end of one line and the start of the next (`X-`/`-Y`) → one word keeping ONE internal hyphen (`Dizer-`/`-vos` → `Dizer-vos`); (c) Portuguese enclitic/mesoclitic pronouns keep their hyphen (`encarecer-vo-`/`s` → `encarecer-vos`); (d) an embedded layer's NOT SIGN (U+00AC) counts as the line-break hyphen; (e) a break reflowed into the middle of a line (`pro¬ pinas`, liteparse markdown) is joined in place |
 | **`markdown-from-records`** | **encoder.post** | **one Markdown file per record, built from the edited pages (artifact)** |
 
 ### `markdown-from-records` (the merged encoder-tools deliverable)
@@ -481,10 +481,13 @@ Each item is annotated with what actually landed:
    dotted leaders (`. . . . .`) reduced to a single space; a real ellipsis
    (`...`, no spaces) preserved; blank lines and `[3v]`/`[l. 10]` foliation
    untouched. `join-hyphenated-words` — a soft-hyphen split joined without the
-   hyphen (`gover-`/`nador` → `governador`); the doubled form joined keeping ONE
+   hyphen while PRESERVING the lineation (`gover-`/`nador mandou` →
+   `governador`/`mandou`, still two lines); the doubled form joined keeping ONE
    hyphen (`Dizer-`/`-vos` → `Dizer-vos`, `del-`/`-rei` → `del-rei`); a
    Portuguese enclitic keeps its hyphen (`encarecer-vo-`/`s` →
-   `encarecer-vos`). `strip-ocr-page-separator` — the `--- Page N ---` line
+   `encarecer-vos`); an embedded layer's `¬` (U+00AC) at end of line is treated
+   as the line-break hyphen, and a break reflowed mid-line (`pro¬ pinas`) is
+   joined in place. `strip-ocr-page-separator` — the `--- Page N ---` line
    removed and nothing else touched.
 
 Run: `.venv/bin/python -m pytest tests/test_filters.py` + the existing

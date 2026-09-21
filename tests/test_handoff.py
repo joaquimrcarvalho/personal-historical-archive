@@ -7,6 +7,7 @@ human work wins, and a lease the pipeline honours.
 """
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -128,6 +129,111 @@ def test_payload_carries_no_stub_and_import_resumes(tmp_path, monkeypatch):
         conn.close()
     assert doc["status"] == "processing", "the worker must resume, not treat it as done"
     assert doc["page_count"] == 3
+
+
+def test_manifest_signature_honours_a_per_document_sidecar(tmp_path, monkeypatch):
+    """The recorded config signature must resolve the SAME stages a scan does:
+    a per-document `<stem>.pha.yaml` `editor: null` wins over the collection
+    `pha.yaml`. Computing it without the stem recorded the collection's editor,
+    so `fetch` would misjudge staleness (R9)."""
+    monkeypatch.chdir(tmp_path)
+    a = _cfg(tmp_path, "projA")
+    _document(a, pages=2, done=2)
+    col = a.dropbox / "collections/DI"
+    (col / "pha.yaml").write_text(
+        "editor:\n  rules: colled\n  model: m-coll\n", encoding="utf-8"
+    )
+    (col / "vol04.pha.yaml").write_text("editor: null\n", encoding="utf-8")
+
+    out = tmp_path / "ho"
+    handoff.export_handoff(a, ["collections/DI"], out, verbose=False)
+    manifest = json.loads((out / "handoff.json").read_text(encoding="utf-8"))
+    sig = manifest["documents"][0]["config_signature"]
+    assert "|ed=" not in sig, f"per-document `editor: null` ignored: {sig}"
+    assert "colled" not in sig, sig
+
+
+# ------------------------------------------------------ definition adoption (R8)
+
+def _filter_def(cfg: Config, name: str, tag: str) -> Path:
+    """Write a minimal filter whose content is tagged, so identity is visible."""
+    d = cfg.filters_dir / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "filter.py").write_text(
+        f"def run(value, ctx):\n    return value + '-{tag}'\n", encoding="utf-8")
+    (d / "filter.md").write_text(
+        f"---\nname: {name}\nreturns: text\n---\n{tag}\n", encoding="utf-8")
+    return d
+
+
+def _owner_with_filter(tmp_path, tag: str = "OWNER"):
+    """An owner archive whose collection sidecar names the `hyphen` filter."""
+    a = _cfg(tmp_path, "projA")
+    _filter_def(a, "hyphen", tag)
+    col = a.dropbox / "collections" / "DI"
+    col.mkdir(parents=True, exist_ok=True)
+    (col / "pha.yaml").write_text(
+        "palaeographer:\n  rules: p1\n  model: m1\n  post:\n    - hyphen\n",
+        encoding="utf-8")
+    _document(a, pages=2, done=2)
+    out = tmp_path / "ho"
+    handoff.export_handoff(a, ["collections/DI"], out, verbose=False)
+    return a, out
+
+
+def test_import_adopts_the_handouts_differing_definition(tmp_path, monkeypatch):
+    """A hand-out is authoritative for the CONFIG as well as the documents: a
+    worker's own older filter must not win silently. That silent win is exactly
+    what made the returned pages carry a different filter signature and get
+    re-extracted on arrival."""
+    monkeypatch.chdir(tmp_path)
+    a, out = _owner_with_filter(tmp_path)
+    assert (out / "defs/filters/hyphen/filter.py").is_file()
+
+    b = _cfg(tmp_path, "projB")
+    bd = _filter_def(b, "hyphen", "WORKER")
+
+    res = handoff.import_handoff(b, out, verbose=False)
+    assert "-OWNER" in (bd / "filter.py").read_text(), \
+        "the hand-out's differing filter must be adopted"
+    assert res["installed_defs"]["replaced"].get("filters") == ["hyphen"]
+    assert (b.filters_dir / "hyphen/filter.py").read_text() == \
+        (a.filters_dir / "hyphen/filter.py").read_text()
+
+
+def test_import_keep_defs_keeps_the_workers_definition(tmp_path, monkeypatch):
+    """`--keep-defs` opts out: the worker's copy is kept and reported."""
+    monkeypatch.chdir(tmp_path)
+    _, out = _owner_with_filter(tmp_path)
+    b = _cfg(tmp_path, "projB")
+    bd = _filter_def(b, "hyphen", "WORKER")
+
+    res = handoff.import_handoff(b, out, verbose=False, keep_defs=True)
+    assert "-WORKER" in (bd / "filter.py").read_text()
+    assert res["installed_defs"]["conflicts"].get("filters") == ["hyphen"]
+
+
+def test_fetch_reports_stale_when_the_worker_used_a_different_definition(
+        tmp_path, monkeypatch):
+    """`fetch` records the WORKER's signature, so pages a worker produced under
+    a different filter are reported stale (R9) instead of applied silently."""
+    monkeypatch.chdir(tmp_path)
+    a, out = _owner_with_filter(tmp_path)
+
+    b = _cfg(tmp_path, "projB")
+    _filter_def(b, "hyphen", "WORKER")
+    handoff.import_handoff(b, out, verbose=False, keep_defs=True)
+
+    back = tmp_path / "ho-back"
+    handoff.build_result(b, out, back, verbose=False)
+    # the result carries the signature that actually produced the pages
+    result = json.loads((back / "handoff-result.json").read_text(encoding="utf-8"))
+    assert "hyphen" in result["documents"][0]["config_signature"]
+
+    applied = handoff.apply_result(a, back, verbose=False)
+    assert applied["stale"], \
+        "a worker that resolved a different filter must be reported stale"
+    assert applied["stale"][0].endswith("vol04.pdf")
 
 
 # ------------------------------------------------------------------- round trip

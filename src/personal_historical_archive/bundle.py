@@ -72,7 +72,7 @@ from .ingest import (
     write_edited_pages,
     write_records_file,
 )
-from .sidecar import resolve_sidecar
+from .sidecar import resolve_sidecar, resolve_stages, sidecar_chain
 from . import bibliography
 from . import locks
 from .model_client import ModelClient
@@ -139,6 +139,20 @@ def _filter_specs_for(cfg, doc_dir: Path) -> list:
 def _copy_stage_model(cfg, stage, bmodels: Path, used: list) -> None:
     """Copy the models/<id>.md referenced by a stage into the bundle."""
     mid = getattr(stage, "model_ref", "") or ""
+    if mid and mid in cfg.models:
+        mf = cfg.models[mid].prompt_file
+        if mf and mf.exists() and mf.name not in used:
+            _copy2(mf, bmodels / mf.name)
+            used.append(mf.name)
+
+
+def _copy_model_by_id(cfg, model_id: str | None, bmodels: Path, used: list) -> None:
+    """Copy `models/<model_id>.md` when the id names a known model file.
+
+    Unlike `_copy_stage_model` this takes the model *id* a pha.yaml sidecar
+    pairs with its rules, so it works for content-only stage files whose own
+    `model_ref` is empty."""
+    mid = (model_id or "").strip()
     if mid and mid in cfg.models:
         mf = cfg.models[mid].prompt_file
         if mf and mf.exists() and mf.name not in used:
@@ -271,6 +285,19 @@ def export_bundle(
                 if sp.is_relative_to(cfg.dropbox) and sp not in copied:
                     _copy2(sp, bdrop / sp.relative_to(cfg.dropbox))
                     copied.add(sp)
+            # --- pha.yaml sidecars: the configuration IS the sidecar. A bundle
+            # or hand-out that carries the documents without it makes the target
+            # resolve DIFFERENT stages (its own defaults), which is exactly the
+            # bug that let a sidecar-configured collection travel unconfigured.
+            # Copy the nearest-wins chain (dropbox root -> document dir) plus the
+            # document-specific `<stem>.pha.yaml`.
+            sc_paths = [d / "pha.yaml" for d in sidecar_chain(cfg.dropbox, fdir)]
+            if not src.is_dir():
+                sc_paths.append(fdir / f"{src.stem}.pha.yaml")
+            for scp in sc_paths:
+                if scp.is_file() and scp.is_relative_to(cfg.dropbox) and scp not in copied:
+                    _copy2(scp, bdrop / scp.relative_to(cfg.dropbox))
+                    copied.add(scp)
             # encoder definitions live next to the sources: copy the encoders
             # directory that holds each resolved definition (covers the def,
             # its .prompt.md/.langextract.md companions and any others).
@@ -353,6 +380,28 @@ def export_bundle(
                         _copy2(encf, bdefs["encoders"] / encf.name)
                         defs_used["encoders"].append(encf.name)
                     _copy_stage_model(cfg, cfg.encoders[eid], bdefs["models"], defs_used["models"])
+            # The model a pha.yaml stage names travels with it. `row["palaeographer"]`
+            # is only the content-only RULES id, so `_copy_stage_model` above finds
+            # no model_ref for a sidecar configuration; resolve the stages exactly
+            # as a scan would (sidecar-aware) and copy each declared model file.
+            # A no-op for legacy inline stages (their model_ref is empty).
+            try:
+                if src.is_dir():
+                    r_stages = resolve_stages(cfg, src, stem=None)
+                else:
+                    r_stages = resolve_stages(cfg, src.parent, stem=src.stem)
+            except Exception as e:  # noqa: BLE001 - resolution must not abort the bundle
+                if verbose:
+                    print(f"  ! {rel}: could not resolve stages for model defs: {e}",
+                          flush=True)
+                r_stages = {}
+            _copy_model_by_id(cfg, (r_stages.get("palaeographer") or {}).get("model_ref"),
+                              bdefs["models"], defs_used["models"])
+            _copy_model_by_id(cfg, (r_stages.get("editor") or {}).get("model_ref"),
+                              bdefs["models"], defs_used["models"])
+            for r_enc in r_stages.get("encoders") or []:
+                _copy_model_by_id(cfg, r_enc.get("model"),
+                                  bdefs["models"], defs_used["models"])
             if prompt_src and not prompt_src.startswith("builtin"):
                 pp = Path(prompt_src)
                 if pp.is_relative_to(cfg.prompts) and pp.exists() \
@@ -369,7 +418,7 @@ def export_bundle(
                 src = cfg.filters_dir / spec.name
                 if not src.is_dir():
                     continue
-                _copytree(src, out / "defs" / "filters" / spec.name)
+                _copy_tree(src, out / "defs" / "filters" / spec.name)
                 defs_used["filters"].append(spec.name)
 
             manifest_docs.append({
@@ -500,10 +549,73 @@ def _remove_bundled(
 
 # --------------------------------------------------------------------------- import
 
-def _install_defs(cfg, bundle_dir: Path, verbose: bool = True) -> dict:
-    """Install bundled model definitions that B does not already have.
-    Never overwrites an existing definition in B."""
-    installed: dict[str, list[str]] = {}
+def _files_identical(a: Path, b: Path) -> bool:
+    """True when two regular files hold identical bytes."""
+    try:
+        if a.stat().st_size != b.stat().st_size:
+            return False
+        return a.read_bytes() == b.read_bytes()
+    except OSError:
+        return False
+
+
+def _tree_identical(a: Path, b: Path) -> bool:
+    """True when two directories hold the same relative files, byte for byte."""
+    def rel_files(root: Path) -> dict[Path, Path]:
+        return {p.relative_to(root): p for p in root.rglob("*") if p.is_file()}
+
+    fa, fb = rel_files(a), rel_files(b)
+    if set(fa) != set(fb):
+        return False
+    return all(_files_identical(fa[r], fb[r]) for r in fa)
+
+
+def _install_defs(cfg, bundle_dir: Path, verbose: bool = True, *,
+                  replace: bool = False) -> dict:
+    """Install the definitions a bundle/hand-out carries into THIS archive.
+
+    An existing definition is left untouched when it is byte-identical to the
+    bundle's. When it DIFFERS:
+
+    - ``replace=True`` — the bundle's copy wins. This is what a hand-out needs:
+      its contract is that the worker resolves the OWNER's stages exactly, so a
+      worker's own older filter/model must not win silently. That silent win is
+      how a hand-out comes back carrying a different filter signature, gets
+      reported stale, and is re-extracted on arrival.
+    - ``replace=False`` (unbundle's contract) — this archive's copy is kept and
+      reported under ``conflicts``; nothing is clobbered.
+
+    Returns ``{"installed": …, "replaced": …, "conflicts": …}``, each mapping a
+    definition kind to the names affected.
+    """
+    result: dict[str, dict[str, list[str]]] = {
+        "installed": {}, "replaced": {}, "conflicts": {},
+    }
+
+    def _record(bucket: str, kind: str, name: str) -> None:
+        result[bucket].setdefault(kind, []).append(name)
+
+    def _handle_file(kind: str, src: Path, dst: Path) -> None:
+        if not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            _record("installed", kind, dst.name)
+            if verbose:
+                print(f"  + def {kind}/{dst.name} installed", flush=True)
+        elif _files_identical(src, dst):
+            return
+        elif replace:
+            shutil.copy2(src, dst)
+            _record("replaced", kind, dst.name)
+            if verbose:
+                print(f"  ~ def {kind}/{dst.name}: replaced with the hand-out's "
+                      f"copy (it differed)", flush=True)
+        else:
+            _record("conflicts", kind, dst.name)
+            if verbose:
+                print(f"  ! def {kind}/{dst.name}: differs from the bundle; "
+                      f"keeping this archive's copy", flush=True)
+
     targets = {
         "models": cfg.models_dir,
         "palaeographers": cfg.palaeographers_dir,
@@ -515,44 +627,38 @@ def _install_defs(cfg, bundle_dir: Path, verbose: bool = True) -> dict:
     # wholesale rather than file-by-file like the definitions above.
     fsrc = bundle_dir / "defs" / "filters"
     if fsrc.is_dir():
-        got = []
         for d in sorted(fsrc.iterdir()):
             if not d.is_dir():
                 continue
             dst = cfg.filters_dir / d.name
-            if dst.exists():
+            if not dst.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(d, dst)
+                _record("installed", "filters", d.name)
                 if verbose:
-                    print(f"  - def filters/{d.name}: already in this archive; keeping it",
-                          flush=True)
+                    print(f"  + def filters/{d.name} installed", flush=True)
+            elif _tree_identical(d, dst):
                 continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(d, dst)
-            got.append(d.name)
-            if verbose:
-                print(f"  + def filters/{d.name} installed", flush=True)
-        if got:
-            installed["filters"] = got
+            elif replace:
+                shutil.rmtree(dst)
+                shutil.copytree(d, dst)
+                _record("replaced", "filters", d.name)
+                if verbose:
+                    print(f"  ~ def filters/{d.name}: replaced with the hand-out's "
+                          f"copy (it differed)", flush=True)
+            else:
+                _record("conflicts", "filters", d.name)
+                if verbose:
+                    print(f"  ! def filters/{d.name}: differs from the bundle; "
+                          f"keeping this archive's copy", flush=True)
     for kind, dst_dir in targets.items():
         src_dir = bundle_dir / "defs" / kind
         if not src_dir.is_dir():
             continue
-        got = []
         for f in sorted(src_dir.iterdir()):
-            if not f.is_file():
-                continue
-            dst = dst_dir / f.name
-            if dst.exists():
-                if verbose:
-                    print(f"  - def {kind}/{f.name}: already in this archive; keeping it", flush=True)
-                continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(f, dst)
-            got.append(f.name)
-            if verbose:
-                print(f"  + def {kind}/{f.name} installed", flush=True)
-        if got:
-            installed[kind] = got
-    return installed
+            if f.is_file():
+                _handle_file(kind, f, dst_dir / f.name)
+    return result
 
 
 def _copy_dropbox_payload(cfg, bundle_dir: Path, force: bool, verbose: bool = True) -> tuple[list[str], list[str]]:

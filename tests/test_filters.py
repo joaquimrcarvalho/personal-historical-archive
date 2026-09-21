@@ -260,15 +260,26 @@ def test_collapse_whitespace_keep_leaders_param():
 
 
 def test_join_hyphenated_words_vectors():
-    # (a) soft hyphen: drop it
-    assert run_ref("join-hyphenated-words", "o gover-\nnador mandou") == "o governador mandou"
+    # The printed LINEATION is preserved: the continuation fragment closes the
+    # word at the end of the current line and the rest of the next line stays on
+    # its own line (an edition quoting the printed page wants the breaks).
+    assert run_ref("join-hyphenated-words", "o gover-\nnador mandou") == "o governador\nmandou"
+    assert run_ref("join-hyphenated-words", "& em seu cen-\ntro, todas as obras") \
+        == "& em seu centro,\ntodas as obras"
     # (b) doubled hyphen: keep exactly one
-    assert run_ref("join-hyphenated-words", "Dizer-\n-vos hei") == "Dizer-vos hei"
+    assert run_ref("join-hyphenated-words", "Dizer-\n-vos hei") == "Dizer-vos\nhei"
     assert run_ref("join-hyphenated-words", "del-\n-rei") == "del-rei"
     # (c) Portuguese enclitic keeps its hyphen
     assert run_ref("join-hyphenated-words", "encarecer-vo-\ns") == "encarecer-vos"
     # a real line-break compound before a capital is left alone
     assert run_ref("join-hyphenated-words", "Anti-\nCristo") == "Anti-\nCristo"
+    # (d) an embedded text layer's NOT SIGN (U+00AC) stands for the line-break
+    #     hyphen (ABBYY-style layers, e.g. Internet Archive scans)
+    assert run_ref("join-hyphenated-words", "o filho da Compa\u00ac\nnhia de Jesus") \
+        == "o filho da Companhia\nde Jesus"
+    # (e) a break reflowed into the MIDDLE of a line (liteparse markdown output,
+    #     where the line break the hyphen belonged to is gone) is joined in place
+    assert run_ref("join-hyphenated-words", "nem pro\u00ac pinas") == "nem propinas"
 
 
 def test_line_numbers_sequences_and_foliation():

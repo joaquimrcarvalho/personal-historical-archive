@@ -48,8 +48,8 @@ from .bundle import (
 )
 from . import locks
 from .config import Config
-from .ingest import (index_document, sha256_of, sha256_of_dir,
-                     write_document_pages, write_edited_pages)
+from .ingest import (_configured_filters_signature, index_document, sha256_of,
+                     sha256_of_dir, write_document_pages, write_edited_pages)
 from .sidecar import resolve_sidecar
 
 HANDOFF_FORMAT = "pha-handoff"
@@ -295,27 +295,29 @@ def _config_signature(cfg: Config, path: Path, doc=None) -> str:
             f"doc.edmodel={doc['editor_model'] or ''}",
         ]
     try:
-        sc = resolve_sidecar(cfg.dropbox, path if path.is_dir() else path.parent)
+        if path.is_dir():
+            sc = resolve_sidecar(cfg.dropbox, path)
+        else:
+            # pass the stem so a document-specific `<stem>.pha.yaml` wins here
+            # exactly as it does in `_doc_sidecar` at scan/edit time
+            sc = resolve_sidecar(cfg.dropbox, path.parent, stem=path.stem)
     except Exception:  # noqa: BLE001 - a signature is diagnostic, never fatal
         return "|".join(parts)
     if sc.palaeographer is not None:
         parts.append(f"pal={sc.palaeographer.rules}")
         parts.append(f"palmodel={sc.palaeographer.model}")
-        parts.append(f"palpost={_filter_names(sc.palaeographer.post)}")
+        parts.append(f"palpost={_configured_filters_signature(cfg, sc.palaeographer.post)}")
     if sc.editor is not None:
         parts.append(f"ed={sc.editor.rules}")
         parts.append(f"edmodel={sc.editor.model}")
-        parts.append(f"edpre={_filter_names(sc.editor.pre)}")
-        parts.append(f"edpost={_filter_names(sc.editor.post)}")
+        parts.append(f"edpre={_configured_filters_signature(cfg, sc.editor.pre)}")
+        parts.append(f"edpost={_configured_filters_signature(cfg, sc.editor.post)}")
     for enc in (sc.encoders or []):
-        parts.append(f"enc={enc.rules}:{enc.model}")
+        parts.append(
+            f"enc={enc.rules}:{enc.model}:"
+            f"{_configured_filters_signature(cfg, list(enc.pre) + list(enc.post))}"
+        )
     return "|".join(parts)
-
-
-def _filter_names(specs) -> str:
-    return ",".join(
-        f"{s.name}:{json.dumps(s.params, sort_keys=True)}" for s in (specs or [])
-    )
 
 
 def _drop_stub_pages(library_root: Path) -> int:
@@ -472,6 +474,7 @@ def read_manifest(handoff_dir_path: Path) -> dict:
 
 def import_handoff(
     cfg: Config, handoff_dir_path: Path, verbose: bool = True, dry_run: bool = False,
+    *, keep_defs: bool = False,
 ) -> dict:
     """Import a hand-out into the WORKER archive and leave it resumable.
 
@@ -485,6 +488,12 @@ def import_handoff(
       `pha scan` finishes it instead of skipping it,
     - a `*waiting*` placeholder is never imported as text, even if an older
       pha wrote one into the payload.
+
+    A hand-out is also authoritative for the CONFIG: a definition the worker
+    already has is **replaced** when it differs (the shipped `pha.yaml`
+    sidecars and the `defs/` this payload carries), so the worker resolves the
+    owner's stages exactly. `keep_defs=True` opts out and keeps the worker's
+    own (then the pages may come back `stale` — see `apply_result`).
 
     No renders travel, so the worker renders from source exactly as a normal
     scan does. Returns a summary dict.
@@ -505,8 +514,14 @@ def import_handoff(
             ],
         }
 
-    installed = _install_defs(cfg, handoff_dir_path, verbose=verbose)
-    copied, skipped = _copy_dropbox_payload(cfg, handoff_dir_path, force=False, verbose=verbose)
+    installed = _install_defs(cfg, handoff_dir_path, verbose=verbose,
+                              replace=not keep_defs)
+    # The hand-out is authoritative for the CONFIG as well as the definitions:
+    # replace this archive's older sidecars so the worker resolves the OWNER's
+    # stages. Forcing the source files too is safe — a hand-out document is
+    # identified by sha256, so an identical file is just rewritten.
+    copied, skipped = _copy_dropbox_payload(cfg, handoff_dir_path, force=True,
+                                            verbose=verbose)
 
     conn = db.connect(cfg.db_path)
     results: list[dict] = []
@@ -732,7 +747,13 @@ def build_result(
                 "palaeographer_model": doc["palaeographer_model"],
                 "editor": doc["editor"],
                 "editor_model": doc["editor_model"],
-                "config_signature": d.get("config_signature"),
+                # The WORKER's signature is what actually produced these pages;
+                # recording it (rather than copying the out-manifest's) is what
+                # lets `fetch` catch a worker that resolved a DIFFERENT filter or
+                # model and report the pages stale, instead of silently applying
+                # them and re-extracting on the next scan.
+                "config_signature": _config_signature(
+                    cfg, cfg.dropbox / str(d.get("relpath") or ""), doc),
                 "pages": pages,
                 "records": records,
             })

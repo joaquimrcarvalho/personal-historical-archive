@@ -516,3 +516,72 @@ def test_unbundle_does_not_import_waiting_stubs_as_text(tmp_path, monkeypatch):
     assert pages[2]["status"] != "done"
     # and the document is not claimed complete, so a scan resumes it
     assert doc["status"] != "done", "a partly-carried document must stay resumable"
+
+
+def test_bundle_carries_pha_yaml_sidecars_and_resolved_models(tmp_path):
+    """Regression: a `pha.yaml`-configured document must travel WITH its sidecar
+    chain (including a per-document `editor: null`) and with the MODEL files its
+    stages name — not just the content-only rules file.
+
+    The export path was written against the legacy `<stem>.palaeographer`
+    selection files, so it shipped neither the sidecars nor the models a
+    sidecar pairs with its rules; a worker/resolver archive then fell back to
+    its own defaults. Also covers the filter-directory copy (`_copytree` typo),
+    which only ran when a sidecar named a filter.
+    """
+    cfg = _make_cfg(tmp_path, "projS")
+    cfg.ensure_dirs()
+    # content-only stage rules: the MODEL is named by the sidecar, so these
+    # files carry no model_ref of their own
+    (cfg.palaeographers_dir / "p1.md").write_text(
+        "---\ndescription: ocr rules\n---\nTranscribe faithfully.\n"
+    )
+    (cfg.editors_dir / "e1.md").write_text(
+        "---\ndescription: editor rules\n---\nModernize.\n"
+    )
+    (cfg.models_dir / "m1.md").write_text(
+        "---\ndescription: test model\nbase_url: http://127.0.0.1:1234/v1\n"
+        "model: fake-model\n---\n"
+    )
+    # a filter the sidecar names is archive-level and must travel too
+    fdir = cfg.filters_dir / "hyphen"
+    fdir.mkdir(parents=True)
+    (fdir / "filter.py").write_text("def run(value, ctx):\n    return value\n")
+    (fdir / "filter.md").write_text("---\nreturns: text\n---\njoin hyphens\n")
+    cfg = Config.load(cfg.root)
+
+    col = cfg.dropbox / "collections" / "COLX"
+    col.mkdir(parents=True)
+    (col / "pha.yaml").write_text(
+        "palaeographer:\n  rules: p1\n  model: m1\n  post:\n    - hyphen\n"
+        "editor:\n  rules: e1\n  model: m1\n"
+    )
+    src = col / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 sidecar-configured")
+    # this volume is read WITHOUT the (paid) editor: the override must travel
+    (col / "doc.pha.yaml").write_text("editor: null\n")
+
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(
+        conn, filename="doc.pdf", path=str(src), sha256=sha256_of(src),
+        size_bytes=src.stat().st_size, mtime=src.stat().st_mtime, kind="pdf",
+        now=time.time(), dir_path="collections/COLX", palaeographer="p1",
+        editor=None,
+    )
+    _db.update_document(conn, doc_id, page_count=5)
+    _db.set_document_status(conn, doc_id, "processing")
+    conn.commit()
+    conn.close()
+
+    bundle_dir = tmp_path / "bundleS"
+    export_bundle(cfg, ["COLX"], out=bundle_dir, verbose=False)
+
+    # the configuration IS the sidecar: both the collection file and the
+    # per-document override travel
+    assert (bundle_dir / "dropbox/collections/COLX/pha.yaml").is_file()
+    assert (bundle_dir / "dropbox/collections/COLX/doc.pha.yaml").is_file()
+    # the model the sidecar pairs with the rules travels, despite the rules
+    # file having an empty model_ref
+    assert (bundle_dir / "defs/models/m1.md").is_file()
+    # the filter named by the sidecar travels (regression: `_copytree` typo)
+    assert (bundle_dir / "defs/filters/hyphen/filter.py").is_file()
