@@ -1095,8 +1095,10 @@ pha mcp [--transport stdio|sse] [--port 8000]
 pha bundle TARGET... [--out DIR] [--force] [--move]  # export collections/docs as a portable bundle
                                                      #   (--move: delete them from THIS archive too)
 pha unbundle BUNDLE [--force]                # import a bundle into THIS archive (no re-scan/edit)
-pha handoff out TARGET... [--out DIR] [--worker NAME] [--force]
+pha handoff out TARGET... [--out DIR] [--worker NAME] [--force] [--force-inbox]
                                              # lend docs to a second machine (they stay HERE)
+                                             #   TARGET: a dropbox path, or inbox/<rel>
+                                             #   (moved into the dropbox first)
 pha handoff in DIR                           # (worker) import a hand-out and leave it resumable
 pha handoff work DIR [--dry-run]             # (worker) scan -> edit -> encode the lent docs
 pha handoff back DIR [--out DIR] [--dry-run] # (worker) build the return payload
@@ -1526,6 +1528,14 @@ pha handoff back ~/x/DI.pha-handoff    # write the return payload (…-back)
 # back on A:
 pha handoff fetch ~/x/DI.pha-handoff-back   # merge the work into the same document
 ```
+
+The document does **not** have to have been scanned here first. Handing it out
+**registers** it (identity, resolved stages and real page count; no render and
+no transcription) — the registration is what the lease is looked up through, so
+a local `pha scan` sees it as out, and the worker does the whole job. A target
+under `inbox/` is relocated into the dropbox first (`inbox/collections/DI/x.pdf`
+→ `dropbox/collections/DI/x.pdf`): only the entries you name, and it refuses to
+overwrite a file already there unless `--force-inbox`.
 
 `work` is only a convenience: it runs `pha scan --path …`, `pha edit --path …`
 and `pha encode --path …` in order, printing each stage's own result. Run those

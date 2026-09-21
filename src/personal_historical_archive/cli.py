@@ -1258,6 +1258,48 @@ def _inbox_execute(cfg: Config, plan: list[tuple[Path, Path]]) -> None:
         _move_into(src, dst)
 
 
+def _handoff_inbox_targets(cfg: Config, targets: list, force: bool = False) -> list:
+    """Resolve `handoff out` targets, relocating any `inbox/<rel>` entry into the
+    dropbox first (mirroring its relative layout) so the hand-out then runs
+    normally.
+
+    Only entries NAMED on the command line move — `handoff out` never relocates
+    the whole inbox. A dropbox collision is REFUSED rather than silently
+    overwriting the file already there (`--force-inbox` overrides)."""
+    from .handoff import HandoffError
+
+    resolved: list[str] = []
+    for t in targets:
+        if t == "inbox" or t == "inbox/":
+            raise HandoffError(
+                "name what to hand over (e.g. `inbox/collections/COLX`) — "
+                "`handoff out` never moves the whole inbox")
+        if not t.startswith("inbox/"):
+            resolved.append(t)
+            continue
+        rel = t[len("inbox/"):].strip("/")
+        if not rel:
+            raise HandoffError(f"nothing named in the inbox target {t!r}")
+        try:
+            plan = _inbox_plan(cfg, rel)
+        except ValueError as e:
+            raise HandoffError(str(e)) from e
+        if not plan:
+            raise HandoffError(f"nothing in the inbox at {rel!r}")
+        for src, dst in plan:
+            if dst.exists() and not force:
+                raise HandoffError(
+                    f"refusing to move inbox/{src.relative_to(cfg.inbox)}: "
+                    f"dropbox/{dst.relative_to(cfg.dropbox)} already exists "
+                    f"(pass --force-inbox to replace it)")
+        _inbox_execute(cfg, plan)
+        for src, dst in plan:
+            print(f"  → moved inbox/{src.relative_to(cfg.inbox)}  →  "
+                  f"dropbox/{dst.relative_to(cfg.dropbox)}", flush=True)
+            resolved.append(dst.relative_to(cfg.dropbox).as_posix())
+    return resolved
+
+
 def _inbox_json(cfg: Config) -> dict:
     """Structured inbox listing: one group per directory holding parked units, the
     documents in it, and the totals a move would carry."""
@@ -1612,7 +1654,11 @@ def cmd_handoff(cfg: Config, args) -> None:
     elif sub == "out":
         out = Path(args.out) if args.out else Path.cwd() / f"{Path(args.targets[0]).name}.pha-handoff"
         try:
-            res = _ho.export_handoff(cfg, args.targets, out, worker=args.worker,
+            # `inbox/<rel>` targets are relocated into the dropbox first, then
+            # the hand-out proceeds exactly as for a dropbox document.
+            targets = _handoff_inbox_targets(cfg, args.targets,
+                                             force=getattr(args, "force_inbox", False))
+            res = _ho.export_handoff(cfg, targets, out, worker=args.worker,
                                      force=args.force, verbose=True)
         except (_ho.HandoffError, FileExistsError) as e:
             _fail(e)
@@ -3096,10 +3142,15 @@ def main(argv: list[str] | None = None) -> None:
     hsub = ho.add_subparsers(dest="handoff_cmd")
 
     ho_out = hsub.add_parser("out", help="lease documents and write a hand-out payload")
-    ho_out.add_argument("targets", nargs="+", help="collection or document path(s) under the dropbox")
+    ho_out.add_argument("targets", nargs="+",
+                        help="collection or document path(s) under the dropbox, or "
+                             "inbox/<rel> to move a held document in first")
     ho_out.add_argument("--out", "-o", default=None, help="payload directory (default: <target>.pha-handoff)")
     ho_out.add_argument("--worker", default="", help="name of the machine taking the work (for `status`)")
     ho_out.add_argument("--force", action="store_true", help="supersede an existing hand-out of the same document")
+    ho_out.add_argument("--force-inbox", action="store_true",
+                        help="when an inbox target would overwrite a file already in the "
+                             "dropbox, replace it instead of refusing")
 
     ho_in = hsub.add_parser("in", help="import a hand-out here (the worker machine) and leave it resumable")
     ho_in.add_argument("directory", help="the hand-out payload directory")

@@ -236,6 +236,133 @@ def test_fetch_reports_stale_when_the_worker_used_a_different_definition(
     assert applied["stale"][0].endswith("vol04.pdf")
 
 
+# --------------------------------------------------------------- cold start
+
+def _write_pdf(path: Path, pages: int = 1) -> None:
+    """A real (tiny) PDF, so the registration can read a true page count."""
+    import pymupdf
+    doc = pymupdf.open()
+    for _ in range(pages):
+        doc.new_page()
+    doc.save(str(path))
+    doc.close()
+
+
+def test_export_registers_a_brand_new_document(tmp_path, monkeypatch):
+    """COLD START: a document with no archive record can be handed out.
+
+    The export registers it first — identity, resolved stages, real page count,
+    `processing` with no pages, and no render/transcription — so the payload
+    carries it and the lease can protect it from a local scan."""
+    monkeypatch.chdir(tmp_path)
+    a = _cfg(tmp_path, "projA")
+    col = a.dropbox / "collections" / "DI"
+    col.mkdir(parents=True, exist_ok=True)
+    src = col / "newvol.pdf"
+    _write_pdf(src, pages=2)
+
+    conn = _db.connect(a.db_path)
+    assert _db.get_document_by_path(conn, str(src)) is None, "must start unregistered"
+    conn.close()
+
+    out = tmp_path / "ho"
+    handoff.export_handoff(a, ["collections/DI"], out, verbose=False)
+
+    assert (out / "dropbox/collections/DI/newvol.pdf").is_file()
+    d = json.loads((out / "handoff.json").read_text(encoding="utf-8"))["documents"][0]
+    assert d["page_count"] == 2
+    assert d["pages_done"] == []
+    assert d["sha256"]
+
+    conn = _db.connect(a.db_path)
+    try:
+        row = _db.get_document_by_path(conn, str(src))
+    finally:
+        conn.close()
+    assert row is not None and row["status"] == "processing"
+    assert row["page_count"] == 2
+    # registered + leased: a local scan now sees it as out on hand-over
+    assert handoff.active_leases(a)
+
+
+def test_bundle_alone_still_skips_unregistered_documents(tmp_path, monkeypatch):
+    """The cold start is hand-off-only: `pha bundle` keeps its contract of
+    moving finished results, never raw unscanned files."""
+    monkeypatch.chdir(tmp_path)
+    from personal_historical_archive.bundle import export_bundle
+
+    a = _cfg(tmp_path, "projA")
+    col = a.dropbox / "collections" / "DI"
+    col.mkdir(parents=True, exist_ok=True)
+    _write_pdf(col / "raw.pdf", pages=1)
+
+    res = export_bundle(a, ["collections/DI"], tmp_path / "bnd", verbose=False)
+    assert res["documents"] == 0
+    assert not (tmp_path / "bnd" / "dropbox/collections/DI/raw.pdf").exists()
+
+
+# ------------------------------------------------------------- inbox targets
+
+def test_handoff_out_moves_a_named_inbox_entry_then_hands_out(tmp_path, monkeypatch):
+    """`inbox/<rel>` is relocated into the mirrored dropbox path and the
+    hand-out then runs normally (cold-start registration included)."""
+    from personal_historical_archive.cli import _handoff_inbox_targets
+
+    monkeypatch.chdir(tmp_path)
+    a = _cfg(tmp_path, "projA")
+    held = a.inbox / "collections" / "DI" / "held.pdf"
+    held.parent.mkdir(parents=True, exist_ok=True)
+    _write_pdf(held, pages=2)
+
+    targets = _handoff_inbox_targets(a, ["inbox/collections/DI/held.pdf"])
+    assert targets == ["collections/DI/held.pdf"]
+    moved = a.dropbox / "collections" / "DI" / "held.pdf"
+    assert moved.is_file()
+    assert not held.exists(), "the inbox entry must MOVE, not copy"
+
+    out = tmp_path / "ho"
+    handoff.export_handoff(a, targets, out, verbose=False)
+    assert (out / "dropbox/collections/DI/held.pdf").is_file()
+    conn = _db.connect(a.db_path)
+    try:
+        row = _db.get_document_by_path(conn, str(moved))
+    finally:
+        conn.close()
+    assert row is not None and row["page_count"] == 2
+
+
+def test_handoff_out_refuses_the_whole_inbox(tmp_path, monkeypatch):
+    """`handoff out` must never relocate the whole inbox — only named entries."""
+    from personal_historical_archive.cli import _handoff_inbox_targets
+
+    monkeypatch.chdir(tmp_path)
+    a = _cfg(tmp_path, "projA")
+    with pytest.raises(handoff.HandoffError):
+        _handoff_inbox_targets(a, ["inbox"])
+
+
+def test_handoff_out_refuses_an_inbox_collision(tmp_path, monkeypatch):
+    """Moving must not silently overwrite a file already in the dropbox."""
+    from personal_historical_archive.cli import _handoff_inbox_targets
+
+    monkeypatch.chdir(tmp_path)
+    a = _cfg(tmp_path, "projA")
+    held = a.inbox / "collections" / "DI" / "held.pdf"
+    held.parent.mkdir(parents=True, exist_ok=True)
+    _write_pdf(held, pages=1)
+    (a.dropbox / "collections" / "DI").mkdir(parents=True, exist_ok=True)
+    _write_pdf(a.dropbox / "collections" / "DI" / "held.pdf", pages=3)
+
+    with pytest.raises(handoff.HandoffError):
+        _handoff_inbox_targets(a, ["inbox/collections/DI/held.pdf"])
+    assert held.exists(), "a refused move must leave the inbox entry in place"
+
+    # --force-inbox replaces the dropbox copy
+    moved = _handoff_inbox_targets(a, ["inbox/collections/DI/held.pdf"], force=True)
+    assert moved == ["collections/DI/held.pdf"]
+    assert not held.exists()
+
+
 # ------------------------------------------------------------------- round trip
 
 def test_round_trip_applies_in_place_and_keeps_human_work(tmp_path, monkeypatch):
@@ -279,6 +406,37 @@ def test_round_trip_applies_in_place_and_keeps_human_work(tmp_path, monkeypatch)
     assert applied["counts"]["conflict"] == 0
     assert handoff.read_lease(a, hid).state == handoff.STATE_APPLIED
     assert handoff.active_leases(a) == []
+
+
+def test_fetch_adopts_the_workers_page_count(tmp_path, monkeypatch):
+    """An owner row registered but never rendered (`page_count` NULL — handed
+    out unscanned, or a scan interrupted after registration) gets the worker's
+    count at fetch, so status and library front matter agree with the pages."""
+    monkeypatch.chdir(tmp_path)
+    a = _cfg(tmp_path, "projA")
+    doc_id, _ = _document(a, pages=3, done=1)
+
+    out = tmp_path / "ho"
+    handoff.export_handoff(a, ["collections/DI"], out, verbose=False)
+    b = _cfg(tmp_path, "projB")
+    handoff.import_handoff(b, out, verbose=False)
+    _worker_finish(b, out, [2, 3])
+    back = tmp_path / "ho-back"
+    handoff.build_result(b, out, back, verbose=False)
+
+    conn = _db.connect(a.db_path)
+    conn.execute("UPDATE documents SET page_count=NULL WHERE id=?", (doc_id,))
+    conn.commit()
+    conn.close()
+
+    handoff.apply_result(a, back, verbose=False)
+
+    conn = _db.connect(a.db_path)
+    try:
+        row = _db.get_document(conn, doc_id)
+    finally:
+        conn.close()
+    assert row["page_count"] == 3
 
 
 # ------------------------------------------------------------------- conflicts

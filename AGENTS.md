@@ -549,7 +549,12 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   scan/edit/encode. On the owner: `pha handoff out <target> [--worker NAME]`
   writes a payload and **leases** the document, so `pha scan`/`edit`/`encode`/
   `reindex` skip it (name+age shown, `pha status` lists it under "out on
-  hand-over"; `--include-leased` overrides). On the worker: `pha handoff in
+  hand-over"; `--include-leased` overrides). A document that has never been
+  scanned can be handed out too: `handoff out` **registers** it first
+  (identity, resolved stages, page count — no render, no transcription), and
+  that record is what the lease is looked up through. An `inbox/<rel>` target
+  is moved into the dropbox first (mirroring the layout; only entries you name,
+  refusing to overwrite unless `--force-inbox`). On the worker: `pha handoff in
   <payload>`, then `pha scan/edit/encode --path <doc>` (or the `pha handoff
   work` wrapper), then `pha handoff back`. Back on the owner: `pha handoff
   fetch <result>` merges the work into the SAME document — local human

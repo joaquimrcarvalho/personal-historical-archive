@@ -48,9 +48,11 @@ from .bundle import (
 )
 from . import locks
 from .config import Config
-from .ingest import (_configured_filters_signature, index_document, sha256_of,
-                     sha256_of_dir, write_document_pages, write_edited_pages)
-from .sidecar import resolve_sidecar
+from .extract import page_count
+from .ingest import (_configured_filters_signature, index_document, is_supported,
+                     sha256_of, sha256_of_dir, write_document_pages,
+                     write_edited_pages)
+from .sidecar import resolve_sidecar, resolve_stages
 
 HANDOFF_FORMAT = "pha-handoff"
 HANDOFF_VERSION = 1
@@ -250,6 +252,63 @@ def _doc_sha(cfg: Config, path: Path) -> str:
     return sha256_of_dir(path) if path.is_dir() else sha256_of(path)
 
 
+def _supported_image_count(unit: Path) -> int:
+    """The pages a directory-of-images document will have: its supported images."""
+    return sum(1 for f in unit.iterdir()
+               if f.is_file() and not f.name.startswith(".") and is_supported(f.name))
+
+
+def _register_document(cfg: Config, conn, unit: Path, sha: str | None = None) -> int:
+    """Create the archive record for a document that has none — a COLD START.
+
+    A hand-out needs a `documents` row for two reasons: `export_bundle` only
+    carries registered documents, and the lease is looked up *through* the row
+    (`_leased_document`), so without one a local `pha scan` could not even see
+    that the document is out on hand-over.
+
+    This is ONLY the registration half of `ingest_file`: identity, the resolved
+    stage ids and the real page count, left `processing` with no pages. It never
+    renders and never transcribes — that is the worker's job.
+    """
+    if unit.is_dir():
+        kind = "dir"
+        total = _supported_image_count(unit)
+    else:
+        kind = "pdf" if unit.suffix.lower() == ".pdf" else "image"
+        try:
+            total = page_count(unit) if kind == "pdf" else 1
+        except Exception:  # noqa: BLE001 - an unreadable source: the worker decides
+            total = 0
+    sha = sha or (sha256_of_dir(unit) if unit.is_dir() else sha256_of(unit))
+    stat = unit.stat()
+    try:
+        rel_dir = str(unit.parent.relative_to(cfg.dropbox))
+    except ValueError:
+        rel_dir = ""
+    if rel_dir == ".":
+        rel_dir = ""
+    try:
+        stages = resolve_stages(cfg, unit if unit.is_dir() else unit.parent,
+                                stem=None if unit.is_dir() else unit.stem)
+    except Exception:  # noqa: BLE001 - a broken sidecar must not block a hand-out
+        stages = {}
+    pal = stages.get("palaeographer") or {}
+    ed = stages.get("editor") or {}
+    doc_id = db.add_document(
+        conn, filename=unit.name, path=str(unit), sha256=sha,
+        size_bytes=stat.st_size, mtime=stat.st_mtime, kind=kind,
+        now=time.time(), dir_path=rel_dir,
+        palaeographer=pal.get("id"), editor=ed.get("id"),
+        palaeographer_model=pal.get("model_ref"), editor_model=ed.get("model_ref"),
+    )
+    db.update_document(conn, doc_id, page_count=total)
+    # `processing` is the resumable state: a later scan resumes the pages
+    # instead of hitting the UNIQUE(path) constraint on a duplicate insert.
+    db.set_document_status(conn, doc_id, "processing")
+    conn.commit()
+    return doc_id
+
+
 def _annotation(cfg: Config, conn, path: Path, rel: str, sha: str) -> dict:
     """The per-document hand-off record: identity + config + resume point."""
     doc = db.get_document_by_path(conn, str(path))
@@ -381,6 +440,15 @@ def export_handoff(
                     continue
                 rel = str(unit.relative_to(cfg.dropbox))
                 sha = _doc_sha(cfg, unit)
+                # COLD START: a document with no archive record can still be
+                # handed out. Register it first — the record is what the lease
+                # is looked up through, so a local `pha scan` would otherwise
+                # not even see that the document is out on hand-over.
+                if db.get_document_by_path(conn, str(unit)) is None:
+                    _register_document(cfg, conn, unit, sha=sha)
+                    if verbose:
+                        print(f"  + registered {rel} (no archive record yet; "
+                              f"handing it out unscanned)", flush=True)
                 docs.append(_annotation(cfg, conn, unit, rel, sha))
         if not docs:
             raise HandoffError("no documents found for the given targets")
@@ -1133,6 +1201,13 @@ def apply_result(
             _apply_records(conn, local, rd, counts)
 
             expected = int(rd.get("page_count") or 0)
+            if expected:
+                # The owner's row may carry NO page count: it can have been
+                # registered but never rendered (handed out unscanned, or a scan
+                # interrupted right after registration). Adopt the worker's count
+                # so `pha status`/MCP and the library front matter agree with the
+                # pages that just arrived.
+                db.update_document(conn, doc_id, page_count=expected)
             have = conn.execute(
                 "SELECT COUNT(*) n FROM pages WHERE document_id = ? AND status = 'done'",
                 (doc_id,),
