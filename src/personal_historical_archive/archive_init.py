@@ -149,6 +149,8 @@ pha status                       # find a document's collection / dropbox path
 pha scan --path collections/COLX                 # re-scan one collection or doc
 pha scan --path collections/COLX --reprocess     # re-extract pages already done
 pha edit --path collections/COLX --page 3        # re-run the editor on one page
+pha scan --path DOC --page 3 --palaeographer X --model Y   # re-READ one page with a chosen model (PINS it)
+pha scan --path DOC --page 3 --unpin             # release that page's pin (the text is kept)
 pha reindex --doc N                              # re-embed one document (only what changed)
 pha reindex --doc N --page 3                     # re-embed one page of one document
 pha test collections/COLX --pages 3              # dry-run a config on a sample
@@ -445,6 +447,16 @@ work on a document you have already processed, target it and force it.
   ```bash
   pha edit --path collections/COLX --page 3
   ```
+- Re-READ one page with a stronger model (a bad page does not cost the whole
+  volume). The reading is pinned so a later bulk `pha scan` keeps it, and the
+  editor + indexer follow for that page automatically:
+  ```bash
+  pha scan --path collections/COLX/vol04.pdf --page 3 \\
+           --palaeographer <rules> --model <model>     # add --dry-run to preview
+  pha scan --path collections/COLX/vol04.pdf --page 3 --unpin   # release it
+  ```
+  A page a human corrected is refused: `pha review --unset --doc N --page 3`
+  first.
 - Try a configuration on a sample before a full pass:
   ```bash
   pha test collections/COLX --pages 3

@@ -21,6 +21,7 @@ from .ingest import (
     edit_all,
     encode_all,
     make_vision_client,
+    plan_page_rescan,
     prune_orphan_renders,
     prune_redundant_edited_dirs,
     reindex_all,
@@ -28,6 +29,7 @@ from .ingest import (
     remove_render_if_orphaned,
     scan_once,
     sync_bibliography,
+    unpin_pages,
     watch,
     write_document_pages,
 )
@@ -67,11 +69,48 @@ def _age_str(seconds: float) -> str:
 
 # --------------------------------------------------------------------------- commands
 
+def _parse_pages(values) -> set[int] | None:
+    """Parse repeated `--page N` / `--page N,M` into a set (None when absent)."""
+    if not values:
+        return None
+    out: set[int] = set()
+    for raw in values:
+        for tok in str(raw).replace(";", ",").split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            try:
+                n = int(tok)
+            except ValueError:
+                print(f"error: --page expects page numbers, got {tok!r}", file=sys.stderr)
+                sys.exit(2)
+            if n < 1:
+                print(f"error: --page must be >= 1 (got {n})", file=sys.stderr)
+                sys.exit(2)
+            out.add(n)
+    return out or None
+
+
 def cmd_scan(cfg: Config, args) -> None:
+    pages = _parse_pages(getattr(args, "page", None))
+    if pages and args.watch:
+        print("error: --page cannot be combined with --watch (watching is whole-dropbox)",
+              file=sys.stderr)
+        sys.exit(2)
+    if args.watch and (getattr(args, "dry_run", False) or getattr(args, "unpin", False)):
+        print("error: --watch cannot be combined with --dry-run/--unpin", file=sys.stderr)
+        sys.exit(2)
+    if getattr(args, "dry_run", False) and not pages:
+        print("error: --dry-run is only meaningful with --page (nothing else to plan)",
+              file=sys.stderr)
+        sys.exit(2)
     client, pal = make_vision_client(cfg, args.palaeographer)
     print(f"palaeographer: {pal.id} ({pal.description or pal.model})")
     if getattr(args, "path", None):
         print(f"target: {args.path}")
+    if pages:
+        print(f"page(s): {', '.join(str(p) for p in sorted(pages))}"
+              + (" (dry run)" if getattr(args, "dry_run", False) else ""))
     try:
         if args.watch:
             watch(cfg, client, pal, explicit_prompt=args.prompt, debounce_s=args.debounce,
@@ -79,24 +118,93 @@ def cmd_scan(cfg: Config, args) -> None:
             return
         res = scan_once(cfg, client, pal, explicit_prompt=args.prompt, reprocess=args.reprocess,
                         path=getattr(args, "path", None),
-                        include_leased=getattr(args, "include_leased", False))
+                        include_leased=getattr(args, "include_leased", False),
+                        pages=pages, pal_override=args.palaeographer,
+                        model_override=getattr(args, "model", None),
+                        dry_run=getattr(args, "dry_run", False),
+                        unpin=getattr(args, "unpin", False),
+                        pin=not getattr(args, "no_pin", False))
     finally:
         client.close()
-    summary = {"ingested": 0, "skipped": 0, "error": 0, "stalled": 0}
+    # a dry run / unpin prints its own report; nothing else to summarise
+    if getattr(args, "dry_run", False):
+        _print_scan_plan(res)
+        return
+    if getattr(args, "unpin", False):
+        for r in res["results"]:
+            if r["action"] == "unpinned":
+                print(f"  unpinned {r['unpinned']} page(s) of {r['filename']} "
+                      f"— the text is kept; a later scan may re-read them")
+            else:
+                print(f"  {r.get('reason', 'nothing to unpin')}")
+        return
+    summary = {"ingested": 0, "skipped": 0, "error": 0, "stalled": 0, "rescanned": 0}
     for r in res["results"]:
         summary[r["action"]] = summary.get(r["action"], 0) + 1
         if r["action"] == "ingested":
             print(f"  + {r['filename']} ({r['pages']} pages, prompt: {r['prompt']})")
+            for p in r.get("kept_pinned") or []:
+                print(f"    · kept pinned page {p} (re-read earlier with a chosen model; "
+                      f"`pha scan --unpin --path …` releases it)")
+        elif r["action"] == "rescanned":
+            _print_page_rescan(r)
         elif r["action"] == "error":
             print(f"  ! {r['filename']}: {r['error']}", file=sys.stderr)
         elif r["action"] == "stalled":
             # Pages the provider never answered for: abandoned for THIS pass,
             # nothing recorded as failed, the document stays 'processing'.
-            pages = ", ".join(str(p) for p in (r.get("stalled") or []))
+            stalled_pages = ", ".join(str(p) for p in (r.get("stalled") or []))
             print(f"  ⏱ {r['filename']}: {len(r.get('stalled') or [])} page(s) abandoned "
-                  f"(model stalled): {pages} — re-run `pha scan` to retry them",
+                  f"(model stalled): {stalled_pages} — re-run `pha scan` to retry them",
                   file=sys.stderr)
     print(f"scanned {res['scanned']} file(s): {summary}")
+
+
+def _print_scan_plan(res: dict) -> None:
+    """`pha scan --page N --dry-run`: what would happen, with no model call."""
+    for r in res["results"]:
+        if r["action"] != "planned":
+            print(f"  ! {r.get('error') or r.get('reason') or r['action']}", file=sys.stderr)
+            continue
+        print(f"plan for {r['filename']} ({r['path']}):")
+        for e in r["plan"]:
+            if e["action"] == "error":
+                print(f"  page {e['page']}: ! {e['reason']}")
+            elif e["action"] == "refused":
+                print(f"  page {e['page']}: refused — {e['reason']}")
+            else:
+                frm = e["from"]
+                kept = " (human edit kept)" if e["human_edit_kept"] else ""
+                pin = " [pinned]" if e["pinned"] else ""
+                print(f"  page {e['page']}: re-read (was "
+                      f"{frm['palaeographer'] or '?'}@{frm['model'] or '?'}, "
+                      f"{e['chars']} chars){pin}{kept}")
+
+
+def _print_page_rescan(r: dict) -> None:
+    """One line per re-read page: before → after, and what followed."""
+    for d in r.get("details") or []:
+        frm, to = d["from"], d["to"]
+        print(f"  ↻ {r['filename']} page {d['page']}: "
+              f"{frm['palaeographer'] or '?'}@{frm['model'] or '?'} → "
+              f"{to['palaeographer']}@{to['model'] or '?'} "
+              f"({d['chars']['before']} → {d['chars']['after']} chars"
+              + (", pinned" if d["pinned"] else ", not pinned") + ")")
+    if r.get("edited_pages"):
+        print(f"  ↻ page(s) {', '.join(str(p) for p in r['pages'])} re-edited and re-indexed")
+    for p in r.get("refused_reviewed") or []:
+        print(f"  ! page {p}: human-reviewed — not re-read "
+              f"(run `pha review --unset --doc <doc> --page {p}` to release it)",
+              file=sys.stderr)
+    for f in r.get("failed") or []:
+        print(f"  ! page {f['page']}: {f['error']} (previous text kept; retried by a later scan)",
+              file=sys.stderr)
+    for p in r.get("stalled") or []:
+        print(f"  ⏱ page {p}: model stalled — abandoned for this pass; "
+              f"re-run `pha scan --page {p}`", file=sys.stderr)
+    if r.get("index_error"):
+        print(f"  ! re-read but not re-indexed: {r['index_error']} — "
+              f"run: pha reindex --doc <doc>", file=sys.stderr)
 
 
 def cmd_search(cfg: Config, args) -> None:
@@ -236,6 +344,12 @@ def cmd_page(cfg: Config, args) -> None:
             "variant": "edited" if edited else "raw",
             "editor": editor_id,
             "palaeographer": doc["palaeographer"],
+            # Per-page reading provenance: a targeted re-read (`pha scan --page N`)
+            # records the pair that read THIS page and pins it. They are None on a
+            # page read by the document's configured pair.
+            "page_palaeographer": page["palaeographer"],
+            "page_model": page["palaeographer_model"],
+            "pinned": bool(page["pinned_at"]),
             "reviewed": bool(page["reviewed_at"]),
             "page_file": str(pf) if pf else None,
             "slug": slug,
@@ -1013,6 +1127,7 @@ def cmd_status(cfg: Config, args) -> None:
         # overview totals (the chunks table carries the embeddings, so every
         # extra pass over it is expensive).
         stats = db.chunk_stats(conn)
+        pinned = db.pinned_counts(conn)
         s = db.summary(conn, chunk_stats=stats)
         docs_status = s["documents"] or {}
         total_docs = sum(docs_status.values())
@@ -1161,6 +1276,10 @@ def cmd_status(cfg: Config, args) -> None:
                         meta.append("0 chunks — NOT INDEXED")
                     if d["status"] == "error" and d["error"]:
                         meta.append(f"error: {d['error'][:40]}")
+                    if pinned.get(d["id"]):
+                        # Mixed provenance: N pages were re-read with a chosen
+                        # model and pinned, so a bulk pass keeps them.
+                        meta.append(f"{pinned[d['id']]} pinned")
                     meta.append(f"updated {_fmt_ts(d['updated_at'])}")
                     age = time.time() - (d["updated_at"] or 0)
                     if d["status"] == "processing" and age >= _STALL_STATUS_S:
@@ -1220,6 +1339,17 @@ def cmd_status(cfg: Config, args) -> None:
                 print(_fit(f"       #{d['id']:>3d}  [{d['dir_path'] or '(root)'}] "
                            f"{d['filename']}  — {d['page_count']} page(s)", width))
             print("     Run:  pha reindex   (or `pha edit --path <doc>` to repair)")
+
+        # Mixed provenance: pages re-read with a chosen model (`pha scan --page N`).
+        # They are pinned, so a bulk pass keeps them — say so, so the reading mix
+        # is visible without opening the library files.
+        if pinned:
+            per_doc = ", ".join(f"#{did} ({n})" for did, n in sorted(pinned.items()))
+            print()
+            print(f"  📌 {sum(pinned.values())} pinned page(s) across {len(pinned)} "
+                  f"document(s) — re-read with a chosen model: {per_doc}")
+            print("     Run:  pha scan --unpin --path <doc>   (keep the text; let a "
+                  "later scan re-read them)")
     finally:
         conn.close()
 
@@ -2529,6 +2659,7 @@ def cmd_test(cfg: Config, args) -> None:
             temperature=getattr(args, "temperature", None),
             max_tokens=getattr(args, "max_tokens", None),
             verbose=True,
+            page=getattr(args, "page", None),
         )
     except KeyError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -2962,6 +3093,26 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--reprocess", action="store_true", help="re-extract everything")
     s.add_argument("--include-leased", action="store_true",
                         help="also process documents currently out on a hand-over")
+    s.add_argument("--page", action="append", default=None, metavar="N",
+                   help="re-read only this page (repeatable, or comma-separated) of "
+                        "ONE document: render/transcribe that page alone, with "
+                        "--palaeographer/--model authoritative for the run, record "
+                        "its provenance and PIN it so a later bulk scan keeps it. "
+                        "Implies re-extraction for those pages. Combine with --path "
+                        "naming the document.")
+    s.add_argument("--model", default=None,
+                   help="model interface id for the PALAEOGRAPHER stage on this run "
+                        "(with --page/--palaeographer); pairs with the document's "
+                        "rules unless --palaeographer also given")
+    s.add_argument("--dry-run", action="store_true",
+                   help="with --page: print what would be re-read (current pair, pin, "
+                        "human-review refusal) and make no model call")
+    s.add_argument("--unpin", action="store_true",
+                   help="with --path/--page: clear the pin without re-reading — the "
+                        "text is kept and a later scan may re-read those pages")
+    s.add_argument("--no-pin", action="store_true",
+                   help="with --page: record provenance but do NOT pin (a later bulk "
+                        "scan may overwrite the reading)")
     s.set_defaults(fn=cmd_scan)
 
     q = sub.add_parser("search", help="search the extracted text")
@@ -3222,6 +3373,9 @@ def main(argv: list[str] | None = None) -> None:
     tt.add_argument("target", nargs="?",
                     help="document or collection path under the dropbox (required unless --show)")
     tt.add_argument("--pages", "-n", type=int, default=3, help="number of pages to sample (default 3)")
+    tt.add_argument("--page", type=int, default=None, metavar="N",
+                    help="test exactly page N (not a count; beats --pages) — the "
+                         "no-write preview of `pha scan --page N`")
     tt.add_argument("--random", action="store_true", help="sample random pages instead of the first N")
     tt.add_argument("--seed", type=int, default=None, help="random seed (with --random, for reproducibility)")
     tt.add_argument("--palaeographer", default=None, help="override palaeographer rules id")

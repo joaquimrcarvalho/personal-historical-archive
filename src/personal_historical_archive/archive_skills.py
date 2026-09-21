@@ -129,6 +129,23 @@ renders — writes to `<archive>/.pha-test/`):
 
 - C: `pha test collections/COLX --pages 3` (add `--random` / `--seed`)
 
+**Re-read ONE page with a stronger model** — a bad page must not cost the whole
+volume. This is a MODEL re-read (the machine path); use `pha review` for a
+human correction.
+
+- C: `pha scan --path collections/COLX/vol04.pdf --page 337 \\
+       --palaeographer <rules> --model <model>` (add `--dry-run` first: it
+  prints the plan and calls no model). Only that page is rendered and
+  transcribed, its provenance is recorded, and it is **pinned** so a later bulk
+  scan keeps it. The editor and indexer then run for that page automatically —
+  do **not** follow with `pha edit`/`pha reindex`.
+- C: preview without touching the DB: `pha test <doc> --page 337 --palaeographer <rules> --model <model>`
+- C: release the pin (text kept): `pha scan --path <doc> --page 337 --unpin`
+- D: `pha_job_start({ action: 'scan', path: '<doc>', page: 337, palaeographer: '<rules>', model: '<model>' })`
+- Needs `--path` naming ONE document. A page a human corrected (`reviewed`) is
+  refused — release it with `pha review --unset --doc N --page 337` first,
+  never by hand-editing around it.
+
 If you only need to find out what a document currently resolves to (which
 palaeographer / editor / prompt / encoders), inspect, don't re-run:
 
@@ -168,6 +185,7 @@ D, poll `pha_job_status`). `pha doctor` lists the servers and their capacity.
 | Re-scan one doc | `pha scan --path <p> --reprocess` | `pha_job_start scan path=… reprocess=true` | not supported (whole-dropbox only) |
 | Re-edit one doc | `pha edit --path <p> --reprocess` | `pha_job_start edit path=… reprocess=true` | not supported |
 | Re-edit one page | `pha edit --path <p> --page 3` | `pha_job_start edit path=… page=3` | not supported |
+| Re-read one page (a chosen model) | `pha scan --path <p> --page 3 --palaeographer X --model Y` | `pha_job_start scan path=… page=3 palaeographer=X model=Y` | preview only: `pha test <p> --page 3` |
 | Re-encode | `pha encode --reprocess` | `pha_job_start encode reprocess=true` | not supported |
 | Dry-run config | `pha test <path> --pages 3` | — | — |
 | Inspect config | `pha editor/palaeographer/prompts <file>` | `pha_collection_config(<path>)` | `pha_collection_config(<path>)` |

@@ -1,7 +1,13 @@
 # Enhancement request — re-read a single page with a specific palaeographer / model
 
-**Status:** draft, not implemented. **Date:** 2026-09-15. **Written against:**
-pha 0.24.0, repo state at `7078d3b`.
+**Status:** IMPLEMENTED (0.33.0+). **Date:** 2026-09-15; implemented
+2026-09-21. **Written against:** pha 0.24.0 (design), 0.33.0 (implementation).
+The shipped command is `pha scan --path <one doc> --page N [--page M …]
+[--palaeographer X] [--model Y] [--dry-run] [--no-pin] [--unpin]`, plus
+`pha test --page N` as the no-write preview (§3.5) and `pha_job_start` on the
+dsh-pha plugin (§3.6). Decisions §8 are as recorded; the per-page provenance
+lands in `pages.palaeographer`/`palaeographer_model`/`pinned_at` and in the
+page file's front matter.
 
 **One line.** Let `pha scan` re-transcribe **one named page** with a
 **palaeographer and/or model chosen for that action only**, overriding the

@@ -193,6 +193,16 @@ function apply(ctx) {
     if (a.doc && String(a.doc).length <= 20 && /^\d+$/.test(String(a.doc))) argv.push('--doc', String(a.doc))
     if (a.page && /^\d+$/.test(String(a.page)) && Number(a.page) < 100000) argv.push('--page', String(a.page))
     if (a.reprocess) argv.push('--reprocess')
+    // The single-page rescan flags exist on `scan` only; a shared argv builder
+    // must not hand them to edit/reindex/review (argparse would reject them).
+    if (action === 'scan') {
+      const NAME_RE = /^[\w.@+-]+$/
+      if (a.palaeographer && NAME_RE.test(String(a.palaeographer)) && String(a.palaeographer).length <= 80) argv.push('--palaeographer', String(a.palaeographer))
+      if (a.model && NAME_RE.test(String(a.model)) && String(a.model).length <= 80) argv.push('--model', String(a.model))
+      if (a.dry_run) argv.push('--dry-run')
+      if (a.unpin) argv.push('--unpin')
+      if (a.no_pin) argv.push('--no-pin')
+    }
     return argv
   }
 
@@ -468,7 +478,7 @@ function apply(ctx) {
       const engines = (data.engines || []).map((e) => ({ engine: e.engine, ok: !!e.ok, path: e.path || null, version: e.version || null }))
       return { ok: true, archive: data.archive || archiveDir, healthy: !!data.ok, broken: data.broken || [], engines }
     }],
-    ['pha_job_start', 'Start a pha job in the background and return its job id: action scan|edit|encode|reindex|review|inbox with optional path/doc/page/reprocess. Poll with pha_job_status.', { action: { type: 'string', enum: ['scan', 'edit', 'encode', 'reindex', 'review', 'inbox'], description: 'pha command to run' }, path: { type: 'string', description: 'dropbox-relative path to restrict to' }, doc: { type: 'string', description: 'document id (review only)' }, reprocess: { type: 'boolean', description: 'add --reprocess' } }, ['action'], async (a) => {
+    ['pha_job_start', 'Start a pha job in the background and return its job id: action scan|edit|encode|reindex|review|inbox with optional path/doc/page/reprocess, and (scan only) palaeographer/model/dry_run/unpin/no_pin. With action=scan plus path (one document) and page N, pha re-reads just that page with the chosen model, records its provenance and pins it so later bulk scans keep it — use dry_run first to see the plan. Poll with pha_job_status.', { action: { type: 'string', enum: ['scan', 'edit', 'encode', 'reindex', 'review', 'inbox'], description: 'pha command to run' }, path: { type: 'string', description: 'dropbox-relative path to restrict to' }, doc: { type: 'string', description: 'document id (review only)' }, page: { type: 'integer', description: 'page number: with scan, re-read this one page; with edit/reindex/review, scope the pass to it' }, reprocess: { type: 'boolean', description: 'add --reprocess' }, palaeographer: { type: 'string', description: 'scan only: palaeographer rules id for this run (authoritative)' }, model: { type: 'string', description: 'scan only: model interface id for the palaeographer stage this run' }, dry_run: { type: 'boolean', description: 'scan + page: print what would be re-read, no model call' }, unpin: { type: 'boolean', description: 'scan + path/page: clear the page pin without re-reading (text kept)' }, no_pin: { type: 'boolean', description: 'scan + page: record provenance but do not pin' } }, ['action'], async (a) => {
       const job = await startJobAction(String(a.action || ''), a)
       return { ok: true, job_id: job.id, command: 'pha ' + job.argv.join(' ') }
     }],

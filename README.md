@@ -1015,6 +1015,7 @@ transcriptions/edits, records, and a readable `report.md` + machine-readable
 pha test [target] [--pages N] [--random] [--seed S] [--show]
                  [--palaeographer ID] [--editor ID] [--encoder ID]
                  [--model ID] [--prompt FILE] [--temperature T] [--max-tokens N]
+pha test TARGET --page N       # exactly page N — the no-write preview of `scan --page N`
 pha test --list             # list saved test reports
 pha test --clean [target]   # delete test report scratch dirs (--dry-run to preview)
 ```
@@ -1057,6 +1058,8 @@ server it will use (`pha scan`/`pha edit`/`pha reindex` take the same ones —
 ```
 pha help [topic]              # orientation + pointers to README/MCP_CLIENTS/HISTORIANS/AGENTS
 pha scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--path COLLECTION] [--reprocess]
+pha scan --path DOC --page N [--palaeographer ID] [--model ID] [--dry-run] [--no-pin]
+pha scan --path DOC [--page N] --unpin      # release the pin, keep the text
 pha search QUERY [--mode hybrid|keyword|semantic] [--collection COLX] [--limit N] [--json]
 pha page DOC PAGE [--edited]    # print the FULL text of one page (doc = id or filename substring)
                                 #   --edited reads the edited/translated variant; when there is
@@ -1487,6 +1490,49 @@ Because a `reviewed` page outranks `--reprocess`, `--unset` is the way to
 re-run a stage over text a human already touched, and it is also what you
 need before applying a new palaeographer/editor (or the planned stage
 filters) to an already-reviewed document.
+
+### Re-reading ONE page with a better model (`pha scan --page`)
+
+A document read cheaply end to end can have a few pages a stronger model reads
+better. Re-reading the whole volume for one page is wasteful, so name the page:
+
+```bash
+pha scan --path collections/COLX/vol04.pdf --page 337 \
+         --palaeographer printed-critical-edition --model minimax-m3 --dry-run
+```
+
+`--dry-run` prints what would happen — the reading it would replace, whether the
+page is pinned, whether it will be refused — and calls no model. Drop it to run:
+
+- only page 337 is rendered and transcribed, with `--palaeographer`/`--model`
+  **authoritative for that run** (both halves resolve independently: `--model`
+  alone keeps the document's rules, `--palaeographer` alone keeps its model, and
+  pairing a VLM prompt with a local OCR engine is warned about);
+- the page records the pair that read it (`pages.palaeographer` /
+  `palaeographer_model`, and `palaeographer:`/`model:`/`pinned: true` in its
+  library front matter);
+- it is **pinned**, so a later bulk `pha scan` (or `--reprocess`, or a changed
+  collection config) keeps that reading instead of overwriting it;
+- the editor re-runs for that page and the indexer re-embeds it (incrementally),
+  so search sees the new text immediately;
+- every other page, and the document's own configured pair, are untouched.
+
+Notes:
+
+- `--page` may be repeated or comma-separated (`--page 12,337`), and it needs a
+  target that resolves to exactly one document (combine with `--path`).
+- **A human correction always wins.** If the page's transcription is `reviewed`,
+  the command refuses and names it; release it with
+  `pha review --unset --doc N --page P` first. A human-corrected *edit* is kept
+  and reported.
+- Naming the page **is** the intent, so `--page N` re-reads a pinned page and
+  re-pins it (reporting the previous pair). To let a bulk pass take the page
+  back: `pha scan --unpin --path <doc> --page N` (the text is kept).
+  `--no-pin` records provenance without pinning.
+- `pha test <doc> --page N --palaeographer X --model Y` previews the same
+  override to `.pha-test/` without touching the DB or `library/`.
+- After the rescan, `pha status` shows the document as mixed provenance
+  (`N pinned`), and `pha page <doc> N --json` reports the page's pair.
 
 ### Moving / sharing collections between archives (`pha bundle` / `pha unbundle`)
 

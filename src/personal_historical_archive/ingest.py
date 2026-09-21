@@ -202,25 +202,80 @@ def _build_entry_spans(texts: list, starts: list[int],
 
 # ----------------------------------------------------------------- model-server jobs
 
-def _servers_for_document(cfg: Config, path: Path) -> set[str]:
-    """The model-server keys a scan/edit of `path` may talk to.
+def _effective_palaeographer(
+    cfg: Config, path: Path, default_pal: Palaeographer,
+    pal_override: str | None = None, model_override: str | None = None,
+    warn: bool = True,
+):
+    """The palaeographer a scan of `path` will actually use, plus its sidecar.
+
+    The per-run override is AUTHORITATIVE, and its two halves resolve
+    independently: `--model X` alone keeps the document's rules, and
+    `--palaeographer R` alone keeps the document's model (so a run that swaps in
+    an OCR engine for a VLM prompt, or the reverse, is warned about rather than
+    silently producing nonsense).
+    """
+    sidecar = _doc_sidecar(cfg, path)
+    pal_id, pal_src = resolve_palaeographer_id(
+        path.stem, path if path.is_dir() else path.parent, cfg.dropbox,
+        explicit=pal_override,
+    )
+    model_id = None
+    if sidecar.palaeographer:
+        if pal_override is None:
+            pal_id = sidecar.palaeographer.rules
+            pal_src = str(sidecar.source)
+        model_id = sidecar.palaeographer.model
+    if model_override:
+        model_id = model_override
+    if pal_id:
+        try:
+            pal = cfg.get_palaeographer(pal_id)
+        except KeyError:
+            if warn:
+                print(f"  warning: unknown palaeographer {pal_id!r} (from {pal_src}); "
+                      f"using default", flush=True)
+            pal = default_pal
+    else:
+        pal = default_pal
+    try:
+        pal = cfg.resolve_model(pal, model_id)
+    except KeyError:
+        if warn:
+            print(f"  warning: unknown model {model_id or cfg.default_model!r}; "
+                  f"leaving {pal.id} unbound", flush=True)
+    if warn and pal_override and model_override is None and (pal.engine or "").strip():
+        print(f"  warning: {pal.id} resolves to the local '{pal.engine}' engine, which "
+              f"ignores the transcription prompt — pass --model to choose a chat/vision "
+              f"model for this run", flush=True)
+    return pal, sidecar
+
+
+def _servers_for_document(
+    cfg: Config, path: Path, default_pal: Palaeographer | None = None,
+    pal_override: str | None = None, model_override: str | None = None,
+    warn: bool = True, include_pal: bool = True,
+) -> set[str]:
+    """The model-server keys a job over `path` may talk to.
 
     Resolved BEFORE a lock is taken, because the lock must cover every server
-    the job may touch. This mirrors the palaeographer/editor resolution that
-    `ingest_file` performs later; encoders are not part of scan/edit.
+    the job may touch — including the server of a per-run override, which is not
+    the document's configured one. `include_pal=False` for the EDITOR pass, which
+    reads no page and so never talks to the palaeographer's server at all.
+    Encoders are not part of scan/edit.
     """
     keys: set[str] = set()
     sidecar = _doc_sidecar(cfg, path)
-    pal_id, _src = resolve_palaeographer_id(
-        path.stem, path if path.is_dir() else path.parent, cfg.dropbox
-    )
-    if sidecar.palaeographer:
-        pal_id = sidecar.palaeographer.rules
-    if pal_id:
-        try:
-            keys.add(locks.stage_key(cfg.resolve_model(cfg.get_palaeographer(pal_id))))
-        except KeyError:
-            pass
+    if include_pal:
+        if default_pal is None:
+            try:
+                default_pal = cfg.get_palaeographer()
+            except KeyError:
+                default_pal = None
+        if default_pal is not None:
+            pal, sidecar = _effective_palaeographer(
+                cfg, path, default_pal, pal_override, model_override, warn=warn)
+            keys.add(locks.stage_key(pal))
     ed_id: str | None = None
     if sidecar.editor_set:
         ed_id = sidecar.editor.rules if sidecar.editor else None
@@ -237,15 +292,19 @@ def _servers_for_document(cfg: Config, path: Path) -> set[str]:
     return keys
 
 
-def _job_keys(cfg: Config, paths, embed: bool = True) -> list[str]:
+def _job_keys(
+    cfg: Config, paths, embed: bool = True, default_pal: Palaeographer | None = None,
+    pal_override: str | None = None, model_override: str | None = None,
+    warn: bool = True, include_pal: bool = True,
+) -> list[str]:
     """Union of the server keys of a job covering `paths`, plus the embed model.
 
     An empty key set means the job touches no model server (e.g. an OCR-only
-    preview) and needs no lock at all.
-    """
+    preview) and needs no lock at all."""
     keys: set[str] = set()
     for p in paths:
-        keys |= _servers_for_document(cfg, p)
+        keys |= _servers_for_document(cfg, p, default_pal, pal_override, model_override,
+                                      warn=warn, include_pal=include_pal)
     if embed:
         keys.add(locks.embed_key(cfg))
     keys.discard("")
@@ -840,7 +899,17 @@ def ingest_file(
     reprocess: bool = False,
     verbose: bool = True,
     sidecar: Sidecar | None = None,
+    pages: set[int] | None = None,
+    pin: bool = True,
 ) -> dict:
+    """Extract one document (or, with `pages`, re-read exactly those pages).
+
+    `pages` is the targeted re-read (`pha scan --page N`): only those pages are
+    rendered and transcribed, with `palaeographer` as the AUTHORITATIVE pair for
+    them; the document-level config and every other page are left alone. Each
+    re-read page records its own provenance and (unless `pin=False`) is pinned,
+    so a later bulk pass cannot discard it. A page whose transcription is
+    human-`reviewed` is refused, never overwritten."""
     path = Path(path)
     if sidecar is None:
         sidecar = _doc_sidecar(cfg, path)
@@ -855,6 +924,31 @@ def ingest_file(
     now = time.time()
 
     existing = db.get_document_by_path(conn, str(path))
+    # The document's CONFIGURED pair, for the before → after report of a page
+    # re-read (it is what the untouched pages still use).
+    doc_pal_id = existing["palaeographer"] if existing else None
+    doc_pal_model = existing["palaeographer_model"] if existing else None
+    prior_status = existing["status"] if existing else None
+    prior_error = existing["error"] if existing else None
+    # ---- page-scoped re-read: cheap pre-checks BEFORE the row is touched ----
+    # An out-of-range page must not flip a finished document to 'error'.
+    if pages is not None:
+        if not pages:
+            return {"action": "error", "filename": path.name,
+                    "error": "--page needs at least one page number"}
+        if existing is None:
+            return {"action": "error", "filename": path.name,
+                    "error": "not scanned yet — run `pha scan --path <doc>` first, "
+                             "then re-read the page"}
+        if path.is_dir():
+            hint = len([f for f in path.iterdir()
+                        if f.is_file() and is_supported(f.name) and not f.name.startswith(".")])
+        else:
+            hint = page_count(path)
+        bad = sorted(n for n in pages if n < 1 or n > hint)
+        if bad:
+            return {"action": "error", "filename": path.name,
+                    "error": f"page(s) {_pages_list(bad)} out of range (1-{hint})"}
     reuse = False
     prompt_changed = False
     if existing and existing["sha256"] == sha:
@@ -863,7 +957,14 @@ def ingest_file(
         # stay in the library folder and DB (staleness marks them for
         # regeneration, never deletion). --reprocess forces re-extraction of
         # every page but must NOT delete the document.
-        if reprocess:
+        if pages is not None:
+            # A targeted page re-read works on the existing row whatever the
+            # document-level staleness says: the user named the page, so the
+            # selected pages are always re-read (and the pin, not the staleness
+            # rule, is what protects the pages nobody named).
+            reuse = True
+            prompt_changed = True
+        elif reprocess:
             reuse = True
             prompt_changed = True  # re-extract ALL pages
         else:
@@ -928,8 +1029,13 @@ def ingest_file(
         palaeographer_model=palaeographer.model_ref or None,
     )
     if reuse:
-        db.update_document(conn, doc_id, palaeographer=palaeographer.id, editor=ed_id,
-                           palaeographer_model=palaeographer.model_ref or None)
+        if pages is None:
+            db.update_document(conn, doc_id, palaeographer=palaeographer.id, editor=ed_id,
+                               palaeographer_model=palaeographer.model_ref or None)
+        elif ed_id is not None:
+            # A page re-read must NOT re-configure the document: the other pages
+            # keep the configured pair, and so does the document row.
+            db.update_document(conn, doc_id, editor=ed_id)
     db.set_document_status(conn, doc_id, "processing")
     conn.commit()
 
@@ -939,32 +1045,42 @@ def ingest_file(
         cfg.dropbox, cfg.prompts, explicit_prompt,
     )
     prompt = compose_prompts(palaeographer.prompt_text, prompt)
-    force = reprocess or prompt_changed  # only these re-extract already-done pages
+    force = reprocess or prompt_changed or pages is not None  # only these re-extract already-done pages
     db.update_document(conn, doc_id, prompt_source=prompt_source)
     conn.commit()
     write_document_pages(cfg, conn, doc_id)  # visible output even while processing
 
     render_dpi, max_image_px, jpeg_quality = effective_render(cfg, sidecar)
+    selection = sorted(pages) if pages is not None else None
     try:
         source_names: list[str | None] = []
         if path.is_dir():
             images = [f for f in sorted(path.iterdir())
                       if f.is_file() and is_supported(f.name) and not f.name.startswith(".")]
             total = len(images)
-            renders: list[Path] = []
-            for img in images:
-                n = len(renders)
-                renders += render_document(img, cfg.renders / sha, render_dpi,
-                                           max_image_px, jpeg_quality,
-                                           prefix=img.stem)
-                # a single image renders to one page: map each new render to
-                # the source image stem (e.g. 505V) for file naming.
-                new = len(renders) - n
-                source_names += [img.stem] * new
+            chosen = selection if selection is not None else list(range(1, total + 1))
+            renders = []
+            page_numbers: list[int] = []
+            for n in chosen:
+                img = images[n - 1]
+                out = render_document(img, cfg.renders / sha, render_dpi,
+                                      max_image_px, jpeg_quality, prefix=img.stem)
+                # a single image renders to one page: map each render to the
+                # source image stem (e.g. 505V) for file naming.
+                renders += out
+                source_names += [img.stem] * len(out)
+                page_numbers += [n] * len(out)
         else:
             total = page_count(path)
-            renders = render_document(path, cfg.renders / sha, render_dpi, max_image_px, jpeg_quality)
-            source_names = [None] * len(renders)
+            rendered = render_document(path, cfg.renders / sha, render_dpi, max_image_px,
+                                       jpeg_quality,
+                                       pages=set(selection) if selection is not None else None)
+            # render_document keeps the ABSOLUTE page index in the file name
+            # (p001.jpg), so a partial render still maps back to its page.
+            rendered = sorted(rendered, key=lambda p: int(p.stem[1:]))
+            renders = rendered
+            page_numbers = [int(p.stem[1:]) for p in rendered]
+            source_names = [None] * len(rendered)
     except Exception as e:
         db.set_document_status(conn, doc_id, "error", error=f"render failed: {e}")
         conn.commit()
@@ -982,11 +1098,29 @@ def ingest_file(
         cfg, sidecar.palaeographer.post if sidecar.palaeographer is not None else [])
     page_errors: list[tuple[int, str]] = []
     stalled: list[int] = []  # pages abandoned for THIS pass by a model stall
-    for i, img in enumerate(renders, start=1):
-        page_id = db.add_page(conn, doc_id, i, source_name=source_names[i - 1] if i - 1 < len(source_names) else None)
+    kept_pinned: list[int] = []      # bulk pass: pages a targeted re-read pinned
+    refused_reviewed: list[int] = []  # explicit --page naming a human-corrected page
+    details: list[dict] = []          # per-page before -> after, for the report
+    for idx, (img, i) in enumerate(zip(renders, page_numbers)):
+        src_name = source_names[idx] if idx < len(source_names) else None
+        page_id = db.add_page(conn, doc_id, i, source_name=src_name)
         page = conn.execute("SELECT * FROM pages WHERE id = ?", (page_id,)).fetchone()
         if page["reviewed_at"]:
+            # A human corrected this page. An explicit --page is REFUSED (and
+            # named) rather than silently ignored; a bulk pass just leaves it.
+            if pages is not None:
+                refused_reviewed.append(i)
+                if verbose:
+                    print(f"  page {i}/{total}: human-reviewed — not re-read; run "
+                          f"`pha review --unset --doc {doc_id} --page {i}` to release it",
+                          flush=True)
             continue  # a human corrected this page; never re-extract over it
+        if pages is None and page["pinned_at"]:
+            # A deliberate re-read of this page with another model: a bulk pass
+            # (or --reprocess, or a changed collection config) must not discard
+            # it. `--page N` re-reads it on purpose; `--unpin` releases it.
+            kept_pinned.append(i)
+            continue
         if page["status"] == "done" and not force:
             if not filters_changed(page["filters"], acceptable_filters):
                 continue  # resume: keep already-extracted pages
@@ -996,6 +1130,7 @@ def ingest_file(
         if verbose:
             print(f"  page {i}/{total}: extracting ...", flush=True)
         started = time.monotonic()
+        before_chars = len(page["raw_text"] or "")
         try:
             text = transcribe_page(client, palaeographer, prompt_txt, img,
                                    source=path, page_no=i, total=total)
@@ -1007,11 +1142,28 @@ def ingest_file(
                 text, ran = _run_stage_filters(
                     cfg, sidecar.palaeographer.post, hook="palaeographer.post",
                     value=text, conn=conn, path=path, doc_id=doc_id, stage="palaeographer",
-                    page=i, source_name=source_names[i - 1] if i - 1 < len(source_names) else None,
+                    page=i, source_name=src_name,
                     verbose=verbose, return_ran=True,
                 )
             db.set_page_result(conn, page_id, raw_text=text,
                                filters=filters_signature(ran))
+            if pages is not None:
+                # Per-page provenance, and the pin that protects it from a later
+                # bulk pass: this page was read by the override pair, not by the
+                # document's configured one.
+                db.set_page_provenance(conn, page_id,
+                                       palaeographer=palaeographer.id,
+                                       model=palaeographer.model_ref or None,
+                                       pinned=pin)
+                details.append({
+                    "page": i,
+                    "from": {"palaeographer": page["palaeographer"] or doc_pal_id,
+                             "model": page["palaeographer_model"] or doc_pal_model},
+                    "to": {"palaeographer": palaeographer.id,
+                           "model": palaeographer.model_ref or None},
+                    "chars": {"before": before_chars, "after": len(text or "")},
+                    "pinned": bool(pin),
+                })
             consecutive_failures = 0
             if verbose:
                 print(_page_timing_line(i, total, time.monotonic() - started), flush=True)
@@ -1045,6 +1197,35 @@ def ingest_file(
         db.touch_document(conn, doc_id)
         conn.commit()
         write_document_pages(cfg, conn, doc_id)  # grow the artifact page by page
+    if pages is not None:
+        # ---- page-scoped finish: editor + incremental index, THESE pages ----
+        edited_pages = 0
+        for pno in sorted(pages):
+            res = edit_document(cfg, conn, doc_id, verbose=verbose, page_no=pno)
+            edited_pages += int(res.get("pages") or 0)
+        index_error = None
+        try:
+            index_document(cfg, conn, doc_id, verbose=verbose, pages=set(pages))
+        except ModelError as e:
+            index_error = str(e)
+            if verbose:
+                print(f"  ! page(s) re-read but not re-indexed: {e} — run "
+                      f"`pha reindex --doc {doc_id}`", flush=True)
+        write_document_pages(cfg, conn, doc_id)
+        # A page fix does not make an INCOMPLETE document complete: restore the
+        # status it had. A failed page keeps its old text (the error branch of
+        # set_page_result does not touch raw_text) and is marked 'waiting' so the
+        # next scan retries it; a stalled page is left pending the same way.
+        if prior_status:
+            db.set_document_status(conn, doc_id, prior_status, error=prior_error)
+        conn.commit()
+        return {"action": "rescanned", "filename": path.name,
+                "pages": sorted(pages), "prompt": prompt_source,
+                "edited_pages": edited_pages, "refused_reviewed": refused_reviewed,
+                "index_error": index_error, "stalled": sorted(stalled),
+                "failed": [{"page": p, "error": e} for p, e in page_errors],
+                "details": details}
+
     if page_errors:
         db.set_document_status(
             conn, doc_id, "error",
@@ -1056,6 +1237,11 @@ def ingest_file(
     edit_document(cfg, conn, doc_id, verbose=verbose)  # editor pass (skips if none configured)
     index_document(cfg, conn, doc_id, verbose=verbose)  # indexes raw + edited variants
     write_document_pages(cfg, conn, doc_id)
+    if kept_pinned and verbose:
+        # Not silent: a bulk pass deliberately leaves pages a targeted re-read
+        # pinned. `--unpin` (or naming the page with `--page`) releases them.
+        print(f"  kept {len(kept_pinned)} pinned page(s) (re-read earlier with a chosen "
+              f"model): {_pages_list(kept_pinned)}", flush=True)
     if stalled:
         # Some pages were abandoned by a stall. What WAS read is edited and
         # indexed (so the progress is searchable), but the document is left
@@ -1067,7 +1253,7 @@ def ingest_file(
                   f"them; nothing was recorded as failed", flush=True)
         return {"action": "stalled", "filename": path.name, "pages": total,
                 "stalled": sorted(stalled), "prompt": prompt_source,
-                "status": "processing"}
+                "status": "processing", "kept_pinned": kept_pinned}
     # `done` is written LAST, after the editor and the indexer have run. A crash
     # in either used to leave a healthy-looking row -- `done`, no edited variant,
     # 0 chunks (doc 57, documenta-indica, 2026-09-15) -- which every status-only
@@ -1075,7 +1261,8 @@ def ingest_file(
     # next scan resumes it.
     db.set_document_status(conn, doc_id, "done", prompt_source=prompt_source)
     conn.commit()
-    return {"action": "ingested", "filename": path.name, "pages": total, "prompt": prompt_source}
+    return {"action": "ingested", "filename": path.name, "pages": total,
+            "prompt": prompt_source, "kept_pinned": kept_pinned}
 
 
 def index_document(
@@ -1488,6 +1675,24 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
         fm["status"] = "done" if p["status"] == "done" else "waiting"
         if p["reviewed_at"]:
             fm["reviewed"] = True
+        # Per-page reading provenance: a targeted re-read (`pha scan --page N`)
+        # records the palaeographer/model that read THIS page, overriding the
+        # document-level pair shown above (the folder name stays the stage id —
+        # the page file is authoritative). `pinned` marks a deliberate reading
+        # a later bulk pass must not discard.
+        try:
+            page_pal = p["palaeographer"]
+        except (IndexError, KeyError):
+            page_pal = None
+        if page_pal:
+            fm["palaeographer"] = page_pal
+            fm["model"] = p["palaeographer_model"] or None
+        try:
+            pinned = p["pinned_at"]
+        except (IndexError, KeyError):
+            pinned = None
+        if pinned:
+            fm["pinned"] = True
         # provenance: which stage filters shaped this page (name + short hash),
         # so "why is this text like this" is answerable from the artifact
         try:
@@ -2246,7 +2451,8 @@ def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True,
     lock = None
     try:
         docs = db.list_documents(conn, limit=10000)
-        keys = _job_keys(cfg, [Path(d["path"]) for d in docs if d["path"]])
+        keys = _job_keys(cfg, [Path(d["path"]) for d in docs if d["path"]],
+                         include_pal=False)   # the editor reads no page
         lock = locks.acquire(cfg, keys, label="pha edit")
         if not lock.ok:
             reason = lock.reason()
@@ -2308,7 +2514,8 @@ def edit_documents_under(
                 continue
             seen.add(doc["id"])
             matched.append((doc, f))
-        lock = locks.acquire(cfg, _job_keys(cfg, [f for _d, f in matched]),
+        lock = locks.acquire(cfg, _job_keys(cfg, [f for _d, f in matched],
+                                            include_pal=False),
                              label="pha edit")
         if not lock.ok:
             reason = lock.reason()
@@ -2959,6 +3166,68 @@ def _lease_age(lease) -> str:
         return "?"
 
 
+def plan_page_rescan(cfg: Config, conn, path: Path, pages) -> list[dict]:
+    """What a `pha scan --page N` would do — no model call, no writes.
+
+    One entry per page: the reading it would replace, whether it is pinned,
+    whether it will be refused (a human-reviewed transcription) and whether a
+    human-corrected edit will be kept."""
+    doc = db.get_document_by_path(conn, str(path))
+    if doc is None:
+        return [{"page": int(p), "action": "error",
+                 "reason": "not scanned yet — run `pha scan --path <doc>` first"}
+                for p in sorted(pages)]
+    plan: list[dict] = []
+    for n in sorted(pages):
+        row = conn.execute(
+            "SELECT * FROM pages WHERE document_id = ? AND page_no = ?",
+            (doc["id"], int(n))).fetchone()
+        if row is None:
+            plan.append({"page": int(n), "action": "error",
+                         "reason": f"no page {int(n)} of {doc['page_count'] or 0}"})
+            continue
+        edited = conn.execute(
+            "SELECT reviewed_at FROM page_edits WHERE page_id = ? AND reviewed_at IS NOT NULL",
+            (row["id"],)).fetchone()
+        entry = {
+            "page": int(n),
+            "action": "refused" if row["reviewed_at"] else "re-read",
+            "from": {"palaeographer": row["palaeographer"] or doc["palaeographer"],
+                     "model": row["palaeographer_model"] or doc["palaeographer_model"]},
+            "pinned": bool(row["pinned_at"]),
+            "human_reviewed": bool(row["reviewed_at"]),
+            "human_edit_kept": edited is not None,
+            "chars": len(row["raw_text"] or ""),
+        }
+        if row["reviewed_at"]:
+            entry["reason"] = (f"human-reviewed — run `pha review --unset --doc "
+                               f"{doc['id']} --page {int(n)}` to release it")
+        plan.append(entry)
+    return plan
+
+
+def unpin_pages(cfg: Config, conn, path: Path, pages=None) -> dict:
+    """`pha scan --unpin`: clear the pin on a document's pages, keep the text.
+
+    The recorded provenance stays (it says who read the page), so `pha status`
+    can still explain the reading; only the protection is lifted, which is what
+    lets a later bulk pass (or `--reprocess`) re-read the page."""
+    doc = db.get_document_by_path(conn, str(path))
+    name = Path(path).name
+    if doc is None:
+        print(f"  {name}: not scanned yet — nothing to unpin", flush=True)
+        return {"action": "skipped", "filename": name, "unpinned": 0}
+    cleared = 0
+    if pages is not None:
+        for n in sorted(pages):
+            cleared += db.clear_page_pins(conn, doc["id"], page_no=int(n))
+    else:
+        cleared = db.clear_page_pins(conn, doc["id"])
+    conn.commit()
+    write_document_pages(cfg, conn, doc["id"])
+    return {"action": "unpinned", "filename": doc["filename"], "unpinned": cleared}
+
+
 def scan_once(
     cfg: Config,
     client: ModelClient,
@@ -2968,8 +3237,26 @@ def scan_once(
     verbose: bool = True,
     path: str | None = None,
     include_leased: bool = False,
+    pages: set[int] | None = None,
+    pal_override: str | None = None,
+    model_override: str | None = None,
+    dry_run: bool = False,
+    unpin: bool = False,
+    pin: bool = True,
 ) -> dict:
+    """Scan the dropbox (or a subpath), or re-read named pages of ONE document.
+
+    With `pages`, `path` must resolve to exactly one document and
+    `pal_override`/`model_override` are authoritative for that run; only those
+    pages are rendered and transcribed, each recording its own provenance and
+    (unless `pin=False`) a pin. `dry_run` prints the plan and calls no model;
+    `unpin` clears the pins instead of re-reading."""
     cfg.ensure_dirs()
+    if dry_run and pages is None:
+        # A dry run is a plan for a targeted page action; never let it fall
+        # through to a real full scan.
+        return {"scanned": 0, "results": [{"action": "error", "filename": "(scan)",
+                                           "error": "--dry-run needs --page"}]}
     # resolve the --path/--collection target to a discovery root under dropbox
     scan_root = cfg.dropbox
     if path:
@@ -2989,7 +3276,49 @@ def scan_once(
     # Discover BEFORE locking: the lock must cover every model-server the job
     # may touch, and that is known only from the matched documents' config.
     files = discover(cfg.dropbox, cfg.dir_documents, root=scan_root, exclude=[cfg.inbox])
-    lock = locks.acquire(cfg, _job_keys(cfg, files), label="pha scan")
+
+    # ---- a targeted page action needs exactly ONE document -----------------
+    if pages is not None or unpin:
+        if len(files) != 1:
+            msg = (f"--page/--unpin needs a target resolving to exactly one document; "
+                   f"{len(files)} matched — narrow --path to the document")
+            print(f"  {msg}", flush=True)
+            return {"scanned": 0, "results": [{"action": "error", "filename": "(scan)",
+                                               "error": msg}]}
+        if dry_run:
+            if pages is None:
+                msg = "--dry-run needs --page (there is nothing else to plan)"
+                print(f"  {msg}", flush=True)
+                return {"scanned": 1, "results": [{"action": "error", "filename": "(scan)",
+                                                   "error": msg}]}
+            conn = db.connect(cfg.db_path)
+            try:
+                plan = plan_page_rescan(cfg, conn, files[0], pages)
+            finally:
+                conn.close()
+            return {"scanned": 1,
+                    "results": [{"action": "planned", "filename": files[0].name,
+                                 "path": str(files[0]), "plan": plan}]}
+
+    if unpin:
+        lock = locks.acquire(cfg, _job_keys(cfg, files), label="pha scan --unpin")
+        if not lock.ok:
+            reason = lock.reason()
+            print(f"  {reason}", flush=True)
+            return {"scanned": 0, "results": [{"action": "skipped", "filename": "(scan)",
+                                               "reason": reason}]}
+        conn = db.connect(cfg.db_path)
+        try:
+            results = [unpin_pages(cfg, conn, files[0], pages)]
+        finally:
+            conn.close()
+            locks.release(lock)
+        return {"scanned": 1, "results": results}
+
+    lock = locks.acquire(cfg, _job_keys(cfg, files, default_pal=palaeographer,
+                                        pal_override=pal_override,
+                                        model_override=model_override, warn=False),
+                         label="pha scan")
     if not lock.ok:
         reason = lock.reason()
         print(f"  {reason}", flush=True)
@@ -3007,29 +3336,8 @@ def scan_once(
         for i, f in enumerate(files, 1):
             if verbose:
                 print(f"[{i}/{len(files)}] {f.name}", flush=True)
-            sc = _doc_sidecar(cfg, f)
-            pal_id, pal_src = resolve_palaeographer_id(
-                f.stem, f if f.is_dir() else f.parent, cfg.dropbox
-            )
-            model_id = None
-            if sc.palaeographer:
-                pal_id = sc.palaeographer.rules
-                pal_src = str(sc.source)
-                model_id = sc.palaeographer.model
-            if pal_id:
-                try:
-                    pal = cfg.get_palaeographer(pal_id)
-                except KeyError:
-                    print(f"  warning: unknown palaeographer {pal_id!r} (from {pal_src}); using default",
-                          flush=True)
-                    pal = palaeographer
-            else:
-                pal = palaeographer
-            try:
-                pal = cfg.resolve_model(pal, model_id)
-            except KeyError:
-                print(f"  warning: unknown model {model_id or cfg.default_model!r}; leaving {pal.id} unbound",
-                      flush=True)
+            pal, sc = _effective_palaeographer(cfg, f, palaeographer, pal_override,
+                                               model_override)
             key = _client_key(pal)
             if key not in clients:
                 clients[key] = (_vision_client(pal), pal)
@@ -3046,7 +3354,8 @@ def scan_once(
                 continue
             results.append(
                 ingest_file(cfg, conn, clients[key][0], f, clients[key][1],
-                            explicit_prompt, reprocess, verbose, sidecar=sc)
+                            explicit_prompt, reprocess, verbose, sidecar=sc,
+                            pages=pages, pin=pin)
             )
         # Refresh bibliographic references LAST, so documents added by this scan
         # are covered too. This is metadata only: it never touches page text,
@@ -3060,7 +3369,9 @@ def scan_once(
         conn.close()
         locks.release(lock)
         for pid, (c, _p) in clients.items():
-            if pid != palaeographer.id:
+            # Only the clients this scan created: the caller owns the one it
+            # passed in (the keys are (id, model_ref) tuples).
+            if pid != _client_key(palaeographer):
                 c.close()
 
 

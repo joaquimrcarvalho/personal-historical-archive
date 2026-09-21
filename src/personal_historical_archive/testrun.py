@@ -361,6 +361,7 @@ def _test_doc(
     pal_override: str | None, ed_override: str | None, enc_override: str | None,
     model: str | None, prompt: str | None, temperature: float | None, max_tokens: int | None,
     verbose: bool,
+    page: int | None = None,
 ) -> DocResult:
     file_dir = _file_dir(path)
     sidecar = resolve_sidecar(cfg.dropbox, file_dir, stem=(path.stem if not path.is_dir() else None))
@@ -372,7 +373,13 @@ def _test_doc(
                      if f.is_file() and is_supported(f.name) and not f.name.startswith(".")])
     else:
         total = page_count(path)
-    selected = _select_pages(total, pages, randomize, seed)
+    # `--page N` names exactly one page; it beats the count-based `--pages`, and
+    # an out-of-range page is reported instead of silently rendering nothing.
+    if page is not None and (total <= 0 or int(page) > total):
+        bad = DocResult(path=str(path), slug=_doc_slug(path), total_pages=total, selected=[])
+        bad.errors.append(f"page {int(page)} out of range (1-{total})")
+        return bad
+    selected = [int(page)] if page is not None else _select_pages(total, pages, randomize, seed)
 
     # --- resolve stages -----------------------------------------------------
     pal, pal_id, pal_src = _resolve_palaeographer(
@@ -731,8 +738,12 @@ def run_test(
     temperature: float | None = None,
     max_tokens: int | None = None,
     verbose: bool = True,
+    page: int | None = None,
 ) -> dict:
     """Run the pipeline on a sample of pages and write the output to a scratch dir.
+
+    `page` names exactly one page (`pha test --page N`), which beats the
+    count-based `pages`; it is the no-write preview of `pha scan --page N`.
 
     Returns a summary dict. Raises KeyError for an unknown override id; other
     errors are captured per document in `DocResult.errors`.
@@ -757,7 +768,7 @@ def run_test(
         for doc_path in docs:
             dr = _test_doc(cfg, doc_path, scratch, scratch_renders, pages, randomize, seed,
                            palaeographer, editor, encoder, model, prompt, temperature, max_tokens,
-                           verbose)
+                           verbose, page=page)
             documents.append(dr)
 
         summary: dict = {

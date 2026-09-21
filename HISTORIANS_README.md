@@ -702,6 +702,28 @@ the search index. Tell me how many pages you imported, and the result.
 Your corrected text becomes the page's reading, and pha will never read that
 page from the image again.
 
+**If the MACHINE read a page badly** (the text is garbled or a passage was
+skipped — you have not corrected it yourself), you do not have to reprocess the
+whole document. Ask your agent for a second reading of that one page with a
+stronger model:
+
+```
+Page <N> of "<document>" was read badly. Re-read that single page with
+<model>, show me the new text next to what we had, and update the edited text
+and the search index for that page.
+```
+
+Behind that, the agent re-reads only that page with the model you chose, records
+which model read it, and marks the new reading so that a later full re-scan
+keeps it instead of replacing it. The edited text and the search index for that
+page are updated automatically — there is no extra step for you to ask for. (If
+you would rather see the plan before anything is read, ask for a dry run.)
+Should you later want the page to go back to the document's normal model, just
+say so and the agent will release it.
+
+Your own corrections always win: if you had already corrected that page by hand,
+pha refuses to read it again until the agent lifts that correction's protection.
+
 **If you corrected the EDITED text** (the editor's final output):
 
 1. Open the edited page file and correct the text under the header.

@@ -195,6 +195,17 @@ def migrate(conn: sqlite3.Connection) -> None:
     # filter) re-runs exactly that stage — no mtime guesswork.
     if "filters" not in pcols:
         conn.execute("ALTER TABLE pages ADD COLUMN filters TEXT")
+    # Per-page reading provenance for a targeted re-read (`pha scan --page N`):
+    # which palaeographer/model read THIS page, overriding the document-level
+    # pair, and when it was pinned. NULL = the document's pair (every bulk-read
+    # page, so no backfill). A pinned page is a deliberate reading that a later
+    # bulk scan / --reprocess / changed collection config must not discard.
+    if "palaeographer" not in pcols:
+        conn.execute("ALTER TABLE pages ADD COLUMN palaeographer TEXT")
+    if "palaeographer_model" not in pcols:
+        conn.execute("ALTER TABLE pages ADD COLUMN palaeographer_model TEXT")
+    if "pinned_at" not in pcols:
+        conn.execute("ALTER TABLE pages ADD COLUMN pinned_at REAL")
     if "filters" not in ecols:
         conn.execute("ALTER TABLE page_edits ADD COLUMN filters TEXT")
     rcols = [r[1] for r in conn.execute("PRAGMA table_info(records)")]
@@ -423,6 +434,54 @@ def set_page_result(
             "UPDATE pages SET raw_text = ?, error = NULL, status = 'done', filters = ? WHERE id = ?",
             (raw_text, filters, page_id),
         )
+
+
+def set_page_provenance(
+    conn: sqlite3.Connection,
+    page_id: int,
+    palaeographer: str | None = None,
+    model: str | None = None,
+    pinned: bool | None = None,
+) -> None:
+    """Record which palaeographer/model read THIS page, and optionally pin it.
+
+    Written by a targeted page re-read (`pha scan --page N`). `pinned=None`
+    leaves the existing pin untouched, so provenance can be updated without
+    changing the page's protection."""
+    sets = ["palaeographer = ?", "palaeographer_model = ?"]
+    params: list = [palaeographer, model]
+    if pinned is not None:
+        sets.append("pinned_at = ?")
+        params.append(_now() if pinned else None)
+    params.append(page_id)
+    _write(conn, f"UPDATE pages SET {', '.join(sets)} WHERE id = ?", tuple(params))
+
+
+def clear_page_pins(conn: sqlite3.Connection, doc_id: int, page_no: int | None = None) -> int:
+    """Clear the PIN on a document's pages (all, or one page). The text and the
+    recorded provenance are kept — `--unpin` releases the protection only."""
+    if page_no is not None:
+        cur = _write(
+            conn,
+            "UPDATE pages SET pinned_at = NULL WHERE document_id = ? AND page_no = ? "
+            "AND pinned_at IS NOT NULL",
+            (doc_id, page_no),
+        )
+    else:
+        cur = _write(
+            conn,
+            "UPDATE pages SET pinned_at = NULL WHERE document_id = ? AND pinned_at IS NOT NULL",
+            (doc_id,),
+        )
+    return int(cur.rowcount or 0)
+
+
+def pinned_counts(conn: sqlite3.Connection) -> dict[int, int]:
+    """{document_id: number of pinned pages} — for the `pha status` summary."""
+    return {int(r["document_id"]): int(r["n"]) for r in conn.execute(
+        "SELECT document_id, COUNT(*) n FROM pages WHERE pinned_at IS NOT NULL "
+        "GROUP BY document_id"
+    )}
 
 
 def mark_page_reviewed(conn: sqlite3.Connection, page_id: int, raw_text: str) -> None:

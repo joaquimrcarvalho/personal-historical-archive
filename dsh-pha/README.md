@@ -25,7 +25,7 @@ Model tools (registered globally, so they are available to the agent in **every*
 | `pha_page` | one page's text (raw / `--edited`) |
 | `pha_search` | full-text search (hybrid) → structured hits |
 | `pha_archive` | archive dir + engine health (`pha doctor`) |
-| `pha_job_start` / `pha_job_status` / `pha_job_kill` | run `pha scan/edit/encode/reindex/review/inbox` as background jobs |
+| `pha_job_start` / `pha_job_status` / `pha_job_kill` | run `pha scan/edit/encode/reindex/review/inbox` as background jobs (`scan` + `page` = single-page rescan, with `palaeographer`/`model`/`dry_run`/`unpin`/`no_pin`) |
 
 All reads go through `pha` (any where a structured/JSON surface exists) or a **read-only,
 `immutable=1`** sqlite open of `archive.db` — which is the one mode that opens this WAL
@@ -114,7 +114,11 @@ After the profile starts, the eleven `pha_*` tools are registered in the host `t
 registry and appear in every session's tool catalog. Trigger them like any tool, e.g. ask the
 agent: `list the documents`, `show document 1 page 2`, `search for missão`. Mutating actions
 (`pha scan/edit/encode/reindex/review/inbox`) can be started with `pha_job_start` and polled
-with `pha_job_status`; pha's own lock prevents overlapping local-model jobs.
+with `pha_job_status`; pha's own lock prevents overlapping local-model jobs. For `scan`,
+`pha_job_start` also takes `page` (re-read that one page of one document), together with
+`palaeographer`/`model`, `dry_run`, `unpin` and `no_pin` — the single-page rescan. It records
+the page's provenance and pins the reading so a later bulk scan keeps it; use `dry_run: true`
+first to see the plan without a model call.
 
 To confirm the host half is live, ask the agent for `pha_status` — the `pha_*` tools exist only
 while the row is active. The same-origin routes answer on the instance's own port (`DSH_WEB_URL`):

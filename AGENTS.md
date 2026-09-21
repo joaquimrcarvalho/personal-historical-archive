@@ -263,6 +263,27 @@
   `reviewed` row outranks `--reprocess`, so **`pha review --unset` is the only
   way to re-run a stage over human-touched text** — required before applying a
   new palaeographer/editor (or the planned stage filters) to those pages.
+- **Re-reading ONE page with a chosen model (`pha scan --page N`)** — the
+  machine counterpart of the review round-trip (a model re-read, not a human
+  correction). `pha scan --path <one doc> --page N [--page M …]
+  [--palaeographer X] [--model Y] [--dry-run] [--no-pin]` renders and
+  transcribes ONLY those pages, with the override **authoritative for that run**
+  and its two halves independent (`--model` alone keeps the document's rules,
+  `--palaeographer` alone keeps its model; a VLM prompt paired with a local OCR
+  engine is warned about). Each re-read page records its own provenance
+  (`pages.palaeographer`/`palaeographer_model`, plus `palaeographer:`/`model:`/
+  `pinned: true` in its library front matter) and is **pinned**: a later bulk
+  `pha scan`, `--reprocess`, or changed collection config keeps it and says
+  `kept N pinned page(s)`. The editor re-runs for that page and the indexer
+  re-embeds it (incrementally), so **no follow-up command is needed**. It needs
+  a target resolving to exactly ONE document; `--page` is refused with
+  `--watch`. A human-`reviewed` transcription is refused (release with
+  `pha review --unset --doc N --page P`), and a human-corrected edit is kept.
+  Naming the page re-reads a pinned page on purpose and re-pins it; `--unpin`
+  releases the protection (text kept), `--no-pin` records provenance without
+  pinning, `--dry-run` prints the plan with no model call. `pha test --page N …`
+  previews it without touching the DB, `pha status` shows `N pinned` per
+  document, and `pha page <doc> N --json` reports the page's pair.
 - Full usage: README.md; planned web UI: WEB_INTERFACE_PLAN.md.
 
 ## Usage — how agents operate the archive (not just develop it)
