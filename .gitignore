@@ -17,6 +17,13 @@ benchmarks/
 test-1577-archive/
 # a pha run from the project dir with no archive configured seeds one here
 archive.db*
+# ...and, in that case, the zero-config defaults pha seeds into the archive
+# (models/palaeographers/editors/encoders default.md). Generated, not source:
+# ignored so a `git add -A` can never commit them.
+/models/default.md
+/palaeographers/default.md
+/editors/default.md
+/encoders/default.md
 
 # Per-file markdown captures written by the editing/agent tooling (unknown
 # provenance — see enhancements/dot-writing-dir-review.md). Ignored so a
