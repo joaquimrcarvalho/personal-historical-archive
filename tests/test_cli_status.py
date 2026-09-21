@@ -287,3 +287,59 @@ def test_status_json_marks_a_document_out_on_handover(tmp_path, capsys):
     assert groups[0]["worker"] == "studio"
     assert groups[0]["state"] == "out"
     assert [d["doc_id"] for d in groups[0]["documents"]] == [doc_id]
+
+
+# --------------------------------------------------------------------------- stall visibility (F3)
+
+def test_status_flags_a_stalled_processing_document(tmp_path, capsys):
+    """A 'processing' document whose row has not moved is named with its age, so
+    a stalled model request is not indistinguishable from healthy progress
+    (enhancements/pha-request-stall-timeout-bug-report.md, F3)."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    col = cfg.dropbox / "collections" / "CAT"
+    col.mkdir(parents=True)
+    a = col / "a.pdf"
+    a.write_bytes(b"%PDF a")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="a.pdf", path=str(a), sha256=sha256_of(a),
+                              size_bytes=1, mtime=1, kind="pdf", now=time.time(),
+                              dir_path="collections/CAT")
+    _db.set_document_status(conn, doc_id, "processing")
+    # last page written two hours ago
+    conn.execute("UPDATE documents SET updated_at=? WHERE id=?",
+                 (time.time() - 7200, doc_id))
+    conn.commit()
+    conn.close()
+
+    cli.cmd_status(cfg, SimpleNamespace())
+    out = capsys.readouterr().out
+    assert "no progress for 2h00m" in out
+    assert "stalled?" in out
+
+
+def test_status_does_not_flag_a_fresh_processing_document(tmp_path, capsys):
+    """A document that just started processing is not called stalled."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    col = cfg.dropbox / "collections" / "CAT"
+    col.mkdir(parents=True)
+    a = col / "a.pdf"
+    a.write_bytes(b"%PDF a")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="a.pdf", path=str(a), sha256=sha256_of(a),
+                              size_bytes=1, mtime=1, kind="pdf", now=time.time(),
+                              dir_path="collections/CAT")
+    _db.set_document_status(conn, doc_id, "processing")
+    conn.commit()
+    conn.close()
+
+    cli.cmd_status(cfg, SimpleNamespace())
+    assert "stalled?" not in capsys.readouterr().out
+
+
+def test_age_str_formats():
+    assert cli._age_str(5) == "5s"
+    assert cli._age_str(12 * 60) == "12m"
+    assert cli._age_str(4 * 3600 + 17 * 60) == "4h17m"
+    assert cli._age_str(3 * 86400) == "3d"

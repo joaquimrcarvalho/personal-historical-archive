@@ -90,6 +90,17 @@ structured records grounded to the page each one starts on.
     with `max_input_chars`). MiniMax M2.5 = 200000; a local 7B might be 32768;
   - `timeout_s` is per-stage (on the palaeographer/editor/encoder file), not
     on the model — vision defaults to 900s, text to 300s.
+  - `deadline_s` (also per-stage, next to `timeout_s`) is a **wall-clock
+    ceiling on ONE model request**, enforced by pha. `timeout_s` is httpx's
+    per-OPERATION timeout, and a provider that trickles keep-alive bytes resets
+    it on every byte — so a request whose answer never arrives could otherwise
+    sit for hours (measured: ~6 h 30 and ~4 h 17 on cloud-vision volumes). The
+    two are complementary: `timeout_s` still bounds a *silent* connection (no
+    byte at all), `deadline_s` bounds the *trickle*. Default: `2 × timeout_s`,
+    at least 60s; set it explicitly to tune, or `0` to disable the ceiling. When
+    it expires, the page is **abandoned for that pass**, named in the output and
+    retried by the next `pha scan`/`pha edit` (never recorded as a page
+    failure). See `enhancements/pha-request-stall-timeout-bug-report.md`.
 
 ## Quickstart
 
@@ -507,7 +518,8 @@ Editing a prompt file (sidecar, collection `prompt.md`, or the default)
 A **palaeographer** is a named set of transcription rules (content only). Each
 palaeographer is **one file** in the `palaeographers/` directory (the file
 name, without extension, is the id): YAML front matter holds only
-`temperature`/`max_tokens`/`timeout_s`; the body is the base prompt. It carries
+`temperature`/`max_tokens`/`timeout_s`/`deadline_s`; the body is the base
+prompt. It carries
 **no model** — the endpoint/model/api-key/resolution limits live in the model
 file, and the pairing is made in `pha.yaml`:
 
@@ -517,7 +529,8 @@ file, and the pairing is made in `pha.yaml`:
 description: qwen3-vl-8b via LM Studio (local, default)
 temperature: 0.1
 max_tokens: 4096
-timeout_s: 900
+timeout_s: 900          # per-operation HTTP timeout
+deadline_s: 1800        # wall-clock ceiling per request (default: 2x timeout_s)
 ---
 
 You are a palaeographer specialised in Western European manuscripts …
@@ -1057,8 +1070,14 @@ pha info [--json]               # archive paths + versions, without walking the 
 pha status [--json]            # archive summary; --json is the PHA view's source for what
                                #   is not scanned yet and what is parked in the inbox
 pha export
-pha reindex [--path collections/COLX]
-                          # re-embed; takes the single-model lock, and a document
+pha reindex [--doc N] [--page P] [--path collections/COLX] [--force]
+                          # re-embed; INCREMENTAL by default — only chunks whose text
+                          #   changed (or whose vector came from another embed model) are
+                          #   embedded, so a one-page correction no longer re-embeds the
+                          #   whole volume; --force re-embeds every chunk;
+                          #   --doc N [--page P] scopes it to one document / one page,
+                          #   leaving the other pages' chunks and vectors untouched;
+                          #   takes the single-model lock, and a document
                           #   whose embed fails is left untouched + reported (exit 3)
 pha filters [--json]      # list the archive's stage filters (filters/<id>/)
 pha filter ID [--input FILE] [--hook H] [--params K=V] [--ctx K=V] [--doc N] [--json]
@@ -1076,6 +1095,9 @@ pha prune --library-variants [--dry-run] [--doc N]
                           #   survive elsewhere (the DB, or its `@<model>` sibling;
                           #   `*waiting*` stubs count as no page at all);
                           #   a folder holding a different reading is reported, not deleted
+pha render [--path collections/COLX] [--doc N] [--dry-run]
+                          # render the page images MISSING from the cache, from the
+                          #   source (a hand-over carries no renders; `fetch` does this)
 pha prompts [file]
 pha palaeographer [file]
 pha editor [file]
@@ -1298,7 +1320,20 @@ embeddings:
   model: nomic-embed-text
 ```
 
-After switching the embedding model run `pha reindex`.
+After switching the embedding model run `pha reindex` — the stored vectors name
+the model that produced them, so a changed model re-embeds every chunk
+automatically (no `--force` needed).
+
+**Re-indexing is incremental.** `pha reindex` re-embeds only the chunks whose
+text changed since they were last indexed, plus any whose stored vector came
+from a different embed model; every other chunk keeps its stored vector. So
+correcting one page of a 900-page volume embeds that page, not the volume —
+`pha reindex --doc N --page P` does it for one page of one document, `pha
+reindex --doc N` for one document, and `pha scan`/`pha edit` re-index what they
+changed themselves (a single-page edit costs a single-page re-embed). Use
+`--force` when you want the old behaviour: re-embed every chunk even though its
+text is unchanged (e.g. after changing an embedding server's settings rather
+than the model name).
 
 **Failure behaviour (why a reindex cannot break a working index).**
 `pha reindex` loads the local embed model, so it takes the same single-model
@@ -1409,7 +1444,8 @@ document has **two page variants**, and correcting them behaves differently:
 4. `pha edit` **re-runs the editor for just that page**, now from your
    corrected transcription (it detects the raw text changed); other pages are
    untouched.
-5. `pha reindex` so search uses the corrected text and the new edited text.
+5. `pha reindex --doc N` so search uses the corrected text and the new edited
+   text (only the chunks that changed are re-embedded).
 
 **You corrected the EDITED text (the editor's final output):**
 
@@ -1417,7 +1453,7 @@ document has **two page variants**, and correcting them behaves differently:
 2. `pha status`, then `pha review [--doc N]` — the corrected text is imported
    and the edit is stamped **reviewed**, so neither `pha scan` nor `pha edit`
    will ever overwrite it.
-3. `pha reindex`.
+3. `pha reindex --doc N`.
 
 Reviewed pages show `reviewed: true` in their front matter.
 
@@ -1536,6 +1572,13 @@ a local `pha scan` sees it as out, and the worker does the whole job. A target
 under `inbox/` is relocated into the dropbox first (`inbox/collections/DI/x.pdf`
 → `dropbox/collections/DI/x.pdf`): only the entries you name, and it refuses to
 overwrite a file already there unless `--force-inbox`.
+
+Renders are **not** carried in either direction (the worker re-renders to
+extract, and shipping images cross-machine would dwarf the payload). Since a
+document handed out before its first scan has no images here, `handoff fetch`
+rebuilds any that are missing with the sidecar's settings — the same thing
+`pha render [--path … | --doc N]` does on demand. Renders are a derived cache,
+so byte-identity across machines is deliberately not required.
 
 `work` is only a convenience: it runs `pha scan --path …`, `pha edit --path …`
 and `pha encode --path …` in order, printing each stage's own result. Run those

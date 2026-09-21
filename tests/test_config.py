@@ -528,3 +528,69 @@ def test_serve_defaults_and_config(tmp_path):
     assert cfg.serve_port == 9000
     # a wildcard BIND address is not a usable client URL
     assert cfg.serve_base_url == "http://127.0.0.1:9000"
+
+
+def test_find_project_root_prefers_an_explicit_start_over_phahome(tmp_path, monkeypatch):
+    """An explicit root must beat PHA_HOME.
+
+    Regression, seen live: PHA_HOME is routinely exported (an agent session, a
+    shell profile). When it outranked the argument, `Config.load(tmp)` returned a
+    Config rooted at the developer's real checkout, so a test running `pha set
+    archive-dir` WROTE the repo's config.yaml — pointing the developer's archive
+    at a pytest temp dir (and the test then failed on its own assertion).
+    """
+    from personal_historical_archive.config import find_project_root
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text("paths:\n  archive_dir: .\n")
+    monkeypatch.setenv("PHA_HOME", "/some/other/checkout")
+    assert find_project_root(root) == root.resolve()
+    assert Config.load(root).root == root.resolve()
+
+
+def test_find_project_root_uses_phahome_when_no_start_is_given(tmp_path, monkeypatch):
+    from personal_historical_archive.config import find_project_root
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("PHA_HOME", str(home))
+    assert find_project_root() == home.resolve()
+
+
+def test_stage_deadline_s_is_parsed_and_reaches_the_client(tmp_path):
+    """`deadline_s` is a stage field (next to `timeout_s`), not a model field:
+    it must survive front-matter parsing, model resolution and ModelClient
+    construction — the plumbing that bounds a stalled request
+    (enhancements/pha-request-stall-timeout-bug-report.md, F1/F4)."""
+    from personal_historical_archive.ingest import make_vision_client
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {root / 'arc'}\n")
+    cfg = Config.load(root)
+    cfg.ensure_dirs()
+    (cfg.palaeographers_dir / "custom.md").write_text(
+        "---\ndescription: t\nbase_url: http://127.0.0.1:1234/v1\nmodel: m\n"
+        "timeout_s: 900\ndeadline_s: 1234\n---\n\nprompt\n", encoding="utf-8")
+    cfg = Config.load(root)
+
+    pal = cfg.get_palaeographer("custom")
+    assert pal.timeout_s == 900 and pal.deadline_s == 1234
+    client, resolved = make_vision_client(cfg, "custom")
+    try:
+        assert resolved.deadline_s == 1234
+        assert client.deadline_s == 1234
+        assert client.timeout_s == 900
+    finally:
+        client.close()
+
+    # absent -> None, so ModelClient derives a default (2 x timeout_s)
+    assert cfg.get_palaeographer("default").deadline_s is None
+    derived = __import__("personal_historical_archive.model_client",
+                         fromlist=["ModelClient"]).ModelClient(
+        "http://example/v1", timeout_s=900)
+    try:
+        assert derived.deadline_s == 1800
+    finally:
+        derived.close()

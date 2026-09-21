@@ -36,7 +36,7 @@ from .extract import (
     resolve_palaeographer_id,
     resolve_prompt,
 )
-from .model_client import ModelClient, ModelError, PAGE_ENGINES
+from .model_client import ModelClient, ModelError, ModelStall, PAGE_ENGINES
 from .filters import FilterError, filters_changed, filters_signature, write_stamp
 from .sidecar import Sidecar, effective_render, resolve_sidecar
 
@@ -86,7 +86,7 @@ def make_vision_client(
     pal = cfg.get_palaeographer(pal_id)
     pal = cfg.resolve_model(pal)  # bind the default model when rules-only
     return ModelClient(pal.base_url, timeout_s=pal.timeout_s, api_key=pal.api_key,
-                       api_style=pal.api_style), pal
+                       api_style=pal.api_style, deadline_s=pal.deadline_s), pal
 
 
 def make_editor_client(cfg: Config, editor_id: str) -> tuple[ModelClient, Editor]:
@@ -95,13 +95,13 @@ def make_editor_client(cfg: Config, editor_id: str) -> tuple[ModelClient, Editor
     editor = cfg.get_editor(editor_id)
     editor = cfg.resolve_model(editor)  # bind the default model when rules-only
     return ModelClient(editor.base_url, timeout_s=editor.timeout_s, api_key=editor.api_key,
-                       api_style=editor.api_style), editor
+                       api_style=editor.api_style, deadline_s=editor.deadline_s), editor
 
 
 def _vision_client(pal: Palaeographer) -> ModelClient:
     """Build a ModelClient for an (already resolved/overridden) palaeographer."""
     return ModelClient(pal.base_url, timeout_s=pal.timeout_s, api_key=pal.api_key,
-                       api_style=pal.api_style)
+                       api_style=pal.api_style, deadline_s=pal.deadline_s)
 
 
 def _client_key(pal: Palaeographer) -> tuple:
@@ -495,9 +495,85 @@ def prune_orphan_renders(cfg: Config, conn, dry_run: bool = False, verbose: bool
     return removed
 
 
+def _render_image_count(rdir: Path) -> int:
+    """JPEGs present in one `renders/<sha>` cache folder."""
+    if not rdir.is_dir():
+        return 0
+    return sum(1 for f in rdir.iterdir() if f.is_file() and not f.name.startswith("."))
+
+
+def render_document_pages(cfg: Config, conn, doc_id: int, verbose: bool = True) -> dict:
+    """Render the page images MISSING for one document, from its source.
+
+    `renders/<sha>/` is a derived cache keyed by the source content hash. A
+    hand-over ships no renders (the worker re-renders to extract) and the return
+    leg carries none either, so a document this archive never scanned — handed
+    out before its first scan — has no images when its text comes back.
+    Re-rendering here, with the same sidecar settings, is cheaper than
+    transferring the worker's images and keeps the cache local.
+
+    Never raises: a missing or unreadable source is reported, so a `fetch` that
+    has already applied the text is not failed by a render.
+    """
+    doc = db.get_document(conn, doc_id)
+    if doc is None:
+        return {"action": "skipped", "reason": "no such document", "doc_id": doc_id}
+    path = Path(doc["path"] or "")
+    sha = doc["sha256"] or ""
+    if not sha or not path.exists():
+        return {"action": "skipped", "reason": "source missing", "doc_id": doc_id}
+    rdir = cfg.renders / sha
+    expected = int(doc["page_count"] or 0)
+    have = _render_image_count(rdir)
+    if expected and have >= expected:
+        return {"action": "skipped", "reason": "already rendered",
+                "doc_id": doc_id, "images": have}
+    dpi, max_px, jq = effective_render(cfg, _doc_sidecar(cfg, path))
+    try:
+        if path.is_dir():
+            for img in sorted(path.iterdir()):
+                if img.is_file() and not img.name.startswith(".") and is_supported(img.name):
+                    render_document(img, rdir, dpi, max_px, jq, prefix=img.stem)
+        else:
+            render_document(path, rdir, dpi, max_px, jq)
+    except Exception as e:  # noqa: BLE001 - a render must never fail the caller
+        return {"action": "error", "doc_id": doc_id, "error": str(e)}
+    n = _render_image_count(rdir)
+    if verbose:
+        print(f"  rendered {n} page image(s) for #{doc_id} ({doc['filename']})", flush=True)
+    return {"action": "rendered", "doc_id": doc_id, "images": n}
+
+
 # What `write_edited_pages` writes for a page whose edit row has no text yet: the
 # absence of a page, not content, so a folder holding only these holds nothing.
 _WAITING_STUB = "*waiting*"
+
+# A page that takes longer than this is called out in the scan/edit output, so
+# a provider slowing down is visible BEFORE it becomes a stall (report F3).
+_SLOW_PAGE_WARN_S = float(os.environ.get("PHA_SLOW_PAGE_S", "600"))
+
+
+def _page_timing_line(page_no: int, total: int, elapsed: float) -> str:
+    """`page N/M: extracted in Xs` — with a warning marker when it was slow."""
+    mark = "  ! slow page: " if elapsed >= _SLOW_PAGE_WARN_S else "  "
+    return f"{mark}page {page_no}/{total}: done in {elapsed:.1f}s"
+
+
+def _pages_list(pages) -> str:
+    """Compact `1, 4, 7-9` rendering of page numbers for a report line."""
+    nums = sorted({int(p) for p in pages})
+    if not nums:
+        return ""
+    spans: list[str] = []
+    start = prev = nums[0]
+    for n in nums[1:]:
+        if n == prev + 1:
+            prev = n
+            continue
+        spans.append(str(start) if start == prev else f"{start}-{prev}")
+        start = prev = n
+    spans.append(str(start) if start == prev else f"{start}-{prev}")
+    return ", ".join(spans)
 
 
 def _db_edited_bodies(conn, doc_id: int, editor: str) -> dict[str, str]:
@@ -802,9 +878,9 @@ def ingest_file(
             # signature differs (checked per page below). It must also clear
             # this document-level early return, which happens before the loop.
             filters_stale = (
-                _configured_filters_signature(
+                _stored_page_filters(conn, existing["id"], sample=1)
+                not in _acceptable_filters_signature(
                     cfg, sidecar.palaeographer.post if sidecar.palaeographer is not None else [])
-                != _stored_page_filters(conn, existing["id"], sample=1)
             )
             changed = prompt_newer or pal_changed or filters_stale
             if existing["status"] == "processing":
@@ -902,21 +978,24 @@ def ingest_file(
     # filter, changed params, or a filter added/removed) and is re-extracted
     # even without --reprocess — the same "editing rules re-runs the stage"
     # rule the prompt/model files follow.
-    expected_filters = _configured_filters_signature(
+    acceptable_filters = _acceptable_filters_signature(
         cfg, sidecar.palaeographer.post if sidecar.palaeographer is not None else [])
+    page_errors: list[tuple[int, str]] = []
+    stalled: list[int] = []  # pages abandoned for THIS pass by a model stall
     for i, img in enumerate(renders, start=1):
         page_id = db.add_page(conn, doc_id, i, source_name=source_names[i - 1] if i - 1 < len(source_names) else None)
         page = conn.execute("SELECT * FROM pages WHERE id = ?", (page_id,)).fetchone()
         if page["reviewed_at"]:
             continue  # a human corrected this page; never re-extract over it
         if page["status"] == "done" and not force:
-            if not filters_changed(page["filters"], expected_filters):
+            if not filters_changed(page["filters"], acceptable_filters):
                 continue  # resume: keep already-extracted pages
             if verbose:
                 print(f"  page {i}/{total}: filters changed, re-extracting ...", flush=True)
         prompt_txt = build_page_prompt(prompt, path.name, i, total)
         if verbose:
             print(f"  page {i}/{total}: extracting ...", flush=True)
+        started = time.monotonic()
         try:
             text = transcribe_page(client, palaeographer, prompt_txt, img,
                                    source=path, page_no=i, total=total)
@@ -934,10 +1013,26 @@ def ingest_file(
             db.set_page_result(conn, page_id, raw_text=text,
                                filters=filters_signature(ran))
             consecutive_failures = 0
+            if verbose:
+                print(_page_timing_line(i, total, time.monotonic() - started), flush=True)
+        except ModelStall as e:
+            # The provider stopped answering (pha's wall-clock deadline). This
+            # is NOT a page failure: abandon the page for THIS pass — leave its
+            # row pending, record no error, and do not advance the
+            # consecutive-failure abort — so a later pass resumes exactly the
+            # abandoned pages (report F1/F3 + the batch behaviour G4).
+            stalled.append(i)
+            if verbose:
+                print(f"  page {i}/{total}: STALLED after "
+                      f"{time.monotonic() - started:.1f}s — abandoned for this pass "
+                      f"({e})", flush=True)
         except (ModelError, FilterError) as e:
             db.set_page_result(conn, page_id, error=str(e))
             page_errors.append((i, str(e)))
             consecutive_failures += 1
+            if verbose:
+                print(f"  page {i}/{total}: FAILED after "
+                      f"{time.monotonic() - started:.1f}s: {e}", flush=True)
             if consecutive_failures >= 5:
                 # systemic failure (server down, model not loaded, ...): stop
                 # instead of burning through the whole document
@@ -961,6 +1056,18 @@ def ingest_file(
     edit_document(cfg, conn, doc_id, verbose=verbose)  # editor pass (skips if none configured)
     index_document(cfg, conn, doc_id, verbose=verbose)  # indexes raw + edited variants
     write_document_pages(cfg, conn, doc_id)
+    if stalled:
+        # Some pages were abandoned by a stall. What WAS read is edited and
+        # indexed (so the progress is searchable), but the document is left
+        # `processing` -- never `done` -- because it is incomplete: the next
+        # `pha scan` resumes exactly the abandoned pages and nothing else.
+        if verbose:
+            print(f"  {len(stalled)} page(s) abandoned for this pass (model stalled): "
+                  f"{_pages_list(stalled)} of {total} — re-run `pha scan` to retry "
+                  f"them; nothing was recorded as failed", flush=True)
+        return {"action": "stalled", "filename": path.name, "pages": total,
+                "stalled": sorted(stalled), "prompt": prompt_source,
+                "status": "processing"}
     # `done` is written LAST, after the editor and the indexer have run. A crash
     # in either used to leave a healthy-looking row -- `done`, no edited variant,
     # 0 chunks (doc 57, documenta-indica, 2026-09-15) -- which every status-only
@@ -971,21 +1078,28 @@ def ingest_file(
     return {"action": "ingested", "filename": path.name, "pages": total, "prompt": prompt_source}
 
 
-def _has_embedded_chunks(conn, doc_id: int) -> bool:
-    """Would destroying this document's chunks also lose stored vectors?"""
-    row = conn.execute(
-        "SELECT 1 FROM chunks WHERE document_id = ? AND embedding IS NOT NULL LIMIT 1",
-        (doc_id,),
-    ).fetchone()
-    return row is not None
-
-
 def index_document(
-    cfg: Config, conn, doc_id: int, embed_client: ModelClient | None = None, verbose: bool = True
+    cfg: Config, conn, doc_id: int, embed_client: ModelClient | None = None,
+    verbose: bool = True, incremental: bool = True, pages=None,
 ) -> int:
     """Index BOTH variants when an editor is configured: the raw transcription
     (variant='raw') and the editor's output (variant='edited'), so searches
     hit either the faithful or the modernized/translated text.
+
+    **Incremental by default.** A chunk whose text is byte-identical to the one
+    already stored, and whose stored vector was produced by the embed model now
+    configured (`chunks.embed_model`), is REUSED instead of re-embedded. So
+    re-indexing after a one-page correction embeds that page's chunks and
+    nothing else, instead of the whole volume (the reported limitation:
+    rewriting one page used to re-embed every page of the document). Pass
+    `incremental=False` to force a full re-embed — what `pha reindex --force`
+    does. A chunk whose `embed_model` is unknown (a row written before that
+    column existed) or different from the current model is never reused, so
+    switching embed model still re-embeds everything.
+
+    `pages` (a set of 1-based page numbers) scopes the pass to those pages:
+    only their chunks are replaced, and every other page keeps its chunk rows.
+    `pha reindex --doc N --page P` uses this.
 
     **Embeddings are computed BEFORE the existing chunks are cleared.** A
     re-index replaces a document's chunks wholesale (`clear_chunks` then
@@ -1003,14 +1117,19 @@ def index_document(
       endpoint is down) still degrades to text-only with a warning, so
       `pha scan` keeps its zero-config behaviour.
     """
-    pages = db.get_pages(conn, doc_id)
+    all_pages = db.get_pages(conn, doc_id)
+    if pages is None:
+        selected = list(all_pages)
+    else:
+        wanted = {int(p) for p in pages}
+        selected = [p for p in all_pages if p["page_no"] in wanted]
     doc = db.get_document(conn, doc_id)
     edited: dict[int, str] = {}
     if doc and doc["editor"]:
         edited = _edited_texts(conn, doc_id, doc["editor"])
     items: list[tuple[int, int, str, str]] = []  # (page_id, chunk_no, text, variant)
     n = 0
-    for p in pages:
+    for p in selected:
         for ch in chunk_text(p["raw_text"], cfg.chunk_chars, cfg.chunk_overlap):
             items.append((p["id"], n, ch, "raw"))
             n += 1
@@ -1018,49 +1137,97 @@ def index_document(
             for ch in chunk_text(edited[p["id"]], cfg.chunk_chars, cfg.chunk_overlap):
                 items.append((p["id"], n, ch, "edited"))
                 n += 1
+    selected_ids = [p["id"] for p in selected]
+    scope_ids = None if pages is None else selected_ids
+    # Loss is only possible when the rows we are about to replace carry vectors.
+    # A forced (non-incremental) pass re-embeds everything, so it only needs the
+    # cheap existence test — not every stored blob.
+    if incremental:
+        old = db.existing_chunks(conn, doc_id, scope_ids)
+        strict = any(r["embedding"] is not None for r in old)
+    else:
+        old = []
+        strict = db.any_embedded_chunk(conn, doc_id, scope_ids)
+    # Reuse pool: (page_id, variant) -> {text: [stored vectors]}, limited to
+    # vectors the CURRENT embed model produced (an unknown/different model is
+    # never reused — see the docstring).
+    pool: dict[tuple[int, str], dict[str, list[bytes]]] = {}
+    if incremental and cfg.embed_model:
+        for r in old:
+            if r["embedding"] is None or r["embed_model"] != cfg.embed_model:
+                continue
+            pool.setdefault((r["page_id"], r["variant"]), {}) \
+                .setdefault(r["text"], []).append(r["embedding"])
+    blobs: list[bytes | None] = [None] * len(items)
+    to_embed: list[tuple[int, str]] = []  # (index into items, prefixed text)
+    for i, (page_id, _no, text, variant) in enumerate(items):
+        reused = pool.get((page_id, variant), {}).get(text)
+        if reused:
+            blobs[i] = reused.pop()
+        else:
+            to_embed.append((i, prefixed(cfg.embed_model, text, "doc")))
     if not items:
-        db.clear_chunks(conn, doc_id)
+        if pages is None:
+            db.clear_chunks(conn, doc_id)
+        else:
+            db.clear_chunks_for_pages(conn, doc_id, selected_ids)
         conn.commit()
         return 0
-    # Loss is only possible when there are vectors to lose; deciding once also
-    # keeps the retry below from changing the fallback semantics.
-    strict = _has_embedded_chunks(conn, doc_id)
+    if not to_embed:
+        # Nothing to embed: if the stored rows already match, this is a true
+        # no-op (keep the rows, their ids and their vectors untouched).
+        same = len(old) == len(items) and sorted(
+            (r["page_id"], r["chunk_no"], r["text"], r["variant"]) for r in old
+        ) == sorted(items)
+        if same:
+            if verbose:
+                print(f"  indexing {len(items)} chunks (all reused; index already current)",
+                      flush=True)
+            return len(items)
     if verbose:
-        print(f"  indexing {n} chunks ...", flush=True)
-    close_embed = False
-    if embed_client is None:
-        embed_client = ModelClient(cfg.embed_base_url, timeout_s=cfg.embed_timeout_s)
-        close_embed = True
-    try:
-        vecs = embed_client.embed(
-            cfg.embed_model,
-            [prefixed(cfg.embed_model, t, "doc") for _, _, t, _v in items],
-            batch_size=cfg.embed_batch_size,
-        )
-    except ModelError as e:
-        if strict:
-            # There are vectors to lose: never trade a working index for a
-            # text-only one. Propagate so the caller reports it and the whole
-            # document is retried later (the chunks above are still intact).
-            raise ModelError(
-                f"embeddings unavailable ({e}); document #{doc_id} left unchanged "
-                "rather than dropping its stored vectors — re-run once the embed "
-                "model is available"
-            ) from e
-        # Nothing to lose yet (a fresh ingest with the endpoint down): keep
-        # `pha scan`'s zero-config behaviour and index text-only.
-        vecs = [None] * len(items)
-        if verbose:
-            print(f"  warning: embeddings unavailable ({e}); indexing text-only")
-    finally:
-        if close_embed:
-            embed_client.close()
+        print(f"  indexing {len(items)} chunks ({len(to_embed)} to embed, "
+              f"{len(items) - len(to_embed)} reused) ...", flush=True)
+    if to_embed:
+        close_embed = False
+        if embed_client is None:
+            embed_client = ModelClient(cfg.embed_base_url, timeout_s=cfg.embed_timeout_s)
+            close_embed = True
+        try:
+            new_vecs = embed_client.embed(
+                cfg.embed_model,
+                [t for _i, t in to_embed],
+                batch_size=cfg.embed_batch_size,
+            )
+        except ModelError as e:
+            if strict:
+                # There are vectors to lose: never trade a working index for a
+                # text-only one. Propagate so the caller reports it and the whole
+                # document is retried later (the chunks above are still intact).
+                raise ModelError(
+                    f"embeddings unavailable ({e}); document #{doc_id} left unchanged "
+                    "rather than dropping its stored vectors — re-run once the embed "
+                    "model is available"
+                ) from e
+            # Nothing to lose yet (a fresh ingest with the endpoint down): keep
+            # `pha scan`'s zero-config behaviour and index text-only.
+            new_vecs = [None] * len(to_embed)
+            if verbose:
+                print(f"  warning: embeddings unavailable ({e}); indexing text-only")
+        finally:
+            if close_embed:
+                embed_client.close()
+        for (i, _t), v in zip(to_embed, new_vecs):
+            blobs[i] = pack(v) if v else None
     # Only now is the old index replaced, with the new vectors already in hand.
-    db.clear_chunks(conn, doc_id)
-    for (page_id, chunk_no, text, variant), v in zip(items, vecs):
-        db.add_chunk(conn, doc_id, page_id, chunk_no, text, pack(v) if v else None, variant)
+    if pages is None:
+        db.clear_chunks(conn, doc_id)
+    else:
+        db.clear_chunks_for_pages(conn, doc_id, selected_ids)
+    for (page_id, chunk_no, text, variant), blob in zip(items, blobs):
+        db.add_chunk(conn, doc_id, page_id, chunk_no, text, blob, variant,
+                     embed_model=cfg.embed_model if blob else None)
     conn.commit()
-    return n
+    return len(items)
 
 
 def _library_dir_for(cfg: Config, conn, doc_id: int) -> Path | None:
@@ -1135,26 +1302,56 @@ def _run_stage_filters(cfg: Config, specs, *, hook: str, value, conn, path: Path
     return (value, ran) if return_ran else value
 
 
-def _configured_filters_signature(cfg: Config, specs) -> str:
-    """The signature of a filter chain as configured NOW, without running it.
+def _filter_chain_signatures(cfg: Config, specs) -> tuple[str, str]:
+    """(resolved, declared) signatures for a filter chain, without running it.
 
-    Used for staleness: comparing this to the signature stored on a page/edit
-    detects an edited filter (content hash), changed params, or a filter that
-    was added/removed — including removing the whole chain, where nothing would
-    otherwise run to record the change.
+    `resolved` merges each filter manifest's declared `params:` with the
+    sidecar's per-use overrides — EXACTLY what `apply_filters()` records on a
+    page. `declared` uses the sidecar params alone, which is what pha computed
+    before this was fixed: a filter whose manifest declares `params:` and whose
+    sidecar omits them (the normal spelling, `post: [my-filter]`) therefore read
+    as "changed" on every pass and re-ran the stage forever. `declared` is kept
+    only so a stored value still in the old spelling counts as unchanged (via
+    `filters_changed`), which avoids one mass re-run of the whole archive.
     """
-    from .filters import filter_sha, filters_signature, load_filter
-    ran = []
+    from .filters import filter_sha, filters_signature, load_filter, resolve_params
+    resolved: list = []
+    declared: list = []
     for spec in specs or []:
         try:
             f = load_filter(cfg.filters_dir, spec.name)
         except FilterError:
             # a broken/missing filter: fold its name in so the stage re-runs
             # once it is fixed, instead of silently looking unchanged
-            ran.append({"name": spec.name, "sha": "missing", "params": spec.params})
+            resolved.append({"name": spec.name, "sha": "missing", "params": spec.params})
+            declared.append({"name": spec.name, "sha": "missing", "params": spec.params})
             continue
-        ran.append({"name": f.name, "sha": filter_sha(f), "params": dict(spec.params)})
-    return filters_signature(ran)
+        sha = filter_sha(f)
+        resolved.append({"name": f.name, "sha": sha, "params": resolve_params(f, spec)})
+        declared.append({"name": f.name, "sha": sha, "params": dict(spec.params)})
+    return filters_signature(resolved), filters_signature(declared)
+
+
+def _configured_filters_signature(cfg: Config, specs) -> str:
+    """The signature of a filter chain as configured NOW, without running it.
+
+    This is the RESOLVED form (manifest defaults merged with the sidecar params)
+    — the same signature `apply_filters()` stores, so a value it produced
+    compares equal. Used wherever the signature is written down.
+    """
+    return _filter_chain_signatures(cfg, specs)[0]
+
+
+def _acceptable_filters_signature(cfg: Config, specs) -> tuple[str, ...]:
+    """Every signature a stored value may carry for this chain to count as
+    unchanged: the resolved form, plus the legacy declared-params form.
+
+    Comparing against BOTH means the fix above does not re-run every page once,
+    and is safe: a real change (edited filter, changed manifest or sidecar
+    params, added/removed filter) changes the sha or the params in both forms,
+    so the stored value matches neither and the stage does re-run.
+    """
+    return _filter_chain_signatures(cfg, specs)
 
 
 def _stored_page_filters(conn, doc_id: int, sample: int = 1) -> str:
@@ -1907,14 +2104,18 @@ def edit_document(
     pages = db.get_pages(conn, doc_id)
     # The chain this pass would apply (pre + post), as a signature: a page whose
     # stored signature differs is re-edited even without --reprocess.
-    expected_filters = _configured_filters_signature(
-        cfg,
+    _editor_chain = (
         (editor_stage.pre if editor_stage is not None else [])
-        + (editor_stage.post if editor_stage is not None else []),
+        + (editor_stage.post if editor_stage is not None else [])
     )
+    # `expected_filters` is WRITTEN (resolved); `acceptable_filters` is what a
+    # stored value may be and still count as unchanged (resolved or legacy).
+    expected_filters = _configured_filters_signature(cfg, _editor_chain)
+    acceptable_filters = _acceptable_filters_signature(cfg, _editor_chain)
     client = ModelClient(editor.base_url, timeout_s=editor.timeout_s, api_key=editor.api_key,
-                         api_style=editor.api_style)
+                         api_style=editor.api_style, deadline_s=editor.deadline_s)
     edited = 0
+    stalled: list[int] = []  # pages abandoned for THIS pass by a model stall
     try:
         for p in pages:
             if page_no is not None and p["page_no"] != page_no:
@@ -1924,10 +2125,11 @@ def edit_document(
                 continue
             edit_row = db.get_page_edit(conn, p["id"], resolved)
             if not _edit_needed(p, edit_row, editor, force, model_files=tuple(model_files),
-                                expected_filters=expected_filters):
+                                expected_filters=acceptable_filters):
                 continue
             if verbose:
                 print(f"  editing page {p['page_no']}/{doc['page_count']} ...", flush=True)
+            started = time.monotonic()
             body = _strip_page_marker(raw)
             if _content_chars(body) < _EDIT_BLANK_MIN_CONTENT_CHARS:
                 # Deterministic blank page: no model call, so a page cannot be
@@ -1972,6 +2174,18 @@ def edit_document(
                     db.set_page_edit(conn, p["id"], resolved, text=out, raw_sha=_raw_sha(raw),
                                      filters=filters_signature(ran))
                     edited += 1
+                    if verbose:
+                        print(_page_timing_line(p["page_no"], doc["page_count"],
+                                                time.monotonic() - started), flush=True)
+                except ModelStall as e:
+                    # A stalled provider: leave this page UNEDITED for this pass
+                    # (no error row) so a later pass retries it, and keep going
+                    # with the rest of the document (report G4).
+                    stalled.append(p["page_no"])
+                    if verbose:
+                        print(f"  editing page {p['page_no']}/{doc['page_count']}: "
+                              f"STALLED after {time.monotonic() - started:.1f}s — "
+                              f"abandoned for this pass ({e})", flush=True)
                 except (ModelError, FilterError) as e:
                     db.set_page_edit(conn, p["id"], resolved, error=str(e), raw_sha=_raw_sha(raw))
             conn.commit()
@@ -1986,7 +2200,12 @@ def edit_document(
                            editor_model=editor.model_ref or None)
         conn.commit()
     write_edited_pages(cfg, conn, doc_id, resolved, model=editor.model_ref or None)
-    return {"action": "edited", "filename": doc["filename"], "editor": resolved, "pages": edited}
+    if stalled and verbose:
+        print(f"  {len(stalled)} page(s) abandoned for this pass (model stalled): "
+              f"{_pages_list(stalled)} — re-run `pha edit` to retry them; nothing was "
+              f"recorded as failed", flush=True)
+    return {"action": "edited", "filename": doc["filename"], "editor": resolved,
+            "pages": edited, "stalled": sorted(stalled)}
 
 
 def _index_after_edit(cfg: Config, conn, doc_id: int, edited_pages: int,
@@ -2125,7 +2344,7 @@ def make_encoder_client(cfg: Config, encoder_id: str | None = None,
         encoder = cfg.get_encoder(encoder_id)
     encoder = cfg.resolve_model(encoder)  # bind the default model when rules-only
     return ModelClient(encoder.base_url, timeout_s=encoder.timeout_s, api_key=encoder.api_key,
-                       api_style=encoder.api_style), encoder
+                       api_style=encoder.api_style, deadline_s=encoder.deadline_s), encoder
 
 
 def _parse_json_array(text: str) -> list | None:
@@ -2456,14 +2675,17 @@ def encode_document(
     # Only the value-shaping filters (pre + non-artifact post) affect WHAT is
     # stored, so they alone drive re-encoding; an artifact filter is governed by
     # its own stamp.
-    record_filters = _configured_filters_signature(
-        cfg,
+    _record_chain = (
         (enc_stage.pre if enc_stage is not None else [])
         + [F for F in (enc_stage.post if enc_stage is not None else [])
-           if not _is_artifact(cfg, F)],
+           if not _is_artifact(cfg, F)]
     )
+    # `record_filters` is WRITTEN (resolved); the acceptable form also admits the
+    # legacy spelling, so the resolution fix does not force one mass re-encode.
+    record_filters = _configured_filters_signature(cfg, _record_chain)
+    acceptable_record_filters = _acceptable_filters_signature(cfg, _record_chain)
     if not _encode_needed(cfg, conn, doc_id, encoder, resolved, doc_path, reprocess,
-                          enc_file, expected_filters=record_filters):
+                          enc_file, expected_filters=acceptable_record_filters):
         return {"action": "skipped", "filename": doc["filename"], "reason": "records up to date"}
 
     # The encoder's filter chain: `pre` normalises the whole-document text the
@@ -2843,11 +3065,24 @@ def scan_once(
 
 
 def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
-                path: str | None = None) -> dict:
-    """Re-embed chunks for every ingested document, or only those under a
-    dropbox subpath (`pha reindex --path collections/COLX`, a document folder,
-    or a single document file). Documents whose status is not 'done' are
-    skipped — their transcription is not final yet.
+                path: str | None = None, doc: int | None = None,
+                page: int | None = None, force: bool = False) -> dict:
+    """Re-embed chunks for every ingested document, or only for the one named
+    by `doc` (`pha reindex --doc N`), or only for the documents under a dropbox
+    subpath (`pha reindex --path collections/COLX`, a document folder, or a
+    single document file). Documents whose status is not 'done' are skipped —
+    their transcription is not final yet.
+
+    Re-indexing is **incremental by default**: a chunk whose text is unchanged
+    and whose stored vector came from the current embed model is reused, so
+    correcting one page re-embeds that page, not the whole volume. `force=True`
+    (`pha reindex --force`) re-embeds every chunk regardless — that is what
+    you run to rebuild the index from scratch. Switching the embed model also
+    forces a full re-embed (the stored vectors' model no longer matches).
+
+    `page` (a 1-based page number) restricts the pass to one page of one
+    document (`--doc` is required): only that page's chunks are replaced, so
+    every other page keeps its rows and vectors.
 
     A document whose embed fails is **reported and left untouched** (see
     `index_document`): it keeps its existing chunks and vectors, so a failed
@@ -2862,6 +3097,9 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
     uses the same server is the "two local models at once" swap this lock
     exists to prevent — and embed-endpoint contention is exactly what makes
     `embed()` time out. A scan using a *different* server can run alongside."""
+    if page is not None and doc is None:
+        return {"reindexed": 0, "chunks": {}, "failed": [],
+                "reason": "--page needs --doc (refusing to reindex page N of every document)"}
     cfg.ensure_dirs()
     keys = _job_keys(cfg, [], embed=True)
     lock = locks.acquire(cfg, keys, label="pha reindex")
@@ -2872,7 +3110,13 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
     conn = db.connect(cfg.db_path)
     try:
         db.backfill_dir_path(conn, cfg.dropbox)
-        if path:
+        if doc is not None:
+            one = db.get_document(conn, doc)
+            if one is None:
+                return {"reindexed": 0, "chunks": {}, "failed": [],
+                        "reason": f"no document #{doc}"}
+            docs = [one]
+        elif path:
             docs = _documents_under(cfg, conn, path)
             if docs is None:
                 return {"reindexed": 0, "chunks": {}, "failed": []}
@@ -2881,6 +3125,7 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
         counts = {}
         failed: list[dict] = []
         leases = _leases(cfg)
+        pages = None if page is None else {page}
         for d in docs:
             if d["status"] != "done":
                 continue
@@ -2891,8 +3136,10 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
                           f"skipped", flush=True)
                 continue
             try:
-                counts[d["id"]] = index_document(cfg, conn, d["id"], embed_client=client,
-                                                 verbose=verbose)
+                counts[d["id"]] = index_document(
+                    cfg, conn, d["id"], embed_client=client, verbose=verbose,
+                    incremental=not force, pages=pages,
+                )
             except ModelError as e:
                 failed.append({"id": d["id"], "filename": d["filename"], "error": str(e)})
                 if verbose:

@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -46,6 +47,24 @@ def _fmt_ts(ts: float | None) -> str:
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
 
 
+# A 'processing' document whose row has not moved for this long is called out in
+# `pha status`: without it, a stalled request is indistinguishable from a
+# healthy one (see enhancements/pha-request-stall-timeout-bug-report.md, F3).
+_STALL_STATUS_S = float(os.environ.get("PHA_STALL_WARN_S", "1800"))
+
+
+def _age_str(seconds: float) -> str:
+    """Compact age: `45s`, `12m`, `4h17m`, `2d`."""
+    seconds = max(0, int(seconds))
+    if seconds < 90:
+        return f"{seconds}s"
+    if seconds < 5400:
+        return f"{seconds // 60}m"
+    if seconds < 172800:
+        return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
+    return f"{seconds // 86400}d"
+
+
 # --------------------------------------------------------------------------- commands
 
 def cmd_scan(cfg: Config, args) -> None:
@@ -63,13 +82,20 @@ def cmd_scan(cfg: Config, args) -> None:
                         include_leased=getattr(args, "include_leased", False))
     finally:
         client.close()
-    summary = {"ingested": 0, "skipped": 0, "error": 0}
+    summary = {"ingested": 0, "skipped": 0, "error": 0, "stalled": 0}
     for r in res["results"]:
         summary[r["action"]] = summary.get(r["action"], 0) + 1
         if r["action"] == "ingested":
             print(f"  + {r['filename']} ({r['pages']} pages, prompt: {r['prompt']})")
         elif r["action"] == "error":
             print(f"  ! {r['filename']}: {r['error']}", file=sys.stderr)
+        elif r["action"] == "stalled":
+            # Pages the provider never answered for: abandoned for THIS pass,
+            # nothing recorded as failed, the document stays 'processing'.
+            pages = ", ".join(str(p) for p in (r.get("stalled") or []))
+            print(f"  ⏱ {r['filename']}: {len(r.get('stalled') or [])} page(s) abandoned "
+                  f"(model stalled): {pages} — re-run `pha scan` to retry them",
+                  file=sys.stderr)
     print(f"scanned {res['scanned']} file(s): {summary}")
 
 
@@ -893,13 +919,19 @@ def _pending_summary_lines(pending: list[dict], get_doc) -> list[str]:
         col = doc["dir_path"] if doc and doc["dir_path"] else "(root)"
         pages = ", ".join(str(p) for p in sorted(by_doc[d_id]))
         lines.append(f"       #{d_id:<3d} [{col}] {name}  — pages {pages}")
+    # Scope the reindex hint to the document when there is exactly one, so a
+    # single correction does not send the historian to an archive-wide pass
+    # (`pha reindex --doc N` re-embeds only what changed).
+    doc_ids = sorted(by_doc)
+    scope = f" --doc {doc_ids[0]}" if len(doc_ids) == 1 else ""
     if any(x.get("variant", "").startswith("transcription-") for x in pending):
         lines.append("     Run:  pha review   (imports your corrections)")
         lines.append("          then  pha edit   — you corrected a TRANSCRIPTION, so the")
         lines.append("                editor re-runs on your corrected text")
-        lines.append("          then  pha reindex")
+        lines.append(f"          then  pha reindex{scope}")
     else:
-        lines.append("     Run:  pha review   (imports your corrections, then pha reindex)")
+        lines.append("     Run:  pha review   (imports your corrections)")
+        lines.append(f"          then  pha reindex{scope}")
     return lines
 
 
@@ -1130,6 +1162,9 @@ def cmd_status(cfg: Config, args) -> None:
                     if d["status"] == "error" and d["error"]:
                         meta.append(f"error: {d['error'][:40]}")
                     meta.append(f"updated {_fmt_ts(d['updated_at'])}")
+                    age = time.time() - (d["updated_at"] or 0)
+                    if d["status"] == "processing" and age >= _STALL_STATUS_S:
+                        meta.append(f"no progress for {_age_str(age)} — stalled?")
                     line = f"      {' · '.join(meta)}"
                     if kw:
                         line += "   [keyword-only — run pha reindex]"
@@ -1568,16 +1603,35 @@ def cmd_filter(cfg: Config, args) -> None:
 
 
 def cmd_reindex(cfg: Config, args) -> None:
+    if args.page is not None and args.doc is None:
+        print("--page requires --doc (refusing to reindex page N of every document)",
+              file=sys.stderr)
+        sys.exit(2)
+    if args.doc is not None and args.path:
+        print("--doc and --path are mutually exclusive", file=sys.stderr)
+        sys.exit(2)
     client = _client(cfg, cfg.embed_base_url, cfg.embed_timeout_s)
     try:
-        res = reindex_all(cfg, client, path=args.path)
+        res = reindex_all(cfg, client, path=args.path, doc=args.doc,
+                          page=args.page, force=args.force)
     finally:
         client.close()
     failed = res.get("failed") or []
     if res.get("reason"):
         print(f"! {res['reason']}", file=sys.stderr)
         sys.exit(2)
-    print(f"reindexed {res['reindexed']} document(s)")
+    scope = ""
+    if args.doc is not None:
+        scope = f" (doc #{args.doc}" + (f", page {args.page})" if args.page else ")")
+    elif args.path:
+        scope = f" ({args.path})"
+    if args.force:
+        mode = "forced: every chunk re-embedded"
+    elif args.page is not None:
+        mode = "page-scoped: only that page's chunks"
+    else:
+        mode = "incremental: unchanged chunks reused"
+    print(f"reindexed {res['reindexed']} document(s){scope} [{mode}]")
     if failed:
         # The documents are untouched (chunks and vectors intact) — this is the
         # safe failure, not a degraded index.
@@ -1934,6 +1988,61 @@ def cmd_prune(cfg: Config, args) -> None:
         conn.close()
 
 
+def cmd_render(cfg: Config, args) -> None:
+    """Render the page images missing from the cache, from each document's source.
+
+    Renders are a derived cache keyed by content hash, and a hand-over ships
+    none — so a document this archive never scanned has no images when its text
+    comes back from the worker. This rebuilds them locally with the sidecar's
+    settings (no transfer, no model call)."""
+    from .ingest import _render_image_count, discover, render_document_pages
+
+    conn = db.connect(cfg.db_path)
+    try:
+        if getattr(args, "doc", None) is not None:
+            doc = db.get_document(conn, int(args.doc))
+            if doc is None:
+                print(f"no document #{args.doc}", file=sys.stderr)
+                sys.exit(2)
+            docs = [doc]
+        else:
+            root = cfg.dropbox
+            if getattr(args, "path", None):
+                root = Path(args.path)
+                if not root.is_absolute():
+                    root = cfg.dropbox / root
+            files = discover(cfg.dropbox, cfg.dir_documents, root=root)
+            docs = [d for d in (db.get_document_by_path(conn, str(f)) for f in files) if d]
+        if not docs:
+            print("no scanned documents matched (nothing to render)")
+            return
+
+        rendered = skipped = errors = 0
+        for d in docs:
+            expected = int(d["page_count"] or 0)
+            have = _render_image_count(cfg.renders / (d["sha256"] or ""))
+            if args.dry_run:
+                if expected and have >= expected:
+                    skipped += 1
+                else:
+                    rendered += 1
+                    print(f"  would render #{d['id']} {d['filename']}: "
+                          f"{have}/{expected or '?'} image(s) present")
+                continue
+            res = render_document_pages(cfg, conn, int(d["id"]), verbose=True)
+            if res["action"] == "rendered":
+                rendered += 1
+            elif res["action"] == "error":
+                errors += 1
+                print(f"  ! #{d['id']} {d['filename']}: {res['error']}", file=sys.stderr)
+            else:
+                skipped += 1
+        verb = "would render" if args.dry_run else "rendered"
+        print(f"{verb}: {rendered} document(s); {skipped} already complete; {errors} error(s)")
+    finally:
+        conn.close()
+
+
 def _sidecar_summary(path: Path) -> str:
     """One-line summary of a pha.yaml's own palaeographer/editor keys."""
     import yaml
@@ -2052,6 +2161,10 @@ def cmd_edit(cfg: Config, args) -> None:
     for r in res["results"]:
         if r["action"] == "edited":
             print(f"  + {r['filename']} [{r['editor']}] ({r['pages']} pages)")
+            if r.get("stalled"):
+                pages = ", ".join(str(p) for p in r["stalled"])
+                print(f"    ⏱ {len(r['stalled'])} page(s) abandoned (model stalled): "
+                      f"{pages} — re-run `pha edit` to retry them", file=sys.stderr)
         elif r["reason"] != "no editor configured":
             print(f"  ! {r['filename']}: {r.get('reason', r['action'])}")
     # The edit pass indexes the documents it touched (and repairs a document
@@ -2995,10 +3108,18 @@ def main(argv: list[str] | None = None) -> None:
     h.add_argument("topic", nargs="?", help="readme | mcp | historians | agents")
     h.set_defaults(fn=cmd_help)
 
-    r = sub.add_parser("reindex", help="re-embed chunks (all documents, or only a subpath)")
+    r = sub.add_parser("reindex", help="re-embed chunks (incremental; all documents, or a doc/page/path)")
     r.add_argument("--path", "--collection", default=None,
                    help="only reindex the document or collection at this dropbox subpath "
                         "(e.g. collections/COLX or collections/COLX/doc.pdf); default: every document")
+    r.add_argument("--doc", type=int, default=None, metavar="N",
+                   help="only reindex document #N (see `pha status`); with --page, only that page")
+    r.add_argument("--page", type=int, default=None, metavar="P",
+                   help="only reindex page P of --doc N — the other pages keep their "
+                        "chunks and vectors untouched")
+    r.add_argument("--force", action="store_true",
+                   help="re-embed EVERY chunk even when its text is unchanged "
+                        "(default: reuse unchanged chunks and embed only what changed)")
     r.add_argument("--include-leased", action="store_true",
                         help="also process documents currently out on a hand-over")
     r.set_defaults(fn=cmd_reindex)
@@ -3052,6 +3173,12 @@ def main(argv: list[str] | None = None) -> None:
                      help="with --library-variants: sweep only this document id")
     prn.set_defaults(fn=cmd_prune)
 
+    rn = sub.add_parser("render", help="render page images missing from the cache (from the source)")
+    rn.add_argument("--path", default=None, help="only documents under this dropbox path")
+    rn.add_argument("--doc", type=int, default=None, help="only this document id")
+    rn.add_argument("--dry-run", action="store_true", help="report what would be rendered")
+    rn.set_defaults(fn=cmd_render)
+
     pr = sub.add_parser("prompts", help="show prompt resolution")
     pr.add_argument("file", nargs="?")
     pr.set_defaults(fn=cmd_prompts)
@@ -3070,7 +3197,8 @@ def main(argv: list[str] | None = None) -> None:
                          "(e.g. collections/COLX); default: every document")
     e2.add_argument("--page", type=int, default=None,
                     help="only edit this page number of each matched document "
-                         "(combine with --path to target one page of one document)")
+                         "(combine with --path to target one page of one document); "
+                         "only that page's chunks are re-embedded")
     e2.add_argument("--reprocess", action="store_true", help="re-edit everything matched")
     e2.add_argument("--include-leased", action="store_true",
                         help="also process documents currently out on a hand-over")

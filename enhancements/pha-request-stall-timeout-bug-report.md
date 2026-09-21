@@ -1,6 +1,8 @@
 # Bug report — a stalled model request is never bounded by `timeout_s`
 
-**Status:** open. **Found:** 2026-09-19/20 while scanning two cloud-vision volumes
+**Status:** **FIXED** — see §9 for what landed (F1–F4 plus the batch rule from
+`pha-handover-editing-workflow-enhancement-request.md` G4).
+**Found:** 2026-09-19/20 while scanning two cloud-vision volumes
 for `jesuit-archive` (pha 0.28.0, repo checkout).
 **Severity:** silent wall-clock loss measured in hours, twice in two days; a
 stalled scan also *looks* healthy — no error, no log line, `pha status` says
@@ -160,3 +162,68 @@ only thing that notices a stalled request.
   `_post_to` (578), `chat_text` (701); `ingest.py` scan loop (per-page error
   handling and the consecutive-failure abort); `config.py` model-sheet
   reference (the `timeout_s` documentation).
+
+## 9. What landed (FIXED)
+
+**F1 — a wall-clock deadline per request, enforced by pha.**
+`ModelClient` now takes `deadline_s` (distinct from the per-operation
+`timeout_s`) and consumes the response as a **stream in the calling thread**,
+abandoning the attempt once the deadline passes and raising the retryable
+`_AttemptDeadline`; when the retries are exhausted the call raises the new
+**`ModelStall(ModelError)`**, so every existing `except ModelError` guard still
+catches it while a per-page pass can tell a stall apart from a bad answer. A
+streaming read (not an abandoned worker thread) is what makes the bound leak-free:
+a blocked socket read cannot be interrupted from another thread, so an abandoned
+worker would survive an endlessly-trickling provider. `deadline_s` is a **stage**
+field (palaeographer/editor/encoder file, next to `timeout_s` — it is not a model
+field), parsed from front matter and from the legacy `config.yaml` blocks.
+Default `2 × timeout_s`, floor 60s; **`deadline_s: 0` disables the ceiling**
+(the old behaviour). Because the default is derived, every existing model sheet
+is bounded with no config change; because the deadline is checked between read
+chunks, a *legitimate* slow page inside the budget still succeeds.
+
+The division of labour is deliberate: **`timeout_s` keeps bounding a SILENT
+connection** (no byte at all — the read timeout fires first and stays a normal,
+non-stall error), while **`deadline_s` bounds the TRICKLE** (bytes keep arriving,
+completion never does) — the case that previously had no bound at all.
+
+**F2 — the budget is known and progress is visible.**
+The deadline is per ATTEMPT, so one page costs at most
+`(retries + 1) × (deadline_s + min(timeout_s, deadline_s))` plus the existing
+backoff — a known number of minutes, whereas before it was unbounded. (The
+`+ min(timeout_s, deadline_s)` is the one read that may already be in flight when
+the deadline passes; every low-level operation is also capped by the deadline, so
+neither a slow pool wait nor a connect can outlast it.) The scan and edit loops
+now print `page N/M: done in Xs` (a slow page is marked, `PHA_SLOW_PAGE_S`
+overrides the 600s threshold) and `page N/M: FAILED after Xs` on the error path.
+
+**F3 — a stall is visible without an external watchdog.**
+Per-page elapsed time in the log (above) *and* `pha status` now flags a
+`processing` document whose row has not moved:
+`updated 2026-09-20 08:56 · no progress for 4h17m — stalled?`
+(threshold 30 min, `PHA_STALL_WARN_S` overrides). "processing" is no longer
+indistinguishable from "hung for hours".
+
+**F4 — the knob is documented.**
+The per-stage front-matter reference (`palaeographers/_sample.md` and the
+`config.py` builtin constants), the README (both the per-stage field list and
+the palaeographer example), the model-file comments that say `timeout_s` is not
+a model field, and AGENTS.md's operating discipline all state that `timeout_s`
+is per-operation and `deadline_s` is the wall-clock ceiling.
+
+**Batch behaviour (the G4 addition, implemented here).** Inside a multi-page
+pass a deadline expiry abandons the page **for that pass**: no page error is
+recorded, the page row stays pending, it does not count toward the
+consecutive-failure abort, and what was read is still edited and indexed — the
+document stays `processing` so the next `pha scan`/`pha edit` resumes exactly
+the abandoned pages. The pass names them
+(`⏱ 2 page(s) abandoned for this pass (model stalled): 12, 34 — re-run …`) and
+the result carries `action: "stalled"` + `stalled: [N, …]` for agents/JSON.
+
+**Tests** — `tests/test_model_stall.py` runs a real socket server:
+blackhole, **keep-alive trickle** (the case that defeats `timeout_s`),
+slow-but-honest inside the deadline, retry after a stalled attempt, `0`
+disables, and the derived default. `tests/test_stall_batch.py` covers the batch
+rule in scan and edit (page abandoned, named, no error, retried next pass; six
+stalls in a row never trip the abort; a genuine `ModelError` still fails the
+page). `tests/test_cli_status.py` covers the stall flag.

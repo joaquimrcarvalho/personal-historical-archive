@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,8 +51,8 @@ from . import locks
 from .config import Config
 from .extract import page_count
 from .ingest import (_configured_filters_signature, index_document, is_supported,
-                     sha256_of, sha256_of_dir, write_document_pages,
-                     write_edited_pages)
+                     render_document_pages, sha256_of, sha256_of_dir,
+                     write_document_pages, write_edited_pages)
 from .sidecar import resolve_sidecar, resolve_stages
 
 HANDOFF_FORMAT = "pha-handoff"
@@ -1220,6 +1221,16 @@ def apply_result(
             for row in _all_editors(conn, doc_id):
                 write_edited_pages(cfg, conn, doc_id, row["editor"], model=None)
             index_document(cfg, conn, doc_id, verbose=False)
+            # A hand-over ships no renders, so a document this archive never
+            # scanned has no page images when its text comes back — the viewer
+            # would show text and no picture. Rebuild them from the source here
+            # (local, cheap, sidecar settings); a render failure is REPORTED and
+            # never fails the apply.
+            rr = render_document_pages(cfg, conn, doc_id, verbose=verbose)
+            if rr.get("action") == "error":
+                print(f"  ! could not render page images for {rel}: {rr.get('error')} "
+                      f"(run `pha render --doc {doc_id}` once the source is readable)",
+                      file=sys.stderr)
             applied.append({"relpath": rel, "id": doc_id, "pages_done": have,
                             "page_count": expected})
 

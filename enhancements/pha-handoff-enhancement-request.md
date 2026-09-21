@@ -602,3 +602,51 @@ worth landing behind `--dry-run` and exercising on one volume before the
   `enhancements/pha-single-page-rescan-enhancement-request.md` (per-page
   provenance), `README.md` §"Moving / sharing collections between archives",
   `MCP_CLIENTS.md` §"Machine-to-machine".
+
+## 12. Addendum (2026-09-21) — what does *not* travel: the page renders
+
+§3.3 says the return leg carries "no renders (the archive machine already has
+them)". That holds only for a document rendered **before** it left. Hand out a
+document that was registered but never scanned and the assumption breaks in a
+way nothing reports.
+
+Measured on `collections/monumenta-brasiliae` (4 volumes, 2 676 pages, handed
+out with 0 pages each — the owner had seeded the rows and killed the first scan
+after a few seconds, leaving 9–17 stray renders per volume):
+
+- `pha handoff back` carries per-page texts, edits and provenance — **no renders**.
+- `pha handoff fetch` applies them, writes the library and indexes the chunks
+  (`index_document`, `handoff.py:1222`) — and creates no renders.
+- The viewer resolves an image through `addresses.render_path()` and answers
+  **404 "no render for this page"** for every page of the returned document
+  (`serve.py:478-497`). The archive is searchable and citable but not
+  *viewable* — and for a historian checking a doubtful reading the image is the
+  point.
+
+**Verified workaround (no model, no network).** Renders are a pure function of
+the source and the render settings. Calling pha's own renderer with the
+collection's settings — `render_document(pdf, renders/<sha256>, dpi=300,
+max_px=2500, jpeg_quality=88)` — reproduced page 1 of volume I **byte for byte**
+as the worker had made it:
+
+```
+240 467 bytes
+sha256 2d78dfdaaf91fddf53d2c8c99b0a88c0d43a64cd6b369f4250d7ec405824ab12
+(same size and same digest on both machines)
+```
+
+A ten-line script regenerated the 2 624 missing pages of the four volumes.
+
+**Proposed fixes, cheapest first:**
+
+- **R1 — `fetch` renders what it just imported when the local render is
+  missing.** The pages are in hand, the source is in the dropbox, the operation
+  is deterministic and free; `pha scan` already has the render step, so this is
+  reuse rather than new machinery.
+- **R2 — `handoff out` includes renders for a document that has no local
+  render** (it is leaving unscanned; the worker renders anyway, but the owner
+  will have nothing on return).
+- **R3 — at minimum, say it.** A fetch that imports 2 676 pages with no local
+  render should print "N pages imported without a page image; `/<slug>/pNNN.jpg`
+  will 404 until they are rendered", instead of leaving it to be discovered by
+  clicking a citation.

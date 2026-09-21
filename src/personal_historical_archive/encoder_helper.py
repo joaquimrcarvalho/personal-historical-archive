@@ -19,7 +19,7 @@ import json
 import re
 from pathlib import Path
 
-from .config import Config, _expand
+from .config import Config, _expand, _opt_int
 from .ingest import _parse_json_array
 from .model_client import ModelClient
 
@@ -100,6 +100,7 @@ def _text_models(cfg: Config) -> list[dict]:
             "temperature": m.temperature,
             "max_tokens": m.max_tokens,
             "timeout_s": m.timeout_s,
+            "deadline_s": m.deadline_s,
             "thinking": m.thinking,
             "api_style": m.api_style,
         })
@@ -251,7 +252,8 @@ def _call_model(model: dict, prompt: str) -> str:
     # encoder file never contains the resolved secret
     client = ModelClient(model["base_url"], timeout_s=model.get("timeout_s", 600),
                          api_key=_expand(str(model.get("api_key") or "")) or None,
-                         api_style=model.get("api_style", "openai"))
+                         api_style=model.get("api_style", "openai"),
+                         deadline_s=_opt_int(model.get("deadline_s")))
     try:
         # generous max_tokens: reasoning models emit a long <think> block even
         # with thinking disabled; a small cap truncates it and yields an empty
@@ -577,6 +579,9 @@ def run(cfg: Config) -> int:
     # add the page range to the front matter (before the closing ---)
     if pages.strip():
         front = front.replace("\n---\n", f"\npages: {pages.strip()}\n---\n", 1)
+    # carry an explicit wall-clock deadline when the picked stage has one
+    if model.get("deadline_s"):
+        front = front.replace("\n---\n", f"\ndeadline_s: {int(model['deadline_s'])}\n---\n", 1)
     body = _BODY_TEMPLATE.format(
         description=description, instructions=instructions,
         examples="(see encoders/<name>.langextract.md)",

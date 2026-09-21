@@ -154,13 +154,27 @@ def _dpapi_read(name: str) -> bytes:
 
 
 def find_project_root(start: Path | None = None) -> Path:
-    env = os.environ.get("PHA_HOME")
-    if env:
-        return Path(env).resolve()
+    """The project root — the directory holding `config.yaml`.
+
+    An explicit `start` is AUTHORITATIVE: a caller that passes a root means that
+    tree, so `PHA_HOME` (a per-machine convenience for "find the project from
+    anywhere") must not redirect it. This is an isolation guarantee, not a
+    detail: `PHA_HOME` is routinely exported by an agent session or a shell
+    profile, and when it outranked the argument, `Config.load(tmp_root)` returned
+    a Config rooted at the developer's real checkout — so `pha set archive-dir`
+    run from a test (or any scoped command) read and WROTE the repo's
+    `config.yaml`, pointing the developer's archive at a pytest temp dir.
+    """
+    if start is None:
+        env = os.environ.get("PHA_HOME")
+        if env:
+            return Path(env).resolve()
     cur = (start or Path.cwd()).resolve()
     for p in [cur, *cur.parents]:
         if (p / "config.yaml").exists():
             return p
+    if start is not None:
+        return cur  # never fall back to the package tree for an explicit root
     # Fallback: the editable install lives inside the project tree.
     pkg = Path(__file__).resolve().parents[2]
     if (pkg / "config.yaml").exists():
@@ -294,6 +308,12 @@ class Palaeographer:
                                     #   layer passes the quality gate, else raster)
     liteparse_embedded_min_chars: int = 200      # prefer-embedded gate (see Model)
     liteparse_embedded_min_quality: float = 0.60  # prefer-embedded gate (see Model)
+    # deadline_s: wall-clock ceiling for ONE model request, enforced by pha
+    # (see model_client.ModelClient.deadline_s). `timeout_s` is per OPERATION
+    # and a trickling gateway resets it, so a stalled request could otherwise
+    # sit for hours. None = derive a generous default from timeout_s;
+    # <= 0 = no ceiling (per-operation timeout only).
+    deadline_s: int | None = None
 
     @property
     def prompt_source(self) -> str:
@@ -323,6 +343,7 @@ class Editor:
     api_style: str = "openai"
     model_ref: str = ""  # models/<id>.md this editor uses ("" = legacy inline)
     server: str = ""  # declared model-server identity (see Model.server)
+    deadline_s: int | None = None  # wall-clock ceiling per request (see Palaeographer)
 
 
 @dataclass
@@ -372,6 +393,7 @@ class Encoder:
     pages: str = ""
     model_ref: str = ""  # models/<id>.md this encoder uses ("" = legacy inline)
     server: str = ""  # declared model-server identity (see Model.server)
+    deadline_s: int | None = None  # wall-clock ceiling per request (see Palaeographer)
 
     @property
     def effective_max_input_chars(self) -> int:
@@ -810,6 +832,7 @@ def _parse_palaeographers(
         max_tokens=int(vis.get("max_tokens", 4096)),
         timeout_s=int(vis.get("timeout_s", 900)),
         prompt_text=prompt_text,
+        deadline_s=_opt_int(vis.get("deadline_s")),
     )
     return {"default": pal}, "default"
 
@@ -855,6 +878,7 @@ def _parse_editors(raw: dict, prompts_dir: Path, root: Path, ed_dir: Path, model
             timeout_s=int(entry.get("timeout_s", 300)),
             prompt_text=prompt_text,
             prompt_file=prompt_file,
+            deadline_s=_opt_int(entry.get("deadline_s")),
         )
     return editors
 
@@ -888,6 +912,7 @@ def _palaeographer_from_entry(
         timeout_s=int(entry.get("timeout_s", 900)),
         prompt_text=prompt_text,
         prompt_file=prompt_file,
+        deadline_s=_opt_int(entry.get("deadline_s")),
     )
 
 
@@ -1047,6 +1072,7 @@ def _palaeographer_from_frontmatter(pal_id: str, text: str, file: Path, models: 
         max_tokens=int(fm.get("max_tokens", 4096)),
         prompt_text=body,
         prompt_file=file,
+        deadline_s=_opt_int(fm.get("deadline_s")),
     )
 
 
@@ -1068,6 +1094,7 @@ def _editor_from_frontmatter(ed_id: str, text: str, file: Path, models: dict | N
         max_tokens=int(fm.get("max_tokens", 4096)),
         prompt_text=body,
         prompt_file=file,
+        deadline_s=_opt_int(fm.get("deadline_s")),
     )
 
 
@@ -1103,6 +1130,7 @@ def _encoder_from_frontmatter(enc_id: str, text: str, file: Path, models: dict |
         candidate_pattern=str(fm.get("candidate_pattern", "") or "") or None,
         candidate_header=str(fm.get("candidate_header", "") or "") or None,
         pages=str(fm.get("pages", "") or "").strip(),
+        deadline_s=_opt_int(fm.get("deadline_s")),
     )
 
 
@@ -1141,6 +1169,17 @@ def _thinking(fm: dict) -> bool:
     if isinstance(v, str):
         return v.strip().lower() not in ("disabled", "false", "off", "no", "0")
     return bool(v)
+
+
+def _opt_int(v) -> int | None:
+    """An optional integer config value: None when absent/blank, else int(v).
+
+    Used for `deadline_s`, where absence must stay distinguishable from 0
+    (None = derive pha's default; 0 = no wall-clock ceiling at all).
+    """
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    return int(v)
 
 
 def _p(root: Path, s: str) -> Path:
@@ -1538,8 +1577,9 @@ _MODEL_QWEN3_LOCAL_SAMPLE = """---
 #     chunking (the Model default, 200000, is far too large for a local model).
 #   thinking: disabled skips reasoning blocks (some builds leak
 #     `<|channel>thought` into the transcript) — faster and cleaner.
-#   timeout_s is NOT a model field: the stage timeout lives in the
-#     palaeographer/editor rules file front matter.
+#   timeout_s / deadline_s are NOT model fields: the stage timeout and the
+#     wall-clock deadline live in the palaeographer/editor rules file
+#     front matter (deadline_s bounds a request that never answers).
 description: qwen3-vl via LM Studio (local) — vision + text
 base_url: http://127.0.0.1:1234/v1
 # server: mac-studio        # optional: which machine/instance serves this
@@ -1572,7 +1612,8 @@ _MODEL_GEMMA4_LOCAL_SAMPLE = """---
 #   max_vision_px 3000 keeps dense printed pages legible (the page only reaches
 #     that size when the collection's render setting allows it).
 #   thinking: disabled avoids the `<|channel>thought` blocks gemma-4 can emit.
-#   timeout_s is NOT a model field: set it in the stage rules file.
+#   timeout_s / deadline_s are NOT model fields: set them in the stage
+#     rules file (deadline_s bounds a stalled request).
 description: gemma-4 via LM Studio (local) — vision + text
 base_url: http://127.0.0.1:1234/v1
 # server: mac-studio        # optional: which machine/instance serves this
@@ -1661,7 +1702,11 @@ _PAL_SAMPLE = """---
 # Optional front matter:
 #   temperature: sampling temperature (default 0.1).
 #   max_tokens: completion token cap (default 4096).
-#   timeout_s: HTTP timeout in seconds (default 900 for vision).
+#   timeout_s: HTTP timeout per OPERATION in seconds (default 900 for vision).
+#   deadline_s: wall-clock ceiling for ONE request (default 2x timeout_s, min
+#     60s). This is what bounds a request whose answer never arrives — a
+#     provider that trickles keep-alive bytes resets timeout_s on every
+#     byte, so timeout_s alone can never end a stall. Set 0 to disable.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example palaeographer — edit me
 temperature: 0.1
@@ -1789,7 +1834,9 @@ _ED_SAMPLE = """---
 # Optional front matter:
 #   temperature: sampling temperature (default 0.1).
 #   max_tokens: completion token cap (default 4096).
-#   timeout_s: HTTP timeout in seconds (default 300 for text).
+#   timeout_s: HTTP timeout per OPERATION in seconds (default 300 for text).
+#   deadline_s: wall-clock ceiling for ONE request (default 2x timeout_s, min
+#     60s) — the knob that bounds a stalled request; 0 disables it.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example editor — edit me
 temperature: 0.0
@@ -1879,7 +1926,9 @@ _ENC_SAMPLE = """---
 # Optional front matter:
 #   temperature: sampling temperature (default 0.0).
 #   max_tokens: completion token cap (default 4096).
-#   timeout_s: HTTP timeout in seconds (default 300 for text).
+#   timeout_s: HTTP timeout per OPERATION in seconds (default 300 for text).
+#   deadline_s: wall-clock ceiling for ONE request (default 2x timeout_s, min
+#     60s) — the knob that bounds a stalled request; 0 disables it.
 #   batch_pages / overlap_pages / extraction_passes: chunking + recall knobs.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example encoder — edit me

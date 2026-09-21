@@ -10,7 +10,8 @@
 #   max_vision_px 3000 keeps dense printed pages legible (the page only reaches
 #     that size when the collection's render setting allows it).
 #   thinking: disabled avoids the `<|channel>thought` blocks gemma-4 can emit.
-#   timeout_s is NOT a model field: set it in the stage rules file.
+#   timeout_s / deadline_s are NOT model fields: set them in the stage
+#     rules file (deadline_s bounds a stalled request).
 description: gemma-4 via LM Studio (local) — vision + text
 base_url: http://127.0.0.1:1234/v1
 # server: mac-studio        # optional: which machine/instance serves this

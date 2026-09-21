@@ -133,7 +133,7 @@ pha inbox [--move]               # list / move documents parked in the inbox
 pha scan                         # extract + index new/changed dropbox files
 pha search "query"               # search the extracted text
 pha review [--doc N]             # import human corrections from library/
-pha reindex [--path collections/COLX]  # rebuild the index (or one collection/doc)
+pha reindex [--doc N] [--page P]        # re-embed what changed (--force: everything)
 pha prune [--dry-run]            # delete orphaned render image caches
 pha help                         # full command list
 pha help agents                  # agent conventions
@@ -149,7 +149,8 @@ pha status                       # find a document's collection / dropbox path
 pha scan --path collections/COLX                 # re-scan one collection or doc
 pha scan --path collections/COLX --reprocess     # re-extract pages already done
 pha edit --path collections/COLX --page 3        # re-run the editor on one page
-pha reindex --path collections/COLX               # re-embed one collection or doc
+pha reindex --doc N                              # re-embed one document (only what changed)
+pha reindex --doc N --page 3                     # re-embed one page of one document
 pha test collections/COLX --pages 3              # dry-run a config on a sample
 pha page <doc> <page>                            # read one page's full text
 ```
@@ -216,7 +217,15 @@ folder once and never overwrites it — edit or extend it freely.
   folders (from a changed or removed document) are cleaned up automatically;
   sweep any leftovers with `pha prune [--dry-run]`.
 - Editing a page file under `library/` is a human correction: run `pha review`
-  to import it, then `pha reindex`.
+  to import it, then `pha reindex --doc N` for that document. Re-indexing is
+  incremental (only the changed chunks are embedded), so one corrected page
+  costs one page, not the whole volume; `--force` re-embeds every chunk.
+- A model request that never answers is bounded by the stage's `deadline_s`
+  (wall-clock, default `2 x timeout_s`; `timeout_s` alone is per-operation and a
+  provider can reset it forever). When it expires the page is abandoned for that
+  pass, named in the output, and retried by the next run — it is not recorded as
+  a failure, and the document stays `processing`. A `processing` document with
+  no progress for 30 minutes is flagged by `pha status` (`stalled?`).
 - **One model per model-server at a time** — `pha scan`, `pha edit`,
   `pha reindex`, `pha test`, `pha unbundle` and `pha handoff fetch` lock every
   model-server they will use and refuse if one is busy; jobs on different
@@ -355,7 +364,8 @@ edit, delete or add skills freely.
   `library/`).
 - `pha status` reports progress and pending review corrections.
 - Editing a page file under `library/` is a human correction; run
-  `pha review` to import it, then `pha reindex`.
+  `pha review` to import it, then `pha reindex --doc N` (incremental: only the
+  changed chunks are re-embedded).
 - One model per model-server at a time; `pha scan`/`pha edit`/`pha reindex`
   take the locks of the servers they use, so check `pha status` before
   starting a pass that shares a server with one already running.

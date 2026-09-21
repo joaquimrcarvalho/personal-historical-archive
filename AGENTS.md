@@ -250,7 +250,10 @@
   from the corrected text (it detects the raw changed). Correcting an
   `edited-*` page fixes the final output: that edit is stamped `reviewed` and
   is never overwritten by `pha scan`/`pha edit`. Either way, follow with
-  `pha reindex`. Reviewed pages show `reviewed: true` in front matter. A
+  `pha reindex --doc N` (scope it to the corrected document; re-indexing is
+  incremental, so only the changed chunks are embedded — `--force` re-embeds
+  every chunk, `--page P` narrows it to one page). Reviewed pages show
+  `reviewed: true` in front matter. A
   `reviewed` row outranks `--reprocess`, so **`pha review --unset` is the only
   way to re-run a stage over human-touched text** — required before applying a
   new palaeographer/editor (or the planned stage filters) to those pages.
@@ -515,6 +518,20 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   lists the keys and the lock dir) before starting a pass.
 - **Quit LM Studio when not ingesting** — its model page-out is what eats disk
   space. Do not leave a vision + editor model loaded at the same time.
+- **A stalled model request is bounded by `deadline_s`, and is not a page
+  failure.** `timeout_s` (in a palaeographer/editor/encoder file) is
+  per-OPERATION, and a provider that trickles keep-alive bytes resets it, so a
+  request whose answer never arrives could sit for hours. pha enforces a
+  wall-clock `deadline_s` (same file, default `2 × timeout_s`, ≥ 60s; `0`
+  disables) — a *silent* connection is still bounded by `timeout_s`, the
+  deadline bounds the *trickle*. On expiry the page is **abandoned for that
+  pass**, named in the output (`⏱ page(s) abandoned … re-run`) and left pending
+  for a later `pha scan`/`pha edit` — never recorded as a page error, and it
+  does not count toward the consecutive-failure abort; what was read is still
+  edited/indexed and the document stays `processing`. `pha status` flags a
+  `processing` document with no progress for 30 min (`no progress for 4h17m —
+  stalled?`, `PHA_STALL_WARN_S` overrides). Report:
+  `enhancements/pha-request-stall-timeout-bug-report.md`.
 - **Render cache is pruned automatically.** Rendered page images live in
   `renders/<content-sha>/`. A superseded or removed document's folder is
   deleted when a changed file is re-scanned, on `pha rm`, and on `pha bundle
@@ -554,7 +571,12 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   (identity, resolved stages, page count — no render, no transcription), and
   that record is what the lease is looked up through. An `inbox/<rel>` target
   is moved into the dropbox first (mirroring the layout; only entries you name,
-  refusing to overwrite unless `--force-inbox`). On the worker: `pha handoff in
+  refusing to overwrite unless `--force-inbox`). Renders are NOT carried either
+  way (the worker re-renders to extract), so `handoff fetch` rebuilds the page
+  images missing here — a document handed out before its first scan has none —
+  and `pha render [--path … | --doc N]` does the same on demand. Renders are a
+  derived cache, so byte-identity across machines is deliberately not required.
+  On the worker: `pha handoff in
   <payload>`, then `pha scan/edit/encode --path <doc>` (or the `pha handoff
   work` wrapper), then `pha handoff back`. Back on the owner: `pha handoff
   fetch <result>` merges the work into the SAME document — local human

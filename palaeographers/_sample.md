@@ -15,7 +15,11 @@
 # Optional front matter:
 #   temperature: sampling temperature (default 0.1).
 #   max_tokens: completion token cap (default 4096).
-#   timeout_s: HTTP timeout in seconds (default 900 for vision).
+#   timeout_s: HTTP timeout per OPERATION in seconds (default 900 for vision).
+#   deadline_s: wall-clock ceiling for ONE request (default 2x timeout_s, min
+#     60s). This is what bounds a request whose answer never arrives — a
+#     provider that trickles keep-alive bytes resets timeout_s on every
+#     byte, so timeout_s alone can never end a stall. Set 0 to disable.
 # Files starting with '_' are ignored (this sample is never loaded).
 description: example palaeographer — edit me
 temperature: 0.1

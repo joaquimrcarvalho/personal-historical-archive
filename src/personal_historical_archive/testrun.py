@@ -406,7 +406,8 @@ def _test_doc(
     try:
         if (pal.engine or "").strip().lower() in ("", "llm"):
             vision_client = ModelClient(pal.base_url, timeout_s=pal.timeout_s,
-                                        api_key=pal.api_key, api_style=pal.api_style)
+                                        api_key=pal.api_key, api_style=pal.api_style,
+                                        deadline_s=pal.deadline_s)
         for page_no, img, source_name in units:
             if verbose:
                 print(f"  page {page_no}/{total}: transcribing ...", flush=True)
@@ -441,7 +442,8 @@ def _test_doc(
                f"transcription being edited): prompts-sent/edit-p<NNN>.md\n\n---\n\n"
                f"{plan.editor.prompt_text}")
         eclient = ModelClient(plan.editor.base_url, timeout_s=plan.editor.timeout_s,
-                              api_key=plan.editor.api_key, api_style=plan.editor.api_style)
+                              api_key=plan.editor.api_key, api_style=plan.editor.api_style,
+                              deadline_s=plan.editor.deadline_s)
         try:
             for page_no, raw in sorted(transcriptions.items()):
                 if verbose:
@@ -517,7 +519,7 @@ def _test_doc(
         )
         _write_sent(out_dir, f"encode-{eid}.md", prompt_txt)
         eclient = ModelClient(enc.base_url, timeout_s=enc.timeout_s, api_key=enc.api_key,
-                              api_style=enc.api_style)
+                              api_style=enc.api_style, deadline_s=enc.deadline_s)
         try:
             parsed: list | None = None
             for attempt in range(3):

@@ -10,8 +10,9 @@
 #     chunking (the Model default, 200000, is far too large for a local model).
 #   thinking: disabled skips reasoning blocks (some builds leak
 #     `<|channel>thought` into the transcript) — faster and cleaner.
-#   timeout_s is NOT a model field: the stage timeout lives in the
-#     palaeographer/editor rules file front matter.
+#   timeout_s / deadline_s are NOT model fields: the stage timeout and the
+#     wall-clock deadline live in the palaeographer/editor rules file
+#     front matter (deadline_s bounds a request that never answers).
 description: qwen3-vl via LM Studio (local) — vision + text
 base_url: http://127.0.0.1:1234/v1
 # server: mac-studio        # optional: which machine/instance serves this

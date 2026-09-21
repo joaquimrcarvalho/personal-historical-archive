@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import shutil
 import subprocess
@@ -14,6 +15,34 @@ import httpx
 
 class ModelError(RuntimeError):
     pass
+
+
+class ModelStall(ModelError):
+    """A request produced no complete response within pha's wall-clock deadline.
+
+    Distinct from the other ModelErrors on purpose: a stall is the PROVIDER not
+    answering, not a bad page or a broken configuration. Inside a multi-page
+    pass the caller abandons that page for the pass and retries it later instead
+    of recording a page error (see `pha-request-stall-timeout-bug-report.md` F1
+    and the batch behaviour in the hand-over workflow request, G4). It remains a
+    `ModelError` subclass, so every existing `except ModelError` guard still
+    catches it.
+    """
+
+
+# How the default wall-clock deadline is derived from `timeout_s` (see
+# ModelClient.deadline_s). A legitimate reasoning page may be silent for
+# minutes, so the deadline must be generous — but it must exist.
+_DEADLINE_MULTIPLE = 2
+_DEADLINE_MIN_S = 60
+
+
+class _AttemptDeadline(Exception):
+    """One request attempt produced no complete response within `deadline_s`.
+
+    Internal and RETRYABLE (the retry loop treats it like a read timeout); the
+    caller only ever sees a `ModelError` that names the deadline.
+    """
 
 
 def _dec(v) -> str:
@@ -531,9 +560,23 @@ class ModelClient:
         retries: int = 2,
         api_key: str | None = None,
         api_style: str = "openai",
+        deadline_s: int | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
+        # deadline_s: a WALL-CLOCK ceiling on ONE request attempt, enforced by
+        # pha because httpx cannot express one. `timeout_s` is per OPERATION
+        # (connect/read/write/pool), and a provider that trickles keep-alive
+        # bytes resets the read timeout on every byte — so a response whose
+        # completion never arrives can sit indefinitely (measured: ~6 h 30 and
+        # ~4 h 17 stalls on cloud-vision volumes, both with a timeout_s set).
+        # None derives a generous default from timeout_s; <= 0 disables the
+        # ceiling (only the per-operation timeout applies, the old behaviour).
+        if deadline_s is None:
+            self.deadline_s = float(max(_DEADLINE_MIN_S, abs(int(timeout_s)) * _DEADLINE_MULTIPLE))
+        else:
+            self.deadline_s = float(deadline_s)
+        self.last_elapsed_s = 0.0  # wall-clock of the last attempt that returned
         self.retries = retries
         self.api_key = api_key or None
         self.api_style = (api_style or "openai").strip().lower()
@@ -558,48 +601,88 @@ class ModelClient:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _attempt_json(self, method: str, target: str, payload: dict[str, Any] | None):
+        """One request, bounded by `deadline_s` of WALL CLOCK.
+
+        `timeout_s` alone cannot bound a request: httpx applies it per
+        operation, and every arriving keep-alive byte resets the read timeout,
+        so a response whose completion never arrives can outlive any per-read
+        bound by an arbitrary margin (the stall this exists to stop: measured at
+        ~6 h 30 and ~4 h 17). The body is therefore consumed as a STREAM in this
+        thread and the attempt is abandoned once `deadline_s` has passed,
+        raising a retryable `_AttemptDeadline`.
+
+        This keeps `timeout_s` exact for its own case — a connection that goes
+        SILENT (no byte at all) still hits the read timeout first and stays a
+        normal, non-stall error — while the deadline bounds the trickle. Worst
+        case for one attempt is `deadline_s + min(timeout_s, deadline_s)`: after
+        the last check, one more read may block for up to the read timeout
+        before it can be abandoned. No worker thread is used, so an abandoned
+        attempt cannot leave one behind.
+        """
+        kwargs: dict[str, Any] = {"json": payload} if payload is not None else {}
+        started = time.monotonic()
+        if self.deadline_s <= 0:
+            r = self._http.request(method, target, **kwargs)
+            r.raise_for_status()
+            self.last_elapsed_s = time.monotonic() - started
+            return r.json()
+        # Cap EVERY low-level operation by the deadline too, so neither a silent
+        # connection nor a slow pool wait can outlast it.
+        budget = max(0.001, min(float(self.timeout_s), self.deadline_s))
+        timeout = httpx.Timeout(connect=budget, read=budget, write=budget, pool=budget)
+        with self._http.stream(method, target, timeout=timeout, **kwargs) as r:
+            r.raise_for_status()
+            body = bytearray()
+            chunks = r.iter_bytes()
+            while True:
+                if time.monotonic() - started >= self.deadline_s:
+                    # The response is still incomplete: this is the stall.
+                    raise _AttemptDeadline(
+                        f"no complete response within {self.deadline_s}s "
+                        "(pha's wall-clock deadline; the connection was still open)"
+                    )
+                try:
+                    body += next(chunks)
+                except StopIteration:
+                    break
+            self.last_elapsed_s = time.monotonic() - started
+            return json.loads(bytes(body))
+
+    def _request_with_retries(self, target: str, payload: dict[str, Any],
+                              where: str) -> dict[str, Any]:
         last: Exception | None = None
+        stalled = False
         for attempt in range(self.retries + 1):
             try:
-                r = self._http.post(path, json=payload)
-                r.raise_for_status()
-                return r.json()
+                return self._attempt_json("POST", target, payload)
             except httpx.HTTPStatusError as e:
-                last = e
+                last, stalled = e, False
                 if e.response is not None and e.response.status_code < 500:
                     break  # 4xx errors are not retryable
+            except _AttemptDeadline as e:
+                last, stalled = e, True
             except httpx.HTTPError as e:
-                last = e
+                last, stalled = e, False
             if attempt < self.retries:
                 time.sleep(2 * (attempt + 1))
-        raise ModelError(f"Request to {self.base_url}{path} failed: {last}")
+        message = f"Request to {where} failed: {last}"
+        # A stall is reported as its own error class so a per-page pass can
+        # abandon the page and retry it later rather than mark it failed.
+        raise ModelStall(message) if stalled else ModelError(message)
+
+    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request_with_retries(path, payload, where=f"{self.base_url}{path}")
 
     def _post_to(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         """POST to an ABSOLUTE url (e.g. a host-root endpoint that base_url
         doesn't cover, like MiniMax's /anthropic/v1/messages)."""
-        last: Exception | None = None
-        for attempt in range(self.retries + 1):
-            try:
-                r = self._http.post(url, json=payload)
-                r.raise_for_status()
-                return r.json()
-            except httpx.HTTPStatusError as e:
-                last = e
-                if e.response is not None and e.response.status_code < 500:
-                    break
-            except httpx.HTTPError as e:
-                last = e
-            if attempt < self.retries:
-                time.sleep(2 * (attempt + 1))
-        raise ModelError(f"Request to {url} failed: {last}")
+        return self._request_with_retries(url, payload, where=url)
 
     def _get(self, path: str) -> dict[str, Any]:
         try:
-            r = self._http.get(path)
-            r.raise_for_status()
-            return r.json()
-        except httpx.HTTPError as e:
+            return self._attempt_json("GET", path, None)
+        except (httpx.HTTPError, _AttemptDeadline) as e:
             raise ModelError(f"Request to {self.base_url}{path} failed: {e}") from e
 
     def list_models(self) -> list[str]:

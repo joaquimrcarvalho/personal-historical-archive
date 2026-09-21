@@ -133,3 +133,46 @@ def test_summary_reuses_chunk_stats_and_embedded_count_is_indexed(tmp_path):
         "WHERE embedding IS NOT NULL GROUP BY document_id")]
     assert any("idx_chunks_embedded" in p for p in plan), plan
     conn.close()
+
+
+def test_migrate_readds_embed_model_column(tmp_path):
+    """An archive written before `chunks.embed_model` existed gains the column
+    on the next connect (NULL on old rows = unknown provenance, never reused),
+    so an upgrade does not need a manual migration step."""
+    from personal_historical_archive import db
+
+    path = tmp_path / "archive.db"
+    conn = db.connect(path)
+    conn.execute("ALTER TABLE chunks DROP COLUMN embed_model")
+    conn.commit()
+    conn.close()
+
+    conn = db.connect(path)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(chunks)")}
+    assert "embed_model" in cols
+    conn.close()
+
+
+def test_any_embedded_chunk_scopes_to_pages(tmp_path):
+    """`any_embedded_chunk` answers the 'would a failure lose a vector?' question
+    for the whole document or for a page subset, without reading blobs."""
+    from personal_historical_archive import db
+
+    conn = db.connect(tmp_path / "archive.db")
+    now = time.time()
+    d = db.add_document(conn, filename="a.pdf", path=str(tmp_path / "a.pdf"),
+                        sha256="a", size_bytes=1, mtime=now, kind="pdf", now=now, dir_path="")
+    p1 = db.add_page(conn, d, 1)
+    p2 = db.add_page(conn, d, 2)
+    db.add_chunk(conn, d, p1, 0, "text only", None)
+    db.add_chunk(conn, d, p2, 0, "embedded", b"\x00\x01vec", embed_model="m1")
+    conn.commit()
+
+    assert db.any_embedded_chunk(conn, d) is True
+    assert db.any_embedded_chunk(conn, d, [p1]) is False
+    assert db.any_embedded_chunk(conn, d, [p2]) is True
+    assert db.any_embedded_chunk(conn, d, []) is False
+
+    row = conn.execute("SELECT embed_model FROM chunks WHERE page_id=?", (p2,)).fetchone()
+    assert row["embed_model"] == "m1"
+    conn.close()

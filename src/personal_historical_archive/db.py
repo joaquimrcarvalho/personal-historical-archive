@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     text TEXT NOT NULL,
     embedding BLOB,
     variant TEXT NOT NULL DEFAULT 'raw',
+    embed_model TEXT,
     UNIQUE (page_id, chunk_no, variant)
 );
 CREATE TABLE IF NOT EXISTS page_edits (
@@ -149,6 +150,21 @@ def migrate(conn: sqlite3.Connection) -> None:
         for attempt in range(15):
             try:
                 conn.execute("ALTER TABLE chunks ADD COLUMN variant TEXT NOT NULL DEFAULT 'raw'")
+                break
+            except sqlite3.OperationalError as e:
+                if attempt >= 14:
+                    raise
+                time.sleep(3)
+    # embed_model: WHICH embedding model produced this vector. `index_document`
+    # reuses a stored vector only when the chunk text is unchanged AND this
+    # column names the model it is about to embed with, so an incremental
+    # reindex can never mix vectors from two models. NULL on rows written before
+    # this column existed (unknown provenance) — those are never reused, so the
+    # first reindex after the upgrade re-embeds them once and stamps the model.
+    if "embed_model" not in ccols:
+        for attempt in range(15):
+            try:
+                conn.execute("ALTER TABLE chunks ADD COLUMN embed_model TEXT")
                 break
             except sqlite3.OperationalError as e:
                 if attempt >= 14:
@@ -563,6 +579,69 @@ def clear_chunks(conn: sqlite3.Connection, doc_id: int) -> None:
     _write(conn, "DELETE FROM chunks WHERE document_id = ?", (doc_id,))
 
 
+def clear_chunks_for_pages(conn: sqlite3.Connection, doc_id: int, page_ids) -> None:
+    """Drop the chunks of JUST these pages — the page-scoped counterpart of
+    `clear_chunks`, used by `pha reindex --doc N --page P` so the document's
+    other pages keep their rows, their vectors and their ids untouched."""
+    page_ids = list(page_ids)
+    if not page_ids:
+        return
+    marks = ",".join("?" * len(page_ids))
+    _write(
+        conn,
+        f"DELETE FROM chunks_fts WHERE rowid IN "
+        f"(SELECT id FROM chunks WHERE document_id = ? AND page_id IN ({marks}))",
+        (doc_id, *page_ids),
+    )
+    _write(conn, f"DELETE FROM chunks WHERE document_id = ? AND page_id IN ({marks})",
+           (doc_id, *page_ids))
+
+
+def existing_chunks(conn: sqlite3.Connection, doc_id: int, page_ids=None) -> list[sqlite3.Row]:
+    """The document's stored chunks (`page_id`, `chunk_no`, `variant`, `text`,
+    `embedding`, `embed_model`), optionally only those of some pages.
+
+    Used by `index_document` to find the vectors it can reuse instead of
+    re-embedding an unchanged chunk."""
+    if page_ids is None:
+        return conn.execute(
+            "SELECT page_id, chunk_no, variant, text, embedding, embed_model "
+            "FROM chunks WHERE document_id = ?", (doc_id,)
+        ).fetchall()
+    page_ids = list(page_ids)
+    if not page_ids:
+        return []
+    marks = ",".join("?" * len(page_ids))
+    return conn.execute(
+        f"SELECT page_id, chunk_no, variant, text, embedding, embed_model "
+        f"FROM chunks WHERE document_id = ? AND page_id IN ({marks})",
+        (doc_id, *page_ids),
+    ).fetchall()
+
+
+def any_embedded_chunk(conn: sqlite3.Connection, doc_id: int, page_ids=None) -> bool:
+    """Would replacing these chunks also destroy a stored vector?
+
+    The cheap existence test `index_document` uses when it is about to re-embed
+    everything anyway (`--force`): it must not read every vector blob just to
+    decide whether a failure would lose something.
+    """
+    if page_ids is None:
+        return conn.execute(
+            "SELECT 1 FROM chunks WHERE document_id = ? AND embedding IS NOT NULL LIMIT 1",
+            (doc_id,),
+        ).fetchone() is not None
+    page_ids = list(page_ids)
+    if not page_ids:
+        return False
+    marks = ",".join("?" * len(page_ids))
+    return conn.execute(
+        f"SELECT 1 FROM chunks WHERE document_id = ? AND page_id IN ({marks}) "
+        f"AND embedding IS NOT NULL LIMIT 1",
+        (doc_id, *page_ids),
+    ).fetchone() is not None
+
+
 def add_chunk(
     conn: sqlite3.Connection,
     doc_id: int,
@@ -571,11 +650,13 @@ def add_chunk(
     text: str,
     embedding: bytes | None,
     variant: str = "raw",
+    embed_model: str | None = None,
 ) -> None:
     cur = _write(
         conn,
-        "INSERT INTO chunks (document_id, page_id, chunk_no, text, embedding, variant) VALUES (?, ?, ?, ?, ?, ?)",
-        (doc_id, page_id, chunk_no, text, embedding, variant),
+        "INSERT INTO chunks (document_id, page_id, chunk_no, text, embedding, variant, embed_model) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (doc_id, page_id, chunk_no, text, embedding, variant, embed_model),
     )
     _write(conn, "INSERT INTO chunks_fts (rowid, text) VALUES (?, ?)", (cur.lastrowid, text))
 

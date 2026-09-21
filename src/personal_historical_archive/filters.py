@@ -521,9 +521,16 @@ def filters_changed(recorded: str | None, current) -> bool:
     """Has the filter chain changed since this value was produced?
 
     `recorded` is the page/edit's stored signature; `current` is either the
-    chain just applied or its signature. A page that never ran a filter
+    chain just applied, its signature, or — passed as a TUPLE — a set of
+    signatures ANY one of which counts as unchanged. The tuple form exists so a
+    fix to how the configured signature is computed (resolving a manifest's
+    declared `params:`) does not re-run every page once: the old and the new
+    spelling of the same chain are both accepted. A page that never ran a filter
     (recorded NULL/"") and is configured with none is unchanged.
     """
+    if isinstance(current, tuple):
+        allowed = [c if isinstance(c, str) else filters_signature(c) for c in current]
+        return (recorded or "") not in allowed
     sig = current if isinstance(current, str) else filters_signature(current)
     return (recorded or "") != sig
 

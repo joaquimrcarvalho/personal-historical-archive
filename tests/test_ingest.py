@@ -878,7 +878,8 @@ def test_index_document_keeps_vectors_when_embed_fails(tmp_path):
             raise ModelError("timeout after 120s")
 
     with pytest.raises(ModelError) as exc:
-        index_document(cfg, conn, doc_id, embed_client=DeadEmbed(), verbose=False)
+        index_document(cfg, conn, doc_id, embed_client=DeadEmbed(), verbose=False,
+                       incremental=False)
     assert "left unchanged" in str(exc.value)
 
     after = conn.execute(
@@ -894,7 +895,8 @@ def test_index_document_keeps_vectors_when_embed_fails(tmp_path):
     conn.commit()
     conn.execute("DELETE FROM chunks WHERE document_id=?", (doc_id,))
     conn.commit()
-    n2 = index_document(cfg, conn, doc_id, embed_client=DeadEmbed(), verbose=False)
+    n2 = index_document(cfg, conn, doc_id, embed_client=DeadEmbed(), verbose=False,
+                        incremental=False)
     assert n2 > 0
     rows = conn.execute(
         "SELECT COUNT(*) n, SUM(embedding IS NOT NULL) e FROM chunks WHERE document_id=?",
@@ -944,7 +946,7 @@ def test_reindex_all_reports_failed_documents_and_keeps_them(tmp_path):
         def embed(self, model, texts, batch_size):
             raise ModelError("connection refused")
 
-    res = reindex_all(cfg, DeadEmbed(), verbose=False)
+    res = reindex_all(cfg, DeadEmbed(), verbose=False, force=True)
     assert res["reindexed"] == 0
     assert len(res["failed"]) == 1
     assert res["failed"][0]["id"] == doc_id
@@ -1044,7 +1046,7 @@ def test_reindex_all_path_selects_only_docs_under(monkeypatch, tmp_path):
 
     reindexed = []
     monkeypatch.setattr(ingest, "index_document",
-                        lambda cfg_, conn_, doc_id, embed_client=None, verbose=True:
+                        lambda cfg_, conn_, doc_id, embed_client=None, verbose=True, **kw:
                         reindexed.append(doc_id) or 0)
 
     res = ingest.reindex_all(cfg, None, path="collections/COLA")
@@ -1084,7 +1086,7 @@ def test_reindex_all_path_to_single_file(monkeypatch, tmp_path):
 
     reindexed = []
     monkeypatch.setattr(ingest, "index_document",
-                        lambda cfg_, conn_, doc_id, embed_client=None, verbose=True:
+                        lambda cfg_, conn_, doc_id, embed_client=None, verbose=True, **kw:
                         reindexed.append(doc_id) or 0)
 
     res = ingest.reindex_all(cfg, None, path="collections/COLA/a.pdf")
@@ -1119,12 +1121,230 @@ def test_reindex_all_no_path_reindexes_everything(monkeypatch, tmp_path):
 
     reindexed = []
     monkeypatch.setattr(ingest, "index_document",
-                        lambda cfg_, conn_, doc_id, embed_client=None, verbose=True:
+                        lambda cfg_, conn_, doc_id, embed_client=None, verbose=True, **kw:
                         reindexed.append(doc_id) or 0)
 
     res = ingest.reindex_all(cfg, None)
     assert reindexed == [da]
     assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": []}
+
+
+class _CountingEmbed:
+    """An embed client that records how many texts it was asked to embed.
+
+    The vector encodes the text length, so a reused vector keeps the value it
+    was stored with rather than being recomputed.
+    """
+
+    def __init__(self):
+        self.calls: list[list[str]] = []
+
+    @property
+    def texts(self) -> int:
+        return sum(len(c) for c in self.calls)
+
+    def embed(self, model, texts, batch_size=1, **kw):
+        texts = list(texts)
+        self.calls.append(texts)
+        return [[float(len(t)), 1.0, 2.0, 3.0] for t in texts]
+
+    def close(self):
+        pass
+
+
+def _doc_with_pages(cfg, pages=3, editor=None):
+    """A dropbox document with N transcribed pages; returns (conn, doc_id, page_ids)."""
+    import time as _t
+    from personal_historical_archive import db as _db
+
+    src = cfg.dropbox / "collections" / "tcol" / "vol.pdf"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"%PDF-1.4 fake")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="vol.pdf", path=str(src), sha256="a",
+                              size_bytes=10, mtime=1, kind="pdf",
+                              dir_path="collections/tcol", now=_t.time(), editor=editor)
+    page_ids = []
+    for n in range(1, pages + 1):
+        pid = _db.add_page(conn, doc_id, n)
+        _db.set_page_result(conn, pid, raw_text=f"PAGE-{n} " + "word " * 100)
+        page_ids.append(pid)
+    _db.update_document(conn, doc_id, page_count=pages)
+    conn.commit()
+    return conn, doc_id, page_ids
+
+
+def _cfg_at(tmp_path):
+    from personal_historical_archive.config import Config
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(f"paths:\n  archive_dir: {tmp_path / 'arc'}\n")
+    return Config.load(root)
+
+
+def test_index_document_reuses_unchanged_chunks(tmp_path):
+    """Correcting one page re-embeds that page's chunk only.
+
+    The reported limitation: rewriting one page of a volume forced a reindex of
+    every page in it. `index_document` is incremental now — an unchanged chunk
+    whose stored vector came from the current embed model is reused.
+    """
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import index_document
+
+    cfg = _cfg_at(tmp_path)
+    conn, doc_id, pids = _doc_with_pages(cfg, 3)
+
+    first = _CountingEmbed()
+    assert index_document(cfg, conn, doc_id, embed_client=first, verbose=False) == 3
+    assert first.texts == 3, "a first index embeds every chunk"
+    before = {r["page_id"]: r["embedding"] for r in conn.execute(
+        "SELECT page_id, embedding FROM chunks WHERE document_id=? AND variant='raw'",
+        (doc_id,))}
+    assert {r["embed_model"] for r in conn.execute(
+        "SELECT embed_model FROM chunks WHERE document_id=?", (doc_id,))} == {cfg.embed_model}
+
+    # the historian corrects page 2's reading
+    _db.set_page_result(conn, pids[1], raw_text="PAGE-2 CORRECTED " + "word " * 100)
+    conn.commit()
+
+    second = _CountingEmbed()
+    assert index_document(cfg, conn, doc_id, embed_client=second, verbose=False) == 3
+    assert second.texts == 1, "only the changed page's chunk is re-embedded"
+    after = {r["page_id"]: r["embedding"] for r in conn.execute(
+        "SELECT page_id, embedding FROM chunks WHERE document_id=? AND variant='raw'",
+        (doc_id,))}
+    assert after[pids[0]] == before[pids[0]], "an untouched page keeps its stored vector"
+    assert after[pids[2]] == before[pids[2]]
+    conn.close()
+
+
+def test_index_document_noop_reindex_makes_no_embed_call(tmp_path):
+    """Re-indexing with nothing changed embeds nothing and rewrites nothing."""
+    from personal_historical_archive.ingest import index_document
+
+    cfg = _cfg_at(tmp_path)
+    conn, doc_id, _pids = _doc_with_pages(cfg, 2)
+    index_document(cfg, conn, doc_id, embed_client=_CountingEmbed(), verbose=False)
+    ids_before = [r["id"] for r in conn.execute(
+        "SELECT id FROM chunks WHERE document_id=? ORDER BY id", (doc_id,))]
+
+    again = _CountingEmbed()
+    assert index_document(cfg, conn, doc_id, embed_client=again, verbose=False) == 2
+    assert again.texts == 0, "an unchanged index is not re-embedded"
+    assert [r["id"] for r in conn.execute(
+        "SELECT id FROM chunks WHERE document_id=? ORDER BY id", (doc_id,))] == ids_before
+    conn.close()
+
+
+def test_index_document_reembeds_when_embed_model_changed(tmp_path):
+    """A vector whose embed_model is unknown or different is never reused."""
+    from personal_historical_archive.ingest import index_document
+
+    cfg = _cfg_at(tmp_path)
+    conn, doc_id, _pids = _doc_with_pages(cfg, 2)
+    index_document(cfg, conn, doc_id, embed_client=_CountingEmbed(), verbose=False)
+
+    # a vector from another model (or from before the column existed: NULL)
+    for stored in ("some-other-model", None):
+        conn.execute("UPDATE chunks SET embed_model=? WHERE document_id=?", (stored, doc_id))
+        conn.commit()
+        again = _CountingEmbed()
+        index_document(cfg, conn, doc_id, embed_client=again, verbose=False)
+        assert again.texts == 2, f"embed_model={stored!r} must not be reused"
+    conn.close()
+
+
+def test_index_document_force_reembeds_everything(tmp_path):
+    """incremental=False is the explicit full rebuild (`pha reindex --force`)."""
+    from personal_historical_archive.ingest import index_document
+
+    cfg = _cfg_at(tmp_path)
+    conn, doc_id, _pids = _doc_with_pages(cfg, 3)
+    index_document(cfg, conn, doc_id, embed_client=_CountingEmbed(), verbose=False)
+
+    forced = _CountingEmbed()
+    index_document(cfg, conn, doc_id, embed_client=forced, verbose=False, incremental=False)
+    assert forced.texts == 3
+    conn.close()
+
+
+def test_reindex_all_doc_scopes_to_one_document(monkeypatch, tmp_path):
+    """`pha reindex --doc N` touches only that document."""
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+
+    cfg = _cfg_at(tmp_path)
+    conn, da, _pids = _doc_with_pages(cfg, 2)
+    _db.add_document(conn, filename="other.pdf", path=str(cfg.dropbox / "other.pdf"),
+                     sha256="b", size_bytes=10, mtime=1, kind="pdf",
+                     dir_path="collections/COLX", now="2026-01-01")
+    other = _db.get_document_by_path(conn, str(cfg.dropbox / "other.pdf"))["id"]
+    _db.set_document_status(conn, da, "done")
+    _db.set_document_status(conn, other, "done")
+    conn.commit()
+    conn.close()
+
+    seen = []
+    monkeypatch.setattr(ingest, "index_document",
+                        lambda cfg_, conn_, doc_id, **kw: seen.append((doc_id, kw)) or 0)
+    res = ingest.reindex_all(cfg, None, doc=da)
+    assert [s[0] for s in seen] == [da]
+    assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": []}
+
+    seen.clear()
+    res = ingest.reindex_all(cfg, None, doc=99999)
+    assert seen == [] and res["reindexed"] == 0
+    assert "no document #99999" in res["reason"]
+
+
+def test_reindex_all_page_scope_leaves_other_pages_untouched(tmp_path):
+    """`pha reindex --doc N --page P` replaces only page P's chunks."""
+    from personal_historical_archive import db as _db
+    from personal_historical_archive.ingest import index_document, reindex_all
+
+    cfg = _cfg_at(tmp_path)
+    conn, doc_id, pids = _doc_with_pages(cfg, 3)
+    _db.set_document_status(conn, doc_id, "done")
+    conn.commit()
+    index_document(cfg, conn, doc_id, embed_client=_CountingEmbed(), verbose=False)
+    before = {r["page_id"]: (r["id"], r["embedding"]) for r in conn.execute(
+        "SELECT id, page_id, embedding FROM chunks WHERE document_id=?", (doc_id,))}
+    conn.close()
+
+    # correct page 2, then reindex just that page
+    conn = _db.connect(cfg.db_path)
+    _db.set_page_result(conn, pids[1], raw_text="PAGE-2 CORRECTED " + "word " * 100)
+    conn.commit()
+    conn.close()
+
+    counting = _CountingEmbed()
+    res = reindex_all(cfg, counting, verbose=False, doc=doc_id, page=2)
+    assert res["reindexed"] == 1 and counting.texts == 1
+
+    conn = _db.connect(cfg.db_path)
+    after = {r["page_id"]: (r["id"], r["embedding"]) for r in conn.execute(
+        "SELECT id, page_id, embedding FROM chunks WHERE document_id=?", (doc_id,))}
+    # pages 1 and 3 are byte-for-byte the same rows (same ids, same vectors)
+    assert after[pids[0]] == before[pids[0]]
+    assert after[pids[2]] == before[pids[2]]
+    text = conn.execute("SELECT text FROM chunks WHERE document_id=? AND page_id=?",
+                        (doc_id, pids[1])).fetchone()["text"]
+    assert text.startswith("PAGE-2 CORRECTED")
+    # the corrected page's own vector was re-embedded (a new length-bearing vector)
+    assert after[pids[1]][1] != before[pids[1]][1]
+    conn.close()
+
+
+def test_reindex_all_page_without_doc_refuses(tmp_path):
+    """A page-scoped reindex with no document is refused, not applied archive-wide."""
+    from personal_historical_archive.ingest import reindex_all
+
+    cfg = _cfg_at(tmp_path)
+    res = reindex_all(cfg, None, page=5)
+    assert res["reindexed"] == 0
+    assert "--page needs --doc" in res["reason"]
 
 
 def test_library_page_path_resolves_raw_and_edited(tmp_path):
