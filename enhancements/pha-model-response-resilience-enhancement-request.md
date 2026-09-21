@@ -1,7 +1,9 @@
 # Enhancement request — one malformed model response must not kill a scan
 
-**Status:** draft, not implemented. Two measured defects from the Documenta
-Indica / Francisco Rodrigues run of 2026-09-15. **Date:** 2026-09-15.
+**Status: IMPLEMENTED** (0.24.1+; `ModelError` on a malformed response, `done`
+written last, `pha edit` indexes, `pha status` surfaces done-without-chunks,
+and `discover()` accepts a single-file `--path`). Two measured defects from the
+Documenta Indica / Francisco Rodrigues run of 2026-09-15. **Date:** 2026-09-15.
 **Written against:** pha 0.24.0.
 
 ## 1. Problem

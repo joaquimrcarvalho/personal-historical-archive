@@ -1,6 +1,6 @@
 # Enhancement — one model per model-server (endpoint-scoped locking)
 
-**Status:** proposed — design draft, nothing implemented. Written against pha
+**Status:** **IMPLEMENTED**, released in **0.28.0**. Written against pha
 **0.20.1**, 2026-09.
 **Severity:** medium. The current rule is simultaneously **too coarse** (it
 blocks job pairs that genuinely cannot collide — remote models) and **too

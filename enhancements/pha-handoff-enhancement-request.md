@@ -1,6 +1,7 @@
 # Enhancement request — hand a document to a second machine and take the results back (`pha handoff`)
 
-**Status: IMPLEMENTED** (0.29.0), landed on branch `feature/handoff`.
+**Status: IMPLEMENTED** (0.29.0); in `main` since (the branch has long been
+merged).
 **Date:** 2026-09-20. **Written against:** pha 0.28.0, repo state at `6681bd5`.
 
 > **As implemented — the four deviations worth knowing.**

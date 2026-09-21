@@ -1,8 +1,9 @@
 # Bug — one edited variant is exported twice, as `edited-<rules>` and `edited-<rules>@<model>`
 
-**Status:** **FIXED (A + B, §8).** C — deleting the redundant bare folders on an
-archive that already has them — remains a documented operator step (§6), not
-automation. Found and measured on `jesuit-archive`, 2026-09-16.
+**Status:** **FIXED (A + B, §8), and C now has a guarded CLI sweep** —
+`pha prune --library-variants [--dry-run] [--doc N]` deletes a bare folder only
+when nothing lives in it alone and reports (never deletes) one holding a
+different reading. Found and measured on `jesuit-archive`, 2026-09-16.
 **Severity:** medium-high — breaks `pha cite --edited` for **every affected
 document**, and can serve a *stale* generation of the edited text as if it were
 current.

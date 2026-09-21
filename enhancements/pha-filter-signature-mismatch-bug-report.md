@@ -1,6 +1,11 @@
 # Bug report — a filter with manifest defaults makes its stage re-run forever
 
-**Status:** open. **Found:** 2026-09-18, while executing Option A of
+**Status:** **FIXED** in `7136ece` (released 0.33.0). The configured side is
+now compared in the *resolved* form (manifest defaults merged with the
+sidecar params — the same signature `apply_filters()` stores), and the
+legacy *declared* form is still accepted, so no stored signature needed a
+migration and no page re-ran once. Regression tests:
+`tests/test_filter_signature.py`. **Found:** 2026-09-18, while executing Option A of
 `pha-post-filter-replay-enhancement-request.md` by hand on
 `collections/franco-imagens` (pha 0.28.0, repo checkout).
 **Severity:** silent, recurring, paid — every later scan/edit re-runs the stage's
