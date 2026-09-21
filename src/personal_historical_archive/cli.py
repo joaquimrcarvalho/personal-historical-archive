@@ -1036,6 +1036,25 @@ def cmd_status(cfg: Config, args) -> None:
             # (document units, image-directories, sidecars and the inbox exclusion are
             # the CLI's rules, not a caller's).
             keys = sorted(set(archived) | set(unscanned), key=lambda k: (k == "(root)", k))
+            # Documents lent to another machine, STRUCTURED: the text report below
+            # prints the same thing as lines, and a view needs the document ids so
+            # it can mark them (a leased document is otherwise indistinguishable
+            # from one that is merely mid-scan).
+            from . import handoff as _ho_json
+            try:
+                _leases = _ho_json.active_leases(cfg)
+            except Exception:  # noqa: BLE001 - status must never fail over this
+                _leases = []
+            out_on_handover = [
+                {"handoff_id": l.handoff_id, "worker": l.worker, "state": l.state,
+                 "created_at": l.created_at,
+                 "documents": [
+                     {"doc_id": d.get("doc_id"), "relpath": d.get("relpath"),
+                      "sha256": d.get("sha256")}
+                     for d in (l.documents or [])
+                 ]}
+                for l in _leases
+            ]
             print(json.dumps({
                 "ok": True,
                 "archive": str(cfg.db_path),
@@ -1061,6 +1080,7 @@ def cmd_status(cfg: Config, args) -> None:
                     {"dir_path": k, "count": len(v), "documents": sorted(v)}
                     for k, v in sorted(holds.items(), key=lambda kv: (kv[0] == "(inbox root)", kv[0]))
                 ],
+                "out_on_handover": out_on_handover,
             }, ensure_ascii=False, indent=2))
             return
 

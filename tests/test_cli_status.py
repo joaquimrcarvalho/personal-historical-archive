@@ -254,3 +254,36 @@ def test_status_json_is_quiet_about_an_empty_archive(tmp_path, capsys):
     data = json.loads(capsys.readouterr().out)
     assert data["documents"] == 0 and data["new"] == 0 and data["on_hold"] == 0
     assert data["unscanned"] == [] and data["in_inbox"] == []
+    assert data["out_on_handover"] == []
+
+
+def test_status_json_marks_a_document_out_on_handover(tmp_path, capsys):
+    """A leased document is visible to the view: `pha status --json` carries the
+    hand-off, its worker and the document ids, so a page-less `processing` row
+    reads as 'out on hand-over' instead of looking stuck."""
+    from personal_historical_archive import handoff
+
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    col = cfg.dropbox / "collections" / "COLX"
+    col.mkdir(parents=True)
+    src = col / "vol.pdf"
+    src.write_bytes(b"%PDF vol")
+    conn = _db.connect(cfg.db_path)
+    doc_id = _db.add_document(conn, filename="vol.pdf", path=str(src),
+                              sha256=sha256_of(src), size_bytes=1, mtime=1, kind="pdf",
+                              now=time.time(), dir_path="collections/COLX")
+    _db.set_document_status(conn, doc_id, "processing")
+    conn.commit()
+    conn.close()
+
+    handoff.export_handoff(cfg, ["collections/COLX"], tmp_path / "ho",
+                           worker="studio", verbose=False)
+
+    cli.cmd_status(cfg, SimpleNamespace(json=True))
+    data = json.loads(capsys.readouterr().out)
+    groups = data["out_on_handover"]
+    assert len(groups) == 1
+    assert groups[0]["worker"] == "studio"
+    assert groups[0]["state"] == "out"
+    assert [d["doc_id"] for d in groups[0]["documents"]] == [doc_id]

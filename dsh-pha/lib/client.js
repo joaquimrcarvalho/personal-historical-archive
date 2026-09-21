@@ -748,6 +748,22 @@ function statusClass(s) {
   if (s === 'processing' || s === 'running' || s === 'starting' || s === 'pending') return 'busy'
   return 'dim'
 }
+// A document lent to another machine has no pages HERE until the work comes back, and its
+// row still reads `processing` — so the lease is what explains an otherwise stuck-looking
+// document. `pha status --json` carries `out_on_handover` for exactly this.
+function leaseFor(status, docId) {
+  const groups = (status && status.out_on_handover) || []
+  for (const g of groups) {
+    for (const doc of (g.documents || [])) {
+      if (doc && doc.doc_id === docId) return g
+    }
+  }
+  return null
+}
+function handoverTitle(lease) {
+  return 'out on hand-over to ' + ((lease && lease.worker) || 'another machine') +
+    ' — its pages are produced there and arrive at `pha handoff fetch`'
+}
 function relPath(doc) {
   return doc ? (doc.dir_path ? doc.dir_path + '/' + doc.filename : doc.filename) : ''
 }
@@ -1336,9 +1352,13 @@ function PhaView(props) {
     body = s.docsErr ? h('div', { className: 'pha-err' }, s.docsErr) : (s.docs ? h('div', null,
       groups.map((g) => h('div', { className: 'pha-group', key: g.key },
         h('div', { className: 'pha-group-h' }, g.key + '  (' + g.docs.length + ')'),
-        g.docs.map((d) => h('div', { className: 'pha-doc' + (s.selectedId === d.id ? ' sel' : ''), key: d.id, title: 'doc #' + d.id, onClick: () => openDoc(d.id) },
+        g.docs.map((d) => {
+          const lease = leaseFor(s.status, d.id)
+          return h('div', { className: 'pha-doc' + (s.selectedId === d.id ? ' sel' : ''), key: d.id, title: 'doc #' + d.id, onClick: () => openDoc(d.id) },
           h('span', { className: 'pha-doc-id' }, docNumberLabel(d.id)),
-          h('span', { className: 'pha-chip ' + statusClass(d.status) }, d.status || '?'),
+          lease
+            ? h('span', { className: 'pha-chip busy', title: handoverTitle(lease) }, 'hand-over')
+            : h('span', { className: 'pha-chip ' + statusClass(d.status) }, d.status || '?'),
           h('span', { className: 'pha-doc-name', title: d.filename }, d.filename),
           // A reference is marked from the sidecar's presence on disk (right even before the
           // snapshot exists); amber when the record's own origin says it is unverified.
@@ -1349,7 +1369,8 @@ function PhaView(props) {
               }, 'bib')
             : null,
           h('span', { className: 'pha-doc-meta' }, (d.page_count || 0) + 'p' + (d.palaeographer ? ' · ' + d.palaeographer : '')),
-        )),
+          )
+        }),
       )),
       unscannedList,
       inboxList,
@@ -1475,6 +1496,7 @@ function PhaView(props) {
   else if (!s.detail.doc) right = h('div', { className: 'pha-empty' }, 'Document not found in the archive.')
   else {
     const d = s.detail.doc
+    const lease = leaseFor(s.status, d.id)
     const totalPages = d.page_count || Math.max(1, (s.detail.pages || []).length)
     const curPage = s.pageReq ? s.pageReq.page : null
     const selIsEdited = !!(s.pageReq && s.pageReq.edited)
@@ -1535,7 +1557,11 @@ function PhaView(props) {
       ),
       h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
         h('span', { className: 'pha-chip ' + statusClass(d.status) }, d.status || '?'),
-        h('span', { className: 'pha-chip' }, (d.page_count || 0) + ' pages'),
+        lease ? h('span', { className: 'pha-chip busy', title: handoverTitle(lease) },
+          'out on hand-over' + (lease.worker ? ' → ' + lease.worker : '')) : null,
+        (lease && !d.page_count)
+          ? h('span', { className: 'pha-chip' }, 'pages on the worker')
+          : h('span', { className: 'pha-chip' }, (d.page_count || 0) + ' pages'),
         h('button', { className: 'pha-btn small', title: "Show this collection's pha.yaml configuration (resolved, generating it only when none is in scope)", onClick: openConfig }, 'Config'),
         h('button', {
           className: 'pha-btn small',
@@ -1575,7 +1601,12 @@ function PhaView(props) {
           const dv = (searchMode && s.searchPageVariant) ? (s.searchPageVariant[p.page_no] === 'edited') : selIsEdited
           const pend = pendingSet.has(p.page_no)
           return h('span', { className: 'pha-page' + (curPage === p.page_no ? ' sel' : '') + (pend ? ' pending' : ''), key: p.id, title: (pend ? 'edited in the library — not imported yet (pha review)\n' : '') + 'status: ' + (p.status || '?'), onClick: () => { openPage(p.page_no, dv); setRange(p.page_no) } }, p.page_no)
-        })) : h('div', { className: 'pha-muted' }, searchMode ? 'No matched pages…' : 'No pages…'),
+        })) : h('div', { className: 'pha-muted' },
+          searchMode ? 'No matched pages…'
+            : lease ? ('No pages here yet — this document is out on hand-over to ' +
+                (lease.worker || 'another machine') +
+                '. Its pages are produced there and appear after `pha handoff fetch`.')
+            : 'No pages…'),
       ),
       h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
         h('button', { className: 'pha-btn small' + (showImg ? ' on' : ''), title: 'show/hide the page image', onClick: () => setShowImg(!showImg) }, 'Image'),
