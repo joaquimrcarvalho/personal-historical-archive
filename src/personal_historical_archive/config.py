@@ -521,7 +521,14 @@ class Config:
         # prompts and the _sample.md templates.
         # Precedence: PHA_ARCHIVE_DIR env > PHA_ARCHIVE_DIR in .env >
         # paths.archive_dir > default "." (the project root, backward
-        # compatible).
+        # compatible). The legacy .env line sits ABOVE config.yaml on purpose:
+        # the shipped config.yaml carries `archive_dir: .` as a default, so
+        # treating that as authoritative would silently move every pre-existing
+        # .env user's archive. `pha set archive-dir` writes paths.archive_dir
+        # AND clears the .env line, which is what makes the file pointer
+        # effective. Kept in sync with AGENTS.md, config.yaml's header and
+        # README.md — see
+        # tests/test_config.py::test_config_archive_dir_dotenv_beats_explicit_yaml.
         archive_env = _env_setting("PHA_ARCHIVE_DIR")
         archive_dir = _p(root, str(archive_env or paths.get("archive_dir", ".")))
 

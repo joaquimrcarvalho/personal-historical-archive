@@ -189,6 +189,13 @@ pha --help
 #      (or interactively: run `pha set archive-dir` and type the path when asked)
 #    Equivalent: set the PHA_ARCHIVE_DIR env var for one run (it takes
 #    precedence over everything), or edit paths.archive_dir in config.yaml.
+#    Note the full precedence: environment > a legacy PHA_ARCHIVE_DIR line in
+#    a gitignored .env > paths.archive_dir in config.yaml > the default "."
+#    (the project dir). The legacy .env line outranks config.yaml on purpose —
+#    the shipped config.yaml carries `archive_dir: .` as a default, so treating
+#    that as authoritative would move every pre-existing .env user's archive.
+#    `pha set archive-dir` writes paths.archive_dir AND removes the legacy .env
+#    line, which is what makes the file pointer effective.
 #    Defaults to the project dir, so a fresh clone works with zero config:
 #    palaeographers/, editors/ and encoders/ are seeded with a default that
 #    uses qwen/qwen3-vl-8b on LM Studio.
@@ -201,7 +208,9 @@ pha --help
 #    but another archive.db sits in a parent directory (the shape of a stale
 #    pointer). The location itself lives in config.yaml (`paths.archive_dir`,
 #    written by `pha set archive-dir`), and an explicit PHA_ARCHIVE_DIR in the
-#    environment overrides it for a single run.
+#    environment overrides it for a single run. In full: environment > legacy
+#    .env line > paths.archive_dir in config.yaml > default "." (see the note
+#    above on why the legacy line is checked first).
 
 # 4. start LM Studio, load qwen/qwen3-vl-8b (or your palaeo model), and the
 #    embedding model; start the local server on port 1234
@@ -1300,7 +1309,10 @@ or per-invocation with the `PHA_NO_UPDATE_CHECK=1` environment variable.
   layout). Default `.` (the project dir). `pha set archive-dir` writes it here,
   so the location is a tracked, reviewable line; an explicit
   `PHA_ARCHIVE_DIR` in the environment overrides it for one run, which is how
-  to keep a machine-specific path out of the committed file.
+  to keep a machine-specific path out of the committed file. Precedence:
+  environment > a legacy `PHA_ARCHIVE_DIR` line in `.env` > this key > `.`;
+  `pha set archive-dir` also removes the legacy `.env` line, which is what
+  makes this key effective.
 - `vision.*` — model server + vision model for extraction
 - `embeddings.*` — model server + embedding model; `batch_size` caps how many
   chunks go in each `/embeddings` request (some endpoints reject an input over

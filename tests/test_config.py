@@ -125,6 +125,32 @@ def test_config_archive_dir_dotenv(monkeypatch, tmp_path):
     assert cfg.dropbox == (arc / "dropbox").resolve()
 
 
+def test_config_archive_dir_dotenv_beats_explicit_yaml(monkeypatch, tmp_path):
+    """A legacy .env line outranks an explicit paths.archive_dir.
+
+    That order is deliberate — the shipped config.yaml carries `archive_dir: .`
+    as a default, so treating it as authoritative would silently move every
+    pre-existing .env user's archive — and it is what AGENTS.md, config.yaml's
+    header and README.md now document. This test is what keeps code and docs
+    from drifting apart again; `pha set archive-dir` removes the legacy .env
+    line, which is how config.yaml is made effective.
+    """
+    monkeypatch.delenv("PHA_HOME", raising=False)
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        f"paths:\n  archive_dir: {tmp_path / 'from-yaml'}\n")
+    (root / ".env").write_text(f"PHA_ARCHIVE_DIR={tmp_path / 'from-dotenv'}\n")
+    cfg = Config.load(root)
+    assert cfg.archive_dir == (tmp_path / "from-dotenv").resolve()
+
+    # ...and with the legacy line gone, config.yaml is used
+    (root / ".env").write_text("")
+    cfg = Config.load(root)
+    assert cfg.archive_dir == (tmp_path / "from-yaml").resolve()
+
+
 def test_config_archive_dir_explicit_in_yaml(tmp_path):
     """paths.archive_dir in config.yaml is used when env/.env are absent."""
     root = tmp_path / "proj"

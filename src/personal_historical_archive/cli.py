@@ -2335,7 +2335,9 @@ def _set_archive_dir_in_config(cfg: Config, path: str | None) -> None:
     `config.yaml` is the tracked, reviewable home for the archive location
     (DEC: one visible pointer instead of a gitignored `.env` line that can go
     stale unnoticed). `PHA_ARCHIVE_DIR` in the real environment still wins, so
-    a one-off or per-machine override needs no file edit.
+    a one-off or per-machine override needs no file edit — and the legacy
+    `.env` line, which is checked BEFORE config.yaml, is removed here so that
+    this write actually takes effect (see `Config.load`).
     """
     current = str(getattr(cfg, "archive_dir", "") or "")
     if not path:

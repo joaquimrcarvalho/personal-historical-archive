@@ -37,11 +37,17 @@
   `pha-location.md` + `.pha/` (machine-local: WHERE the `pha` tool is on THIS
   machine — written on every run, gitignored, never archive content; see
   "`pha` not on PATH?" under Remote / machine-to-machine). The project
-  dir holds only code, `prompts/`, `schema/` and the `_sample.md` templates. Precedence:
-  `PHA_ARCHIVE_DIR` env > `paths.archive_dir` in `config.yaml` (written by
-  `pha set archive-dir`; this is the tracked, reviewable home for the
-  location) > a legacy `PHA_ARCHIVE_DIR` line in a gitignored `.env` > the
-  default `.`. A fresh archive is seeded with
+  dir holds only code, `prompts/`, `schema/` and the `_sample.md` templates.
+  Precedence: `PHA_ARCHIVE_DIR` in the environment > a legacy
+  `PHA_ARCHIVE_DIR` line in a gitignored `.env` > `paths.archive_dir` in
+  `config.yaml` (written by `pha set archive-dir`) > the default `.` (the
+  project root). The legacy `.env` line sits ABOVE `config.yaml` on purpose:
+  the shipped `config.yaml` carries `archive_dir: .` as a default, so treating
+  that as authoritative would silently move every pre-existing `.env` user's
+  archive. `config.yaml` is still the tracked, reviewable home — `pha set
+  archive-dir` writes it AND removes the legacy `.env` line, which is what
+  makes it effective; `pha info` names the source that won
+  (`archive_source`). A fresh archive is seeded with
   `default.md` for model/palaeographer/editor/encoder (all qwen3-vl-8b) so it
   works with zero config.
 - **Three config layers.** (1) `models/<id>.md` — pure model interface

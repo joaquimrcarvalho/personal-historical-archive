@@ -57,7 +57,12 @@ was therefore the single point of failure for the whole view.
 - **D4 — neither durable pointer is machine-level.** `pha set archive-dir`
   writes `paths.archive_dir` into the **tracked** `config.yaml`
   (`cli.py:2322-2323`, deliberately: "a tracked, reviewable line rather than a
-  gitignored `.env` value"), while the `.env` route is labelled *legacy*. Both
+  gitignored `.env` value"), while the `.env` route is labelled *legacy*. (Note
+  the resolution order: the legacy `.env` line is checked BEFORE
+  `paths.archive_dir` — the shipped `config.yaml` carries `archive_dir: .` as a
+  default, so it cannot be authoritative without moving every pre-existing
+  `.env` user's archive — which is exactly why `pha set archive-dir` also
+  removes that line. See `Config.load` and AGENTS.md.) Both
   live in the checkout; a repo edit or a `git checkout` can undo one, an
   accident can empty the other. A user-level config (say
   `~/.config/pha/config.yaml`, consulted after the environment and before the
