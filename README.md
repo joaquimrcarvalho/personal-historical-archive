@@ -1486,6 +1486,16 @@ version stamped every file it walked, which froze the whole archive against
   `pha scan`/`pha edit` again. Scope it to one document, or one page of one
   document, to undo a mistaken review without disturbing the rest.
 
+**Never review while a pass is writing.** A `pha scan`/`pha edit`/`pha reindex`
+rewrites library page files as it works, so a file read mid-pass used to look
+like a human correction (measured: 435 pages imported when 4 were real).
+`pha review` now **refuses** while such a job holds its model-server lock, or
+while a document is still `processing` — nothing is imported or stamped; wait
+for the pass to finish, or pass `--force` deliberately. `pha review --unset` is
+not gated, because releasing a stamp is safe during a pass. A file also counts
+as *pending* only when its **body** differs from the stored text, so touching a
+page file without changing it is no longer treated as a correction.
+
 Because a `reviewed` page outranks `--reprocess`, `--unset` is the way to
 re-run a stage over text a human already touched, and it is also what you
 need before applying a new palaeographer/editor (or the planned stage

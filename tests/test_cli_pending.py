@@ -189,11 +189,45 @@ def test_pending_ignores_a_bare_alias_of_a_model_qualified_variant(tmp_path):
 
     assert pending_review_files(cfg, conn) == []
 
-    # the qualified file still reports when it is genuinely edited
+    # the qualified file still reports when it is genuinely edited: both the
+    # mtime moves AND the body differs (an mtime touch alone is not an edit —
+    # a scan rewrites these files, which is why the body check exists)
+    _write_page_file(cfg, doc, 1, variant="edited-french-ocr@deepseek-v4-flash",
+                     body="real text, corrected by hand")
     os.utime(qual, (future + 100, future + 100))
     pend = pending_review_files(cfg, conn)
     assert len(pend) == 1 and pend[0]["variant"] == "edited-french-ocr@deepseek-v4-flash"
     conn.close()
+
+
+def test_pending_needs_a_body_change_not_just_an_mtime(tmp_path):
+    """A file whose mtime moved but whose body is unchanged is NOT a human edit.
+
+    A running scan rewrites library page files as it works, so mtime alone
+    reported machine-written pages as corrections and `pha review` stamped them
+    `reviewed` (measured 2026-09-18: 435 imported when 4 were real)."""
+    import os
+
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    doc_id, doc = _add_doc_with_page(cfg, page_no=1, exported_at=1000.0)
+    conn = _db.connect(cfg.db_path)
+    try:
+        conn.execute("UPDATE pages SET raw_text=? WHERE document_id=? AND page_no=1",
+                     ("machine text", doc_id))
+        conn.commit()
+        future = 10 ** 9
+        # machine-written and identical to the DB → not pending, mtime or not
+        f = _write_page_file(cfg, doc, 1, body="machine text")
+        assert pending_review_files(cfg, conn) == []
+        os.utime(f, (future, future))
+        assert pending_review_files(cfg, conn) == [], "an mtime-only touch is not an edit"
+        # a genuine body edit is pending
+        _write_page_file(cfg, doc, 1, body="machine text, corrected")
+        os.utime(f, (future + 100, future + 100))
+        assert len(pending_review_files(cfg, conn)) == 1
+    finally:
+        conn.close()
 
 
 # --- `pha review` scope: pending only, --all opt-in, --unset undo ------------

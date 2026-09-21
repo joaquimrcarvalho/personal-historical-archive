@@ -1807,9 +1807,13 @@ def cmd_review(cfg: Config, args) -> None:
                   f"{res['edits']} edit(s) — they can be re-scanned/re-edited now")
             return
         res = review_import(cfg, conn, doc_id=args.doc, verbose=True,
-                            include_all=getattr(args, "all", False))
+                            include_all=getattr(args, "all", False),
+                            force=bool(getattr(args, "force", False)))
     finally:
         conn.close()
+    if res.get("refused"):
+        print(f"review refused: {res['refused']}", file=sys.stderr)
+        sys.exit(2)
     scope = " (--all: every library file)" if getattr(args, "all", False) else ""
     extra = f", {res['missing']} file(s) naming no page" if res.get("missing") else ""
     print(f"reviewed: {res['pages']} transcription page(s), {res['edits']} edit(s) "
@@ -3306,6 +3310,10 @@ def main(argv: list[str] | None = None) -> None:
     rv.add_argument("--all", action="store_true",
                     help="import and stamp EVERY library page file, changed or not "
                          "(the deliberate blanket review; off by default)")
+    rv.add_argument("--force", action="store_true",
+                    help="import even while a scan/edit/reindex is writing library pages "
+                         "(or a document is still 'processing') — risks stamping "
+                         "machine-written pages as human-reviewed")
     rv.add_argument("--unset", action="store_true",
                     help="clear the reviewed stamp instead of importing, so the pages "
                          "can be re-scanned/re-edited (undoes a review; keeps the text)")

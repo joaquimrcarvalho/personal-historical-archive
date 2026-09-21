@@ -1978,7 +1978,13 @@ def _pending_scan(conn, targets: list[tuple[int, Path]]) -> list[dict]:
                 if is_edited:
                     edit = edits.get((int(row["id"]), editor or ""))
                     if edit is not None and edit["exported_at"] is not None:
-                        pending = mtime > edit["exported_at"]
+                        # mtime first (cheap), then the BODY must differ too: a
+                        # scan rewrites these files as it works, so mtime alone
+                        # marks machine-written pages as human edits.
+                        pending = False
+                        if mtime > edit["exported_at"]:
+                            body = fm_body if fm_body is not None else read_body(Path(f.path))
+                            pending = body != edit_body(int(row["id"]), editor)
                     else:
                         body = fm_body if fm_body is not None else read_body(Path(f.path))
                         pending = body != edit_body(int(row["id"]), editor)
@@ -1987,7 +1993,10 @@ def _pending_scan(conn, targets: list[tuple[int, Path]]) -> list[dict]:
                                     "variant": variant, "editor": editor})
                 else:
                     if row["exported_at"] is not None:
-                        pending = mtime > row["exported_at"]
+                        pending = False
+                        if mtime > row["exported_at"]:
+                            body = fm_body if fm_body is not None else read_body(Path(f.path))
+                            pending = body != raw_body(row)
                     else:
                         body = fm_body if fm_body is not None else read_body(Path(f.path))
                         pending = body != raw_body(row)
@@ -2001,10 +2010,15 @@ def _pending_scan(conn, targets: list[tuple[int, Path]]) -> list[dict]:
 def pending_review_files(cfg: Config, conn, doc_id: int | None = None) -> list[dict]:
     """Find library page files a human edited since pha last wrote/imported them.
 
-    Timestamp-based: a file is pending if its filesystem mtime is NEWER than
-    the page/edit's `exported_at` (when pha last wrote that file). For legacy
-    rows with exported_at NULL we fall back to comparing the file body to the
-    DB text. Returns {path, document_id, page_no, variant, editor}.
+    A file is pending when its filesystem mtime is NEWER than the page/edit's
+    `exported_at` (when pha last wrote that file) **and its body differs** from
+    the stored text. The body check is not just for legacy rows with
+    `exported_at` NULL any more: a running scan rewrites library files as it
+    works, so mtime alone reported machine-written pages as human corrections
+    (measured 2026-09-18: 435 imported when 4 were real). Reading a body happens
+    only for a file whose mtime is already newer, so the common path still
+    touches directory entries and mtimes only. Returns
+    {path, document_id, page_no, variant, editor}.
 
     Both forms are DB-driven now (one `pages` + one `page_edits` query, then a
     directory scan per document) — the old form walked every `library/**/*.md`
@@ -2086,8 +2100,40 @@ def _all_review_files(cfg: Config, doc_id: int | None = None) -> list[dict]:
     return out
 
 
+def _review_busy_reason(cfg: Config, conn, doc_id: int | None) -> str | None:
+    """Why importing corrections NOW would be unsafe, or None when it is safe.
+
+    Two hazards, both measured on 2026-09-18 (435 pages imported when 4 were
+    real corrections): a running scan/edit/reindex writes library page files as
+    it goes, and a document left `processing` still has pages being written. A
+    page written after this run snapshotted `exported_at` looks like a human
+    edit and would be imported **and stamped `reviewed`**, which freezes it
+    against every later scan/edit until someone runs `pha review --unset`.
+    """
+    key = locks.embed_key(cfg)
+    if locks.job_running(cfg, key):
+        who = locks.holder_label(key)
+        subject = f"a model job ({who})" if who else "a model job"
+        return (f"{subject} is running and writes library pages as it goes — importing now "
+                f"can stamp machine-written pages as reviewed; wait for it to finish, or "
+                f"pass --force")
+    sql = "SELECT id, filename FROM documents WHERE status = 'processing'"
+    params: tuple = ()
+    if doc_id is not None:
+        sql += " AND id = ?"
+        params = (int(doc_id),)
+    rows = conn.execute(sql, params).fetchall()
+    if rows:
+        names = ", ".join(f"#{r['id']} {r['filename']}" for r in rows[:3])
+        more = f" (+{len(rows) - 3} more)" if len(rows) > 3 else ""
+        return (f"{len(rows)} document(s) are still being processed ({names}{more}) — their "
+                f"library pages are being written right now; wait for the pass to finish, "
+                f"or pass --force")
+    return None
+
+
 def review_import(cfg: Config, conn, doc_id: int | None = None, verbose: bool = True,
-                  include_all: bool = False) -> dict:
+                  include_all: bool = False, force: bool = False) -> dict:
     """Import human corrections from the library markdown files back into the DB.
 
     The historian edits `library/.../transcription-<pal>/<stem>.md` or
@@ -2100,7 +2146,17 @@ def review_import(cfg: Config, conn, doc_id: int | None = None, verbose: bool = 
     status` reports. Stamping every library file would freeze the archive:
     a `reviewed` row is never re-processed, even by `--reprocess`. Pass
     `include_all=True` (`pha review --all`) for the deliberate blanket import.
+
+    **Safety.** A pass that is writing library pages right now (a running
+    scan/edit/reindex, or a document left `processing`) is refused unless
+    `force=True` — see `_review_busy_reason`. `include_all=True` is already the
+    deliberate blanket import, so it does not need the guard.
     """
+    if not force and not include_all:
+        reason = _review_busy_reason(cfg, conn, doc_id)
+        if reason:
+            return {"pages": 0, "edits": 0, "skipped": 0, "missing": 0,
+                    "scanned": 0, "refused": reason}
     candidates = (
         _all_review_files(cfg, doc_id) if include_all
         else pending_review_files(cfg, conn, doc_id=doc_id)

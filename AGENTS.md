@@ -245,10 +245,14 @@
   than globbing the folders yourself.
 - **Review round-trip (historians correct the files)**: the library `.md`
   files are the human review surface. A historian edits a page body; `pha
-  status` reports un-imported corrections (timestamp-based: file mtime newer
-  than the page's `exported_at`); `pha review [--doc N]` imports them into the
-  DB — **only the changed files**, which is the same pending set `pha status`
-  reports. (`--all` is the opt-in blanket import that stamps every file;
+  status` reports un-imported corrections (a file is pending when its mtime is
+  newer than the page's `exported_at` **and its body differs** from the stored
+  text — mtime alone reported machine-written pages as corrections, measured
+  2026-09-18: 435 imported when 4 were real); `pha review [--doc N]` imports
+  them into the DB — **only the changed files**, which is the same pending set
+  `pha status` reports. It **refuses** while a scan/edit/reindex holds its
+  model-server lock or a document is still `processing` (`--force` overrides;
+  `--unset` is not gated — releasing a stamp is safe mid-pass). (`--all` is the opt-in blanket import that stamps every file;
   `--unset [--doc N [--page P]]` clears the stamp again and keeps the text.)
   Correcting a `transcription-*` page fixes the palaeographer's reading:
   the page is stamped `reviewed` (`reviewed_at`), so `pha scan` never re-reads

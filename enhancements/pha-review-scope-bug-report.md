@@ -172,8 +172,15 @@ corrections and must be preserved, so no blanket `--unset` was run against it.
 
 ## 11. Addendum (2026-09-18) — the scope test still fails against a scan in progress
 
-**Status:** reproducible on 0.28.0. The §10 fix imports "only the pending set",
-and it does — but the pending test is **mtime-based per library file**, and a
+**Status: FIXED** (2026-09-21). `pha review` now refuses while a running
+scan/edit/reindex is writing library pages, or while a document is still
+`processing` (`--force` overrides), and `pending_review_files()` requires the
+**body** to differ as well as the mtime — §11.2's fix — so a machine-written
+file is never mistaken for a correction. `--unset` is deliberately NOT gated:
+releasing a stamp is safe during a pass, and often urgent.
+
+**Original report** (reproducible on 0.28.0). The §10 fix imports "only the
+pending set", and it does — but the pending test is **mtime-based per library file**, and a
 running `pha scan` *grows* the library page by page (`write_document_pages()`
 inside the page loop). So every page the scan has produced so far looks newer
 than the database's record of it and is imported and stamped as a human
