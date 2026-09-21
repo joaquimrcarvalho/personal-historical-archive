@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from personal_historical_archive import cli, db as _db, mcp_server
+from personal_historical_archive import cli, db as _db, mcp_server, serve
 from personal_historical_archive.config import Config
 from personal_historical_archive.ingest import sha256_of
 
@@ -112,6 +112,48 @@ def test_queries_work_while_another_connection_holds_the_write_lock(tmp_path):
         try:
             n = conn.execute("SELECT COUNT(*) n FROM documents").fetchone()["n"]
             assert n == 1
+        finally:
+            conn.close()
+    finally:
+        writer.rollback()
+        writer.close()
+
+
+# --------------------------------------------------------------------------- serve
+
+def test_serve_reads_read_only_and_runs_no_ddl(tmp_path, monkeypatch):
+    """`pha serve` has its own opener (`mode=ro`/`immutable=1`); assert it too."""
+    cfg = _cfg(tmp_path)
+    _seed(cfg)
+    called: list[str] = []
+    monkeypatch.setattr(_db, "migrate", lambda conn: called.append("migrate"))
+    monkeypatch.setattr(_db, "_ensure_optional_indexes",
+                        lambda conn: called.append("indexes"))
+
+    conn, degraded = serve._connect_ro(cfg.db_path)
+    try:
+        assert degraded is False
+        assert conn.execute("PRAGMA query_only").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) n FROM documents").fetchone()["n"] == 1
+        assert called == []
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute("UPDATE documents SET filename='x' WHERE id=1")
+    finally:
+        conn.close()
+
+
+def test_serve_reader_is_not_refused_by_a_writer(tmp_path):
+    """The viewer must keep answering while a scan holds the write lock."""
+    cfg = _cfg(tmp_path)
+    _seed(cfg)
+    writer = sqlite3.connect(str(cfg.db_path))
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("BEGIN IMMEDIATE")
+    try:
+        conn, degraded = serve._connect_ro(cfg.db_path)
+        try:
+            assert degraded is False
+            assert conn.execute("SELECT COUNT(*) n FROM documents").fetchone()["n"] == 1
         finally:
             conn.close()
     finally:

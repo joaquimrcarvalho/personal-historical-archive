@@ -1859,13 +1859,15 @@ def _pending_scan(conn, targets: list[tuple[int, Path]]) -> list[dict]:
     """Fast library pending check for `(document_id, library doc dir)` targets.
 
     Same verdict as the historical `library/**` walk — a page file is pending
-    when its mtime is newer than the row's `exported_at`, or, for a legacy row
-    with `exported_at` NULL, when its body differs — but the page is derived
-    from the FILE NAME (`page-NNN.md`, or the source name for a
-    directory-of-images document) and the file is only READ for those legacy
-    rows. Reading every page body is what made `pha status` spend minutes on a
-    large archive; here only directory entries and their mtimes are touched
-    (`os.scandir` stats come for free on macOS/APFS).
+    when its mtime is newer than the row's `exported_at` **and its body differs
+    from the stored text**. The body check applies to every row, not only a
+    legacy one with `exported_at` NULL: a running scan rewrites library files as
+    it works, so mtime alone reported machine-written pages as human
+    corrections (measured 2026-09-18: 435 imported when 4 were real). The page
+    is derived from the FILE NAME (`page-NNN.md`, or the source name for a
+    directory-of-images document), and the file is read only once its mtime is
+    already newer — so the common path still touches directory entries and their
+    mtimes only (`os.scandir` stats come for free on macOS/APFS).
 
     A file whose name matches no page falls back to its front matter, exactly
     like the old walk, so hand-renamed files are still caught.
