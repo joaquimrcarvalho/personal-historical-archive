@@ -654,6 +654,16 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   gitignored). `pha handoff status [--json]` / MCP `pha_handoff_status()` show
   what is out; `pha handoff cancel <id>` releases it and refuses a later
   result.
+  **The worker does not embed hand-over material** (gap G1): `import_handoff`
+  records the document set here as RECEIVED (`state: "in"` — NOT a lease, so the
+  worker still scans/edits/encodes it), and `pha scan`/`pha edit` on the worker
+  skip the index for those documents, because the return payload carries text and
+  provenance but **no vectors** — the owner's `fetch` is the only place that
+  embeds, so embedding on both machines repeats the same hours of work (measured:
+  2,676 pages twice). `pha status` shows `index deferred — received for
+  hand-over` instead of `NOT INDEXED`, `pha handoff back` reports the documents
+  returned without chunks, and the escape hatches are `pha scan --index` /
+  `pha edit --index` (one run) or `pha handoff cancel <id>` (permanent).
 - The MCP server runs on the machine that owns the dropbox and models. A
   client on another machine needs only an MCP connection — no local models or
   dropbox. Start on the archive machine with

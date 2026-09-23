@@ -1757,6 +1757,20 @@ never archive content. `pha handoff status --json` gives the machine-readable
 form, and the read-only MCP tool `pha_handoff_status()` returns the same for a
 remote agent.
 
+**The worker does not embed hand-over material.** When B imports a hand-out it
+records the document set as *received* (same file, `state: "in"`), and `pha scan`
+/ `pha edit` there **skip the index** for those documents — the index the worker
+built would never reach A (the return payload carries text and provenance, not
+vectors), so building it would repeat the same hours of embedding on both
+machines (measured: 2,676 pages embedded twice). `pha status` shows such a
+document as `index deferred — received for hand-over` instead of
+`0 chunks — NOT INDEXED`, and `pha handoff back` reports how many documents it
+returned without chunks so the omission is explicit. A received document is *not*
+a lease: the worker still scans, edits and encodes it, and `A`'s `fetch` (or a
+later `pha reindex --doc N`) builds the chunks. Two escape hatches if you do want
+chunks on B: `pha scan --index` / `pha edit --index` for one run, or
+`pha handoff cancel <id>` to release the marker permanently.
+
 ## Notes on quality & performance
 
 - Extraction is page-by-page; on an M2/24 GB, `qwen3-vl-8b` takes roughly

@@ -904,6 +904,24 @@ def library_page_path(
     return f if f.exists() else None
 
 
+def _index_deferred_reason(conn, doc_id: int, force_index: bool,
+                           defer_index: set[str] | None) -> str | None:
+    """Why this document must NOT be embedded on THIS machine, or None.
+
+    A document received for a hand-over is embedded by the OWNER when it applies
+    the result (`handoff fetch`), so embedding it here repeats the same hours of
+    work on both machines — measured on the *Monumenta Brasiliae* hand-over:
+    2 676 pages embedded twice (gap G1). `--index` overrides."""
+    if force_index or not defer_index:
+        return None
+    doc = db.get_document(conn, doc_id)
+    sha = str((doc["sha256"] if doc is not None else "") or "")
+    if sha and sha in defer_index:
+        return ("indexing deferred to the owner — this document was received for a "
+                "hand-over; pass --index to build the chunks here too")
+    return None
+
+
 def ingest_file(
     cfg: Config,
     conn,
@@ -916,6 +934,8 @@ def ingest_file(
     sidecar: Sidecar | None = None,
     pages: set[int] | None = None,
     pin: bool = True,
+    force_index: bool = False,
+    defer_index: set[str] | None = None,
 ) -> dict:
     """Extract one document (or, with `pages`, re-read exactly those pages).
 
@@ -924,7 +944,12 @@ def ingest_file(
     them; the document-level config and every other page are left alone. Each
     re-read page records its own provenance and (unless `pin=False`) is pinned,
     so a later bulk pass cannot discard it. A page whose transcription is
-    human-`reviewed` is refused, never overwritten."""
+    human-`reviewed` is refused, never overwritten.
+
+    `defer_index` holds the sha256 of documents received here for a hand-over:
+    the owner embeds them when it applies the result, so embedding here would
+    duplicate hours of work (gap G1). `force_index` (`pha scan --index`) embeds
+    them anyway."""
     path = Path(path)
     if sidecar is None:
         sidecar = _doc_sidecar(cfg, path)
@@ -1218,14 +1243,17 @@ def ingest_file(
         for pno in sorted(pages):
             res = edit_document(cfg, conn, doc_id, verbose=verbose, page_no=pno)
             edited_pages += int(res.get("pages") or 0)
-        index_error = None
-        try:
-            index_document(cfg, conn, doc_id, verbose=verbose, pages=set(pages))
-        except ModelError as e:
-            index_error = str(e)
-            if verbose:
-                print(f"  ! page(s) re-read but not re-indexed: {e} — run "
-                      f"`pha reindex --doc {doc_id}`", flush=True)
+        index_error = _index_deferred_reason(conn, doc_id, force_index, defer_index)
+        if index_error is None:
+            try:
+                index_document(cfg, conn, doc_id, verbose=verbose, pages=set(pages))
+            except ModelError as e:
+                index_error = str(e)
+                if verbose:
+                    print(f"  ! page(s) re-read but not re-indexed: {e} — run "
+                          f"`pha reindex --doc {doc_id}`", flush=True)
+        elif verbose:
+            print(f"  index deferred: {index_error}", flush=True)
         write_document_pages(cfg, conn, doc_id)
         # A page fix does not make an INCOMPLETE document complete: restore the
         # status it had. A failed page keeps its old text (the error branch of
@@ -1250,7 +1278,11 @@ def ingest_file(
         return {"action": "error", "filename": path.name, "error": page_errors[0][1]}
 
     edit_document(cfg, conn, doc_id, verbose=verbose)  # editor pass (skips if none configured)
-    index_document(cfg, conn, doc_id, verbose=verbose)  # indexes raw + edited variants
+    deferred = _index_deferred_reason(conn, doc_id, force_index, defer_index)
+    if deferred is None:
+        index_document(cfg, conn, doc_id, verbose=verbose)  # raw + edited variants
+    elif verbose:
+        print(f"  index deferred: {deferred}", flush=True)
     write_document_pages(cfg, conn, doc_id)
     if kept_pinned and verbose:
         # Not silent: a bulk pass deliberately leaves pages a targeted re-read
@@ -1277,7 +1309,10 @@ def ingest_file(
     db.set_document_status(conn, doc_id, "done", prompt_source=prompt_source)
     conn.commit()
     return {"action": "ingested", "filename": path.name, "pages": total,
-            "prompt": prompt_source, "kept_pinned": kept_pinned}
+            "prompt": prompt_source, "kept_pinned": kept_pinned,
+            # Non-None when this document was NOT embedded here (received for a
+            # hand-over: the owner embeds it — gap G1).
+            "index_deferred": deferred}
 
 
 def index_document(
@@ -2691,7 +2726,9 @@ def edit_document(
 
 
 def _index_after_edit(cfg: Config, conn, doc_id: int, edited_pages: int,
-                      verbose: bool = True, pages: set[int] | None = None) -> dict:
+                      verbose: bool = True, pages: set[int] | None = None,
+                      force_index: bool = False,
+                      defer_index: set[str] | None = None) -> dict:
     """Re-index a document the editor pass just finished.
 
     Indexing runs when the editor changed pages (their edited variant is new)
@@ -2704,6 +2741,11 @@ def _index_after_edit(cfg: Config, conn, doc_id: int, edited_pages: int,
     re-embed a whole document); indexing is already incremental, so unchanged
     chunks are reused either way.
     """
+    deferred = _index_deferred_reason(conn, doc_id, force_index, defer_index)
+    if deferred is not None:
+        if verbose:
+            print(f"  index deferred: {deferred}", flush=True)
+        return {"indexed": False, "index_deferred": deferred}
     stats = db.chunk_stats(conn, doc_id) or {}
     has_chunks = stats.get(doc_id, {}).get("chunks", 0) > 0
     if edited_pages <= 0 and has_chunks:
@@ -2720,7 +2762,7 @@ def _index_after_edit(cfg: Config, conn, doc_id: int, edited_pages: int,
 
 
 def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True,
-             page_no: int | None = None) -> dict:
+             page_no: int | None = None, force_index: bool = False) -> dict:
     """Run the editor pass for every document that has an editor configured.
 
     Takes a lock on every model-server the matched documents may talk to (plus
@@ -2729,6 +2771,7 @@ def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True,
     If another job holds a needed server, this pass reports which one and exits."""
     cfg.ensure_dirs()
     conn = db.connect(cfg.db_path)
+    defer_index = _defer_index_shas(cfg, force_index)
     lock = None
     try:
         docs = db.list_documents(conn, limit=10000)
@@ -2749,7 +2792,9 @@ def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True,
             if res.get("action") == "edited":
                 idx = _index_after_edit(cfg, conn, d["id"], res.get("pages", 0),
                                         verbose=verbose,
-                                        pages={page_no} if page_no is not None else None)
+                                        pages={page_no} if page_no is not None else None,
+                                        force_index=force_index,
+                                        defer_index=defer_index)
                 indexed += 1 if idx.get("indexed") else 0
                 if idx.get("index_error"):
                     index_failed.append(f"{d['filename']}: {idx['index_error']}")
@@ -2765,6 +2810,7 @@ def edit_documents_under(
     page_no: int | None = None, editor_override: str | None = None,
     model_override: str | None = None, pin: bool = True, dry_run: bool = False,
     unpin: bool = False, pages: set[int] | None = None,
+    force_index: bool = False,
 ) -> dict:
     """Run the editor pass for JUST the documents under a dropbox subpath
     (`pha edit --path collections/COLX`, a document folder, ...).
@@ -2801,6 +2847,7 @@ def edit_documents_under(
         print(f"  {msg}", flush=True)
         return {"results": [{"action": "error", "filename": "(edit)", "reason": msg}]}
     conn = db.connect(cfg.db_path)
+    defer_index = _defer_index_shas(cfg, force_index)
     lock = None
     try:
         matched: list[tuple] = []
@@ -2859,7 +2906,9 @@ def edit_documents_under(
             if res.get("action") == "edited":
                 idx = _index_after_edit(cfg, conn, doc["id"], res.get("pages", 0),
                                         verbose=verbose,
-                                        pages=set(pages) if pages else None)
+                                        pages=set(pages) if pages else None,
+                                        force_index=force_index,
+                                        defer_index=defer_index)
                 indexed += 1 if idx.get("indexed") else 0
                 if idx.get("index_error"):
                     index_failed.append(f"{doc['filename']}: {idx['index_error']}")
@@ -3463,6 +3512,21 @@ def encode_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> di
         conn.close()
 
 
+def _defer_index_shas(cfg: Config, force_index: bool = False) -> set[str]:
+    """sha256 of documents RECEIVED here for a hand-over — do not embed them.
+
+    The owner embeds when it applies the result, so embedding here duplicates
+    the work (gap G1). Empty when `--index` was passed, or when the feature is
+    not in use. Imported lazily: `handoff` imports this module."""
+    if force_index:
+        return set()
+    try:
+        from .handoff import incoming_shas
+        return set(incoming_shas(cfg))
+    except Exception:  # noqa: BLE001 - never let the marker machinery break a scan
+        return set()
+
+
 def _leases(cfg: Config):
     """The hand-over lease map, or {} when the feature is not in use.
 
@@ -3640,6 +3704,7 @@ def scan_once(
     dry_run: bool = False,
     unpin: bool = False,
     pin: bool = True,
+    force_index: bool = False,
 ) -> dict:
     """Scan the dropbox (or a subpath), or re-read named pages of ONE document.
 
@@ -3722,6 +3787,7 @@ def scan_once(
         return {"scanned": 0, "results": [{"action": "skipped", "filename": "(scan)",
                                            "reason": reason}]}
     conn = db.connect(cfg.db_path)
+    defer_index = _defer_index_shas(cfg, force_index)
     # vision clients per effective palaeographer (rules + model override): the
     # default is the passed client; other palaeographers get their own.
     clients: dict[tuple, tuple[ModelClient, Palaeographer]] = {
@@ -3752,7 +3818,8 @@ def scan_once(
             results.append(
                 ingest_file(cfg, conn, clients[key][0], f, clients[key][1],
                             explicit_prompt, reprocess, verbose, sidecar=sc,
-                            pages=pages, pin=pin)
+                            pages=pages, pin=pin, force_index=force_index,
+                            defer_index=defer_index)
             )
         # Refresh bibliographic references LAST, so documents added by this scan
         # are covered too. This is metadata only: it never touches page text,

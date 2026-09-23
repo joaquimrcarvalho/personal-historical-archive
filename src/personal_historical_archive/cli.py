@@ -128,7 +128,8 @@ def cmd_scan(cfg: Config, args) -> None:
                         model_override=getattr(args, "model", None),
                         dry_run=getattr(args, "dry_run", False),
                         unpin=getattr(args, "unpin", False),
-                        pin=not getattr(args, "no_pin", False))
+                        pin=not getattr(args, "no_pin", False),
+                        force_index=getattr(args, "index", False))
     finally:
         client.close()
     # a dry run / unpin prints its own report; nothing else to summarise
@@ -1183,6 +1184,17 @@ def cmd_status(cfg: Config, args) -> None:
         stats = db.chunk_stats(conn)
         pinned = db.pinned_counts(conn)
         pinned_edits = db.pinned_edit_counts(conn)
+        # Documents received here for a hand-over (the worker side). Their
+        # embedding belongs to the owner, so a document with 0 chunks is not a
+        # lost index — see the `index deferred` marker below (gap G1).
+        incoming: dict[int, object] = {}
+        try:
+            from .handoff import incoming_leases
+            incoming = {int(d["doc_id"]): lease
+                        for lease in incoming_leases(cfg)
+                        for d in lease.documents if d.get("doc_id") is not None}
+        except Exception:  # noqa: BLE001 - status must never fail on this
+            incoming = {}
         s = db.summary(conn, chunk_stats=stats)
         docs_status = s["documents"] or {}
         total_docs = sum(docs_status.values())
@@ -1326,9 +1338,15 @@ def cmd_status(cfg: Config, args) -> None:
                             meta.append(f"{cs['chunks']} chunks ({cs['embedded']} embedded)")
                             kw = True
                     elif d["status"] == "done":
-                        # `done` with no chunks at all: the document was reported
-                        # complete while its index was never written (or was lost).
-                        meta.append("0 chunks — NOT INDEXED")
+                        if incoming.get(d["id"]):
+                            # Received for a hand-over: the owner embeds it when
+                            # it applies the result, so 0 chunks HERE is the
+                            # hand-over rule working, not a lost index (G1).
+                            meta.append("index deferred — received for hand-over")
+                        else:
+                            # `done` with no chunks at all: the document was reported
+                            # complete while its index was never written (or was lost).
+                            meta.append("0 chunks — NOT INDEXED")
                     if d["status"] == "error" and d["error"]:
                         meta.append(f"error: {d['error'][:40]}")
                     if pinned.get(d["id"]):
@@ -2382,10 +2400,12 @@ def cmd_edit(cfg: Config, args) -> None:
         res = edit_documents_under(cfg, path, reprocess=args.reprocess, verbose=True,
                                    pages=pages, editor_override=editor_override,
                                    model_override=model_override, pin=pin,
-                                   dry_run=dry_run, unpin=unpin)
+                                   dry_run=dry_run, unpin=unpin,
+                                   force_index=getattr(args, "index", False))
     else:
         res = edit_all(cfg, reprocess=args.reprocess, verbose=True,
-                       page_no=min(pages) if pages else None)
+                       page_no=min(pages) if pages else None,
+                       force_index=getattr(args, "index", False))
     if dry_run:
         _print_edit_plan(res)
         return
@@ -3270,6 +3290,9 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--no-pin", action="store_true",
                    help="with --page: record provenance but do NOT pin (a later bulk "
                         "scan may overwrite the reading)")
+    s.add_argument("--index", action="store_true",
+                   help="embed even a document received here for a hand-over — by "
+                        "default the owner embeds it on `handoff fetch` (no duplicate work)")
     s.set_defaults(fn=cmd_scan)
 
     q = sub.add_parser("search", help="search the extracted text")
@@ -3531,6 +3554,9 @@ def main(argv: list[str] | None = None) -> None:
                          "(optionally --page N); the text is kept")
     e2.add_argument("--include-leased", action="store_true",
                         help="also process documents currently out on a hand-over")
+    e2.add_argument("--index", action="store_true",
+                    help="embed even a document received here for a hand-over — by "
+                         "default the owner embeds it on `handoff fetch` (no duplicate work)")
     e2.set_defaults(fn=cmd_edit)
 
     en = sub.add_parser("encoder", help="show encoder resolution for a file, or create one")

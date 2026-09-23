@@ -62,6 +62,7 @@ MANIFEST_NAME = "handoff.json"
 RESULT_NAME = "handoff-result.json"
 
 STATE_OUT = "out"
+STATE_IN = "in"          # this machine RECEIVED the document to work on (the worker)
 STATE_APPLIED = "applied"
 STATE_CANCELLED = "cancelled"
 
@@ -189,6 +190,43 @@ def leased_shas(cfg: Config) -> dict[str, Lease]:
         for sha in lease.shas():
             out.setdefault(sha, lease)
     return out
+
+
+def incoming_leases(cfg: Config) -> list[Lease]:
+    """Hand-outs this archive RECEIVED and is still working on (the worker side).
+
+    Written by `import_handoff`. An incoming marker is NOT an active out-lease:
+    the pipeline must still process these documents here (the yes/no question
+    "may I work on it" differs from "must I embed it"), so `active_leases` and
+    `leased_shas` deliberately ignore it. What it drives is the index rule —
+    the OWNER embeds when it applies the result, so embedding here duplicates
+    hours of work (gap G1). `pha handoff cancel <id>` releases the marker and
+    makes the document indexable here again.
+    """
+    d = handoff_dir(cfg)
+    if not d.is_dir():
+        return []
+    out: list[Lease] = []
+    for f in sorted(d.glob("*.json")):
+        lease = read_lease(cfg, f.stem)
+        if lease is not None and lease.state == STATE_IN:
+            out.append(lease)
+    return out
+
+
+def incoming_shas(cfg: Config) -> dict[str, Lease]:
+    """{sha256: Lease} for documents received here for a hand-over."""
+    out: dict[str, Lease] = {}
+    for lease in incoming_leases(cfg):
+        for sha in lease.shas():
+            out.setdefault(sha, lease)
+    return out
+
+
+def incoming_for_document(cfg: Config, doc) -> Lease | None:
+    """The incoming hand-over holding this document (a row or a dict), if any."""
+    sha = (doc["sha256"] if doc is not None else None) or ""
+    return incoming_shas(cfg).get(str(sha)) if sha else None
 
 
 def lease_for_document(cfg: Config, doc, conn=None) -> Lease | None:
@@ -602,11 +640,34 @@ def import_handoff(
         conn.commit()
     finally:
         conn.close()
+    # Mark this document set as RECEIVED here (state "in"). The worker scans and
+    # edits it but must not embed it: the owner re-indexes when it applies the
+    # result, so embedding on both machines is the same hours of work twice
+    # (gap G1). `pha handoff cancel <id>` releases the marker.
+    marker = None
+    existing = read_lease(cfg, handoff_id) if handoff_id else None
+    if handoff_id and (doc_results := [r for r in results if r.get("sha256")]):
+        if existing is not None and existing.state == STATE_OUT:
+            # Importing a payload into the archive that CREATED it: keep the
+            # out-lease, which is the authoritative record of what is lent.
+            if verbose:
+                print(f"  ! this archive created {handoff_id}; keeping its "
+                      f"out-lease (not marking it received)", file=sys.stderr)
+        else:
+            marker = write_lease(cfg, Lease(
+                handoff_id=handoff_id,
+                worker=str(payload.get("worker") or ""),
+                state=STATE_IN,
+                created_at=float(payload.get("created_at") or time.time()),
+                documents=[{"sha256": r["sha256"], "relpath": r.get("relpath"),
+                            "doc_id": r["id"]} for r in doc_results],
+            ))
     return {
         "handoff_id": handoff_id,
         "installed_defs": installed,
         "dropbox": {"copied": copied, "skipped": skipped},
         "documents": results,
+        "incoming_marker": str(marker) if marker else None,
     }
 
 
@@ -726,6 +787,7 @@ def _import_one(cfg: Config, conn, handoff_dir_path: Path, doc: dict,
         )
     return {
         "id": doc_id,
+        "sha256": str(doc.get("sha256") or ""),
         "relpath": rel,
         "status": status,
         "pages_done": int(have),
@@ -807,11 +869,17 @@ def build_result(
                 )
             ]
             records = _records_payload(conn, int(doc["id"]))
+            doc_chunks = (db.chunk_stats(conn, int(doc["id"])) or {}).get(
+                int(doc["id"]), {}).get("chunks", 0)
             docs_out.append({
                 "relpath": d.get("relpath"),
                 "sha256": sha,
                 "status": doc["status"],
                 "page_count": int(doc["page_count"] or 0),
+                # Chunks built HERE. 0 is the expected value while the document is
+                # under an incoming hand-over marker: the owner embeds on fetch
+                # (gap G1), so a 0 here is a deliberate omission, not a failure.
+                "chunks": int(doc_chunks),
                 "palaeographer": doc["palaeographer"],
                 "palaeographer_model": doc["palaeographer_model"],
                 "editor": doc["editor"],
@@ -837,6 +905,10 @@ def build_result(
                 1 for d in docs_out for p in d["pages"] if p["reviewed_at"]
             ),
             "records": sum(len(d["records"]) for d in docs_out),
+            # Documents returned with NO chunks built here: the deliberate
+            # omission the owner must make good with `pha reindex --doc N`
+            # (or `handoff fetch`, which indexes unless told otherwise).
+            "index_omitted": sum(1 for d in docs_out if not d.get("chunks")),
         }
         if dry_run:
             return {"handoff_id": handoff_id, "dry_run": True, "counts": counts,
@@ -869,6 +941,10 @@ def build_result(
             )
             for m in missing:
                 print(f"  ! {m}: not in this archive; skipped", flush=True)
+            if counts.get("index_omitted"):
+                print(f"  index: no chunks built on this machine for "
+                      f"{counts['index_omitted']} document(s) (the owner embeds them "
+                      f"when it applies this result — the hand-over rule)", flush=True)
         return {"handoff_id": handoff_id, "out": str(out), "counts": counts,
                 "missing": missing}
     finally:
