@@ -12,10 +12,10 @@ Shipped: stable page addresses, page navigation, stage filters, endpoint-scoped
 locking, per-document bibliographic references, scan resilience, **two-machine
 hand-over** (in `main` since 0.29.0), **single-page re-scan**, the
 **untranslated-Latin enablers** (`thinking:` on a rules file, plus the
-effective parameters in `pha editor`/`pha palaeographer`) and the **per-page
-edit override**. Open: **three
-live defects** (archive-pointer resolution, the untranslated-Latin editor's
-remaining asks, and the hand-over gaps G1/G3/G5), **four feature
+effective parameters in `pha editor`/`pha palaeographer`), the **per-page
+edit override** and the **hand-over workflow gaps G1/G3/G5**. Open: **two
+live defects** (archive-pointer resolution and the untranslated-Latin
+editor's remaining asks), **four feature
 requests** (post-filter replay, notes search, `extends`, the encoder prescan)
 and **four proposals awaiting a decision**.
 
@@ -29,7 +29,7 @@ stable IDs referenced from the prose, not ranks.
 | **3** | [`pha-review-scope-bug-report.md`](pha-review-scope-bug-report.md) §11 | **FIXED** (2026-09-21) — the import refuses while a pass writes or a document is `processing` (`--force` overrides), and "pending" now needs a body change, not just an mtime |
 | — | [`pha-latin-not-translated-thinking-disabled-bug-report.md`](pha-latin-not-translated-thinking-disabled-bug-report.md) | **pha side FIXED** (2026-09-21) — a rules file may now set `thinking:` (stage-level, beats the model sheet) and `pha editor`/`pha palaeographer` print the effective parameters. F1 is an archive-side prompt change; F3 (page-range editors) and F5 (a language guard) remain open. Original impact: `thinking: disabled` + an all-Latin page = untranslated text stored as `done`; ~1 300 pages measured |
 | — | [`pha-archive-pointer-loss-bug-report.md`](pha-archive-pointer-loss-bug-report.md) | **OPEN (partly mitigated).** Location trace + `archive_source` shipped; D1/D2/D5 remain |
-| — | [`pha-handover-editing-workflow-enhancement-request.md`](pha-handover-editing-workflow-enhancement-request.md) | **OPEN** — G1 (double embedding), G3 (`fetch` cannot wait), G5 (`work --pages/--resume`). **G2/G4/G6 fixed** (G6: query commands now open the DB read-only, so a writer cannot refuse them) |
+| — | [`pha-handover-editing-workflow-enhancement-request.md`](pha-handover-editing-workflow-enhancement-request.md) | **ALL SIX GAPS FIXED (2026-09-23).** G1 the machine holding a RECEIVED hand-over no longer embeds it (`import_handoff` writes a worker-side marker, `scan`/`edit` skip `index_document` unless `--index`, `handoff back` reports the unbuilt chunks and `pha status` says `index deferred`); G2 incremental, page-scopable indexing; G3 `handoff fetch` applies WITHOUT the embedding lock (it only ever needed it for the re-index it folded in) and names the reindex command, plus a bounded `--wait[=SECONDS]`/`PHA_LOCK_WAIT` queue on the lock-taking commands; G4 `deadline_s` + the stall batch rule; G5 `pha handoff work --pages N[,M] --resume` (STATELESS: planned from the worker's DB, no progress file); G6 query commands open the DB read-only, so a writer cannot refuse them |
 | 4 | [`pha-post-filter-replay-enhancement-request.md`](pha-post-filter-replay-enhancement-request.md) | Draft — **now unblocked** (#1 is fixed); procedure already proven by hand |
 | 6 | [`pha-notes-search-enhancement-request.md`](pha-notes-search-enhancement-request.md) | Draft — independent, no-op when the notes index is empty |
 | 10 | `extends`, encoder prescan | Draft — **re-measure before building**; filters shrank both |
