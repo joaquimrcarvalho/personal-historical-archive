@@ -1,6 +1,8 @@
-# Enhancement request — hand-over and per-page editing: five workflow gaps, measured
+# Enhancement request — hand-over and per-page editing: six workflow gaps, measured
 
-**Status:** draft for decision. **Written:** 2026-09-22, from a real hand-over:
+**Status:** **ALL SIX GAPS FIXED** (2026-09-23, pha 0.35.0 — the `Status: FIXED`
+lines below name the mechanism and the gap). Kept as the record of what was
+measured and specified. **Written:** 2026-09-22, from a real hand-over:
 4 volumes of *Monumenta Brasiliae* (2 676 pages) processed on a Mac Mini and
 applied back on the owner's MacBook. Every number below was measured, not
 estimated.
@@ -31,6 +33,16 @@ on the MacBook minutes later — hours of local embedding work spent twice.
 
 `handoff back` should report how many chunks were deliberately left unbuilt, so
 the omission is visible rather than assumed.
+
+**Status: FIXED** (2026-09-23, pha 0.35.0). `import_handoff` records the set on the
+worker as RECEIVED (`<archive>/.pha/handoffs/<id>.json`, `state: "in"`), which is
+NOT a lease — the worker still scans, edits and encodes the document. `scan` and
+`edit` there skip the index for those documents (the return payload carries no
+vectors, so the worker's index could never reach the owner); `--index` overrides
+for one run and `pha handoff cancel <id>` releases the marker permanently.
+`handoff back` carries `chunks` per document plus an `index_omitted` count and
+says it in the output, and `pha status` shows `index deferred — received for
+hand-over` instead of `0 chunks — NOT INDEXED`.
 
 ## G2 — a single-page edit re-indexes the whole document
 
@@ -88,6 +100,17 @@ and how long it has been held, and keep `--no-wait` as today's default. The
 hand-over is the motivating case: applying results should never demand that the
 owner interrupt work in progress.
 
+**Status: FIXED** (2026-09-23, pha 0.35.0), with a different split than proposed. The lock
+existed only because the apply folded in a re-index: merging rows, rewriting the
+library files and rebuilding missing renders touch no model at all. So the
+default `handoff fetch` takes **no lock** (it can no longer be refused by a
+running scan) and prints the exact `pha reindex --doc N …`, reporting
+`indexed`/`index_doc_ids` for agents; `fetch --index` embeds in the same command
+and does take the lock. `--wait[=SECONDS]` (and `PHA_LOCK_WAIT`) was added on
+`scan`/`edit`/`reindex`/`handoff fetch` for the general case, with a mandatory
+ceiling (bare `--wait` = 300 s, `--no-wait` overrides the env) because the
+embedding endpoint is often the same LM Studio that serves the scan's model.
+
 ## G4 — model-call stalls are unbounded inside a per-page loop
 
 `timeout_s` is per httpx *operation*, not per request (see
@@ -130,7 +153,70 @@ extending it (or adding a `--pages` / `--resume` form) would let the *entire*
 worker job be a single pha command, run by the worker, with no external
 orchestration.
 
+**Status: FIXED** (2026-09-23, pha 0.35.0). `pha handoff work --pages N[,M] --resume` runs
+the whole worker job. `--resume` is STATELESS: `plan_work` reads the worker's own
+database, so an interrupted page list continues and a document with nothing
+missing is not touched at all. There is no progress file. A named page without
+`--resume` stays a deliberate re-do, and human-corrected pages are reported as
+kept rather than re-run.
+
+## G6 — a read-only config query is refused while another job writes
+
+`pha config --doc N` (or `--path`) answers the most basic question one can ask of
+an archive — *how is this document configured?* During this hand-over it was
+refused while a long `pha scan` was running:
+
+```
+the archive database is busy: another pha job (scan / edit / encode / review /
+reindex) is writing right now. Wait for it to finish, then run the command again.
+```
+
+The per-stage forms kept working during the same scan — `pha editor <file>`,
+`pha palaeographer <file>`, `pha encoder <file>` — which is how the gap was
+noticed: the information *is* reachable, just not through the command that
+answers it directly.
+
+The refusal is stricter than the operation requires. `config`'s writes are
+opt-in (`--write` generates a missing `pha.yaml`); the plain query touches
+nothing. And the database is already opened in WAL mode
+(`PRAGMA journal_mode=WAL`, `db.connect`), where a reader does not block a writer
+and is not blocked by one. Callers that need a snapshot without touching the
+write-ahead log already do exactly this: the MCP server and the DSH plugin open
+`archive.db` **read-only, `immutable=1`** (`dsh-pha/README.md`).
+
+**Spec.**
+
+- The read-only forms of `config` (and the sibling queries `palaeographer`,
+  `editor`, `encoder`, `prompts`) must not be gated on the busy flag; only
+  `--write` needs it.
+- Where a query needs a consistent snapshot, read it from the WAL database
+  read-only rather than refusing.
+- The same question applies to `pha info --json`, which the DSH plugin uses for
+  archive discovery: it is documented as "reads only the config, opens no DB",
+  and should stay that way under any concurrency.
+
+This is the read-side twin of **G3** (a *write* command that should wait instead
+of refusing) and of **G4** (a page that should be abandoned instead of blocking
+the run). All three come from the same measured property of this archive: a job
+that runs for hours holds the whole tool shut.
+
+**Status: FIXED** (pha 0.34.0; hardened in 0.34.1). `db.connect(readonly=True)`
+runs no schema work on connect and sets `PRAGMA query_only=ON`, so `status`,
+`search`, `page`, `cite`, `config`, `pending`, `serve` and every FastMCP query
+tool answer while another job writes; only the write paths keep the busy gate.
+0.34.1 added the matching discipline on the query side: a read-only command must
+never reference a column a newer pha adds, because no migration ran
+(`db.row_get`/`db.has_column`) — `pha status` had met an archive whose
+`page_edits.pinned_at` did not exist yet.
+
 ## Acceptance criteria
+
+**All six are met** (2026-09-23, pha 0.35.0): 1 and 5 by the worker marker plus
+`handoff work --pages/--resume` (G1/G5); 2 by incremental, page-scopable indexing
+(G2); 3 by removing the embedding lock from the apply path altogether — `fetch`
+is never refused, and `--index` (like any lock-taking command) can queue with
+`--wait` up to a ceiling; 4 by `deadline_s` and the stall batch rule (G4); 6 by
+read-only connections for the query commands (G6).
 
 1. A hand-over of an unscanned document builds **no** chunks on the worker and
    complete chunks on the owner; `handoff back` states the deliberate omission.
@@ -140,6 +226,8 @@ orchestration.
 4. A stalled page cannot hold a batch run past its deadline; the run continues
    and names the page it abandoned.
 5. The whole worker job is expressible as one pha command.
+6. `pha config --doc N` (without `--write`) answers **while** another job is
+   writing; only the write form is gated.
 
 ## Relation to existing documents
 
