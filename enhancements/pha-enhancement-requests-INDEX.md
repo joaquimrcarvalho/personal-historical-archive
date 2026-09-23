@@ -4,10 +4,13 @@ Design/spec docs (drafts) for additions to **pha**, written while working on the
 **Documenta Indica** collection. Statuses below are verified against the code,
 and each doc's own header has been brought in line with this index (2026-09-21).
 
-**Current: pha 0.34.1** (the single-page re-scan, the review-safety and
-read-only-connect fixes, `thinking:` on a rules file and the per-page edit
-override all landed in 0.34.0; 0.34.1 fixes `pha status` on an archive the new
-per-page columns had not reached yet).
+**Current: pha 0.35.0.** 0.34.0 carried the single-page re-scan, the
+review-safety and read-only-connect fixes, `thinking:` on a rules file and the
+per-page edit override; 0.34.1 fixed `pha status` on an archive the new
+per-page columns had not reached yet; 0.35.0 closes the hand-over workflow's
+six gaps (the worker no longer embeds what it received, `handoff fetch`
+applies without the embedding lock and a bounded `--wait` queues instead of
+refusing, and `handoff work --pages/--resume` is one command).
 Shipped: stable page addresses, page navigation, stage filters, endpoint-scoped
 locking, per-document bibliographic references, scan resilience, **two-machine
 hand-over** (in `main` since 0.29.0), **single-page re-scan**, the
