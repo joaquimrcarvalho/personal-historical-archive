@@ -165,7 +165,12 @@
   results and a `note` instead of loading the embed model (`--force` embeds
   anyway). Read-only commands (`status`, `search`, `page`, `cite`, `config`,
   `pending`, and the FastMCP query tools) open the DB read-only — no schema work
-  on connect — so a running job cannot refuse them. **`pha reindex` belongs in
+  on connect — so a running job cannot refuse them. **Consequence: a query
+  command must never reference a column a newer pha adds**, because no
+  migration ran — read such a column through `db.row_get(row, "<col>")` and
+  guard a whole-table check with `db.has_column(conn, "<table>", "<col>")`
+  (0.34.1: `pha status` failed with "no such column: pe.pinned_at" on every
+  archive that had not been written to since the per-page columns landed). **`pha reindex` belongs in
   that set because re-embedding loads the embed model** — running it alongside a scan/edit is what times out `embed()`
   (see the vector-loss incident in
   `enhancements/pha-embed-loss-bug-report.md`).

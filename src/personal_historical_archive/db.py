@@ -510,7 +510,12 @@ def clear_page_pins(conn: sqlite3.Connection, doc_id: int, page_no: int | None =
 
 
 def pinned_counts(conn: sqlite3.Connection) -> dict[int, int]:
-    """{document_id: number of pinned pages} — for the `pha status` summary."""
+    """{document_id: number of pinned pages} — for the `pha status` summary.
+
+    `{}` on an archive whose DB predates the pin column (read-only commands run
+    no migration)."""
+    if not has_column(conn, "pages", "pinned_at"):
+        return {}
     return {int(r["document_id"]): int(r["n"]) for r in conn.execute(
         "SELECT document_id, COUNT(*) n FROM pages WHERE pinned_at IS NOT NULL "
         "GROUP BY document_id"
@@ -604,6 +609,26 @@ def document_pages(conn: sqlite3.Connection, doc_id: int) -> list[sqlite3.Row]:
 _UNSET = object()
 
 
+def row_get(row, key: str, default=None):
+    """`row[key]`, or `default` when the column is absent from the result.
+
+    A READ-ONLY connection deliberately runs no migration (gap G6), so a query
+    command must never assume a column that a newer pha adds is already present
+    in an archive whose last write pass predates it. Without this, `pha status`
+    failed with "no such column: pe.pinned_at" on every not-yet-migrated
+    archive (0.34.0 regression).
+    """
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return default
+
+
+def has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """Does `table` have `column` in THIS database? (Schema queries only.)"""
+    return any(r[1] == column for r in conn.execute(f"PRAGMA table_info({table})"))
+
+
 def get_page_edit(
     conn: sqlite3.Connection, page_id: int, editor: str
 ) -> sqlite3.Row | None:
@@ -687,7 +712,10 @@ def pinned_edit_for_page(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row 
 
     A page carries at most one deliberate per-page reading; picking the newest
     pin keeps the answer deterministic if a page was pinned, unpinned in text
-    only, and pinned again."""
+    only, and pinned again. None on an archive whose DB predates the pin column
+    (a read-only command runs no migration — there are no pins there)."""
+    if not has_column(conn, "page_edits", "pinned_at"):
+        return None
     return conn.execute(
         "SELECT * FROM page_edits WHERE page_id = ? AND pinned_at IS NOT NULL "
         "ORDER BY pinned_at DESC LIMIT 1", (page_id,)).fetchone()
@@ -733,13 +761,13 @@ def effective_edits_for_document(
         by_page.setdefault(int(r["page_id"]), []).append(r)
     out: list[sqlite3.Row] = []
     for page_id, group in by_page.items():
-        reviewed = [r for r in group if r["reviewed_at"] is not None]
-        pinned = [r for r in group if r["pinned_at"] is not None]
+        reviewed = [r for r in group if row_get(r, "reviewed_at") is not None]
+        pinned = [r for r in group if row_get(r, "pinned_at") is not None]
         chosen = None
         if reviewed:
-            chosen = max(reviewed, key=lambda r: (r["reviewed_at"], r["updated_at"] or 0))
+            chosen = max(reviewed, key=lambda r: (row_get(r, "reviewed_at"), r["updated_at"] or 0))
         elif pinned:
-            chosen = max(pinned, key=lambda r: (r["pinned_at"], r["updated_at"] or 0))
+            chosen = max(pinned, key=lambda r: (row_get(r, "pinned_at"), r["updated_at"] or 0))
         else:
             chosen = next((r for r in group if r["editor"] == editor), None)
         if chosen is not None:
@@ -772,7 +800,12 @@ def clear_edit_pins(conn: sqlite3.Connection, doc_id: int, page_no: int | None =
 
 
 def pinned_edit_counts(conn: sqlite3.Connection) -> dict[int, int]:
-    """{document_id: number of pinned page edits} — for the `pha status` summary."""
+    """{document_id: number of pinned page edits} — for the `pha status` summary.
+
+    `{}` on an archive whose DB predates the pin column (read-only commands run
+    no migration), so `pha status` still answers instead of raising."""
+    if not has_column(conn, "page_edits", "pinned_at"):
+        return {}
     return {int(r["document_id"]): int(r["n"]) for r in conn.execute(
         "SELECT p.document_id, COUNT(*) n FROM page_edits pe JOIN pages p ON p.id = pe.page_id "
         "WHERE pe.pinned_at IS NOT NULL GROUP BY p.document_id"

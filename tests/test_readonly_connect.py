@@ -161,6 +161,71 @@ def test_serve_reader_is_not_refused_by_a_writer(tmp_path):
         writer.close()
 
 
+# --------------------------------------------------------------------------- old schema
+
+# Columns 0.34.0 added for the per-page overrides (scan + edit). A read-only
+# command runs NO migration, so it must answer on an archive whose DB predates
+# them — this is the regression that broke `pha status` ("no such column:
+# pe.pinned_at") for every archive that had not run a write pass since 0.34.0.
+_PRE_034_COLUMNS = (
+    ("pages", "palaeographer"), ("pages", "palaeographer_model"), ("pages", "pinned_at"),
+    ("page_edits", "editor_model"), ("page_edits", "pinned_at"),
+)
+
+
+def _drop_new_columns(cfg: Config) -> None:
+    """Make the DB look like one written by pha < 0.34.0."""
+    conn = sqlite3.connect(str(cfg.db_path))
+    try:
+        for table, col in _PRE_034_COLUMNS:
+            conn.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_read_only_commands_survive_a_pre_034_schema(tmp_path, capsys):
+    cfg = _cfg(tmp_path)
+    doc = _seed(cfg)
+    # give the document an editor and one edited page, then take the 0.34.0
+    # columns away: this is the state of every archive that has not been
+    # written to since the update.
+    conn = _db.connect(cfg.db_path)
+    try:
+        _db.update_document(conn, doc, editor="french-ocr", editor_model="deepseek-v4-flash")
+        pid = conn.execute("SELECT id FROM pages WHERE document_id=? AND page_no=1",
+                           (doc,)).fetchone()["id"]
+        _db.set_page_edit(conn, pid, "french-ocr", text="edited text")
+        conn.commit()
+    finally:
+        conn.close()
+    _drop_new_columns(cfg)
+
+    cli.cmd_status(cfg, SimpleNamespace())
+    cli.cmd_pending(cfg, SimpleNamespace(doc=None, json=True))
+    cli.cmd_page(cfg, SimpleNamespace(doc=str(doc), page=1, edited=True, editor=None,
+                                      json=True))
+    cli.cmd_cite(cfg, SimpleNamespace(doc=str(doc), page=1, edited=False, editor=None,
+                                      palaeographer=None, json=True))
+
+    import asyncio
+    fns = {t.name: t.fn for t in asyncio.run(mcp_server.make_server(cfg).list_tools())}
+    page = fns["pha_get_page"](doc, 1)
+    assert page["edited_served"]["editor"] == "french-ocr"   # no crash, honest answer
+    assert page["edited_served"]["pinned"] is False
+    capsys.readouterr()
+
+    # a WRITE connection migrates the columns back, and the feature works again
+    conn = _db.connect(cfg.db_path)
+    try:
+        ecols = {r[1] for r in conn.execute("PRAGMA table_info(page_edits)")}
+        pcols = {r[1] for r in conn.execute("PRAGMA table_info(pages)")}
+        assert {"editor_model", "pinned_at"} <= ecols
+        assert {"palaeographer", "palaeographer_model", "pinned_at"} <= pcols
+    finally:
+        conn.close()
+
+
 # --------------------------------------------------------------------------- call sites
 
 def _spy_connect(monkeypatch):

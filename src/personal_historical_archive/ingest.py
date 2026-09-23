@@ -1946,14 +1946,18 @@ def _pending_scan(conn, targets: list[tuple[int, Path]]) -> list[dict]:
         writer and `pha page` use: a human's reading, else a per-page override,
         else the row of the variant folder's editor. Without this a page
         overridden by another editor would read as pending forever (its
-        override row's `exported_at` is never the folder editor's)."""
+        override row's `exported_at` is never the folder editor's).
+
+        Column access goes through `db.row_get`: read-only commands run no
+        migration, so on an archive older than the pin column this must still
+        answer (0.34.0 regression)."""
         group = edits.get(page_id) or []
-        reviewed = [r for r in group if r["reviewed_at"] is not None]
+        reviewed = [r for r in group if db.row_get(r, "reviewed_at") is not None]
         if reviewed:
-            return max(reviewed, key=lambda r: r["reviewed_at"])
-        pinned = [r for r in group if r["pinned_at"] is not None]
+            return max(reviewed, key=lambda r: db.row_get(r, "reviewed_at"))
+        pinned = [r for r in group if db.row_get(r, "pinned_at") is not None]
         if pinned:
-            return max(pinned, key=lambda r: r["pinned_at"])
+            return max(pinned, key=lambda r: db.row_get(r, "pinned_at"))
         return next((r for r in group if (r["editor"] or "") == (editor or "")), None)
 
     def edit_body(row) -> str:

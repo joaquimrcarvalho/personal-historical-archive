@@ -336,8 +336,8 @@ def cmd_page(cfg: Config, args) -> None:
             if e is not None and e["text"]:
                 text = e["text"]
                 editor_id = e["editor"]
-                edit_model = e["editor_model"]
-                edit_pinned = bool(e["pinned_at"])
+                edit_model = db.row_get(e, "editor_model")
+                edit_pinned = bool(db.row_get(e, "pinned_at"))
             else:
                 print(f"no edited text for page {args.page} (editor {editor_id})"
                       f" — run: {edit_hint}",
@@ -366,10 +366,10 @@ def cmd_page(cfg: Config, args) -> None:
             # Per-page reading provenance: a targeted re-read (`pha scan --page N`)
             # records the pair that read THIS page and pins it. They are None on a
             # page read by the document's configured pair.
-            "page_palaeographer": page["palaeographer"],
-            "page_model": page["palaeographer_model"],
-            "pinned": bool(page["pinned_at"]),
-            "reviewed": bool(page["reviewed_at"]),
+            "page_palaeographer": db.row_get(page, "palaeographer"),
+            "page_model": db.row_get(page, "palaeographer_model"),
+            "pinned": bool(db.row_get(page, "pinned_at")),
+            "reviewed": bool(db.row_get(page, "reviewed_at")),
             # Per-page EDIT provenance: the editor/model that produced the served
             # edited text, and whether it is a deliberate per-page override.
             "page_editor": editor_id if edited else None,
@@ -483,8 +483,8 @@ def cmd_cite(cfg: Config, args) -> None:
         # per page (`pha scan --page N --palaeographer X` / `pha edit --page N
         # --editor X --model Y`) keeps the document's variant FOLDER but carries
         # its own pair, so label it from the page, not from the folder name.
-        page_pair = {"palaeographer": page["palaeographer"] or doc["palaeographer"],
-                     "palaeographer_model": (page["palaeographer_model"]
+        page_pair = {"palaeographer": db.row_get(page, "palaeographer") or doc["palaeographer"],
+                     "palaeographer_model": (db.row_get(page, "palaeographer_model")
                                              or doc["palaeographer_model"])}
         edit_row = None
         if stage == "edited" and not args.editor:
@@ -492,8 +492,10 @@ def cmd_cite(cfg: Config, args) -> None:
             if edit_row is not None and edit_row["text"]:
                 label = addresses.variant_label(
                     f"edited-{edit_row['editor']}"
-                    + (f"@{edit_row['editor_model']}" if edit_row["editor_model"] else ""))
-        elif stage == "transcription" and not args.palaeographer and page["palaeographer"]:
+                    + (f"@{db.row_get(edit_row, 'editor_model')}"
+                       if db.row_get(edit_row, "editor_model") else ""))
+        elif (stage == "transcription" and not args.palaeographer
+              and db.row_get(page, "palaeographer")):
             label = addresses.variant_label(
                 f"transcription-{page_pair['palaeographer']}"
                 + (f"@{page_pair['palaeographer_model']}" if page_pair["palaeographer_model"]
@@ -523,11 +525,13 @@ def cmd_cite(cfg: Config, args) -> None:
             "filled": True,
             # Per-page provenance of the cited reading (None when the document's
             # own pair produced it), so a client can see a page-level override.
-            "page_palaeographer": page["palaeographer"],
-            "page_model": page["palaeographer_model"],
+            "page_palaeographer": db.row_get(page, "palaeographer"),
+            "page_model": db.row_get(page, "palaeographer_model"),
             "page_editor": (edit_row["editor"] if edit_row is not None else None),
-            "page_editor_model": (edit_row["editor_model"] if edit_row is not None else None),
-            "edit_pinned": bool(edit_row is not None and edit_row["pinned_at"]),
+            "page_editor_model": (db.row_get(edit_row, "editor_model")
+                                  if edit_row is not None else None),
+            "edit_pinned": bool(edit_row is not None
+                                and db.row_get(edit_row, "pinned_at")),
             "file": variant["file"],
             "render": str(render) if render else None,
             "render_exists": render is not None,

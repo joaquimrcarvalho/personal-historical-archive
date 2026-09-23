@@ -200,12 +200,15 @@ def make_server(cfg: Config) -> FastMCP:
             # page's own reading pair, so a client cites the reading it read.
             eff = db.effective_edit_for_page(conn, page["id"], doc["editor"])
             out["edited_served"] = ({
-                "editor": eff["editor"], "model": eff["editor_model"], "text": eff["text"],
-                "pinned": bool(eff["pinned_at"]), "reviewed": bool(eff["reviewed_at"]),
+                "editor": eff["editor"], "model": db.row_get(eff, "editor_model"),
+                "text": eff["text"], "pinned": bool(db.row_get(eff, "pinned_at")),
+                "reviewed": bool(db.row_get(eff, "reviewed_at")),
             } if eff is not None else None)
-            out["page_palaeographer"] = page["palaeographer"] or doc["palaeographer"]
-            out["page_model"] = page["palaeographer_model"] or doc["palaeographer_model"]
-            out["pinned"] = bool(page["pinned_at"])
+            out["page_palaeographer"] = (db.row_get(page, "palaeographer")
+                                        or doc["palaeographer"])
+            out["page_model"] = (db.row_get(page, "palaeographer_model")
+                                 or doc["palaeographer_model"])
+            out["pinned"] = bool(db.row_get(page, "pinned_at"))
             # encoded records for this page (source is the page number)
             recs = conn.execute(
                 "SELECT id, encoder, kind, data FROM records WHERE document_id=? AND source=?",
