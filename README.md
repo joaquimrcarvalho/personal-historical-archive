@@ -1158,7 +1158,9 @@ pha handoff out TARGET... [--out DIR] [--worker NAME] [--force] [--force-inbox]
                                              #   TARGET: a dropbox path, or inbox/<rel>
                                              #   (moved into the dropbox first)
 pha handoff in DIR                           # (worker) import a hand-out and leave it resumable
-pha handoff work DIR [--dry-run]             # (worker) scan -> edit -> encode the lent docs
+pha handoff work DIR [--pages N[,M]] [--resume] [--dry-run]
+                          # (worker) scan -> edit -> encode the lent docs;
+                          #   --pages names pages; --resume works only what is missing
 pha handoff back DIR [--out DIR] [--dry-run] # (worker) build the return payload
 pha handoff fetch DIR [--dry-run] [--index]  # (owner) merge the returned work into the same doc
                           #   (--index also embeds; default: apply + print `pha reindex`)
@@ -1718,10 +1720,26 @@ rebuilds any that are missing with the sidecar's settings — the same thing
 `pha render [--path … | --doc N]` does on demand. Renders are a derived cache,
 so byte-identity across machines is deliberately not required.
 
-`work` is only a convenience: it runs `pha scan --path …`, `pha edit --path …`
-and `pha encode --path …` in order, printing each stage's own result. Run those
-commands yourself (with `--pages`, `--reprocess`, `--page`, whatever the job
-needs) when you want control — nothing about `pha handoff` requires `work`.
+`work` is a convenience wrapper: it runs `pha scan --path …`, `pha edit --path …`
+and `pha encode --path …` in order, printing each stage's own result. It can
+run the whole worker job as ONE command:
+
+```bash
+pha handoff work ~/x/DI.pha-handoff --pages 12,337 --resume
+```
+
+- `--pages N[,M]` names the pages to work (repeatable or comma-separated).
+- `--resume` works **only what is still missing**: it is planned from the
+  worker's own database, so an interrupted page list continues exactly where
+  it stopped and a document that is already complete is not touched at all.
+  There is no progress file to keep in sync, and pages a human has corrected
+  on the worker are reported as kept, never re-read. Without `--resume`, a
+  named page is a deliberate re-do.
+- `--dry-run` prints the exact commands and runs nothing.
+
+Run the stages yourself (with `--reprocess`, `--editor`, whatever the job
+needs) when you want finer control — nothing about `pha handoff` requires
+`work`.
 
 What travels:
 

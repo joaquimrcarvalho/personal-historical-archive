@@ -2067,27 +2067,65 @@ def cmd_handoff(cfg: Config, args) -> None:
 
     elif sub == "work":
         target = Path(args.directory)
+        pages = _parse_pages(getattr(args, "pages", None))
+        resume = bool(getattr(args, "resume", False))
         try:
-            manifest = _ho.read_manifest(target)
+            plan = _ho.plan_work(cfg, target, pages=pages, resume=resume)
         except _ho.HandoffError as e:
             _fail(e)
-        paths = [str(d.get("relpath")) for d in manifest.get("documents") or []]
-        if not paths:
+        if not plan:
             print("nothing to work", file=sys.stderr)
             sys.exit(2)
+
+        def _cmd(relpath: str, stage: str, page_list) -> list[str]:
+            argv = [sys.executable, "-m", "personal_historical_archive", stage,
+                    "--path", relpath]
+            for n in page_list or []:
+                argv += ["--page", str(n)]
+            return argv
+
+        # `--resume` plans from the DB (no progress file), so a re-run after an
+        # interruption names only the pages that still need each pass and skips
+        # a document that is already complete. A named page WITHOUT --resume is
+        # a deliberate re-do: both passes get the whole list.
+        runs: list[list[str]] = []
+        for entry in plan:
+            rel = entry["relpath"]
+            if entry.get("reason"):
+                print(f"  ! {rel}: {entry['reason']}", file=sys.stderr)
+                continue
+            kept = entry.get("kept_reviewed") or []
+            kept_edits = entry.get("kept_edits") or []
+            if resume and not entry["scan_pages"] and not entry["edit_pages"]:
+                print(f"  = {rel}: nothing to do (resume; "
+                      f"{len(kept) + len(kept_edits)} human-corrected page(s) kept)")
+                continue
+            if pages:
+                missing = sorted(set(entry["scan_pages"]) | set(entry["edit_pages"]))
+                human = len(kept) + len(kept_edits)
+                print(f"  {rel}: {'resuming' if resume else 'working'} "
+                      f"{len(missing)} of {len(pages)} named page(s)"
+                      + (f", keeping {human} human-corrected" if human else ""))
+            if entry["scan_pages"] or not pages:
+                runs.append(_cmd(rel, "scan", entry["scan_pages"] if pages else None))
+            if entry["edit_pages"] or (not pages and entry["edit_pages"] is not None):
+                runs.append(_cmd(rel, "edit", entry["edit_pages"] if pages else None))
+            runs.append(_cmd(rel, "encode", None))
+
         if getattr(args, "dry_run", False):
-            print("would run, for each document:")
-            for p in paths:
-                print(f"  pha scan --path {p} && pha edit --path {p} && pha encode --path {p}")
+            print("would run, in order:")
+            for argv in runs:
+                print(f"  pha {' '.join(argv[3:])}")
+            return
+        if not runs:
+            print("nothing to run")
             return
         print("running the explicit stage commands (each reports its own outcome):")
-        for p in paths:
-            for stage in ("scan", "edit", "encode"):
-                print(f"=== pha {stage} --path {p}")
-                rc = subprocess.call([sys.executable, "-m", "personal_historical_archive",
-                                      stage, "--path", p])
-                if rc != 0:
-                    print(f"! pha {stage} failed for {p} (exit {rc})", file=sys.stderr)
+        for argv in runs:
+            print(f"=== pha {' '.join(argv[3:])}")
+            rc = subprocess.call(argv)
+            if rc != 0:
+                print(f"! pha {argv[3]} failed (exit {rc})", file=sys.stderr)
 
 
 def cmd_bundle(cfg: Config, args) -> None:
@@ -3714,6 +3752,13 @@ def main(argv: list[str] | None = None) -> None:
 
     ho_work = hsub.add_parser("work", help="scan -> edit -> encode the handed-out documents")
     ho_work.add_argument("directory", help="the hand-out payload directory")
+    ho_work.add_argument("--pages", action="append", default=None, metavar="N",
+                         help="only these pages (repeatable or comma-separated: "
+                              "--pages 12,337); without --resume they are RE-DONE")
+    ho_work.add_argument("--resume", action="store_true",
+                         help="work only what is still missing — planned from the DB "
+                              "(no progress file), so an interrupted page list continues "
+                              "and a finished document is skipped")
     ho_work.add_argument("--dry-run", action="store_true", help="print the commands; run nothing")
 
     ho_back = hsub.add_parser("back", help="build the return payload from this archive's rows")

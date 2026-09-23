@@ -50,8 +50,8 @@ from .bundle import (
 from . import locks
 from .config import Config
 from .extract import page_count
-from .ingest import (_configured_filters_signature, index_document, is_supported,
-                     render_document_pages, sha256_of, sha256_of_dir,
+from .ingest import (_configured_filters_signature, _raw_sha, index_document,
+                     is_supported, render_document_pages, sha256_of, sha256_of_dir,
                      write_document_pages, write_edited_pages)
 from .sidecar import resolve_sidecar, resolve_stages
 
@@ -831,6 +831,75 @@ def _page_payload(conn, page_row) -> dict:
         "reviewed_at": page_row["reviewed_at"],
         "edits": edits,
     }
+
+
+def plan_work(cfg: Config, handoff_dir_path: Path, pages=None, resume: bool = False,
+              ) -> list[dict]:
+    """What `pha handoff work` would run, per document — the STATELESS resume.
+
+    `--resume` must survive an interrupted page list without a progress file:
+    the database already knows which pages are done, so it is read directly.
+    Per named page (or every page, when none is named):
+
+    * it needs the TRANSCRIPTION pass when it has no text and no human
+      correction (`reviewed_at` — a reviewed page is never re-read);
+    * it needs the EDITOR pass when the reading the archive serves for it is
+      missing, not `done`, or was produced from different raw text
+      (`raw_sha`), and it is not a human correction.
+
+    Without `resume`, a named page is a deliberate re-do: every named page is
+    planned for both passes. Returns one entry per document:
+    `{relpath, doc_id, scan_pages, edit_pages, kept_reviewed, kept_edits,
+    reason}` — `None`
+    page lists mean "run the stage without `--page`".
+    """
+    manifest = read_manifest(handoff_dir_path)
+    wanted = sorted({int(p) for p in pages}) if pages else None
+    conn = db.connect(cfg.db_path)
+    try:
+        out: list[dict] = []
+        for d in manifest.get("documents") or []:
+            rel = str(d.get("relpath") or "")
+            sha = str(d.get("sha256") or "")
+            doc = _worker_document(conn, sha) if sha else None
+            if doc is None:
+                out.append({"relpath": rel, "doc_id": None, "scan_pages": [],
+                            "edit_pages": [], "kept_reviewed": [],
+                            "kept_edits": [],
+                            "reason": "not imported in this archive — run `pha handoff in`"})
+                continue
+            doc_id = int(doc["id"])
+            rows = [p for p in db.get_pages(conn, doc_id)
+                    if wanted is None or int(p["page_no"]) in wanted]
+            scan_pages: list[int] = []
+            edit_pages: list[int] = []
+            kept: list[int] = []          # human-corrected transcriptions
+            kept_edits: list[int] = []    # human-corrected edits
+            for p in rows:
+                pno = int(p["page_no"])
+                raw = (p["raw_text"] or "").strip()
+                if p["reviewed_at"] is not None:
+                    kept.append(pno)          # a human read this page: hands off
+                    continue
+                if not resume or not raw:
+                    scan_pages.append(pno)
+                if not doc["editor"]:
+                    continue                  # no editor configured: nothing to edit
+                eff = db.effective_edit_for_page(conn, int(p["id"]), doc["editor"])
+                stale = (eff is None or eff["status"] != "done"
+                         or (eff["raw_sha"] or "") != _raw_sha(raw))
+                if eff is not None and eff["reviewed_at"]:
+                    kept_edits.append(pno)    # a human corrected this edit: keep it
+                    continue
+                if not resume or stale:
+                    edit_pages.append(pno)
+            out.append({"relpath": rel, "doc_id": doc_id,
+                        "scan_pages": scan_pages, "edit_pages": edit_pages,
+                        "kept_reviewed": kept, "kept_edits": kept_edits,
+                        "reason": None})
+        return out
+    finally:
+        conn.close()
 
 
 def build_result(

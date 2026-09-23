@@ -648,9 +648,13 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   and `pha render [--path … | --doc N]` does the same on demand. Renders are a
   derived cache, so byte-identity across machines is deliberately not required.
   On the worker: `pha handoff in
-  <payload>`, then `pha scan/edit/encode --path <doc>` (or the `pha handoff
-  work` wrapper), then `pha handoff back`. Back on the owner: `pha handoff
-  fetch <result>` merges the work into the SAME document — local human
+  <payload>`, then `pha handoff work --pages 12,337 --resume` (one command for the
+  whole job; `--resume` is STATELESS — it plans from the worker's DB, so an
+  interrupted page list continues and a finished document is skipped; without it
+  a named page is a deliberate re-do), then `pha handoff back`. The explicit
+  stages — `pha scan/edit/encode --path <doc>` — still work and report the
+  same. Back on the owner: `pha handoff fetch <result>` merges the work into
+  the SAME document — local human
   corrections are kept and reported as conflicts, and a document processed
   under a different palaeographer/editor is reported `stale`. Identity across
   machines is `sha256` + dropbox-relative path (ids are per-machine and mean
