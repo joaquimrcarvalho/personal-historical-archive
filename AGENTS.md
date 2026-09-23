@@ -293,6 +293,31 @@
   pinning, `--dry-run` prints the plan with no model call. `pha test --page N …`
   previews it without touching the DB, `pha status` shows `N pinned` per
   document, and `pha page <doc> N --json` reports the page's pair.
+- **Re-editing ONE page with a chosen editor (`pha edit --page N`)** — the
+  EDIT-stage twin of the single-page re-scan. `pha edit --path <one doc>
+  --page N [--page M …] [--editor X] [--model Y] [--dry-run] [--no-pin]`
+  re-edits ONLY those pages (`--page` is repeatable or comma-separated);
+  `--editor`/`--model` are **authoritative for that run** and need
+  `--page` (a whole-document pass uses the `pha.yaml` config). The page records
+  its own pair (`page_edits.editor_model` + `pinned_at`, and `editor:`/`model:`/
+  `pinned: true` in its library front matter) and stays in the **document's**
+  `edited-<editor>@<model>` folder — the page file is authoritative for its own
+  pair, exactly as `pha scan --page N` works for the transcription. It is
+  **pinned**: a later bulk `pha edit` (or `--reprocess` or a changed collection
+  config) keeps it and reports `kept N pinned page(s)`; the document row
+  (`documents.editor`) is never rewritten by a per-page override. The indexer
+  re-embeds just that page (incremental), so no follow-up command is needed.
+  A page whose served edit is human-`reviewed` is refused (release with
+  `pha review --unset --doc N --page P`); naming the page with the CONFIGURED
+  editor (no override) re-edits it and releases that page's override pin;
+  `--unpin [--path <doc> [--page P]]` releases the protection (text kept);
+  `--no-pin` records provenance without pinning; `--dry-run` prints the plan
+  with no model call. `pha test <doc> --page N --editor X --model Y` previews it
+  without touching the DB. `pha status` shows `N pinned page edit(s)`, `pha page
+  --edited --json` reports `page_editor`/`page_editor_model`/`edit_pinned`, and
+  `pha cite` labels the citation with the pair the text actually came from. An
+  explicit `--editor X` on `pha page`/`pha cite` still selects a VARIANT FOLDER
+  by name; the page's own folder is the document's.
 - Full usage: README.md; planned web UI: WEB_INTERFACE_PLAN.md.
 
 ## Usage — how agents operate the archive (not just develop it)

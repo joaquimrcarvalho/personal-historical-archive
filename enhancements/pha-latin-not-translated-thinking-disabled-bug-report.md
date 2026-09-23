@@ -125,7 +125,10 @@ F3 (page-range editors) and F5 (a language guard) remain open — see
 - **F3 — per-page-class editor selection.** Encoders already accept `pages=`
   ranges (`encoders/apparatus.md` uses `pages=1-140,955-1011`). Editors have no
   equivalent, so "Latin prefaces and apparatus get the reasoning editor, the
-  Portuguese body gets the fast one" cannot be expressed.
+  Portuguese body gets the fast one" cannot be expressed. **Partly addressed
+  (2026-09-22):** `pha edit --path <doc> --page N --editor X --model Y` applies
+  an editor/model to ONE page, records and pins it — the manual form of the same
+  thing. Declaring ranges in `pha.yaml` (so a bulk pass does it) is still open.
 - **F4 — surface the effective parameters.** `pha editor <file>` prints the
   rules and the model id but not whether reasoning is on; the fact that mattered
   most here was invisible.

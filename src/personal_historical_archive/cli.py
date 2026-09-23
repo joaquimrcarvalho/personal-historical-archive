@@ -70,9 +70,14 @@ def _age_str(seconds: float) -> str:
 # --------------------------------------------------------------------------- commands
 
 def _parse_pages(values) -> set[int] | None:
-    """Parse repeated `--page N` / `--page N,M` into a set (None when absent)."""
+    """Parse repeated `--page N` / `--page N,M` into a set (None when absent).
+
+    Tolerates a bare int/str as well as the list argparse's `action="append"`
+    produces, so callers that build the args namespace by hand work too."""
     if not values:
         return None
+    if isinstance(values, (int, str)):
+        values = [values]
     out: set[int] = set()
     for raw in values:
         for tok in str(raw).replace(";", ",").split(","):
@@ -305,9 +310,13 @@ def cmd_page(cfg: Config, args) -> None:
             sys.exit(1)
         edited = bool(getattr(args, "edited", False))
         editor_id = None
+        variant_editor = None   # the editor whose FOLDER holds the file
+        edit_model = None
+        edit_pinned = False
         text = page["raw_text"] or ""
         if edited:
             editor_id = args.editor or doc["editor"]
+            variant_editor = editor_id
             # A missing edited variant is a config/state problem, not a crash: name the
             # pass that produces it. Callers (the GUI, MCP clients) show this verbatim.
             edit_hint = (f"pha edit --path {doc['dir_path']}" if doc["dir_path"] else "pha edit")
@@ -316,9 +325,19 @@ def cmd_page(cfg: Config, args) -> None:
                       " — set an editor in the collection's pha.yaml",
                       file=sys.stderr)
                 sys.exit(1)
-            e = db.get_page_edit(conn, page["id"], editor_id)
+            if args.editor:
+                # An explicit --editor asks for THAT reading, folder-selected.
+                e = db.get_page_edit(conn, page["id"], args.editor)
+            else:
+                # Otherwise serve the page's EFFECTIVE edit: a human correction,
+                # else a deliberate per-page override (`pha edit --page N
+                # --editor X --model Y`), else the document's editor.
+                e = db.effective_edit_for_page(conn, page["id"], doc["editor"])
             if e is not None and e["text"]:
                 text = e["text"]
+                editor_id = e["editor"]
+                edit_model = e["editor_model"]
+                edit_pinned = bool(e["pinned_at"])
             else:
                 print(f"no edited text for page {args.page} (editor {editor_id})"
                       f" — run: {edit_hint}",
@@ -326,7 +345,7 @@ def cmd_page(cfg: Config, args) -> None:
                 sys.exit(1)
         pf = library_page_path(cfg, doc, args.page,
                                variant="edited" if edited else "raw",
-                               source_name=page["source_name"], editor_id=editor_id)
+                               source_name=page["source_name"], editor_id=variant_editor)
         # Stable identity + everything an external consumer needs (the render, and
         # the full variant set) so it never re-derives the sha256 join or the
         # `edited-<editor>[@model]` directory grammar itself.
@@ -351,6 +370,11 @@ def cmd_page(cfg: Config, args) -> None:
             "page_model": page["palaeographer_model"],
             "pinned": bool(page["pinned_at"]),
             "reviewed": bool(page["reviewed_at"]),
+            # Per-page EDIT provenance: the editor/model that produced the served
+            # edited text, and whether it is a deliberate per-page override.
+            "page_editor": editor_id if edited else None,
+            "page_editor_model": edit_model if edited else None,
+            "edit_pinned": edit_pinned if edited else False,
             "page_file": str(pf) if pf else None,
             "slug": slug,
             "rel_path": rel_path,
@@ -455,6 +479,25 @@ def cmd_cite(cfg: Config, args) -> None:
         rel_path = addresses.document_rel_path(cfg, doc)
         slug = addresses.doc_slug(rel_path)
         label = addresses.variant_label(name)
+        # A citation must name the reading the text actually IS. A page overridden
+        # per page (`pha scan --page N --palaeographer X` / `pha edit --page N
+        # --editor X --model Y`) keeps the document's variant FOLDER but carries
+        # its own pair, so label it from the page, not from the folder name.
+        page_pair = {"palaeographer": page["palaeographer"] or doc["palaeographer"],
+                     "palaeographer_model": (page["palaeographer_model"]
+                                             or doc["palaeographer_model"])}
+        edit_row = None
+        if stage == "edited" and not args.editor:
+            edit_row = db.effective_edit_for_page(conn, page["id"], doc["editor"])
+            if edit_row is not None and edit_row["text"]:
+                label = addresses.variant_label(
+                    f"edited-{edit_row['editor']}"
+                    + (f"@{edit_row['editor_model']}" if edit_row["editor_model"] else ""))
+        elif stage == "transcription" and not args.palaeographer and page["palaeographer"]:
+            label = addresses.variant_label(
+                f"transcription-{page_pair['palaeographer']}"
+                + (f"@{page_pair['palaeographer_model']}" if page_pair["palaeographer_model"]
+                   else ""))
         render = addresses.render_path(cfg, doc, args.page, page["source_name"])
         # The sidecar on disk is the source of truth, read live so an edited
         # reference shows up without a scan. Absent a sidecar this is exactly
@@ -478,6 +521,13 @@ def cmd_cite(cfg: Config, args) -> None:
             "variant": name,
             "label": label,
             "filled": True,
+            # Per-page provenance of the cited reading (None when the document's
+            # own pair produced it), so a client can see a page-level override.
+            "page_palaeographer": page["palaeographer"],
+            "page_model": page["palaeographer_model"],
+            "page_editor": (edit_row["editor"] if edit_row is not None else None),
+            "page_editor_model": (edit_row["editor_model"] if edit_row is not None else None),
+            "edit_pinned": bool(edit_row is not None and edit_row["pinned_at"]),
             "file": variant["file"],
             "render": str(render) if render else None,
             "render_exists": render is not None,
@@ -1128,6 +1178,7 @@ def cmd_status(cfg: Config, args) -> None:
         # extra pass over it is expensive).
         stats = db.chunk_stats(conn)
         pinned = db.pinned_counts(conn)
+        pinned_edits = db.pinned_edit_counts(conn)
         s = db.summary(conn, chunk_stats=stats)
         docs_status = s["documents"] or {}
         total_docs = sum(docs_status.values())
@@ -1350,6 +1401,17 @@ def cmd_status(cfg: Config, args) -> None:
                   f"document(s) — re-read with a chosen model: {per_doc}")
             print("     Run:  pha scan --unpin --path <doc>   (keep the text; let a "
                   "later scan re-read them)")
+        # Mixed provenance of the EDITED reading: pages re-edited with a chosen
+        # editor/model (`pha edit --page N --editor X --model Y`), pinned so a
+        # bulk pass keeps them.
+        if pinned_edits:
+            per_doc = ", ".join(f"#{did} ({n})" for did, n in sorted(pinned_edits.items()))
+            print()
+            print(f"  📌 {sum(pinned_edits.values())} pinned page edit(s) across "
+                  f"{len(pinned_edits)} document(s) — edited with a chosen editor/model: "
+                  f"{per_doc}")
+            print("     Run:  pha edit --unpin --path <doc>   (keep the text; let a "
+                  "later edit re-edit them)")
     finally:
         conn.close()
 
@@ -2289,14 +2351,48 @@ def cmd_editor(cfg: Config, args) -> None:
 
 
 def cmd_edit(cfg: Config, args) -> None:
-    from .ingest import edit_documents_under
+    from .ingest import edit_all, edit_documents_under
 
-    page_no = getattr(args, "page", None)
-    if getattr(args, "path", None):
-        res = edit_documents_under(cfg, args.path, reprocess=args.reprocess,
-                                   verbose=True, page_no=page_no)
+    pages = _parse_pages(getattr(args, "page", None))
+    path = getattr(args, "path", None)
+    editor_override = getattr(args, "editor", None)
+    model_override = getattr(args, "model", None)
+    dry_run = getattr(args, "dry_run", False)
+    unpin = getattr(args, "unpin", False)
+    pin = not getattr(args, "no_pin", False)
+    override = bool(editor_override or model_override)
+    if override and not pages:
+        print("error: --editor/--model override ONE page — pass --page N "
+              "(a whole-document pass uses the document's configured editor)",
+              file=sys.stderr)
+        sys.exit(2)
+    if dry_run and not pages:
+        print("error: --dry-run is only meaningful with --page (nothing else to plan)",
+              file=sys.stderr)
+        sys.exit(2)
+    if (pages or override or dry_run or unpin) and not path:
+        print("error: --page/--editor/--model/--dry-run/--unpin need "
+              "--path <one document> (they are per-page actions)", file=sys.stderr)
+        sys.exit(2)
+    if path:
+        res = edit_documents_under(cfg, path, reprocess=args.reprocess, verbose=True,
+                                   pages=pages, editor_override=editor_override,
+                                   model_override=model_override, pin=pin,
+                                   dry_run=dry_run, unpin=unpin)
     else:
-        res = edit_all(cfg, reprocess=args.reprocess, verbose=True, page_no=page_no)
+        res = edit_all(cfg, reprocess=args.reprocess, verbose=True,
+                       page_no=min(pages) if pages else None)
+    if dry_run:
+        _print_edit_plan(res)
+        return
+    if unpin:
+        for r in res["results"]:
+            if r["action"] == "unpinned":
+                print(f"  unpinned {r['unpinned']} page edit(s) of {r['filename']} "
+                      f"— the text is kept; a later `pha edit` may re-edit them")
+            else:
+                print(f"  {r.get('reason', 'nothing to unpin')}")
+        return
     edited = sum(1 for r in res["results"] if r["action"] == "edited")
     print(f"edited {edited} document(s)")
     for r in res["results"]:
@@ -2306,7 +2402,21 @@ def cmd_edit(cfg: Config, args) -> None:
                 pages = ", ".join(str(p) for p in r["stalled"])
                 print(f"    ⏱ {len(r['stalled'])} page(s) abandoned (model stalled): "
                       f"{pages} — re-run `pha edit` to retry them", file=sys.stderr)
-        elif r["reason"] != "no editor configured":
+            for p in r.get("kept_pinned") or []:
+                print(f"    · kept pinned page {p} (edited earlier with a chosen "
+                      f"editor/model; `pha edit --unpin --path … --page {p}` releases it)")
+            for p in r.get("refused_reviewed") or []:
+                print(f"    ! page {p}: human-reviewed — not re-edited "
+                      f"(`pha review --unset --doc <doc> --page {p}` releases it)",
+                      file=sys.stderr)
+            for p, ed in r.get("released_override") or []:
+                print(f"    · page {p}: released the per-page override from editor {ed} "
+                      f"(re-edited with the configured editor)")
+            if r.get("override"):
+                _print_page_reedit(r)
+        elif r.get("action") == "error":
+            print(f"  ! {r.get('reason') or r.get('error')}", file=sys.stderr)
+        elif r.get("reason") != "no editor configured":
             print(f"  ! {r['filename']}: {r.get('reason', r['action'])}")
     # The edit pass indexes the documents it touched (and repairs a document
     # whose index was never written); report that, rather than silently
@@ -2316,6 +2426,38 @@ def cmd_edit(cfg: Config, args) -> None:
         print(f"re-indexed {indexed} document(s) so search covers the edited text")
     for msg in res.get("index_failed", []):
         print(f"  ! not re-indexed: {msg} — run: pha reindex", file=sys.stderr)
+
+
+def _print_edit_plan(res: dict) -> None:
+    """`pha edit --page N --editor X --model Y --dry-run`: no model call."""
+    for r in res["results"]:
+        if r["action"] != "planned":
+            print(f"  ! {r.get('reason') or r.get('error') or r['action']}", file=sys.stderr)
+            continue
+        print(f"plan for {r['filename']} ({r['path']}):")
+        for e in r["plan"]:
+            if e["action"] == "error":
+                print(f"  page {e['page']}: ! {e['reason']}")
+            elif e["action"] == "refused":
+                print(f"  page {e['page']}: refused — {e['reason']}")
+            else:
+                frm, to = e["from"], e["to"]
+                pin = " [pinned]" if e["pinned"] else ""
+                print(f"  page {e['page']}: re-edit (was "
+                      f"{frm['editor'] or '?'}@{frm['model'] or '?'}, "
+                      f"{e['chars']} chars){pin} → "
+                      f"{to['editor'] or '?'}@{to['model'] or '?'}")
+
+
+def _print_page_reedit(r: dict) -> None:
+    """One line per overridden page: before → after, and what followed."""
+    for d in r.get("details") or []:
+        frm, to = d["from"], d["to"]
+        print(f"    ↻ page {d['page']}: "
+              f"{frm['editor'] or '?'}@{frm['model'] or '?'} → "
+              f"{to['editor']}@{to['model'] or '?'} "
+              f"({d['chars']['before']} → {d['chars']['after']} chars"
+              + (", pinned" if d["pinned"] else ", not pinned") + ")")
 
 
 def cmd_key(cfg: Config, args) -> None:
@@ -3363,11 +3505,26 @@ def main(argv: list[str] | None = None) -> None:
     e2.add_argument("--path", "--collection", default=None,
                     help="only edit documents under this subpath of the dropbox "
                          "(e.g. collections/COLX); default: every document")
-    e2.add_argument("--page", type=int, default=None,
+    e2.add_argument("--page", action="append", default=None, metavar="N",
                     help="only edit this page number of each matched document "
-                         "(combine with --path to target one page of one document); "
-                         "only that page's chunks are re-embedded")
+                         "(repeatable or comma-separated: --page 12,337) — with "
+                         "--editor/--model it re-edits THAT page with the override; "
+                         "only the named pages' chunks are re-embedded")
     e2.add_argument("--reprocess", action="store_true", help="re-edit everything matched")
+    e2.add_argument("--editor", default=None,
+                    help="re-edit ONE page (--page N) with these editor rules "
+                         "instead of the document's, and pin it")
+    e2.add_argument("--model", default=None,
+                    help="re-edit ONE page (--page N) with this model interface "
+                         "instead of the document's (pairs with --editor)")
+    e2.add_argument("--dry-run", action="store_true",
+                    help="with --page: print what would be re-edited, call no model")
+    e2.add_argument("--no-pin", action="store_true",
+                    help="record the per-page override but do not protect it from "
+                         "a later bulk pass")
+    e2.add_argument("--unpin", action="store_true",
+                    help="release the per-page override pins of one document "
+                         "(optionally --page N); the text is kept")
     e2.add_argument("--include-leased", action="store_true",
                         help="also process documents currently out on a hand-over")
     e2.set_defaults(fn=cmd_edit)

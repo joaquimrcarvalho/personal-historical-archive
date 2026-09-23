@@ -230,6 +230,17 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE pages ADD COLUMN pinned_at REAL")
     if "filters" not in ecols:
         conn.execute("ALTER TABLE page_edits ADD COLUMN filters TEXT")
+    # Per-page edit provenance for a targeted re-edit (`pha edit --page N
+    # --editor X --model Y`), the EDIT-stage twin of pages.palaeographer/
+    # palaeographer_model/pinned_at. `editor_model` is the resolved model
+    # interface that produced THIS page's edit (the variant folder names it for
+    # a whole pass; a per-page override needs it per row); `pinned_at` marks a
+    # deliberate reading a later bulk `pha edit` must not discard. NULL on every
+    # existing row = the document-level pair, so no backfill is needed.
+    if "editor_model" not in ecols:
+        conn.execute("ALTER TABLE page_edits ADD COLUMN editor_model TEXT")
+    if "pinned_at" not in ecols:
+        conn.execute("ALTER TABLE page_edits ADD COLUMN pinned_at REAL")
     rcols = [r[1] for r in conn.execute("PRAGMA table_info(records)")]
     if "filters" not in rcols:
         # the filter chain that produced this encoder run (same signature as
@@ -589,6 +600,10 @@ def document_pages(conn: sqlite3.Connection, doc_id: int) -> list[sqlite3.Row]:
 
 # --------------------------------------------------------------------------- page edits (editors)
 
+# Sentinel for "the caller did not mention this column" (see set_edit_provenance).
+_UNSET = object()
+
+
 def get_page_edit(
     conn: sqlite3.Connection, page_id: int, editor: str
 ) -> sqlite3.Row | None:
@@ -605,29 +620,163 @@ def set_page_edit(
     error: str | None = None,
     raw_sha: str | None = None,
     filters: str | None = None,
+    editor_model: str | None = None,
+    pinned: bool | None = None,
 ) -> None:
+    """Store one page's edit for `editor`.
+
+    ``editor_model`` records which model interface produced the row (written by
+    a targeted re-edit; NULL for a whole-pass row, whose model the variant
+    folder names). ``pinned=None`` leaves an existing pin alone — the error path
+    must not release the protection on a page that merely failed this pass.
+    """
     import time as _t
 
     if error is not None:
         _write(
             conn,
-            """INSERT INTO page_edits (page_id, editor, text, raw_sha, status, error, updated_at, filters)
-               VALUES (?, ?, NULL, ?, 'waiting', ?, ?, ?)
+            """INSERT INTO page_edits (page_id, editor, text, raw_sha, status, error, updated_at, filters, editor_model)
+               VALUES (?, ?, NULL, ?, 'waiting', ?, ?, ?, ?)
                ON CONFLICT(page_id, editor) DO UPDATE SET
                  text = NULL, raw_sha = ?, status = 'waiting', error = ?, updated_at = ?, filters = ?""",
-            (page_id, editor, raw_sha, error, _t.time(), filters,
+            (page_id, editor, raw_sha, error, _t.time(), filters, editor_model,
              raw_sha, error, _t.time(), filters),
         )
     else:
         _write(
             conn,
-            """INSERT INTO page_edits (page_id, editor, text, raw_sha, status, error, updated_at, filters)
-               VALUES (?, ?, ?, ?, 'done', NULL, ?, ?)
+            """INSERT INTO page_edits (page_id, editor, text, raw_sha, status, error, updated_at, filters, editor_model)
+               VALUES (?, ?, ?, ?, 'done', NULL, ?, ?, ?)
                ON CONFLICT(page_id, editor) DO UPDATE SET
-                 text = ?, raw_sha = ?, status = 'done', error = NULL, updated_at = ?, filters = ?""",
-            (page_id, editor, text, raw_sha, _t.time(), filters,
-             text, raw_sha, _t.time(), filters),
+                 text = ?, raw_sha = ?, status = 'done', error = NULL, updated_at = ?, filters = ?, editor_model = ?""",
+            (page_id, editor, text, raw_sha, _t.time(), filters, editor_model,
+             text, raw_sha, _t.time(), filters, editor_model),
         )
+    if pinned is not None:
+        set_edit_provenance(conn, page_id, editor, pinned=pinned)
+
+
+def set_edit_provenance(
+    conn: sqlite3.Connection,
+    page_id: int,
+    editor: str,
+    editor_model=_UNSET,
+    pinned: bool | None = None,
+) -> None:
+    """Record the model that produced a page edit and optionally pin it.
+
+    The EDIT-stage twin of `set_page_provenance`. `editor_model` defaults to
+    "leave the stored value alone"; `pinned=None` likewise leaves the pin."""
+    sets: list[str] = []
+    params: list = []
+    if editor_model is not _UNSET:
+        sets.append("editor_model = ?")
+        params.append(editor_model)
+    if pinned is not None:
+        sets.append("pinned_at = ?")
+        params.append(_now() if pinned else None)
+    if not sets:
+        return
+    params.extend([page_id, editor])
+    _write(conn, f"UPDATE page_edits SET {', '.join(sets)} "
+                 "WHERE page_id = ? AND editor = ?", tuple(params))
+
+
+def pinned_edit_for_page(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
+    """The page's pinned edit row, newest pin first, or None.
+
+    A page carries at most one deliberate per-page reading; picking the newest
+    pin keeps the answer deterministic if a page was pinned, unpinned in text
+    only, and pinned again."""
+    return conn.execute(
+        "SELECT * FROM page_edits WHERE page_id = ? AND pinned_at IS NOT NULL "
+        "ORDER BY pinned_at DESC LIMIT 1", (page_id,)).fetchone()
+
+
+def reviewed_edit_for_page(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
+    """The page's human-reviewed edit row (any editor), or None."""
+    return conn.execute(
+        "SELECT * FROM page_edits WHERE page_id = ? AND reviewed_at IS NOT NULL "
+        "ORDER BY reviewed_at DESC LIMIT 1", (page_id,)).fetchone()
+
+
+def effective_edit_for_page(
+    conn: sqlite3.Connection, page_id: int, editor: str | None
+) -> sqlite3.Row | None:
+    """The edit the archive SERVES for this page.
+
+    Priority: a human's reading (``reviewed_at``, any editor) → a deliberate
+    per-page override (``pinned_at``, any editor) → the row of the document's
+    configured ``editor``. This is what the library page file must show and what
+    `pha review` must import into, or a per-page override would be invisible (or
+    a later machine pass could shadow a human correction).
+    """
+    return (reviewed_edit_for_page(conn, page_id)
+            or pinned_edit_for_page(conn, page_id)
+            or (get_page_edit(conn, page_id, editor) if editor else None))
+
+
+def effective_edits_for_document(
+    conn: sqlite3.Connection, doc_id: int, editor: str | None
+) -> list[sqlite3.Row]:
+    """One row per page of `doc_id` that has any edit, best reading first.
+
+    `effective_edit_for_page`'s rule applied to a whole document, in one pass:
+    for each page take the reviewed row, else the pinned row, else the row for
+    `editor`. Pages with no edit at all are absent (they get no library file).
+    """
+    rows = conn.execute(
+        """SELECT pe.*, p.page_no FROM page_edits pe JOIN pages p ON p.id = pe.page_id
+           WHERE p.document_id = ?""", (doc_id,)).fetchall()
+    by_page: dict[int, list[sqlite3.Row]] = {}
+    for r in rows:
+        by_page.setdefault(int(r["page_id"]), []).append(r)
+    out: list[sqlite3.Row] = []
+    for page_id, group in by_page.items():
+        reviewed = [r for r in group if r["reviewed_at"] is not None]
+        pinned = [r for r in group if r["pinned_at"] is not None]
+        chosen = None
+        if reviewed:
+            chosen = max(reviewed, key=lambda r: (r["reviewed_at"], r["updated_at"] or 0))
+        elif pinned:
+            chosen = max(pinned, key=lambda r: (r["pinned_at"], r["updated_at"] or 0))
+        else:
+            chosen = next((r for r in group if r["editor"] == editor), None)
+        if chosen is not None:
+            out.append(chosen)
+    out.sort(key=lambda r: int(r["page_no"]))
+    return out
+
+
+def clear_edit_pins(conn: sqlite3.Connection, doc_id: int, page_no: int | None = None,
+                    editor: str | None = None) -> int:
+    """Clear the PIN on a document's page edits (all, or one page; optionally one
+    editor). The text and the recorded provenance are kept — `pha edit --unpin`
+    releases the protection only."""
+    where = ["pe.pinned_at IS NOT NULL", "p.document_id = ?"]
+    params: list = [int(doc_id)]
+    if page_no is not None:
+        where.append("p.page_no = ?")
+        params.append(int(page_no))
+    if editor is not None:
+        where.append("pe.editor = ?")
+        params.append(editor)
+    cur = _write(
+        conn,
+        "UPDATE page_edits SET pinned_at = NULL WHERE id IN "
+        f"(SELECT pe.id FROM page_edits pe JOIN pages p ON p.id = pe.page_id "
+        f"WHERE {' AND '.join(where)})",
+        tuple(params),
+    )
+    return int(cur.rowcount or 0)
+
+
+def pinned_edit_counts(conn: sqlite3.Connection) -> dict[int, int]:
+    """{document_id: number of pinned page edits} — for the `pha status` summary."""
+    return {int(r["document_id"]): int(r["n"]) for r in conn.execute(
+        "SELECT p.document_id, COUNT(*) n FROM page_edits pe JOIN pages p ON p.id = pe.page_id "
+        "WHERE pe.pinned_at IS NOT NULL GROUP BY p.document_id"
+    )}
 
 
 def edits_for_document(

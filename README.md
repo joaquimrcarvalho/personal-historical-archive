@@ -827,9 +827,11 @@ The legacy `editor` file (one id) still works as a fallback.
 - `pha edit` runs the editor pass over every document that has an editor and
   re-indexes; `pha edit --path collections/COLX` re-edits just one collection
   (or document folder), and `pha edit --path <doc> --page N` re-edits a single
-  page. A document re-edits when its editor rules file
-  (`editors/<id>.md`), its editor MODEL file (`models/<id>.md`), or the paired
-  editor model id changed since the last edit. `pha editor [file]` shows
+  page. `--editor X --model Y` adds a **per-page override** — that page is
+  re-edited with another editor/model, recorded and pinned (see "Re-editing ONE
+  page with a better editor" below). A document re-edits when its editor rules
+  file (`editors/<id>.md`), its editor MODEL file (`models/<id>.md`), or the
+  paired editor model id changed since the last edit. `pha editor [file]` shows
   resolution.
 - **The null editor**: the special editor id `null` (or `passthrough`) keeps
   the transcription verbatim — `pha edit` copies each page's text as the
@@ -1115,6 +1117,9 @@ pha review [--doc N] [--all] [--unset [--page N]]
                           #   --all imports+stamps every file (deliberate blanket review);
                           #   --unset clears the reviewed stamp instead (undo a review)
 pha edit [--reprocess] [--path collections/COLX] [--page N]
+                          # --page N re-edits one page with the document's editor;
+                          #   --editor X --model Y override that page (pinned);
+                          #   --dry-run prints the plan, --unpin releases a pin
 pha rm ID|NAME            # remove document(s) from the index
 pha prune [--dry-run]     # delete orphaned render image caches (no registered document)
 pha prune --library-variants [--dry-run] [--doc N]
@@ -1558,6 +1563,51 @@ Notes:
   override to `.pha-test/` without touching the DB or `library/`.
 - After the rescan, `pha status` shows the document as mixed provenance
   (`N pinned`), and `pha page <doc> N --json` reports the page's pair.
+
+### Re-editing ONE page with a better editor (`pha edit --page`)
+
+The same idea for the EDIT stage: a page whose translation came out badly can be
+re-edited with another editor and/or model without re-editing the volume.
+
+```bash
+pha edit --path collections/COLX/vol04.pdf --page 337 \
+         --editor latin-to-english-ocr --model deepseek-v4-flash --dry-run
+```
+
+`--page` is repeatable or comma-separated (`--page 12,337`). `--dry-run` prints
+the reading it would replace and calls no model. Drop it to run:
+
+- only page 337 is re-edited, with `--editor`/`--model` **authoritative for that
+  run** (the halves resolve independently: `--model` alone keeps the document's
+  editor, `--editor` alone keeps its model);
+- the page records the pair that produced it (`page_edits.editor_model`, and
+  `editor:`/`model:`/`pinned: true` in its library front matter). It stays in
+  the **document's** `edited-<editor>@<model>` folder — the page file is
+  authoritative for its own pair, exactly as a per-page re-read does for the
+  transcription;
+- it is **pinned**, so a later bulk `pha edit` (or `--reprocess`) keeps that
+  reading instead of overwriting it;
+- the indexer re-embeds just that page, so search sees the new text immediately;
+- the document's configured editor (`documents.editor`), every other page and
+  the rest of the collection are untouched.
+
+Notes:
+
+- `--editor`/`--model` **need `--page N`** (a whole-document pass is what the
+  `pha.yaml` config is for) and `--path` must resolve to exactly one document.
+- **A human correction always wins.** If the page's served edit is `reviewed`,
+  the command refuses and names it; release it with
+  `pha review --unset --doc N --page P`.
+- Naming the page with the *configured* editor (`pha edit --path <doc> --page N`,
+  no override) is how you put the document's editor back on one page: it
+  re-edits and releases that page's override pin.
+- `pha edit --unpin --path <doc> [--page N]` releases the protection without
+  changing the text; `--no-pin` records provenance without pinning.
+- `pha test <doc> --page N --editor X --model Y` previews the same override to
+  `.pha-test/` without touching the DB or `library/`.
+- `pha status` reports `N pinned page edit(s)`; `pha page <doc> N --edited
+  --json` reports the page's editor pair, and `pha cite` labels the citation
+  with the pair the text actually came from.
 
 ### Moving / sharing collections between archives (`pha bundle` / `pha unbundle`)
 

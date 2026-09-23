@@ -7,9 +7,10 @@ and each doc's own header has been brought in line with this index (2026-09-21).
 **Current: pha 0.33.0**, plus the single-page re-scan (commit `1f99a1e`).
 Shipped: stable page addresses, page navigation, stage filters, endpoint-scoped
 locking, per-document bibliographic references, scan resilience, **two-machine
-hand-over** (in `main` since 0.29.0), **single-page re-scan** and the
+hand-over** (in `main` since 0.29.0), **single-page re-scan**, the
 **untranslated-Latin enablers** (`thinking:` on a rules file, plus the
-effective parameters in `pha editor`/`pha palaeographer`). Open: **three
+effective parameters in `pha editor`/`pha palaeographer`) and the **per-page
+edit override**. Open: **three
 live defects** (archive-pointer resolution, the untranslated-Latin editor's
 remaining asks, and the hand-over gaps G1/G3/G5), **four feature
 requests** (post-filter replay, notes search, `extends`, the encoder prescan)
@@ -40,6 +41,7 @@ stable IDs referenced from the prose, not ranks.
 | **1** | [`pha-filter-signature-mismatch-bug-report.md`](pha-filter-signature-mismatch-bug-report.md) | **FIXED** in `7136ece` — the configured side is compared in the *resolved* form and the legacy declared form is still accepted once, so nothing re-ran. **This unblocks #4** |
 | **2** | [`pha-request-stall-timeout-bug-report.md`](pha-request-stall-timeout-bug-report.md) | **FIXED.** Wall-clock `deadline_s` per request + the stall batch rule; two stalls of 6 h 30 / 4 h 17 measured |
 | **5** | [`pha-single-page-rescan-enhancement-request.md`](pha-single-page-rescan-enhancement-request.md) | **IMPLEMENTED** (`1f99a1e`, 0.33.0+). `pha scan --page N [--palaeographer X] [--model Y]` re-reads one page, records its provenance, pins it; `--dry-run`/`--unpin`/`--no-pin`, `pha test --page N` preview |
+| — | per-page **EDIT** override (the edit-stage twin of #5; asked 2026-09-22) | **IMPLEMENTED** (2026-09-22). `pha edit --path <doc> --page N [--editor X] [--model Y] [--dry-run] [--no-pin]` + `--unpin`: re-edits ONE page with a chosen editor/model, records it per page (`page_edits.editor_model` + `pinned_at`, plus `editor:`/`model:`/`pinned: true` in the page's front matter inside the DOCUMENT's variant folder), never rewrites `documents.editor`, keeps it against a later bulk `pha edit`/`--reprocess` (`kept N pinned page(s)`), re-embeds just that page, refuses a human-`reviewed` page, and serves/labels it per page (`pha page --edited --json`, `pha cite`, `pha status`). Also makes the review round-trip import a correction of a pinned page onto the row the file shows. Tests: `tests/test_edit_page_override.py` (19). Remaining from the Latin report: F3 config-declared page ranges, F5 language guard |
 | **7** | [`pha-handoff-enhancement-request.md`](pha-handoff-enhancement-request.md) | **SHIPPED in `main` (0.29.0)**; its `unbundle` stub bug is fixed. Open follow-on: the §12 render gap (an unscanned hand-out comes home with a 404 viewer) |
 | — | [`pha-model-response-resilience-enhancement-request.md`](pha-model-response-resilience-enhancement-request.md), [`pha-embed-loss-bug-report.md`](pha-embed-loss-bug-report.md), [`pha-duplicate-edited-variants-bug-report.md`](pha-duplicate-edited-variants-bug-report.md), [`pha-filters-enhancement-request.md`](pha-filters-enhancement-request.md), [`pha-per-server-model-lock-enhancement-request.md`](pha-per-server-model-lock-enhancement-request.md), [`pha-stable-page-addresses-enhancement-request.md`](pha-stable-page-addresses-enhancement-request.md), [`pha-page-navigation-enhancement-request.md`](pha-page-navigation-enhancement-request.md) | **SHIPPED** (details in the tables below) |
 
