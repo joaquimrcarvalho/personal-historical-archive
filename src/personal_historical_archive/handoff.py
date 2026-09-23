@@ -1172,6 +1172,7 @@ def _apply_records(conn, doc, result_doc: dict, counts: dict) -> None:
 
 def apply_result(
     cfg: Config, result_dir: Path, verbose: bool = True, dry_run: bool = False,
+    index: bool = False, wait_s: float = 0.0,
 ) -> dict:
     """Apply a returned hand-off onto THIS archive, in place.
 
@@ -1179,7 +1180,16 @@ def apply_result(
     citations. Per page the merge follows the design's table (locally reviewed
     wins; a worker's human correction is carried back as reviewed; two human
     readings are a conflict). Then the library files are regenerated from the
-    DB, the affected documents are re-indexed, and the lease is cleared.
+    DB and the lease is cleared.
+
+    **Applying does NOT embed by default** (gap G3). Merging rows, regenerating
+    the library files and rebuilding missing renders touch no model, so the only
+    reason `fetch` ever needed the embedding server's lock was the re-index it
+    folded in — which made applying a finished hand-over impossible while a scan
+    was running (the owner had to *stop* the scan, or defer the fetch). Now the
+    text is applied with no lock at all and the result names the documents to
+    re-index (`index_doc_ids`); pass `index=True` (`pha handoff fetch --index`)
+    to embed in the same command, which takes the lock and honours `wait_s`.
 
     `dry_run` prints the plan and touches nothing.
     """
@@ -1198,16 +1208,16 @@ def apply_result(
 
     conn = db.connect(cfg.db_path)
     try:
-        # Applying merges rows and then RE-INDEXES the document
-        # (`index_document` embeds), so the only model server this touches is
-        # the embedding model's — the same single lock `pha unbundle` takes, and
-        # for the same reason. Without it a fetch can run alongside `pha scan`
-        # or `pha reindex` and the two fight over the embed model. A dry run
-        # writes nothing, so it must not be refused because that server is busy.
+        # A lock is needed ONLY when this command embeds (`--index`): the merge,
+        # the library rewrite and the render rebuild touch no model. Without
+        # `--index` an apply can therefore never be refused by a running scan —
+        # which is the whole point of the split (gap G3). A dry run writes
+        # nothing, so it is never gated either.
         lock = None
-        if not dry_run:
+        if index and not dry_run:
             lock = locks.acquire(cfg, [locks.embed_key(cfg)],
-                                 label="pha handoff fetch")
+                                 label="pha handoff fetch", wait_s=wait_s,
+                                 verbose=verbose)
             if not lock.ok:
                 raise HandoffError(lock.reason())
 
@@ -1216,6 +1226,9 @@ def apply_result(
         applied: list[dict] = []
         conflicts: list[dict] = []
         refused: list[str] = []
+        # Documents whose text was applied but NOT embedded here (`--index` was
+        # not passed): the caller tells the user the exact reindex command.
+        pending_index: list[int] = []
 
         for rd in result.get("documents") or []:
             rel = str(rd.get("relpath") or "")
@@ -1296,7 +1309,10 @@ def apply_result(
             write_document_pages(cfg, conn, doc_id)
             for row in _all_editors(conn, doc_id):
                 write_edited_pages(cfg, conn, doc_id, row["editor"], model=None)
-            index_document(cfg, conn, doc_id, verbose=False)
+            if index:
+                index_document(cfg, conn, doc_id, verbose=False)
+            else:
+                pending_index.append(doc_id)
             # A hand-over ships no renders, so a document this archive never
             # scanned has no page images when its text comes back — the viewer
             # would show text and no picture. Rebuild them from the source here
@@ -1322,12 +1338,19 @@ def apply_result(
             }
 
         release(cfg, handoff_id, STATE_APPLIED)
+        if pending_index and verbose:
+            ids = " ".join(f"--doc {i}" for i in pending_index)
+            print(f"  applied without embedding: search still shows the OLD text for "
+                  f"{len(pending_index)} document(s) — run\n"
+                  f"    pha reindex {ids}", flush=True)
         return {
             "handoff_id": handoff_id,
             "documents": applied,
             "counts": counts,
             "conflicts": conflicts,
             "refused": refused,
+            "indexed": bool(index),
+            "index_doc_ids": pending_index,
             "stale": stale,
         }
     finally:

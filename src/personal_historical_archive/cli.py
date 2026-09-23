@@ -96,6 +96,43 @@ def _parse_pages(values) -> set[int] | None:
     return out or None
 
 
+# Default ceiling for `--wait` (seconds). A bound is mandatory: on a typical
+# machine the embedding endpoint is the SAME LM Studio that serves a scan's
+# vision model, so "wait for the embed server" can mean "wait for the scan".
+LOCK_WAIT_DEFAULT_S = 300.0
+
+
+def _add_wait_args(p) -> None:
+    """`--wait[=SECONDS]` / `--no-wait` for a lock-taking command."""
+    p.add_argument("--wait", nargs="?", type=float, const=LOCK_WAIT_DEFAULT_S,
+                   default=None, metavar="SECONDS",
+                   help="queue for a busy model server instead of refusing, up to "
+                        f"SECONDS (default {LOCK_WAIT_DEFAULT_S:.0f}s when the flag is "
+                        "bare; PHA_LOCK_WAIT sets the default for every command)")
+    p.add_argument("--no-wait", action="store_true",
+                   help="refuse immediately even when PHA_LOCK_WAIT asks to wait")
+
+
+def _lock_wait_s(args) -> float:
+    """This run's lock-queue ceiling: `--wait[=SECONDS]` > `PHA_LOCK_WAIT` > 0.
+
+    `--no-wait` forces 0 (today's refuse-immediately behaviour) even when the
+    environment asks to wait."""
+    if getattr(args, "no_wait", False):
+        return 0.0
+    wait = getattr(args, "wait", None)
+    if wait is not None:
+        return max(0.0, float(wait))
+    env = os.environ.get("PHA_LOCK_WAIT", "").strip()
+    if env:
+        try:
+            return max(0.0, float(env))
+        except ValueError:
+            print(f"warning: ignoring PHA_LOCK_WAIT={env!r} (not a number)",
+                  file=sys.stderr)
+    return 0.0
+
+
 def cmd_scan(cfg: Config, args) -> None:
     pages = _parse_pages(getattr(args, "page", None))
     if pages and args.watch:
@@ -129,7 +166,8 @@ def cmd_scan(cfg: Config, args) -> None:
                         dry_run=getattr(args, "dry_run", False),
                         unpin=getattr(args, "unpin", False),
                         pin=not getattr(args, "no_pin", False),
-                        force_index=getattr(args, "index", False))
+                        force_index=getattr(args, "index", False),
+                        wait_s=_lock_wait_s(args))
     finally:
         client.close()
     # a dry run / unpin prints its own report; nothing else to summarise
@@ -1827,7 +1865,8 @@ def cmd_reindex(cfg: Config, args) -> None:
     client = _client(cfg, cfg.embed_base_url, cfg.embed_timeout_s)
     try:
         res = reindex_all(cfg, client, path=args.path, doc=args.doc,
-                          page=args.page, force=args.force)
+                          page=args.page, force=args.force,
+                          wait_s=_lock_wait_s(args))
     finally:
         client.close()
     failed = res.get("failed") or []
@@ -1996,7 +2035,9 @@ def cmd_handoff(cfg: Config, args) -> None:
                     return
                 print(f"  result directory: {res['out']}")
             else:
-                res = _ho.apply_result(cfg, target, verbose=True, dry_run=dry)
+                res = _ho.apply_result(cfg, target, verbose=True, dry_run=dry,
+                                       index=getattr(args, "index", False),
+                                       wait_s=_lock_wait_s(args))
                 if dry:
                     print(json.dumps(res, indent=2, ensure_ascii=False))
                     return
@@ -2401,11 +2442,13 @@ def cmd_edit(cfg: Config, args) -> None:
                                    pages=pages, editor_override=editor_override,
                                    model_override=model_override, pin=pin,
                                    dry_run=dry_run, unpin=unpin,
-                                   force_index=getattr(args, "index", False))
+                                   force_index=getattr(args, "index", False),
+                                   wait_s=_lock_wait_s(args))
     else:
         res = edit_all(cfg, reprocess=args.reprocess, verbose=True,
                        page_no=min(pages) if pages else None,
-                       force_index=getattr(args, "index", False))
+                       force_index=getattr(args, "index", False),
+                       wait_s=_lock_wait_s(args))
     if dry_run:
         _print_edit_plan(res)
         return
@@ -3293,6 +3336,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--index", action="store_true",
                    help="embed even a document received here for a hand-over — by "
                         "default the owner embeds it on `handoff fetch` (no duplicate work)")
+    _add_wait_args(s)
     s.set_defaults(fn=cmd_scan)
 
     q = sub.add_parser("search", help="search the extracted text")
@@ -3455,6 +3499,7 @@ def main(argv: list[str] | None = None) -> None:
                         "(default: reuse unchanged chunks and embed only what changed)")
     r.add_argument("--include-leased", action="store_true",
                         help="also process documents currently out on a hand-over")
+    _add_wait_args(r)
     r.set_defaults(fn=cmd_reindex)
 
     e = sub.add_parser("export", help="regenerate per-page transcription files from the DB")
@@ -3557,6 +3602,7 @@ def main(argv: list[str] | None = None) -> None:
     e2.add_argument("--index", action="store_true",
                     help="embed even a document received here for a hand-over — by "
                          "default the owner embeds it on `handoff fetch` (no duplicate work)")
+    _add_wait_args(e2)
     e2.set_defaults(fn=cmd_edit)
 
     en = sub.add_parser("encoder", help="show encoder resolution for a file, or create one")
@@ -3678,6 +3724,10 @@ def main(argv: list[str] | None = None) -> None:
     ho_fetch = hsub.add_parser("fetch", help="apply a returned payload in place")
     ho_fetch.add_argument("directory", help="the result directory written by `handoff back`")
     ho_fetch.add_argument("--dry-run", action="store_true", help="print the plan; touch nothing")
+    ho_fetch.add_argument("--index", action="store_true",
+                          help="also embed the applied documents (takes the embedding "
+                               "lock; default: apply only and print the reindex command)")
+    _add_wait_args(ho_fetch)
 
     ho_status = hsub.add_parser("status", help="what is out on hand-over")
     ho_status.add_argument("--json", action="store_true", help="machine-readable output")

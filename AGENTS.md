@@ -159,6 +159,11 @@
     mac-studio: {slots: 2}
   ```
   `pha doctor` prints the resulting keys, their capacity and the lock dir.
+  A busy server makes a job **refuse**, not queue — add `--wait[=SECONDS]` (or
+  `PHA_LOCK_WAIT`) on `scan`/`edit`/`reindex`/`handoff fetch` to queue up to that
+  ceiling: it names the holder and its age, `--wait` bare means 300 s, `--no-wait`
+  overrides the env, and there is deliberately no unbounded form (waiting for the
+  embedding server can mean waiting for a scan that runs for hours).
   Locks live in a **user-global** directory (`~/Library/Caches/pha/locks` on
   macOS), so two archives sharing one server serialise too. `pha search` never
   takes the lock: while a job uses the embedding server it answers with keyword
@@ -654,6 +659,12 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   gitignored). `pha handoff status [--json]` / MCP `pha_handoff_status()` show
   what is out; `pha handoff cancel <id>` releases it and refuses a later
   result.
+  **`handoff fetch` applies without the embedding lock** (gap G3): merging rows,
+  rewriting library files and rebuilding renders touch no model, so the default
+  apply takes **no lock** (never refused by a running scan) and prints
+  `pha reindex --doc N …`; `fetch --index` embeds in the same command and takes
+  the lock (with `--wait` if asked). The result carries `indexed` and
+  `index_doc_ids` for agents.
   **The worker does not embed hand-over material** (gap G1): `import_handoff`
   records the document set here as RECEIVED (`state: "in"` — NOT a lease, so the
   worker still scans/edits/encodes it), and `pha scan`/`pha edit` on the worker

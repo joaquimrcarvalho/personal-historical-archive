@@ -2762,7 +2762,8 @@ def _index_after_edit(cfg: Config, conn, doc_id: int, edited_pages: int,
 
 
 def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True,
-             page_no: int | None = None, force_index: bool = False) -> dict:
+             page_no: int | None = None, force_index: bool = False,
+             wait_s: float = 0.0) -> dict:
     """Run the editor pass for every document that has an editor configured.
 
     Takes a lock on every model-server the matched documents may talk to (plus
@@ -2777,7 +2778,8 @@ def edit_all(cfg: Config, reprocess: bool = False, verbose: bool = True,
         docs = db.list_documents(conn, limit=10000)
         keys = _job_keys(cfg, [Path(d["path"]) for d in docs if d["path"]],
                          include_pal=False)   # the editor reads no page
-        lock = locks.acquire(cfg, keys, label="pha edit")
+        lock = locks.acquire(cfg, keys, label="pha edit", wait_s=wait_s,
+                             verbose=verbose)
         if not lock.ok:
             reason = lock.reason()
             print(f"  {reason}", flush=True)
@@ -2810,7 +2812,7 @@ def edit_documents_under(
     page_no: int | None = None, editor_override: str | None = None,
     model_override: str | None = None, pin: bool = True, dry_run: bool = False,
     unpin: bool = False, pages: set[int] | None = None,
-    force_index: bool = False,
+    force_index: bool = False, wait_s: float = 0.0,
 ) -> dict:
     """Run the editor pass for JUST the documents under a dropbox subpath
     (`pha edit --path collections/COLX`, a document folder, ...).
@@ -2880,7 +2882,7 @@ def edit_documents_under(
                                             include_pal=False,
                                             ed_override=editor_override,
                                             ed_model_override=model_override),
-                             label="pha edit")
+                             label="pha edit", wait_s=wait_s, verbose=verbose)
         if not lock.ok:
             reason = lock.reason()
             print(f"  {reason}", flush=True)
@@ -3705,6 +3707,7 @@ def scan_once(
     unpin: bool = False,
     pin: bool = True,
     force_index: bool = False,
+    wait_s: float = 0.0,
 ) -> dict:
     """Scan the dropbox (or a subpath), or re-read named pages of ONE document.
 
@@ -3763,7 +3766,8 @@ def scan_once(
                                  "path": str(files[0]), "plan": plan}]}
 
     if unpin:
-        lock = locks.acquire(cfg, _job_keys(cfg, files), label="pha scan --unpin")
+        lock = locks.acquire(cfg, _job_keys(cfg, files), label="pha scan --unpin",
+                             wait_s=wait_s, verbose=verbose)
         if not lock.ok:
             reason = lock.reason()
             print(f"  {reason}", flush=True)
@@ -3780,7 +3784,7 @@ def scan_once(
     lock = locks.acquire(cfg, _job_keys(cfg, files, default_pal=palaeographer,
                                         pal_override=pal_override,
                                         model_override=model_override, warn=False),
-                         label="pha scan")
+                         label="pha scan", wait_s=wait_s, verbose=verbose)
     if not lock.ok:
         reason = lock.reason()
         print(f"  {reason}", flush=True)
@@ -3841,7 +3845,8 @@ def scan_once(
 
 def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
                 path: str | None = None, doc: int | None = None,
-                page: int | None = None, force: bool = False) -> dict:
+                page: int | None = None, force: bool = False,
+                wait_s: float = 0.0) -> dict:
     """Re-embed chunks for every ingested document, or only for the one named
     by `doc` (`pha reindex --doc N`), or only for the documents under a dropbox
     subpath (`pha reindex --path collections/COLX`, a document folder, or a
@@ -3877,7 +3882,8 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
                 "reason": "--page needs --doc (refusing to reindex page N of every document)"}
     cfg.ensure_dirs()
     keys = _job_keys(cfg, [], embed=True)
-    lock = locks.acquire(cfg, keys, label="pha reindex")
+    lock = locks.acquire(cfg, keys, label="pha reindex", wait_s=wait_s,
+                         verbose=verbose)
     if not lock.ok:
         # cmd_reindex reports the reason (and exits 2); keep the message in the
         # return value rather than printing it twice.

@@ -252,6 +252,8 @@ class LockHandle:
     degraded: bool = False        # locking impossible: proceeding unlocked
     busy_key: str = ""
     busy_holder: str = ""
+    waited_s: float = 0.0         # how long a `wait_s` queue actually waited
+    timeout: bool = False         # the queue gave up at its ceiling
 
     @property
     def ok(self) -> bool:
@@ -262,14 +264,29 @@ class LockHandle:
         if not self.busy_key:
             return ""
         who = f" ({self.busy_holder})" if self.busy_holder else ""
+        waited = (f" [waited {_fmt_dur(self.waited_s)} before giving up]"
+                  if self.timeout and self.waited_s else "")
         if self.busy_key == WILDCARD:
             return (f"another job{who} is using a model with no declared server — "
                     "one model per model-server at a time; wait for it to finish, or "
                     "declare `server:` in the model files (and, if the machine really "
-                    "holds both models, slots in config.yaml: servers: {<id>: {slots: 2}})")
+                    "holds both models, slots in config.yaml: servers: {<id>: {slots: 2}})"
+                    + waited)
         return (f"model server '{self.busy_key}' is busy{who} — one model per "
                 "model-server at a time; wait for it to finish, or declare more "
-                "capacity in config.yaml: servers: {%s: {slots: 2}}" % self.busy_key)
+                "capacity in config.yaml: servers: {%s: {slots: 2}}" % self.busy_key
+                + waited)
+
+
+def _fmt_dur(seconds: float) -> str:
+    s = max(0.0, float(seconds))
+    if s < 10:
+        return f"{s:.1f}s"          # a short queue must not print "0s"
+    if s < 60:
+        return f"{s:.0f}s"
+    if s < 3600:
+        return f"{s / 60:.0f}m"
+    return f"{s / 3600:.1f}h"
 
 
 def _acquire_key(cfg, key: str, label: str) -> tuple[str, Path | None, str]:
@@ -333,13 +350,22 @@ def _first_foreign(key: str | None) -> tuple[bool, str]:
     return False, ""
 
 
-def acquire(cfg, keys, label: str = "pha job") -> LockHandle:
+def acquire(cfg, keys, label: str = "pha job", wait_s: float = 0.0,
+            verbose: bool = False) -> LockHandle:
     """Take a slot on every server key the job may touch.
 
     Keys are acquired in sorted order and released on refusal, so two jobs
     needing {A,B} and {B,A} cannot deadlock. Never raises: a refusal is a
     handle with `ok == False` (and `.reason()`), an unwritable lock directory
     is a `degraded` handle that proceeds without locking, as before.
+
+    `wait_s` > 0 QUEUES instead of refusing at once: it retries until that
+    ceiling, naming the holder and how long it has held the slot (`verbose`).
+    A ceiling is mandatory — "waiting for the embedding server" on a machine
+    where one LM Studio serves every model can mean waiting for a scan that runs
+    for hours, so there is no unbounded form and `wait_s=0` (the default) keeps
+    today's refuse-immediately behaviour. On timeout the refused handle carries
+    `timeout=True` and `waited_s`.
     """
     wanted = sorted({k for k in keys if k})
     if not wanted:
@@ -348,6 +374,36 @@ def acquire(cfg, keys, label: str = "pha job") -> LockHandle:
         lock_dir().mkdir(parents=True, exist_ok=True)
     except OSError:
         return LockHandle(degraded=True)
+    wait_s = max(0.0, float(wait_s or 0.0))
+    started = time.monotonic()
+    deadline = started + wait_s
+    announced = False
+    while True:
+        handle = _take_all(cfg, wanted, label)
+        if handle.ok or handle.degraded or not wait_s:
+            if announced and verbose and handle.ok:
+                print(f"  lock acquired after {_fmt_dur(time.monotonic() - started)}",
+                      flush=True)
+            return handle
+        now = time.monotonic()
+        if now >= deadline:
+            handle.timeout = True
+            handle.waited_s = now - started
+            return handle
+        if verbose and not announced:
+            age = holder_age_s(handle.busy_key)
+            if age is None:
+                age = holder_age_s(None)
+            who = f" ({handle.busy_holder})" if handle.busy_holder else ""
+            held = f", held for {_fmt_dur(age)}" if age else ""
+            print(f"  waiting up to {_fmt_dur(wait_s)} for model server "
+                  f"'{handle.busy_key}'{who}{held} — Ctrl-C to give up", flush=True)
+            announced = True
+        time.sleep(min(2.0, max(0.1, deadline - now)))
+
+
+def _take_all(cfg, wanted: list[str], label: str) -> LockHandle:
+    """One attempt at every key (the body of `acquire`, factored out)."""
     handle = LockHandle()
     for key in wanted:
         status, path, holder = _acquire_key(cfg, key, label)
@@ -375,6 +431,27 @@ def acquire(cfg, keys, label: str = "pha job") -> LockHandle:
             release(handle)
             return LockHandle(busy_key=WILDCARD, busy_holder=holder)
     return handle
+
+
+def holder_age_s(key: str | None = None) -> float | None:
+    """Seconds the current holder of `key` (any key when None) has held a slot.
+
+    Observation only, for the `--wait` message ("held for 1h12m"): the slot file's
+    mtime is when the job took it."""
+    try:
+        files = sorted(lock_dir().glob("*.lock")) if key is None else _slot_paths(key)
+    except OSError:
+        return None
+    ages: list[float] = []
+    for path in files:
+        pid, _label = _holder(path)
+        if pid == os.getpid() or _stale(path, pid):
+            continue
+        try:
+            ages.append(max(0.0, time.time() - path.stat().st_mtime))
+        except OSError:
+            continue
+    return min(ages) if ages else None
 
 
 def release(handle: LockHandle | None) -> None:

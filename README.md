@@ -590,9 +590,13 @@ model: qwen/qwen3-vl-8b
 ```
 
 `pha scan`, `pha edit`, `pha reindex`, `pha test`, `pha unbundle` and
-`pha handoff fetch` each take a lock on **every model-server they will talk to**
-and refuse if one is busy,
-naming the server and the holding job; two jobs may run concurrently **iff
+`pha handoff fetch --index` each take a lock on **every model-server they will
+talk to** and refuse if one is busy, naming the server and the holding job. Add
+`--wait[=SECONDS]` (or set `PHA_LOCK_WAIT`) to **queue** instead of refusing, up
+to that ceiling: the wait names the holder and how long it has held the server.
+There is deliberately no unbounded form, because "wait for the embedding server"
+can mean waiting for a scan that runs for hours — so `--wait` bare means 300 s
+and `--no-wait` overrides the environment. Two jobs may run concurrently **iff
 their servers are disjoint** — so a job against a remote model no longer blocks
 a local one, and two archives on one machine that share a server serialise
 (lock files live in a user-global directory, `~/Library/Caches/pha/locks` on
@@ -1156,7 +1160,8 @@ pha handoff out TARGET... [--out DIR] [--worker NAME] [--force] [--force-inbox]
 pha handoff in DIR                           # (worker) import a hand-out and leave it resumable
 pha handoff work DIR [--dry-run]             # (worker) scan -> edit -> encode the lent docs
 pha handoff back DIR [--out DIR] [--dry-run] # (worker) build the return payload
-pha handoff fetch DIR [--dry-run]            # (owner) merge the returned work into the same doc
+pha handoff fetch DIR [--dry-run] [--index]  # (owner) merge the returned work into the same doc
+                          #   (--index also embeds; default: apply + print `pha reindex`)
 pha handoff status [--json] | cancel ID      # what is out, and how to take it back
 pha update [--check] [--yes]  # check GitHub for a newer pha and install it
 ```
@@ -1756,6 +1761,14 @@ Leases live in `<archive>/.pha/handoffs/<id>.json` — machine-local, gitignored
 never archive content. `pha handoff status --json` gives the machine-readable
 form, and the read-only MCP tool `pha_handoff_status()` returns the same for a
 remote agent.
+
+**Applying a result does not wait for the embedding server.** `pha handoff
+fetch` merges the returned rows, rewrites the library files and rebuilds any
+missing page images — none of which touches a model — so it takes **no lock**
+by default and can never be refused because a scan is running. It prints the
+exact follow-up (`pha reindex --doc N …`) and reports `index_doc_ids` for
+agents; pass `--index` to embed in the same command, which does take the lock
+(and honours `--wait`).
 
 **The worker does not embed hand-over material.** When B imports a hand-out it
 records the document set as *received* (same file, `state: "in"`), and `pha scan`

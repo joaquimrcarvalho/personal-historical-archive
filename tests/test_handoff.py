@@ -549,21 +549,29 @@ def test_fetch_refuses_a_result_with_no_lease_here(tmp_path, monkeypatch):
     assert "already cancelled" in str(e.value)
 
 
-def test_fetch_takes_the_embedding_server_lock(tmp_path, monkeypatch):
-    """`fetch` re-indexes the document it merges, so it must hold the embedding
-    server's lock — the same single lock `pha unbundle` takes. A refusal must
-    leave the lease OPEN so the apply can be retried, and a dry run (which
-    writes nothing) must not be refused just because that server is busy."""
+def test_fetch_applies_without_the_embed_lock_and_embeds_only_with_index(
+        tmp_path, monkeypatch):
+    """G3 — applying a finished hand-over must not need the embedding server.
+
+    `fetch` used to take the embedding lock because it folded a re-index into the
+    apply, so a running scan refused it and the owner had to stop the scan (or
+    defer the fetch). Applying only merges rows, rewrites the library files and
+    rebuilds missing renders — no model — so it is lock-free now, and it names
+    the documents to re-index; `--index` opts into embedding, and THAT path takes
+    the lock (refusing, naming the holder, and leaving the lease open to retry).
+    """
     monkeypatch.chdir(tmp_path)
     a = _cfg(tmp_path, "projA")
     _document(a, pages=1, done=1)
-    out = tmp_path / "ho"
-    handoff.export_handoff(a, ["collections/DI"], out, verbose=False)
     b = _cfg(tmp_path, "projB")
-    handoff.import_handoff(b, out, verbose=False)
-    back = tmp_path / "ho-back"
-    handoff.build_result(b, out, back, verbose=False)
-    hid = handoff.read_result(back)["handoff_id"]
+
+    def cycle(tag: str):
+        out = tmp_path / f"ho-{tag}"
+        handoff.export_handoff(a, ["collections/DI"], out, verbose=False)
+        handoff.import_handoff(b, out, verbose=False)
+        back = tmp_path / f"ho-{tag}-back"
+        handoff.build_result(b, out, back, verbose=False)
+        return back, handoff.read_result(back)["handoff_id"]
 
     # another live job holds the embedding server
     monkeypatch.setattr(locks, "_pid_alive", lambda pid: True)
@@ -571,19 +579,28 @@ def test_fetch_takes_the_embedding_server_lock(tmp_path, monkeypatch):
     planted.parent.mkdir(parents=True, exist_ok=True)
     planted.write_text("999999 pha scan", encoding="utf-8")
 
+    # 1. the DEFAULT apply does not touch the embedding server at all
+    back, _hid = cycle("one")
+    res = handoff.apply_result(a, back, verbose=False)
+    assert res["indexed"] is False
+    assert res["index_doc_ids"], "it must name the documents to re-index"
+    assert handoff.active_leases(a) == [], "the apply completed despite the busy server"
+
+    # 2. `--index` does need it: refused, holder named, lease left open to retry
+    back2, hid2 = cycle("two")
     with pytest.raises(handoff.HandoffError) as e:
-        handoff.apply_result(a, back, verbose=False)
+        handoff.apply_result(a, back2, verbose=False, index=True)
     assert "busy" in str(e.value)
     assert "pha scan" in str(e.value)          # names the job holding the server
-    assert [l.handoff_id for l in handoff.active_leases(a)] == [hid], \
+    assert [l.handoff_id for l in handoff.active_leases(a)] == [hid2], \
         "a refused fetch must not consume the lease"
 
     # a dry run touches nothing, so a busy embed server is not its problem
-    res = handoff.apply_result(a, back, verbose=False, dry_run=True)
-    assert res["dry_run"] is True
+    assert handoff.apply_result(a, back2, verbose=False, dry_run=True)["dry_run"] is True
 
     planted.unlink()
-    handoff.apply_result(a, back, verbose=False)
+    res = handoff.apply_result(a, back2, verbose=False, index=True)
+    assert res["indexed"] is True and res["index_doc_ids"] == []
     assert handoff.active_leases(a) == []
     # and the lock it took is released, not leaked
     assert not locks._slot_path(locks.embed_key(a), 1).exists()
