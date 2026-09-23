@@ -4,7 +4,9 @@ Design/spec docs (drafts) for additions to **pha**, written while working on the
 **Documenta Indica** collection. Statuses below are verified against the code,
 and each doc's own header has been brought in line with this index (2026-09-21).
 
-**Current: pha 0.33.0**, plus the single-page re-scan (commit `1f99a1e`).
+**Current: pha 0.34.0** (the single-page re-scan, the review-safety and
+read-only-connect fixes, `thinking:` on a rules file and the per-page edit
+override all landed in 0.34.0).
 Shipped: stable page addresses, page navigation, stage filters, endpoint-scoped
 locking, per-document bibliographic references, scan resilience, **two-machine
 hand-over** (in `main` since 0.29.0), **single-page re-scan**, the

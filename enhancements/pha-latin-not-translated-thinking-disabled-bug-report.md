@@ -102,7 +102,7 @@ opening paragraph.
 
 ### 4.2 What pha could do
 
-**Status of F2 + F4: FIXED** (2026-09, pha 0.33.0). A rules file
+**Status of F2 + F4: FIXED** (2026-09, pha 0.34.0). A rules file
 (`palaeographers/`, `editors/`, `encoders/<id>.md`) may now carry `thinking:
 on|off`; it is a **stage-level override that beats the paired model sheet**,
 because the model file states a capability while the rules file states what
