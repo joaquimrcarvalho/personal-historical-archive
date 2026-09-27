@@ -663,6 +663,32 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   gitignored). `pha handoff status [--json]` / MCP `pha_handoff_status()` show
   what is out; `pha handoff cancel <id>` releases it and refuses a later
   result.
+  **Moving the payload is pha's job when the two machines share a tailnet**:
+  `--send <peer>` on `out`/`back` tars the payload and Taildrops it
+  (`tailscale file cp`), and `pha handoff recv` on the other machine moves it
+  out of the Tailscale inbox, unpacks it into
+  `<archive>/.pha/handoffs/incoming/<id>/` and **prints** the `in`/`fetch`
+  command — it never merges on its own (`--wait`; `--loop` for a drop box;
+  `--from PATH` for a file you copied yourself; `--no-downloads` to ignore the
+  macOS app's `~/Downloads`). No ssh keys, no shared folder, no open port, no
+  daemon: security is tailnet membership (`pha handoff peers` lists who can
+  receive). The tar is a **transport envelope only** — the payload format is
+  unchanged, and `handoff_transport.unpack` refuses an absolute path, `..` or a
+  link, because a tar from the network is untrusted even on a tailnet.
+  Directory-moving (rsync/zip/USB) stays the fallback, and is what to use when
+  Tailscale is not on both machines.
+  **`pha handoff worker --send-to <owner>` is the unattended trigger** — the
+  receiving side of Taildrop is not a trigger, so on the always-on machine this
+  watches the inbox and runs `in` → `work --resume` → `back` → send for each
+  hand-over. It drives those as SUBPROCESSES of the documented CLI (never by
+  importing the pipeline), retries only `PeerUnavailable` (the owner's laptop is
+  shut — that is the normal case, so it waits; a misspelled/ambiguous peer is
+  NOT retried forever), and `--install` writes a user LaunchAgent
+  (`~/Library/LaunchAgents`, no admin) using the PATH-proof
+  `<python> -m personal_historical_archive` form, so no ssh is needed to
+  trigger work at all. `--once`/`--status`/`--uninstall`/`--dry-run`; log at
+  `<archive>/.pha/handoff-worker.log`. It cannot wake a sleeping LM Studio, so
+  a missing model fails loudly in the log rather than hanging.
   **`handoff fetch` applies without the embedding lock** (gap G3): merging rows,
   rewriting library files and rebuilding renders touch no model, so the default
   apply takes **no lock** (never refused by a running scan) and prints

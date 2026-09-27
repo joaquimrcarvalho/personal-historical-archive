@@ -164,17 +164,35 @@ A document is a dropbox-relative subpath: `collections/COLX`, `documents/`
 ## Working on a handed-out document (`pha handoff`)
 
 A document may have been lent to this machine from another archive because this
-machine can reach the models (or is simply available). You will be given a
-**hand-out payload directory**; the whole job is four commands:
+machine can reach the models (or is simply available). If both machines are on
+the same Tailscale tailnet the payload can move without ssh, keys or a shared
+folder: `pha handoff recv` collects it, unpacks it and prints the path, and `pha
+handoff peers` lists the machines you can send the result back to. Otherwise you
+will be given a **hand-out payload directory**. Either way the job is the same
+commands:
 
 ```bash
+pha handoff recv                        # over the tailnet: unpack it, print the path
 pha handoff in   ~/x/DI.pha-handoff     # import it here (no models needed)
 pha handoff work ~/x/DI.pha-handoff     # scan -> edit -> encode; or run those
                                         #   three `--path <doc>` commands yourself
 pha handoff back ~/x/DI.pha-handoff     # build the return payload
 ```
 
-Then send the `…-back` directory back. Notes:
+Then send the `…-back` directory back — `pha handoff back … --send <peer>` over
+the tailnet, or by copying the directory.
+
+If this machine is meant to work hand-overs **unattended** (nobody at the
+keyboard), one command makes it self-driving — it receives each hand-over, works
+it and returns the result by itself, waiting for the owner's machine to come
+back online:
+
+```bash
+pha handoff worker --send-to <owner-peer> --install   # user LaunchAgent; no admin
+pha handoff worker --status                           # installed? running?
+```
+
+Check its log at `<archive>/.pha/handoff-worker.log`. Notes:
 
 - `pha handoff status` here shows nothing; the lease lives in the **owner's**
   archive. Do not worry that no lease appears.

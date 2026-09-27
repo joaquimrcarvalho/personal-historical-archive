@@ -3850,8 +3850,25 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
     """Re-embed chunks for every ingested document, or only for the one named
     by `doc` (`pha reindex --doc N`), or only for the documents under a dropbox
     subpath (`pha reindex --path collections/COLX`, a document folder, or a
-    single document file). Documents whose status is not 'done' are skipped —
-    their transcription is not final yet.
+    single document file).
+
+    **Which documents are considered.** A document that is not `done` — its
+    transcription is not final yet — is skipped by a BULK pass, because
+    embedding a half-finished volume is hours of work that the remaining pages
+    will invalidate. But skipping it silently was a bug: `pha handoff fetch`
+    prints `pha reindex --doc N` as the way to make returned work searchable,
+    and a hand-over routinely leaves the document `processing` (the pages the
+    worker never read stay `pending`), so that printed command did nothing while
+    reporting success. Two things follow:
+
+    - an **explicit** scope (`--doc N` or `--path …`) is honoured whatever the
+      status is: the operator named the document, and the chunks that exist are
+      real, page-grounded text. `pha reindex --doc N` therefore works on the
+      document `handoff fetch` just told you to reindex;
+    - a bulk pass still skips, but now NAMES what it skipped (`skipped_not_done`
+      in the result, reported by `pha reindex` and not counted as success), and
+      `--force` bypasses the gate too — `--force` means "do it anyway", and it
+      must never print `every chunk re-embedded` over `0 document(s)`.
 
     Re-indexing is **incremental by default**: a chunk whose text is unchanged
     and whose stored vector came from the current embed model is reused, so
@@ -3905,10 +3922,23 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
             docs = db.list_documents(conn, limit=10000)
         counts = {}
         failed: list[dict] = []
+        skipped_not_done: list[dict] = []
         leases = _leases(cfg)
         pages = None if page is None else {page}
+        # An explicit scope is honoured at any status; a bulk pass is not, unless
+        # --force says to do it anyway.
+        explicit = doc is not None or bool(path)
         for d in docs:
-            if d["status"] != "done":
+            if d["status"] != "done" and not (explicit or force):
+                have = conn.execute(
+                    "SELECT COUNT(*) n FROM pages WHERE document_id = ? AND status = 'done'",
+                    (int(d["id"]),),
+                ).fetchone()["n"]
+                skipped_not_done.append({
+                    "id": int(d["id"]), "filename": d["filename"],
+                    "status": d["status"], "pages_done": int(have),
+                    "page_count": int(d["page_count"] or 0),
+                })
                 continue
             if d["sha256"] in leases:
                 lease = leases[d["sha256"]]
@@ -3925,7 +3955,8 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
                 failed.append({"id": d["id"], "filename": d["filename"], "error": str(e)})
                 if verbose:
                     print(f"  ! {d['filename']}: {e}", flush=True)
-        return {"reindexed": len(counts), "chunks": counts, "failed": failed}
+        return {"reindexed": len(counts), "chunks": counts, "failed": failed,
+                "skipped_not_done": skipped_not_done}
     finally:
         conn.close()
         locks.release(lock)

@@ -1051,7 +1051,8 @@ def test_reindex_all_path_selects_only_docs_under(monkeypatch, tmp_path):
 
     res = ingest.reindex_all(cfg, None, path="collections/COLA")
     assert reindexed == [da]
-    assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": []}
+    assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": [],
+                    "skipped_not_done": []}
 
 
 def test_reindex_all_path_to_single_file(monkeypatch, tmp_path):
@@ -1091,7 +1092,8 @@ def test_reindex_all_path_to_single_file(monkeypatch, tmp_path):
 
     res = ingest.reindex_all(cfg, None, path="collections/COLA/a.pdf")
     assert reindexed == [da]
-    assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": []}
+    assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": [],
+                    "skipped_not_done": []}
 
 
 def test_reindex_all_no_path_reindexes_everything(monkeypatch, tmp_path):
@@ -1126,7 +1128,8 @@ def test_reindex_all_no_path_reindexes_everything(monkeypatch, tmp_path):
 
     res = ingest.reindex_all(cfg, None)
     assert reindexed == [da]
-    assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": []}
+    assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": [],
+                    "skipped_not_done": []}
 
 
 class _CountingEmbed:
@@ -1291,7 +1294,8 @@ def test_reindex_all_doc_scopes_to_one_document(monkeypatch, tmp_path):
                         lambda cfg_, conn_, doc_id, **kw: seen.append((doc_id, kw)) or 0)
     res = ingest.reindex_all(cfg, None, doc=da)
     assert [s[0] for s in seen] == [da]
-    assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": []}
+    assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": [],
+                    "skipped_not_done": []}
 
     seen.clear()
     res = ingest.reindex_all(cfg, None, doc=99999)
@@ -1696,3 +1700,94 @@ def test_edit_all_indexes_edited_documents(tmp_path, monkeypatch):
     assert res["indexed"] == 1
     assert res["index_failed"] == []
 
+
+
+# ---------------------------------------- an unfinished document is never a silent skip
+#
+# `pha handoff fetch` tells the operator to run `pha reindex --doc N`, and a
+# hand-over routinely leaves the document `processing` (the pages the worker
+# never read stay pending). Skipping those silently meant the printed command
+# did nothing while reporting `reindexed 0 document(s)` and exit 0 — finished
+# work applied but invisible to search, with no error anywhere.
+
+def test_reindex_bulk_names_the_unfinished_documents_it_skips(monkeypatch, tmp_path):
+    """A bulk pass still skips a `processing` document (embedding half a volume
+    is wasted work) — but as a REASON, reported with the page counts, never as
+    `0 document(s)` that looks like success."""
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+
+    cfg = _cfg_at(tmp_path)
+    conn, da, _ = _doc_with_pages(cfg, pages=4)
+    _db.set_document_status(conn, da, "processing")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(ingest, "index_document",
+                        lambda cfg_, conn_, doc_id, **kw: pytest.fail(
+                            "a bulk pass must not index an unfinished document"))
+    res = ingest.reindex_all(cfg, None)
+    assert res["reindexed"] == 0
+    assert res["skipped_not_done"] == [
+        {"id": da, "filename": "vol.pdf", "status": "processing",
+         "pages_done": 4, "page_count": 4}]
+
+
+def test_reindex_doc_scope_indexes_a_processing_document(monkeypatch, tmp_path):
+    """The command `handoff fetch` prints must actually work: naming the
+    document is an explicit request, so the status gate does not apply."""
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+
+    cfg = _cfg_at(tmp_path)
+    conn, da, _ = _doc_with_pages(cfg, pages=4)
+    _db.set_document_status(conn, da, "processing")
+    conn.commit()
+    conn.close()
+
+    seen = []
+    monkeypatch.setattr(ingest, "index_document",
+                        lambda cfg_, conn_, doc_id, **kw: seen.append(doc_id) or 0)
+    res = ingest.reindex_all(cfg, None, doc=da)
+    assert seen == [da]
+    assert res == {"reindexed": 1, "chunks": {da: 0}, "failed": [],
+                   "skipped_not_done": []}
+
+
+def test_reindex_path_scope_indexes_a_processing_document(monkeypatch, tmp_path):
+    """`--path` is explicit too — a document folder or collection named by hand."""
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+
+    cfg = _cfg_at(tmp_path)
+    conn, da, _ = _doc_with_pages(cfg, pages=2)
+    _db.set_document_status(conn, da, "processing")
+    conn.commit()
+    conn.close()
+
+    seen = []
+    monkeypatch.setattr(ingest, "index_document",
+                        lambda cfg_, conn_, doc_id, **kw: seen.append(doc_id) or 0)
+    res = ingest.reindex_all(cfg, None, path="collections/tcol")
+    assert seen == [da]
+    assert res["skipped_not_done"] == []
+
+
+def test_reindex_force_bypasses_the_status_gate(monkeypatch, tmp_path):
+    """`--force` means "do it anyway": it must never print `every chunk
+    re-embedded` over `0 document(s)`."""
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+
+    cfg = _cfg_at(tmp_path)
+    conn, da, _ = _doc_with_pages(cfg, pages=2)
+    _db.set_document_status(conn, da, "processing")
+    conn.commit()
+    conn.close()
+
+    seen = []
+    monkeypatch.setattr(ingest, "index_document",
+                        lambda cfg_, conn_, doc_id, **kw: seen.append(kw) or 0)
+    res = ingest.reindex_all(cfg, None, force=True)
+    assert len(seen) == 1 and seen[0]["incremental"] is False
+    assert res["reindexed"] == 1 and res["skipped_not_done"] == []

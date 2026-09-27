@@ -1072,6 +1072,11 @@ KEPT_LOCAL = "kept-local"
 TOOK_WORKER = "took-worker"
 CONFLICT = "conflict"
 SKIPPED = "skipped"
+# A page that came back with NO text. Two very different things look identical
+# in the payload unless you read `status`, and conflating them is a real bug (see
+# `_decide_merge`): BLANK is an ANSWER, UNREAD is unfinished work.
+BLANK = "blank"
+UNREAD = "unread"
 
 
 def _decide_merge(conn, local, wp: dict) -> tuple[str, dict | None]:
@@ -1090,6 +1095,7 @@ def _decide_merge(conn, local, wp: dict) -> tuple[str, dict | None]:
     never had (the caller decides whether to create it).
     """
     w_text = (wp.get("raw_text") or "").strip()
+    w_status = (wp.get("status") or "").strip()
     w_reviewed = wp.get("reviewed_at")
     l_reviewed = local["reviewed_at"]
     l_text = (local["raw_text"] or "").strip()
@@ -1100,7 +1106,31 @@ def _decide_merge(conn, local, wp: dict) -> tuple[str, dict | None]:
     if l_reviewed:
         return KEPT_LOCAL, None
     if not w_text:
-        return SKIPPED, None
+        # NO TEXT CAME BACK. `build_result` exports EVERY page of the worker's
+        # document (`SELECT * FROM pages`, no status filter), so a page the
+        # worker never read — left `pending` by a stalled or interrupted pass —
+        # arrives here byte-identical to a page it read and found blank. Only
+        # `status` tells them apart, and the difference is the whole point: one
+        # is an answer, the other is unfinished work.
+        #
+        # Conflating them is how a document gets stuck: leave both `pending` and
+        # the page count never reaches `page_count`, so the document stays
+        # `processing` for ever and `pha reindex` skips it (silently, before
+        # this fix). Treat both as an answer and never-read pages are recorded
+        # as transcribed pages — a fabricated reading, which is worse.
+        if l_text:
+            # this archive already holds a reading: a blank never wipes it
+            return KEPT_LOCAL, None
+        if w_status == "done":
+            # The worker READ this page and there is nothing on it. Resolve it
+            # exactly as a local scan would — `set_page_result` with empty text
+            # IS `done` (db.py) — so the document can reach `done` at all, and
+            # so a blank page is not a permanent hole in the page count.
+            return BLANK, {"raw_text": "", "filters": wp.get("filters"),
+                           "reviewed_at": None, "edits": []}
+        # never read here or there: say so, and leave it as the unfinished work
+        # it is (the caller reports it, so the operator is not left guessing)
+        return UNREAD, None
 
     lid = local["id"]
     edits: list[tuple[str, dict | None]] = []
@@ -1158,7 +1188,7 @@ def _merge_page(conn, doc_id: int, wp: dict, counts: dict,
 
     outcome, detail = _decide_merge(conn, local, wp)
     _tally_decisions([(outcome, detail)], counts)
-    if outcome != TOOK_WORKER or detail is None:
+    if outcome not in (TOOK_WORKER, BLANK) or detail is None:
         return pno if outcome == CONFLICT else None
 
     lid = int(local["id"])
@@ -1290,7 +1320,8 @@ def apply_result(
             if not lock.ok:
                 raise HandoffError(lock.reason())
 
-        counts = {KEPT_LOCAL: 0, TOOK_WORKER: 0, CONFLICT: 0, SKIPPED: 0, "records": 0}
+        counts = {KEPT_LOCAL: 0, TOOK_WORKER: 0, CONFLICT: 0, SKIPPED: 0,
+                  BLANK: 0, UNREAD: 0, "records": 0}
         stale: list[str] = []
         applied: list[dict] = []
         conflicts: list[dict] = []
@@ -1371,9 +1402,16 @@ def apply_result(
                 "SELECT COUNT(*) n FROM pages WHERE document_id = ? AND status = 'done'",
                 (doc_id,),
             ).fetchone()["n"]
-            db.set_document_status(
-                conn, doc_id, "done" if (expected and have >= expected) else "processing"
-            )
+            # Pages that are STILL not done after the merge: the worker never
+            # read them (see UNREAD). Counted separately from `expected - have`
+            # so the report can say "the worker did not read these" instead of
+            # implying the work is merely unfinished here.
+            open_pages = conn.execute(
+                "SELECT COUNT(*) n FROM pages WHERE document_id = ? AND status != 'done'",
+                (doc_id,),
+            ).fetchone()["n"]
+            doc_status = "done" if (expected and have >= expected) else "processing"
+            db.set_document_status(conn, doc_id, doc_status)
             conn.commit()
             write_document_pages(cfg, conn, doc_id)
             for row in _all_editors(conn, doc_id):
@@ -1393,7 +1431,8 @@ def apply_result(
                       f"(run `pha render --doc {doc_id}` once the source is readable)",
                       file=sys.stderr)
             applied.append({"relpath": rel, "id": doc_id, "pages_done": have,
-                            "page_count": expected})
+                            "page_count": expected, "status": doc_status,
+                            "open_pages": open_pages})
 
         if dry_run:
             return {

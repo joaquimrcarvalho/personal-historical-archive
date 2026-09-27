@@ -761,3 +761,153 @@ def test_conflict_is_named_not_just_counted(tmp_path, monkeypatch):
     p1 = _pages(a, a_doc)[1]
     assert p1["raw_text"] == "PAGE 1 OWNER human reading"
     assert p1["reviewed_at"]
+
+
+# ------------------------------------------- a page with no text: answer or absence?
+#
+# `build_result` exports EVERY page of the worker's document (`SELECT * FROM
+# pages`, no status filter), so two very different things reach the merge looking
+# identical — both with `raw_text` empty:
+#
+#   * the worker READ the page and found nothing (status `done`), and
+#   * the worker NEVER read it (status `pending`: a stalled or interrupted pass).
+#
+# They must not be treated alike. Left alike, the document can never reach
+# `done` and `pha reindex` skips it for ever (the reported bug); treated alike
+# the other way, a page nobody transcribed is recorded as transcribed, which on
+# a historical archive fabricates a reading. `status` is what separates them.
+
+def _worker_read_blank(cfg: Config, handoff_dir: Path, pages: list[int]):
+    """The worker read these pages and found NOTHING on them."""
+    conn = _db.connect(cfg.db_path)
+    try:
+        doc_id = int(conn.execute("SELECT id FROM documents").fetchone()["id"])
+        for pno in pages:
+            pid = conn.execute(
+                "SELECT id FROM pages WHERE document_id=? AND page_no=?", (doc_id, pno)
+            ).fetchone()["id"]
+            _db.set_page_result(conn, pid, raw_text="")
+        _db.set_document_status(conn, doc_id, "done")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _local_row(**kw):
+    row = {"id": 1, "raw_text": None, "reviewed_at": None}
+    row.update(kw)
+    return row
+
+
+def test_decide_merge_reads_status_to_tell_blank_from_never_read():
+    """The pure rule, by case. Both inputs have empty `raw_text`."""
+    conn = None
+    blank = {"page_no": 1, "status": "done", "raw_text": ""}
+    unread = {"page_no": 1, "status": "pending", "raw_text": ""}
+
+    # nothing here yet: the worker's status decides answer vs unfinished work
+    assert handoff._decide_merge(conn, _local_row(), blank)[0] == handoff.BLANK
+    assert handoff._decide_merge(conn, _local_row(), unread)[0] == handoff.UNREAD
+    # a page this archive already holds is never wiped by a blank
+    assert handoff._decide_merge(
+        conn, _local_row(raw_text="OLD READING"), blank)[0] == handoff.KEPT_LOCAL
+    # a human reading outranks any machine answer, blank or not
+    assert handoff._decide_merge(
+        conn, _local_row(raw_text="HUMAN", reviewed_at=1.0), blank)[0] == handoff.KEPT_LOCAL
+    assert handoff._decide_merge(
+        conn, _local_row(raw_text="HUMAN", reviewed_at=1.0), unread)[0] == handoff.KEPT_LOCAL
+    # text is still text
+    assert handoff._decide_merge(
+        conn, _local_row(), {"page_no": 1, "status": "done", "raw_text": "T"})[0] \
+        == handoff.TOOK_WORKER
+
+
+def test_a_page_the_worker_read_and_found_blank_is_resolved(tmp_path, monkeypatch):
+    """The reported bug: 32 blank pages came back, stayed `pending`, so the
+    document never reached `done` and `pha reindex` skipped it silently."""
+    monkeypatch.chdir(tmp_path)
+    a = _cfg(tmp_path, "projA")
+    doc_id, _ = _document(a, pages=2, done=1)      # page 2 not extracted here
+
+    out = tmp_path / "ho"
+    handoff.export_handoff(a, ["collections/DI"], out, verbose=False)
+    b = _cfg(tmp_path, "projB")
+    handoff.import_handoff(b, out, verbose=False)
+    _worker_read_blank(b, out, [2])                # read; nothing on the page
+
+    back = tmp_path / "ho-back"
+    handoff.build_result(b, out, back, verbose=False)
+    applied = handoff.apply_result(a, back, verbose=False)
+
+    pages = _pages(a, doc_id)
+    assert pages[2]["status"] == "done", "a blank page must be resolved, not left pending"
+    assert (pages[2]["raw_text"] or "") == ""
+    conn = _db.connect(a.db_path)
+    try:
+        status = conn.execute(
+            "SELECT status FROM documents WHERE id=?", (doc_id,)).fetchone()["status"]
+    finally:
+        conn.close()
+    assert status == "done", "the page count must be able to close"
+    assert applied["counts"][handoff.BLANK] == 1
+    assert applied["counts"][handoff.UNREAD] == 0
+    assert applied["documents"][0]["open_pages"] == 0
+
+
+def test_a_page_the_worker_never_read_is_not_recorded_as_transcribed(tmp_path, monkeypatch):
+    """The same empty payload from a page the worker never got to. Marking this
+    `done` would invent a reading for a page nobody transcribed, and hide real
+    unfinished work — so it stays pending and the document stays `processing`."""
+    monkeypatch.chdir(tmp_path)
+    a = _cfg(tmp_path, "projA")
+    doc_id, _ = _document(a, pages=2, done=1)
+
+    out = tmp_path / "ho"
+    handoff.export_handoff(a, ["collections/DI"], out, verbose=False)
+    b = _cfg(tmp_path, "projB")
+    handoff.import_handoff(b, out, verbose=False)
+    # deliberately finish nothing: page 2 stays `pending` on the worker, and
+    # `build_result` exports it anyway
+
+    back = tmp_path / "ho-back"
+    handoff.build_result(b, out, back, verbose=False)
+    applied = handoff.apply_result(a, back, verbose=False)
+
+    pages = _pages(a, doc_id)
+    assert pages[2]["status"] == "pending", "unread work must NOT become a reading"
+    assert (pages[2]["raw_text"] or "") == ""
+    conn = _db.connect(a.db_path)
+    try:
+        status = conn.execute(
+            "SELECT status FROM documents WHERE id=?", (doc_id,)).fetchone()["status"]
+    finally:
+        conn.close()
+    assert status == "processing", "an unfinished document must say it is unfinished"
+    assert applied["counts"][handoff.UNREAD] == 1
+    assert applied["counts"][handoff.BLANK] == 0
+    # and the report names the finish line rather than implying success
+    assert applied["documents"][0]["open_pages"] == 1
+    assert applied["documents"][0]["status"] == "processing"
+
+
+def test_a_blank_never_wipes_a_reading_the_owner_already_has(tmp_path, monkeypatch):
+    """Both sides have text for the page and the worker returns blank: keep the
+    owner's (a re-read that found nothing is not evidence the text was wrong)."""
+    monkeypatch.chdir(tmp_path)
+    a = _cfg(tmp_path, "projA")
+    doc_id, _ = _document(a, pages=2, done=2)
+
+    out = tmp_path / "ho"
+    handoff.export_handoff(a, ["collections/DI"], out, verbose=False)
+    b = _cfg(tmp_path, "projB")
+    handoff.import_handoff(b, out, verbose=False)
+    _worker_read_blank(b, out, [2])
+
+    back = tmp_path / "ho-back"
+    handoff.build_result(b, out, back, verbose=False)
+    applied = handoff.apply_result(a, back, verbose=False)
+
+    pages = _pages(a, doc_id)
+    assert pages[2]["raw_text"] == "PAGE 2 machine text"
+    assert applied["counts"][handoff.BLANK] == 0
+    assert applied["counts"][handoff.KEPT_LOCAL] == 1

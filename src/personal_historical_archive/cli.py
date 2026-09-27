@@ -1885,6 +1885,18 @@ def cmd_reindex(cfg: Config, args) -> None:
     else:
         mode = "incremental: unchanged chunks reused"
     print(f"reindexed {res['reindexed']} document(s){scope} [{mode}]")
+    not_done = res.get("skipped_not_done") or []
+    if not_done:
+        # A skip is a REASON, not a silent success: `reindexed 0 document(s)`
+        # on its own is what made a fetched-but-unsearchable hand-over look fine.
+        print(f"! {len(not_done)} document(s) NOT reindexed — still `processing`, "
+              f"so their transcription is not final:", file=sys.stderr)
+        for s in not_done:
+            pages = (f"{s['pages_done']}/{s['page_count']} pages done"
+                     if s["page_count"] else s["status"])
+            print(f"  - #{s['id']} {s['filename']}: {pages} — "
+                  f"`pha reindex --doc {s['id']}` indexes it now anyway; "
+                  f"`pha scan --path …` finishes it", file=sys.stderr)
     if failed:
         # The documents are untouched (chunks and vectors intact) — this is the
         # safe failure, not a degraded index.
@@ -1998,6 +2010,14 @@ def cmd_handoff(cfg: Config, args) -> None:
             print(f"  {res['stubs_dropped']} not-yet-extracted page(s) left behind "
                   f"(the worker resumes them)")
         print(f"  payload: {res['out']}")
+        if getattr(args, "send", None):
+            from . import handoff_transport as _ho_t
+            try:
+                sent = _ho_t.send_dir(Path(res["out"]), args.send, verbose=True)
+            except _ho.HandoffError as e:
+                _fail(e)
+            print(f"  sent to {sent['to']} ({sent['to_ip']}) — on that machine run: "
+                  f"`pha handoff recv`")
         print(f"  these are now leased: the pipeline skips them until `pha handoff fetch`")
 
     elif sub in ("in", "back", "fetch"):
@@ -2034,6 +2054,15 @@ def cmd_handoff(cfg: Config, args) -> None:
                     print(json.dumps(res, indent=2, ensure_ascii=False))
                     return
                 print(f"  result directory: {res['out']}")
+                if getattr(args, "send", None):
+                    from . import handoff_transport as _ho_t
+                    try:
+                        sent = _ho_t.send_dir(Path(res["out"]), args.send,
+                                              verbose=True)
+                    except _ho.HandoffError as e:
+                        _fail(e)
+                    print(f"  sent to {sent['to']} ({sent['to_ip']}) — on the owner's "
+                          f"machine run: `pha handoff recv`")
             else:
                 res = _ho.apply_result(cfg, target, verbose=True, dry_run=dry,
                                        index=getattr(args, "index", False),
@@ -2045,9 +2074,28 @@ def cmd_handoff(cfg: Config, args) -> None:
                 print(
                     f"applied {len(res['documents'])} document(s): "
                     f"{c['took-worker']} page(s)/edit(s) from the worker, "
-                    f"{c['kept-local']} skipped (you had corrected them), "
-                    f"{c['conflict']} conflict(s), {c['skipped']} dropped"
+                    f"{c['blank']} blank page(s), "
+                    f"{c['kept-local']} kept (your reading), "
+                    f"{c['conflict']} conflict(s), {c['unread']} never read"
                 )
+                if c["blank"]:
+                    print(f"  {c['blank']} page(s) came back with no text because the "
+                          f"worker READ them and found nothing — recorded as done, the "
+                          f"same as a local blank page, so the page count still closes",
+                          file=sys.stderr)
+                unfinished = [d for d in res["documents"] if d.get("open_pages")]
+                if unfinished:
+                    # NOT the same thing as the blank pages above: the worker never
+                    # read these, so the document is not finished — and it is not
+                    # finished HERE either (the pages stay pending). The reindex
+                    # command does cover them, so say what is actually wrong.
+                    print(f"  ! {len(unfinished)} document(s) are still NOT finished — "
+                          f"the worker left pages it never read:", file=sys.stderr)
+                    for d in unfinished:
+                        print(f"      #{d['id']} {d['relpath']}: {d['pages_done']}/"
+                              f"{d['page_count']} pages done, {d['open_pages']} never read "
+                              f"— finish with: pha scan --path {d['relpath']}",
+                              file=sys.stderr)
                 if res["conflicts"]:
                     print("  conflicts (both sides corrected differently; local kept):",
                           file=sys.stderr)
@@ -2064,6 +2112,145 @@ def cmd_handoff(cfg: Config, args) -> None:
                     print(f"  ! refused: {', '.join(res['refused'])}", file=sys.stderr)
         except _ho.HandoffError as e:
             _fail(e)
+
+    elif sub == "peers":
+        from . import handoff_transport as _ho_t
+        try:
+            known = _ho_t.peers()
+        except _ho.HandoffError as e:
+            _fail(e)
+        if getattr(args, "json", False):
+            print(json.dumps(
+                [{"hostname": p.hostname, "ip": p.ip, "online": p.online,
+                  "status": p.status} for p in known],
+                indent=2, ensure_ascii=False))
+            return
+        if not known:
+            print("no tailnet devices can receive a hand-over — is Tailscale "
+                  "running and logged in on both machines?")
+            return
+        print("tailnet devices that can receive a hand-over")
+        for p in known:
+            state = "online" if p.online else p.status
+            print(f"  {p.hostname:<30} {p.ip:<16} {state}")
+
+    elif sub == "recv":
+        from . import handoff_transport as _ho_t
+
+        def _stage(archive: Path) -> None:
+            info = _ho_t.describe(cfg, archive, verbose=True)
+            where = " (came from ~/Downloads)" if info["from_downloads"] else ""
+            print(f"  hand-out {info['handoff_id'] or '?'} — {info['kind']}, "
+                  f"{info['documents']} document(s){where}")
+            print(f"    next: {info['command']}")
+
+        def _sweep() -> int:
+            found = _ho_t.candidates(
+                cfg, include_downloads=not getattr(args, "no_downloads", False))
+            for a in found:
+                _stage(a)
+            return len(found)
+
+        try:
+            src = getattr(args, "from_", None)
+            if src:
+                p = Path(src)
+                if p.is_dir():
+                    kind = _ho_t.read_kind(p)
+                    cmd = (f"pha handoff in {p}" if kind == _ho_t.KIND_PAYLOAD
+                           else f"pha handoff fetch {p}")
+                    print(f"  hand-out {_ho_t.read_id(p) or '?'} ({kind}) "
+                          f"— already unpacked")
+                    print(f"    next: {cmd}")
+                    return
+                _stage(p)
+                return
+            if getattr(args, "loop", False):
+                print("drop box: receiving every hand-over as it arrives "
+                      "(Ctrl-C to stop)")
+                while True:
+                    _ho_t.receive(cfg, wait=True, verbose=True)
+                    _sweep()
+                return
+            _ho_t.receive(cfg, wait=getattr(args, "wait", False), verbose=True)
+            if not _sweep():
+                print("nothing new to receive")
+        except KeyboardInterrupt:
+            print("\nstopped")
+        except _ho.HandoffError as e:
+            _fail(e)
+
+    elif sub == "worker":
+        from . import handoff_worker as _hw
+
+        send_to = (getattr(args, "send_to", None) or "").strip()
+
+        if getattr(args, "status", False):
+            st = _hw.worker_status(cfg)
+            if getattr(args, "json", False):
+                print(json.dumps(st, indent=2, ensure_ascii=False))
+                return
+            state = ("running" if st["running"]
+                     else "installed but not running" if st["installed"]
+                     else "not installed")
+            print(f"hand-over worker: {state}")
+            print(f"  plist: {st['plist']}")
+            print(f"  log:   {st['log']}")
+            if st["detail"]:
+                print(f"  note:  {st['detail']}")
+            return
+
+        if getattr(args, "uninstall", False):
+            try:
+                res = _hw.uninstall_worker()
+            except _ho.HandoffError as e:
+                _fail(e)
+            print("worker uninstalled" if res["uninstalled"]
+                  else "no worker was installed")
+            print(f"  {res['plist']}")
+            return
+
+        if getattr(args, "install", False):
+            try:
+                res = _hw.install_worker(cfg, send_to,
+                                         dry_run=getattr(args, "dry_run", False))
+            except _ho.HandoffError as e:
+                _fail(e)
+            if res.get("dry_run"):
+                print("would install a user LaunchAgent (no admin password needed):")
+                print(f"  {res['plist']}")
+                print(f"  running: {' '.join(res['would_run'])}")
+                print(f"  log: {res['log']}")
+                print("  re-run without --dry-run to install it")
+                return
+            print("hand-over worker installed and started")
+            print(f"  {res['plist']}")
+            print(f"  log: {res['log']}")
+            print(f"  it will now receive, work and return hand-overs by itself")
+            print(f"  check: pha handoff worker --status")
+            return
+
+        if not send_to:
+            _fail(_ho.HandoffError(
+                "the worker needs --send-to <peer> — the machine that owns the "
+                "documents (see `pha handoff peers`)"))
+
+        try:
+            reports = _hw.worker_loop(cfg, send_to,
+                                      once=getattr(args, "once", False),
+                                      poll_s=getattr(args, "poll_s", 60.0),
+                                      max_retries=getattr(args, "max_retries", 0))
+        except KeyboardInterrupt:
+            print("\nworker stopped")
+            return
+        except _ho.HandoffError as e:
+            _fail(e)
+        done = [r for r in reports if r.get("ok")]
+        print(f"processed {len(reports)} hand-over(s); {len(done)} returned")
+        for r in reports:
+            if not r.get("ok"):
+                print(f"  ! {r.get('handoff_id') or r.get('archive')}: "
+                      f"{r.get('reason') or r.get('step', '')}", file=sys.stderr)
 
     elif sub == "work":
         target = Path(args.directory)
@@ -3741,6 +3928,10 @@ def main(argv: list[str] | None = None) -> None:
     ho_out.add_argument("--force-inbox", action="store_true",
                         help="when an inbox target would overwrite a file already in the "
                              "dropbox, replace it instead of refusing")
+    ho_out.add_argument("--send", metavar="PEER", default=None,
+                        help="also taildrop the payload to a tailnet device (a name "
+                             "substring or IP; see `pha handoff peers`) — no ssh keys, "
+                             "no shared folders")
 
     ho_in = hsub.add_parser("in", help="import a hand-out here (the worker machine) and leave it resumable")
     ho_in.add_argument("directory", help="the hand-out payload directory")
@@ -3765,6 +3956,9 @@ def main(argv: list[str] | None = None) -> None:
     ho_back.add_argument("directory", help="the hand-out payload directory")
     ho_back.add_argument("--out", "-o", default=None, help="result directory (default: <directory>-back)")
     ho_back.add_argument("--dry-run", action="store_true", help="report what would travel")
+    ho_back.add_argument("--send", metavar="PEER", default=None,
+                         help="also taildrop the result to a tailnet device (a name "
+                              "substring or IP; see `pha handoff peers`)")
 
     ho_fetch = hsub.add_parser("fetch", help="apply a returned payload in place")
     ho_fetch.add_argument("directory", help="the result directory written by `handoff back`")
@@ -3779,6 +3973,50 @@ def main(argv: list[str] | None = None) -> None:
 
     ho_cancel = hsub.add_parser("cancel", help="release a lease without applying a result")
     ho_cancel.add_argument("handoff_id", help="the hand-off id from `pha handoff status`")
+
+    ho_recv = hsub.add_parser(
+        "recv", help="receive a hand-over over the tailnet and unpack it (no ssh, no keys)")
+    ho_recv.add_argument("--wait", action="store_true",
+                         help="block until a hand-over arrives")
+    ho_recv.add_argument("--loop", action="store_true",
+                         help="stay open as a drop box, receiving each hand-over as it "
+                              "is sent (Ctrl-C to stop)")
+    ho_recv.add_argument("--from", dest="from_", default=None, metavar="PATH",
+                         help="stage this archive — or report this already-unpacked "
+                              "directory — instead of the Tailscale inbox")
+    ho_recv.add_argument("--no-downloads", action="store_true",
+                         help="do not also look for archives the macOS app delivered "
+                              "to ~/Downloads")
+
+    ho_peers = hsub.add_parser("peers",
+                               help="tailnet devices that can receive a hand-over")
+    ho_peers.add_argument("--json", action="store_true", help="machine-readable output")
+
+    ho_worker = hsub.add_parser(
+        "worker",
+        help="run unattended: receive a hand-over, work it, send the result back")
+    ho_worker.add_argument("--send-to", metavar="PEER", default=None,
+                           help="the tailnet device that OWNS the documents — where "
+                                "results are sent back (`pha handoff peers` lists them)")
+    ho_worker.add_argument("--once", action="store_true",
+                           help="process what is waiting, return, and exit")
+    ho_worker.add_argument("--poll-s", type=float, default=60.0, metavar="SECONDS",
+                           help="how long to wait before retrying while the owner's "
+                                "machine is offline (default 60)")
+    ho_worker.add_argument("--max-retries", type=int, default=0, metavar="N",
+                           help="give up sending after N attempts (default 0 = wait "
+                                "indefinitely, which is the point of a resident worker)")
+    ho_worker.add_argument("--install", action="store_true",
+                           help="install + start a user LaunchAgent so the worker runs "
+                                "at login (macOS; no admin password)")
+    ho_worker.add_argument("--uninstall", action="store_true",
+                           help="stop and remove the LaunchAgent")
+    ho_worker.add_argument("--status", action="store_true",
+                           help="is the worker installed and running?")
+    ho_worker.add_argument("--json", action="store_true",
+                           help="with --status: machine-readable output")
+    ho_worker.add_argument("--dry-run", action="store_true",
+                           help="with --install: print what would change; write nothing")
 
     ho.set_defaults(fn=cmd_handoff)
 

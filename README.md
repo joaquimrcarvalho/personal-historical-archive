@@ -1153,15 +1153,21 @@ pha mcp [--transport stdio|sse] [--port 8000]
 pha bundle TARGET... [--out DIR] [--force] [--move]  # export collections/docs as a portable bundle
                                                      #   (--move: delete them from THIS archive too)
 pha unbundle BUNDLE [--force]                # import a bundle into THIS archive (no re-scan/edit)
-pha handoff out TARGET... [--out DIR] [--worker NAME] [--force] [--force-inbox]
+pha handoff out TARGET... [--out DIR] [--worker NAME] [--force] [--force-inbox] [--send PEER]
                                              # lend docs to a second machine (they stay HERE)
                                              #   TARGET: a dropbox path, or inbox/<rel>
                                              #   (moved into the dropbox first)
+                                             #   --send: also taildrop it (no ssh keys)
+pha handoff recv [--wait] [--loop] [--from PATH]  # receive a hand-out over the tailnet
+pha handoff peers [--json]                   # tailnet devices that can receive one
+pha handoff worker --send-to PEER [--once] [--install|--uninstall|--status]
+                           # unattended: receive, work and return hand-overs
+                           #   (--install = user LaunchAgent, macOS, no admin)
 pha handoff in DIR                           # (worker) import a hand-out and leave it resumable
 pha handoff work DIR [--pages N[,M]] [--resume] [--dry-run]
                           # (worker) scan -> edit -> encode the lent docs;
                           #   --pages names pages; --resume works only what is missing
-pha handoff back DIR [--out DIR] [--dry-run] # (worker) build the return payload
+pha handoff back DIR [--out DIR] [--dry-run] [--send PEER] # (worker) build the return payload
 pha handoff fetch DIR [--dry-run] [--index]  # (owner) merge the returned work into the same doc
                           #   (--index also embeds; default: apply + print `pha reindex`)
 pha handoff status [--json] | cancel ID      # what is out, and how to take it back
@@ -1693,7 +1699,7 @@ just run somewhere else:
 ```bash
 # on the archive that OWNS the document (A):
 pha handoff out collections/DI --worker mac-studio -o ~/x/DI.pha-handoff
-# transfer the payload directory (rsync / zip / USB)
+# transfer the payload directory (rsync / zip / USB, or `--send` + `recv` below)
 
 # on the WORKING machine (B):
 pha handoff in ~/x/DI.pha-handoff      # import it here, left resumable
@@ -1719,6 +1725,96 @@ document handed out before its first scan has no images here, `handoff fetch`
 rebuilds any that are missing with the sidecar's settings — the same thing
 `pha render [--path … | --doc N]` does on demand. Renders are a derived cache,
 so byte-identity across machines is deliberately not required.
+
+#### Moving the payload without ssh keys (`--send` / `pha handoff recv`)
+
+The payload is a directory, and moving a directory between two machines is
+normally where the technical cost lands (ssh keys, addresses, remote paths —
+twice per hand-over). If both machines are on the **same Tailscale tailnet**,
+pha moves it for you with **Taildrop**, which needs no keys, opens no port and
+installs nothing:
+
+```bash
+# on A (the owner):
+pha handoff peers                          # who can receive: name, address, online
+pha handoff out collections/DI --send mac-studio
+
+# on B (the worker) — no path to type:
+pha handoff recv                           # unpack it and print the next command
+pha handoff in <archive>/.pha/handoffs/incoming/DI-20260926   # the path it printed
+
+# …work, then the return trip:
+pha handoff back ~/x/DI.pha-handoff --send macbook
+# on A:
+pha handoff recv && pha handoff fetch <the path it printed>
+```
+
+- `--send <peer>` takes a **name substring or an IP** (`mac-studio`,
+  `100.68.155.125`); an ambiguous name lists the candidates and stops, and an
+  offline machine is refused up front (Taildrop is a direct transfer with no
+  server-side queue, so the peer must be awake — which the hand-over design
+  already assumes at both ends).
+- `pha handoff recv` moves files out of the Tailscale inbox, unpacks them into
+  `<archive>/.pha/handoffs/incoming/<id>/`, and **tells you the command to run**;
+  it never merges on its own. Re-running it is safe — an already-unpacked
+  hand-over is not staged twice. It also finds an archive the macOS app dropped
+  in `~/Downloads` (`--no-downloads` turns that off), and `--from PATH` stages a
+  file you copied yourself.
+- `--wait` blocks until one arrives; `--loop` turns the always-on machine into a
+  **drop box** (`pha handoff recv --loop`), receiving each hand-over as it is
+  sent. Nothing is installed: stop it with Ctrl-C.
+- The archive you receive is a **transport envelope only** — the payload format
+  is unchanged, and a member that would escape the staging directory (an
+  absolute path, `..`, a symlink) is refused, because a tar from the network is
+  untrusted even on a tailnet.
+- **Security is the tailnet.** Taildrop is peer-to-peer over WireGuard between
+  devices already authenticated to the same tailnet; pha adds no auth of its own
+  and exposes no port. Any device on your tailnet can send to you — restrict
+  that with tailnet ACLs if you want it tighter.
+- Without Tailscale, nothing changes: `rsync`/zip/USB plus the plain directory
+  commands (`pha handoff in DIR`, `pha handoff fetch DIR`) still work.
+
+#### Nobody at the keyboard: `pha handoff worker`
+
+Moving the payload without ssh still leaves the *trigger* — someone has to run
+`handoff in` / `work` / `back` on the working machine. When that machine is the
+always-on box with nobody at it, let pha do the whole job:
+
+```bash
+# on the WORKING machine (the Mac mini), once:
+pha handoff worker --send-to macbook-air --install    # user LaunchAgent, no admin
+pha handoff worker --status                           # installed? running?
+
+# from then on, the owner's side is just:
+pha handoff out collections/DI --send mac-mini
+# …and the finished result turns up by itself:
+pha handoff recv && pha handoff fetch <the path it printed>
+```
+
+The worker watches the Tailscale inbox and, for each hand-over that arrives,
+runs `in` → `work --resume` → `back` and Taildrops the result back. It is a
+genuine convenience wrapper over exactly the commands above: it drives them as
+subprocesses, so each stage still reports its own outcome.
+
+- **It waits for you.** Taildrop refuses an offline peer, and a closed MacBook is
+  the normal case — so while the owner is unreachable the worker retries every
+  `--poll-s` (default 60) and sends when the lid opens. A **misspelled or
+  ambiguous peer is not retried forever**: no amount of waiting fixes it, so the
+  worker says so and leaves the packed result on disk.
+- `--once` drains what is waiting and exits (cron-style); `--max-retries N`
+  bounds the wait; without `--install` it just runs in the foreground.
+- `--install` writes `~/Library/LaunchAgents/com.personal-historical-archive.
+  handoff-worker.plist` (macOS; **no administrator password**, nothing outside
+  your home folder and the archive's `.pha/`). It uses the PATH-proof
+  `<python> -m personal_historical_archive` form, so it works from a login
+  context with a minimal PATH. `--dry-run` prints exactly what would change;
+  `--uninstall` stops and removes it. Logs:
+  `<archive>/.pha/handoff-worker.log`.
+- It **cannot wake a sleeping model server** — LM Studio must be running on the
+  working machine, and a stage that finds no model fails loudly in the log
+  rather than hanging silently.
+- `pha handoff recv --loop` remains the "watch and tell me" mode (it stages and
+  prints); `worker` is the "just do it" mode.
 
 `work` is a convenience wrapper: it runs `pha scan --path …`, `pha edit --path …`
 and `pha encode --path …` in order, printing each stage's own result. It can
