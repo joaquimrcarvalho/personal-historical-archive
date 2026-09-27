@@ -1,15 +1,16 @@
 # pha for historians — a step-by-step guide
 
-**pha** (Personal Historical Archive) keeps your manuscripts, old books and
-maps in a local archive: you drop files into a folder, a vision model reads
-each page, a text model can modernize or translate the transcriptions, and
-everything becomes searchable by your AI assistant.
+**pha** (Personal Historical Archive) keeps scanned copies of manuscripts, old books and maps in a local archive in your computer and enables AI agents to answer your queries about them. Worflow: 
+1. you drop files into a folder (PDFs, JPEGs, PNG)
+2. an AI palaeographer reads each page and generates text files with the content;
+3. optionally, an AI Editor transforms the result and perfomrs editing tasks such as expand abreviations, modernize names or translate certain languages (for instance from Latin).
+4. The resulting text is stored in a semantic database and everything becomes searchable by your AI assistant
 
 ## What problem **pha** solves
 
 ### Ai needs context to be smart
 
-To understand what **pha** does and why it is needed it helps to understand how AI deals with queries and the role of what is called "context". 
+To understand what **pha** does it helps to understand how AI deals with queries and the role of what is called "context". 
 
 "Context" is the information that is provided to the LLM to facilitate answering your queries. The AI has no memory of your conversations nor any capacity to learn from its interactions with you. It knows what it learned during training before being released in the world. Everything that is relevant to answer your query and is not part of its initial training must be provided as context, including the record of your past interactions. 
 
