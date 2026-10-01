@@ -11,17 +11,21 @@ Layout (the `~/.agents/skills/` convention agent runtimes use):
 
     <archive>/skills/README.md          what these are, and the format
     <archive>/skills/<name>/SKILL.md    one skill, YAML front matter + body
+    <archive>/skills/<name>/...         helper files the skill ships
 
-The skill bodies are **embedded in this package** (like `builtin_samples()`),
+The skill files are **embedded in this package** (like `builtin_samples()`),
 not read from the source tree: the machine that owns the archive may have pha
 installed with no access to the pha repository — which is exactly the situation
-these skills exist for. The repo's `skills/<name>/SKILL.md` files are the
-authored copies; `tests/test_archive_skills.py` asserts the embedded constants match
-them byte for byte, so the two cannot drift.
+these skills exist for. The repo's `skills/<name>/` files are the authored
+copies; `tests/test_archive_skills.py` asserts the embedded files match them
+byte for byte, so the two cannot drift.
 
-Seeding is **once** — like `notes/README.md`, and unlike README.md/AGENTS.md
-(which are marker-stamped and refreshed): a skill file is never overwritten,
-because the archive owner is expected to edit, add or remove them.
+Seeding writes a bundled file **only when it is missing** — like
+`notes/README.md`, and unlike README.md/AGENTS.md (which are marker-stamped
+and refreshed): an existing skill file is never overwritten, so the archive
+owner's edits survive. A missing bundled file — e.g. a skill added in a newer
+pha version — is (re)created on the next run, which is how updates reach an
+existing archive.
 
 This module deliberately imports nothing from the package, so both
 `archive_init.init_archive` and `Config.ensure_dirs` can use it without an
@@ -426,21 +430,29 @@ Every substantive claim should cite the source it came from:
 - [ ] Every claim cites document id, page, and variant (raw vs edited).
 """
 
-SKILLS_README_MD = """# Skills
+SKILLS_README_MD = r'''# Skills
 
-This folder holds **pha-specific agent skills** — short, self-contained
-instruction files that tell an AI agent how to operate *this* archive without
-reading the pha source code. They are the archive's own copy, seeded here when
-the archive was created, so an agent that was pointed at this directory alone
-can find them (no pha checkout, no network).
+This folder holds the **agent skills pha bundles with an archive** — short,
+self-contained instruction files that tell an AI agent how to operate *this*
+archive (and do recurring research tasks on it) without reading the pha source
+code. They are the archive's own copy, seeded here when the archive was
+created, so an agent that was pointed at this directory alone can find them (no
+pha checkout, no network).
 
 Each skill is one folder with a `SKILL.md` inside:
 
     skills/<name>/SKILL.md
 
-The file starts with YAML front matter carrying a `name` (which **must match
-the folder name**) and a `description` (the trigger — when an agent should
-reach for it), followed by the instructions:
+A skill may also ship the files it needs — helper `scripts/`, `examples/`, a
+`LICENSE`, its own `README.md`. `pha` seeds every bundled file, so an archive
+with no source checkout gets the whole skill, not only the instructions.
+
+Paths inside a skill are relative to the skill's own folder: run its
+`scripts/...` from there (or with the full path), not from the archive root.
+
+The `SKILL.md` file starts with YAML front matter carrying a `name` (which
+**must match the folder name**) and a `description` (the trigger — when an
+agent should reach for it), followed by the instructions:
 
     ---
     name: pha-search-context
@@ -453,8 +465,8 @@ reach for it), followed by the instructions:
 ## How an agent should use these
 
 **Using the archive:** before the matching task, read
-`skills/<name>/SKILL.md` and follow it. The three seeded here cover the most
-common mistakes:
+`skills/<name>/SKILL.md` and follow it. The four skills seeded here cover the
+most common tasks:
 
 - `pha-search-context` — a search hit is a *snippet*; recover the full page
   (raw and edited) before quoting or summarizing.
@@ -466,25 +478,40 @@ common mistakes:
   library (the local API's MODS, an RDF export, `pha bib <doc> --to-json
   --write`, and the provenance rules that keep an unverified reference from
   being cited as fact).
+- `palaeographers-compare` — compare two or more palaeographers' (or
+  transcription models') readings of the same pages into a uniform comparative
+  edition: a `comparison/` folder with one file per page (readings stacked
+  under `## Entry-by-entry comparison` plus a `## Key differences on this
+  page` list) and an `overview.md`. Ships `scripts/normalize_comparison.py`
+  (skeleton normalisation), `scripts/verify_comparison.py` (skeleton +
+  reading-count checks) and `scripts/make_reference.py` (one-line-per-entry
+  `reference/` variant); a reviewed `human/` folder is read-only for agents.
 
 **Installing them into an agent runtime:** some runtimes (DeepSeek Harness and
 other tools that read the shared agent-skills convention) discover skills from
-a user-level directory instead of the archive. Copy the folder there:
+a user-level directory instead of the archive. Copy the whole skill folder
+there — including any `scripts/`, `examples/`, … files it ships:
 
-    cp -R skills/pha-search-context ~/.agents/skills/
+    cp -R skills/palaeographers-compare ~/.agents/skills/
 
 Keep the folder names unchanged — a skill's front-matter `name` must match its
 folder name.
 
 ## Editing and updating
 
-`pha` seeds this folder **once** and never overwrites it: edit these files
-freely, delete the ones you do not want, and add your own (any folder holding a
-`SKILL.md` conforming to the format above). To pick up a newer version shipped
-with pha, copy it from the `skills/` folder of the pha source repository, or
-from a newly created archive of the same pha version — pha will not silently
-replace your edits.
-"""
+`pha` seeds this folder from the skills bundled with the installed pha
+version: a bundled file is written **only when it is missing**, and an existing
+file is never overwritten — so your edits survive. A skill or file added in a
+newer pha version appears here on the next pha run, which is how an updated
+install reaches an existing archive. (A bundled file you delete is re-seeded
+the same way; to keep a custom version, edit the file in place instead.)
+
+Add your own skills — any folder holding a `SKILL.md` conforming to the format
+above — and edit or extend the bundled ones freely. To pick up a newer authored
+version of a skill, copy it from the `skills/` folder of the pha source
+repository, or from a newly created archive of the same pha version; pha will
+not replace the files you already have.
+'''
 
 _SKILL_ZOTERO_BIBLIOGRAPHY = """---
 name: pha-zotero-bibliography
@@ -758,13 +785,977 @@ snapshot that `pha serve` and the MCP tools read is refreshed by `pha scan`,
       `pha cite <doc> <page>`.
 """
 
-# The pha-specific skills pha ships, as (folder_name, SKILL.md body). Embedded
+_SKILL_PALEOGRAPHERS_COMPARE = r'''---
+name: palaeographers-compare
+description: Compare multiple palaeographers' (or transcription models') readings of the same historical document page-by-page and produce a uniform comparative edition — an overview of differences plus one markdown file per page with entry-by-entry stacked readings (1. reading A / 2. reading B / … / N. reading N; any number of readings, 2 or more). Use when the user asks to compare or collate transcriptions, compare palaeographers or transcription models, find differences between readings of the same document, or generate a comparative overview of catalogue/archive transcriptions.
+---
+
+# Palaeographers Compare
+
+Produces a **uniform comparative edition** from two or more independent readings of the same document (e.g. three palaeographers, or several vision-model transcriptions of the same manuscript pages). The output is a `comparison/` folder with:
+
+- one markdown file per page, in a **fixed uniform skeleton**, showing every entry with the readings stacked as `1.` … `N.` (or `= all readings:` when identical), plus a "Key differences" bullet list;
+- an `overview.md` summarising corpus, palaeographer mapping, systematic conventions, and the most significant disagreements.
+
+The reference implementation of the workflow (and of the expected output format) is `palaeographers/comparison/` under the 1577 Portuguese Jesuit catalogue benchmark — the same layout must be reproduced for every new corpus.
+
+## Inputs
+
+- An **input directory** containing one subdirectory per palaeographer (e.g. `palaeographers/DeepSeek-V4-FVE/`, `palaeographers/M3/`, `palaeographers/Qwen3.8-Max/`). Each subdirectory has one markdown file per page of the same document, with **matching basenames across palaeographers** (e.g. `507v.md`, `508.md`, …).
+- Each page file contains a transcription section. The transcription may be inside a fenced code block (under `## Transcription`) or be the body before `## Notes`. Only the transcription content is compared; `Notes` / `Named entities` / `Content summary` sections are context, never part of the comparison.
+
+## Workflow
+
+1. **Name the palaeographers.** List the subdirectories of the input dir. Fix their order with the user (this becomes the numbering used everywhere); default to folder order or alphabetical. Example: `1. DeepSeek-V4-FVE · 2. M3 · 3. Qwen3.8-Max`.
+
+2. **Discover the pages.** Take the intersection of filenames across all palaeographer subdirectories (a page must exist for every palaeographer). Sort them in reading order (recto/verso).
+
+3. **Read every transcription** for every page×palaeographer. Note per-page context (community/college, column layout, rotation, damage, show-through) from the notes sections.
+
+4. **Generate the per-page comparison files** (see "Output format" below). This step fans out naturally — generate each page's file independently; you may parallelise pages across subagents, but every file must follow the same skeleton exactly.
+
+5. **Generate `overview.md`** (see "Overview" below).
+
+6. **Normalise + verify** the whole output folder with the bundled scripts (see "Scripts" below) so every file shares the exact skeleton.
+
+## Alignment rules
+
+- One **entry** = one line of the catalogue (a person's name with or without role, a heading such as `Casos.` / `1ª classe de humanidad.`, a count marker, the `+IESVS` header).
+- Entries appear in the same order in all readings; if a palaeographer misses, adds, or splits a line, align by position and meaning and **flag it** in Key differences.
+- When readings diverge **fundamentally** (no shared lines — e.g. one palaeographer reads a blank leaf, another a rotated index, a third a show-through roster), present each reading **in full as one entry** (`[1]` … `[N]`) inside the fenced block and explain the disagreement in Context and Key differences.
+- Preserve each reading's own structure verbatim (columns, numbering, class numbers) — never harmonise the palaeographers' structural choices; flag the disagreement.
+
+## Fidelity rules (verbatim transcription)
+
+- Preserve the original text **exactly**: diacritics (`ç ã ñ`), `[square bracket]` expansions, `[?]` and `[illegible]` markers, honorific variants (`P.`, `P[adr]e`, `P.e`, `Pº`), punctuation, slashes, trailing dashes, abbreviation forms (`Hernade3`, `coadintor`, `co[n]fessa`). Never modernise or normalise.
+- `= all readings:` (older files may say `= all three:`) is used **only** when the readings are identical in every substantive character. Trailing periods, long filler-dash runs (`————`), and the name↔role connector (`—` vs `,`+dashes vs `/`) are treated as padding and ignored for the equality test.
+
+## Output format — per-page file (uniform skeleton)
+
+Every page file must have **exactly** this layout (title line, one Context paragraph, one section with a *single* fenced code block, one Key-differences section):
+
+```markdown
+# <page> — Comparative readings (1. <P1> · … · N. <PN>)
+
+Context: <one or two sentences: what the page contains, column layout, rotation/damage notes, reading order>
+
+## Entry-by-entry comparison
+
+```
+[1] 1. <reading 1>
+    2. <reading 2>
+    3. <reading 3>
+    …
+
+[2] = all readings: <shared reading>
+
+[3] 1. <only the differing lines are shown; identical lines are dropped>
+    ...
+```
+
+## Key differences on this page
+
+- <bullet list of the most significant disagreements: name variants, one reading legible where another has [?], different role/office readings, extra/missing entries, structural differences — quoting the readings concisely>
+```
+
+Skeleton rules (non-negotiable):
+
+- Title: `# <page> — Comparative readings (1. <P1> · … · N. <PN>)` — one numbered reading line per reading, `1.` … `N.` in order.
+- Exactly two `##` sections, named `## Entry-by-entry comparison` and `## Key differences on this page`.
+- **One single fenced code block** holding *all* `[n]` entries — never one fenced block per entry, never narrative prose sections.
+- One blank line before the opening fence; entries separated by one blank line; stacked readings indented under their number.
+- No stray label lines inside the block (e.g. a subagent's `Nuovices heading.`), no redundant "Numbering:" line (the mapping is in the title).
+
+## Output format — overview.md
+
+1. **Corpus** — what the document is (date, communities/colleges listed), table of pages with one-line content summaries.
+2. **The palaeographers** — the fixed 1.…N. mapping, with the user's example reading quoted if one was given.
+3. **Overall picture** — how much the readings agree; systematic orthographic/editorial conventions per palaeographer; the three kinds of difference (spelling conventions, damaged-character readings, structural interpretation).
+4. **Page-by-page highlights** — for each page, the most significant disagreements with the competing readings quoted (e.g. a name read three ways, a role disagreement, a class-numbering difference).
+5. **Consensus notes** — where a majority of readings agree, that reading is more probable; flag internally suspicious readings (e.g. dittography); keep historical identifications hedged ("historically plausible", verify against the edition) unless confirmed.
+6. **Files** — index of the per-page files and sources.
+
+## Scripts
+
+After generating the files, normalise and verify the whole folder:
+
+```bash
+# Merge per-entry fenced blocks into one block; restore blank lines; collapse double blanks
+python3 scripts/normalize_comparison.py comparison/
+
+# Structural check: 2 fences per file, correct sections, contiguous entries
+python3 scripts/verify_comparison.py comparison/
+
+# ...and check every entry carries exactly N readings:
+python3 scripts/verify_comparison.py comparison/ --readings 3
+```
+
+- `normalize_comparison.py` — for every page file (not `overview.md`): locates the section between `## Entry-by-entry comparison` and `## Key differences on this page`, removes per-entry fence lines, collapses blank runs, and wraps the entries in a single pair of fences. Optionally `--drop-label "Nuovices heading."` style stray lines via repeated `--drop-label` arguments.
+- `verify_comparison.py` — prints OK/FAIL per file for: exactly 2 fences, exactly the two `##` sections, contiguous numbered entries inside one block, blank line before the opening fence, and matching entry counts. With `--readings N` it also fails any entry whose reading count is not N (0 is accepted for `= all …` entries; pages kept unconsolidated — a single reading per entry — are exempt), catching silent mis-merges. Exits non-zero if any check fails.
+- `make_reference.py` — builds a **`reference/` folder for producing a reference translation**: every entry becomes ONE line with common words written once and variants joined with `/` in reading order (any number of readings). See "Reference variant" below.
+
+## Reference variant (for producing a reference translation)
+
+From the comparison folder, generate a sibling `reference/` folder aimed at translation work:
+
+```bash
+python3 scripts/make_reference.py comparison/            # writes reference/ next to comparison/
+python3 scripts/make_reference.py comparison/ reference/ # explicit output folder
+
+# guard against a wrong reading count (refuses to write if a page has more):
+python3 scripts/make_reference.py comparison/ --readings 3
+
+# pages that cannot be consolidated are auto-detected; force one explicitly:
+python3 scripts/make_reference.py comparison/ --divergent 511
+```
+
+Each entry becomes one line, e.g. (entry [7] of `507v.md`):
+
+```
+[7] P./P[adr]e Iuan/Juan Correa/correa —————————/— Ministro.
+```
+
+Rules implemented by the script:
+
+- Token-level sequence alignment (edit-distance DP) merges the N readings per entry, handling insertions/deletions.
+- Common words are written once; variants are joined with `/` in reading order (1/2/…/N).
+- Padding: trailing periods/commas, line-end hyphenation (`-`/`=` at line end), and standalone `/`/`-` name↔role connectors are dropped; em-dash layout leaders (`————`) are kept and shown as variants (`————————/—`).
+- The first variant keeps its own punctuation (`P.`), later variants are punctuation-normalised (`P[adr]e`).
+- Entries identical in all readings are given as-is. Pages whose readings diverge fundamentally (every entry carrying a single full reading — e.g. a leaf read as blank vs index vs show-through) are auto-detected and kept unconsolidated; `--divergent PAGE` forces the same for a named page. Reading markers are recognised only in sequence (`1.`, `2.`, …), so an embedded number in a wrapped line ("3. Nouicos.") is not mistaken for a reading.
+- The output files keep the same uniform skeleton (title with palaeographer mapping, Context, one fenced block, Notes).
+
+## Human-reviewed gold standard (human/ folder)
+
+After the comparison and reference folders are produced, a **human reviewer** may edit the reference content into a corrected, variant-free version kept in a sibling `human/` folder: same page files and uniform skeleton, but with a `## Corrected text` section where the variants are resolved to the correct reading and the original line breaks are restored. (In the reference corpus, the review is by Joaquim Carvalho, started 2026-08-30; only `507v.md` has been reviewed so far — the other files are still unedited copies of the reference.)
+
+The reviewer documents the editing rules in the file header (e.g. kept line-break hyphens in their `=` form, original capitalisation preserved, dots kept as word separators, long dash runs reduced to three dashes, letter normalisation `u`→`v` and `ƒ`→`ss`/`s` particular to this hand) and signs the review in the Notes section.
+
+**Rules for agents:**
+
+- `human/` is **read-only for agents** — never edit, "correct", regenerate, or reformat anything inside it; the human review is authoritative and must remain untouched.
+- It may be **read freely**, and its purpose is twofold:
+  - **Benchmarking palaeographers**: compare each palaeographer's raw reading (or the consolidated reference line) against the human corrected text — count per-entry agreement on names, roles, spellings and offices; identify which palaeographer is most accurate per page and which readings the human rejected.
+  - **Improving prompts**: use the human version paired with the slashed variants as few-shot examples of correct readings, or feed the disagreements back into the transcription/vision prompt to target recurring failure modes (e.g. surname confusions, role misreadings).
+
+The three-folder pipeline is therefore: `comparison/` (aligned stacked readings) → `reference/` (slashed variants for translation) → `human/` (reviewed gold standard for benchmarking and prompt tuning).
+
+## Quality checklist
+
+- [ ] Every page file shares the exact uniform skeleton (title / Context / one fenced block / Key differences).
+- [ ] All readings verbatim: diacritics, `[?]`/`[illegible]`, bracket expansions, honorific variants preserved.
+- [ ] `= all readings` (older files: `= all three`) used only for substantive identity; differing readings all shown.
+- [ ] Structural disagreements (class numbering, columns, fundamental page disagreements) flagged, not harmonised.
+- [ ] `overview.md` present with palaeographer mapping, conventions, page-by-page highlights, consensus notes.
+- [ ] `verify_comparison.py` passes for every file.
+
+## Examples
+
+- `examples/entry-format.md` — minimal sample of the uniform skeleton.
+- Live reference output: `palaeographers/comparison/`, `palaeographers/reference/` and `palaeographers/human/` in the 1577 Jesuit catalogue benchmark (8 pages, 3 palaeographers).
+'''
+
+_SKILL_PALEOGRAPHERS_COMPARE_README = r'''# palaeographers-compare
+
+Compare several palaeographers' (or transcription models') readings of the same
+historical document, page by page, and turn them into three review surfaces:
+
+1. **`comparison/`** — every entry with the readings stacked side by side (`1.` … `N.`; any number of readings, 2 or more),
+   plus an overview of the differences;
+2. **`reference/`** — the same entries collapsed into one line each, with common words
+   written once and variants joined by `/`, made for producing a translation;
+3. **`human/`** — the place for your own hand-corrected, variant-free text (the gold standard).
+
+Works on any folder of aligned transcriptions. It needs nothing but Python 3 —
+no pha install, no special tooling, no network.
+
+---
+
+## How to use it (step by step)
+
+### What you need first
+
+A folder containing **one subdirectory per palaeographer**, each with **one markdown
+file per page, using the same filenames across all of them**:
+
+```
+1577/palaeographers/
+├── DeepSeek-V4-FVE/   507v.md   508.md   508v.md   ...   511.md
+├── M3/                507v.md   508.md   508v.md   ...   511.md
+└── Qwen3.8-Max/       507v.md   508.md   508v.md   ...   511.md
+```
+
+Each file needs its transcription (the readable text of the page). The `Notes` /
+named-entity sections are ignored; they are only used as context.
+
+### 1. Ask the agent
+
+Give it the folder and fix the numbering — that numbering becomes `1.`, `2.`, … `N.`
+in every output file (any number of palaeographers works — 2 or more):
+
+> Compare the palaeographer readings in
+> `benchmarks/collections/jesuit-catalogues/jesuit-cat-type4/portugal/1577/palaeographers`
+> — **1 = DeepSeek-V4-FVE, 2 = M3, 3 = Qwen3.8-Max** — and produce the per-page
+> comparison plus an overview.
+
+If you don't give an order, the agent will ask you or use folder order. The skill also
+triggers on plain requests such as *"compare these transcriptions"*, *"collate the
+readings"*, or *"which readings disagree on this page?"*.
+
+### 2. Get the comparison
+
+The agent creates a `comparison/` folder inside the one you named:
+
+- `comparison/overview.md` — what the document is, who the palaeographers are, how much
+  they agree, the systematic spelling habits of each, and the most significant
+  disagreements per page.
+- `comparison/<page>.md` — one file per page, every entry numbered `[n]` with the three
+  readings stacked (`= all readings:` when they match), and a "Key differences" list.
+
+### 3. Review it
+
+Open `overview.md` first to see where the readings disagree, then dip into the page
+files for the exact wording. Anything one palaeographer left as `[illegible]` while
+another read a name is worth a look — those are the decisions that matter.
+
+### 4. Build the reference text (for translation)
+
+Ask: *"now build the reference text from the comparison"*. You get `reference/<page>.md`,
+one line per entry:
+
+```
+[7] P./P[adr]e Iuan/Juan Correa/correa —————————/— Ministro.
+```
+
+Read it as: the readings agree on everything except the variants separated by `/`
+(here `P.` / `P[adr]e`, `Iuan` / `Juan`, `Correa` / `correa`, a long dash / a short one).
+Common words appear once. This is the working text to translate from — where variants
+are listed, pick the correct reading (or simply skip them if the variant does not change
+the sense).
+
+### 5. Record your own correction (human gold standard)
+
+Copy `reference/` to a sibling folder named `human/` and edit it by hand: resolve the
+variants, restore the original line breaks, and note your editing rules at the top
+of each file.
+
+**Important:** `human/` is *yours*. Agents are told to treat it as **read-only** — they
+must never edit, reformat, or regenerate it. Its value is as the authoritative text,
+used later to **benchmark how accurate each palaeographer was** and to **improve the
+transcription prompts**.
+
+### Adding pages or a new palaeographer later
+
+Just add the files (same filenames in every palaeographer folder) and re-run the request.
+New pages get their own files; existing ones are regenerated, so re-check anything you had
+edited by hand in `comparison/` or `reference/` — `human/` is never touched.
+
+---
+
+## What each output folder contains
+
+| Folder | Who writes it | What it is |
+|---|---|---|
+| `comparison/` | the agent | Aligned readings, `[n]` per entry, stacked `1.`…`N.`, plus `overview.md` |
+| `reference/` | the agent (`make_reference.py`) | One line per entry, variants joined by `/` — for translation |
+| `human/` | **you** | Hand-corrected, variant-free gold standard. Read-only for agents |
+
+## Useful commands (optional)
+
+The agent runs these for you; you can also run them yourself to check the output:
+
+```bash
+# force the uniform layout (one fenced block per page file) and report changes
+python3 scripts/normalize_comparison.py comparison/
+
+# check every page file is well formed (2 fences, correct sections, entries [1]..[N])
+python3 scripts/verify_comparison.py comparison/
+
+# ...and check every entry carries exactly N readings
+python3 scripts/verify_comparison.py comparison/ --readings 3
+
+# (re)build the reference text from the comparison
+python3 scripts/make_reference.py comparison/            # writes reference/ next to comparison/
+python3 scripts/make_reference.py comparison/ reference/ # explicit destination
+
+# guard against a wrong reading count (refuses to write if a page has more readings)
+python3 scripts/make_reference.py comparison/ --readings 3
+```
+
+Requires only Python 3 (standard library).
+
+## Notes and gotchas
+
+- **Uniform layout matters.** Every page file must have the same shape: title, one
+  `Context:` paragraph, one `## Entry-by-entry comparison` block with all `[n]` entries in
+  a *single* fenced code block, and one `## Key differences on this page` list. The
+  `normalize_comparison.py` + `verify_comparison.py` pair keeps that true.
+- **Readings are never "corrected"** by the skill: diacritics, `[?]`, `[illegible]`,
+  bracket expansions and odd spellings are preserved exactly as the palaeographer wrote them.
+- **Pages that cannot be compared** (one reads a blank leaf, another an index, a third
+  show-through) are auto-detected and each full reading is kept, rather than forced into a
+  misleading alignment.
+- **Any number of readings works** — 2, 3, 4 or more. Pass `--readings N` so that a page
+  with more readings than you expect is refused loudly instead of being silently merged
+  wrongly (the reference generator is N-ary; without the flag it auto-detects the count).
+- **Inside a pha archive**, work in a benchmark/working folder like the one above and never
+  edit pha's generated files (`library/`, `renders/`, `archive.db`).
+
+## Reference implementation
+
+`palaeographers/comparison/`, `palaeographers/reference/` and `palaeographers/human/` under
+the 1577 Portuguese Jesuit catalogue benchmark — 8 pages, 3 palaeographers
+(DeepSeek-V4-FVE, M3, Qwen3.8-Max).
+
+## Deploy / publish
+
+```bash
+cd ~/develop/historical-skills && ./deploy.sh   # copies to ~/.agents/skills/
+```
+
+To share: create a GitHub repo for this directory, push it, and others can install with
+`npx skills add github.com/USER/palaeographers-compare`.
+
+## License
+
+MIT
+'''
+
+_SKILL_PALEOGRAPHERS_COMPARE_LICENSE = r'''MIT License
+
+Copyright (c) 2026 Joaquim R. Carvalho
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+'''
+
+_SKILL_PALEOGRAPHERS_COMPARE_ENTRY_FORMAT = r'''# 12r — Comparative readings (1. Alpha · 2. Beta · 3. Gamma)
+
+Context: Folio 12 recto — start of the community roster; two columns; mild show-through from the verso.
+
+## Entry-by-entry comparison
+
+```
+[1] 1. P. Juan Perez — confessa.
+    2. P[adr]e Juan Perez — co[n]fessa
+    3. P. Juan Perez — confiessa.
+
+[2] = all three: Casos.
+
+[3] 1. P. Pero [illegible] — leyente.
+    2. P. Pero de Mora — leyente
+    3. P. Pero de Mora — leyente
+```
+
+## Key differences on this page
+
+- Entry [1]: verb forms differ (confessa / co[n]fessa / confiessa) — spelling only.
+- Entry [3]: the Casos reader's surname is illegible in reading 1 but read as "de Mora" by readings 2 and 3.
+'''
+
+_SKILL_PALEOGRAPHERS_COMPARE_MAKE_REFERENCE = r'''#!/usr/bin/env python3
+"""Build a reference/ folder (consolidated variant lines) from a comparison/ folder.
+
+Works with ANY number of readings per entry (2, 3, 4, …).
+
+For every page file in comparison/, produce reference/<page>.md where each entry
+is ONE line: common words written once, differing words joined with '/' in
+reading order. Token-level sequence alignment handles insertions/deletions;
+trailing periods/commas and line-end hyphenation are treated as padding; em-dash
+layout leaders are kept as variants, bare '/' and '-' name<->role connectors are
+dropped.
+
+Usage:
+  python3 scripts/make_reference.py comparison/ [reference/] [--readings N] [--divergent PAGE ...]
+
+  --readings N     expected number of readings per entry; the script refuses to
+                   write anything if a page turns out to have MORE readings than
+                   declared (silent mis-merges are the failure mode to avoid)
+  --divergent PAGE page stem(s) to keep unconsolidated (repeatable). Pages whose
+                   entries each carry only a single reading are detected as
+                   divergent automatically.
+"""
+import argparse
+import pathlib
+import re
+import sys
+
+M1 = "## Entry-by-entry comparison"
+M2 = "## Key differences on this page"
+
+ANNOT = re.compile(r"\s*\([^)]*(?:reading|renders|is written|not transcribed|omitted)[^)]*\)")
+# matches "= all three:", "= all readings:", "= all:" …
+ALL_RE = re.compile(r"^=\s*all\b[^:]*:\s*(.*)$", re.I)
+READ_RE = re.compile(r"^(\d+)\.\s+(.*)$")
+
+# standalone tokens that act as name<->role connectors (padding for equality)
+CONN = {"--", "-", "/"}
+
+
+def canon_conn(tok):
+    return "--" if tok in CONN else tok
+
+
+def dehyphenate(lines):
+    """Join transcription lines, resolving line-end hyphenation (- or =)."""
+    out = ""
+    for ln in lines:
+        s = ANNOT.sub("", ln.strip())
+        if not s:
+            continue
+        if out and out[-1] in "-=" and s[0] not in "-=":
+            out = out[:-1] + s
+        elif out:
+            out = out + " " + s
+        else:
+            out = s
+    return out
+
+
+def parse_entries(path):
+    """Parse a comparison page file.
+
+    Returns (entries, max_reading):
+      entries      -> list of (num, kind, payload)
+                      kind 'all'  -> payload is the shared text (str)
+                      kind 'diff' -> payload is a LIST of the readings present
+      max_reading  -> highest reading index seen on the page (0 if none)
+
+    Reading markers are recognised only in sequence (1., 2., 3., …), so a
+    continuation line that happens to start with a number ("3. Nouicos.") is
+    not mistaken for a new reading.
+    """
+    text = path.read_text()
+    i = text.index(M1)
+    j = text.index(M2)
+    block = text[i + len(M1):j].splitlines()
+    raw = []
+    cur = None
+    for ln in block:
+        s = ln.strip()
+        if s == "" or s == "```":
+            continue
+        m = re.match(r"^\[(\d+)\]", s)
+        if m:
+            if cur:
+                raw.append(cur)
+            cur = {"num": int(m.group(1)), "rest": s[m.end():], "lines": []}
+        elif cur is not None:
+            cur["lines"].append(ln)
+    if cur:
+        raw.append(cur)
+
+    entries = []
+    max_reading = 0
+    for e in raw:
+        rest = e["rest"].strip()
+        m = ALL_RE.match(rest)
+        if m:
+            txt = dehyphenate([m.group(1)] + e["lines"])
+            entries.append((e["num"], "all", txt))
+            continue
+        reads = {}
+        cur_n = None
+        expected = 1
+        for ln in [rest] + e["lines"]:
+            s = ln.strip()
+            m = READ_RE.match(s)
+            if m and int(m.group(1)) == expected:
+                cur_n = int(m.group(1))
+                reads[cur_n] = [m.group(2)]
+                expected += 1
+            elif cur_n is not None:
+                reads[cur_n].append(s)
+        if not reads:                       # no reading markers at all
+            reads[1] = [rest] + [l.strip() for l in e["lines"]]
+        idxs = sorted(reads)
+        max_reading = max(max_reading, idxs[-1])
+        entries.append((e["num"], "diff", [dehyphenate(reads[k]) for k in idxs]))
+    return entries, max_reading
+
+
+def tok_eq(a, b):
+    return a.rstrip(".,") == b.rstrip(".,") or (
+        a in CONN and b in CONN)
+
+
+def align(a, b):
+    """Token-level sequence alignment; returns list of (a_tok|None, b_tok|None)."""
+    n, m = len(a), len(b)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n + 1):
+        dp[i][0] = i
+    for j in range(m + 1):
+        dp[0][j] = j
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            c = 0 if tok_eq(a[i - 1], b[j - 1]) else 1
+            dp[i][j] = min(dp[i - 1][j - 1] + c, dp[i - 1][j] + 1, dp[i][j - 1] + 1)
+    i, j = n, m
+    pairs = []
+    while i > 0 or j > 0:
+        if i > 0 and j > 0 and dp[i][j] == dp[i - 1][j - 1] + (0 if tok_eq(a[i - 1], b[j - 1]) else 1):
+            pairs.append((a[i - 1], b[j - 1]))
+            i -= 1
+            j -= 1
+        elif i > 0 and dp[i][j] == dp[i - 1][j] + 1:
+            pairs.append((a[i - 1], None))
+            i -= 1
+        else:
+            pairs.append((None, b[j - 1]))
+            j -= 1
+    pairs.reverse()
+    return pairs
+
+
+def merge(readings):
+    """readings: list of N token lists -> consolidated string with '/' variants."""
+    lists = []
+    for toks in readings:
+        # bare '/' and '-' are name<->role connectors (padding): drop them before
+        # alignment; em-dash runs ('—', '————') are layout leaders and are kept.
+        lists.append([t for t in toks if t not in ("/", "-")])
+    lists = [l for l in lists if l]
+    if not lists:
+        return ""
+    if len(lists) == 1:
+        return " ".join(lists[0])
+
+    base = lists[0]
+    cols = [{0: t0, 1: t1} for t0, t1 in align(base, lists[1])]
+
+    for idx in range(2, len(lists)):
+        col = 0
+        for t0, ti in align(base, lists[idx]):
+            if t0 is not None:
+                while col < len(cols) and (cols[col].get(0) is None or cols[col][0] != t0):
+                    col += 1
+                if col < len(cols):
+                    cols[col][idx] = ti
+                    col += 1
+            else:
+                nxt = col
+                while nxt < len(cols) and cols[nxt].get(0) is None:
+                    nxt += 1
+                # merge into the preceding insertion column (same position, no token for this reading yet)
+                if nxt > 0 and cols[nxt - 1].get(0) is None and cols[nxt - 1].get(idx) is None:
+                    cols[nxt - 1][idx] = ti
+                else:
+                    cols.insert(nxt, {0: None, idx: ti})
+
+    def norm(tok):
+        return tok.rstrip(".,;:")
+
+    parts = []
+    for k in cols:
+        vals = [k.get(i) for i in range(len(lists))]
+        vals = [v for v in vals if v is not None]
+        if not vals:
+            continue
+        vals = [canon_conn(v) for v in vals]
+        if all(norm(v) == norm(vals[0]) for v in vals):
+            parts.append(vals[0])
+            continue
+        # first variant kept raw (keeps its punctuation, e.g. 'P.'), the
+        # remaining variants are punctuation-normalised ('P[adr]e')
+        uniq = [vals[0]]
+        for v in vals[1:]:
+            if norm(v) not in [norm(u) for u in uniq]:
+                uniq.append(v)
+        rendered = uniq[0]
+        if len(uniq) > 1:
+            rendered += "/" + "/".join(norm(u) for u in uniq[1:])
+        parts.append(rendered)
+    return " ".join(parts)
+
+
+def reference_text(entries):
+    """Render the consolidated lines for a page (str for the fenced block)."""
+    lines = []
+    for num, kind, payload in entries:
+        if kind == "all":
+            lines.append(f"[{num}] {payload}")
+        else:
+            lines.append(f"[{num}] {merge([t.split() for t in payload])}")
+    return "\n".join(lines)
+
+
+def page_meta(src_text):
+    raw_title = re.match(r"^# (.+)$", src_text, re.M).group(1)
+    title = "# " + raw_title.replace("Comparative readings", "Reference text with variants")
+    order = re.search(r"\((.*)\)\s*$", raw_title)
+    order = order.group(1) if order else "reading order"
+    ctx = re.search(r"^Context: .*$", src_text, re.M)
+    context = ctx.group(0) if ctx else "Context: (see comparison file)"
+    return title, order, context
+
+
+def write_page(src, dst, force_divergent=False):
+    """Write one reference page. Returns (n_entries, n_readings_max, divergent)."""
+    src_text = src.read_text()
+    title, order, context = page_meta(src_text)
+    entries, max_reading = parse_entries(src)
+    diff_entries = [e for e in entries if e[1] == "diff"]
+
+    # a page where every entry carries a single reading cannot be consolidated
+    divergent = force_divergent or (
+        bool(diff_entries) and all(len(e[2]) == 1 for e in diff_entries))
+
+    if divergent:
+        block = re.search(r"```\n(.*?)\n```", src_text, re.S).group(1)
+        section = (
+            "No consolidation possible — the readings for this page diverge fundamentally "
+            "(see comparison/{0}). Each reading is given in full:\n\n"
+            "```\n{1}\n```".format(src.name, block)
+        )
+        notes = [
+            "- The readings for this page cannot be aligned; every reading is kept in full.",
+            "- See comparison/{0} for the full discussion.".format(src.name),
+        ]
+        print(f"wrote {dst.name}: divergent readings kept in full")
+    else:
+        section = "```\n" + reference_text(entries) + "\n```"
+        notes = [
+            "- Convention: common words are written once; where the readings differ the variants are "
+            "joined with '/' in reading order ({0}).".format(order),
+            "- Trailing periods/commas and line-end hyphenation are treated as padding; the name<->role "
+            "connector ('—', '/', '-') is rendered as '—'. Entries identical in all readings are given as-is.",
+            "- Generated from comparison/{0} — see that file for the full stacked readings and the key "
+            "differences.".format(src.name),
+        ]
+        print(f"wrote {dst.name}: {len(entries)} entries")
+
+    content = (
+        title + "\n\n" + context + "\n\n"
+        "## Reference text (variants in slashes)\n\n"
+        + section + "\n\n"
+        "## Notes\n\n" + "\n".join(notes) + "\n"
+    )
+    dst.write_text(content)
+    return len(entries), max_reading, divergent
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("comparison", help="comparison folder (input)")
+    ap.add_argument("reference", nargs="?", default=None,
+                    help="reference folder (output; default: sibling 'reference' of the comparison folder)")
+    ap.add_argument("--readings", type=int, default=None, metavar="N",
+                    help="expected number of readings per entry; causes an error if a page has more")
+    ap.add_argument("--divergent", action="append", default=[], metavar="PAGE",
+                    help="page stem(s) to keep unconsolidated (repeatable)")
+    args = ap.parse_args()
+
+    comp = pathlib.Path(args.comparison)
+    if not comp.is_dir():
+        print(f"error: {comp} is not a directory", file=sys.stderr)
+        return 2
+    if args.readings is not None and args.readings < 2:
+        print("error: --readings must be at least 2", file=sys.stderr)
+        return 2
+
+    pages = [p for p in sorted(comp.glob("*.md")) if p.name != "overview.md"]
+    if not pages:
+        print(f"error: no page files found in {comp}", file=sys.stderr)
+        return 2
+
+    # validate BEFORE writing anything, so a wrong --readings never produces bad output
+    if args.readings is not None:
+        too_many, too_few = [], []
+        for p in pages:
+            entries, max_reading = parse_entries(p)
+            if max_reading > args.readings:
+                too_many.append((p.name, max_reading))
+            diffs = [e for e in entries if e[1] == "diff"]
+            divergent = bool(diffs) and all(len(e[2]) == 1 for e in diffs)
+            if divergent:
+                continue
+            for num, kind, payload in entries:
+                if kind == "diff" and len(payload) < args.readings:
+                    too_few.append((p.name, num, len(payload)))
+                    break
+        if too_many:
+            print(f"error: --readings {args.readings} was declared, but these pages have MORE readings:",
+                  file=sys.stderr)
+            for name, mx in too_many:
+                print(f"  - {name}: reading {mx} found", file=sys.stderr)
+            print("  (nothing was written — fix --readings or the comparison files)", file=sys.stderr)
+            return 1
+        if too_few:
+            print(f"warning: --readings {args.readings} declared; pages with fewer readings detected:",
+                  file=sys.stderr)
+            for name, num, n in too_few[:10]:
+                print(f"  - {name} entry [{num}]: {n} reading(s)", file=sys.stderr)
+
+    ref = pathlib.Path(args.reference) if args.reference else comp.parent / "reference"
+    ref.mkdir(parents=True, exist_ok=True)
+
+    divergent = set(args.divergent)
+    n_div = 0
+    for p in pages:
+        _, _, was_divergent = write_page(p, ref / p.name, force_divergent=p.stem in divergent)
+        n_div += int(was_divergent)
+    print(f"\nreference folder: {ref}  ({len(pages)} pages, {n_div} kept unconsolidated)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+_SKILL_PALEOGRAPHERS_COMPARE_NORMALIZE = r'''#!/usr/bin/env python3
+"""Normalise the layout of palaeographers-compare output files.
+
+For every page file (not overview.md) in a comparison folder, collapses
+per-entry fenced code blocks into ONE fenced block (the uniform skeleton):
+  - removes lines that are exactly ```
+  - trims leading/trailing blank lines of the entry section
+  - collapses runs of 2+ blank lines into one
+  - wraps the whole entry section in a single pair of fences
+  - restores a single blank line before the opening fence
+Also collapses double blank lines in the header area and optionally drops
+stray label lines (--drop-label "...").
+"""
+import argparse
+import pathlib
+import re
+import sys
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("folder", nargs="?", default="comparison",
+                    help="comparison output folder (default: comparison)")
+    ap.add_argument("--drop-label", action="append", default=[],
+                    metavar="TEXT",
+                    help="drop lines that exactly equal TEXT (repeatable)")
+    args = ap.parse_args()
+
+    folder = pathlib.Path(args.folder)
+    if not folder.is_dir():
+        print(f"error: {folder} is not a directory", file=sys.stderr)
+        return 2
+
+    changed = 0
+    for p in sorted(folder.glob("*.md")):
+        if p.name == "overview.md":
+            continue
+        text = p.read_text()
+        original = text
+
+        for label in args.drop_label:
+            text = re.sub(rf"^\s*{re.escape(label)}\s*$\n?", "", text, flags=re.M)
+
+        m1 = "## Entry-by-entry comparison"
+        m2 = "## Key differences on this page"
+        if m1 not in text or m2 not in text:
+            print(f"skip  {p.name}: section markers not found")
+            continue
+        i = text.index(m1)
+        j = text.index(m2)
+        head, middle, tail = text[:i], text[i + len(m1):j], text[j:]
+
+        lines = [ln for ln in middle.splitlines() if ln.strip() != "```"]
+        while lines and lines[0].strip() == "":
+            lines.pop(0)
+        while lines and lines[-1].strip() == "":
+            lines.pop()
+        out, prev_blank = [], False
+        for ln in lines:
+            blank = (ln.strip() == "")
+            if blank and prev_blank:
+                continue
+            out.append(ln)
+            prev_blank = blank
+        body = "\n".join(out)
+
+        head = re.sub(r"\n{3,}(## Entry-by-entry comparison)", r"\n\n\1", head)
+        new_text = head + m1 + "\n\n```\n" + body + "\n```\n\n" + tail
+        if new_text != original:
+            p.write_text(new_text)
+            changed += 1
+            n_entries = sum(1 for ln in out if ln.startswith("["))
+            print(f"fixed {p.name}: {n_entries} entries in one fenced block")
+        else:
+            print(f"ok    {p.name}")
+
+    print(f"\n{changed} file(s) normalised")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+_SKILL_PALEOGRAPHERS_COMPARE_VERIFY = r'''#!/usr/bin/env python3
+"""Verify the uniform skeleton of palaeographers-compare output files.
+
+Checks per page file (not overview.md):
+  - exactly 2 fenced code blocks
+  - exactly the two sections "## Entry-by-entry comparison" and
+    "## Key differences on this page", in that order
+  - a blank line before the opening fence
+  - all [n] entry markers contiguous inside the single fenced block
+  - entry numbers form a continuous sequence [1]..[N]
+  - with --readings N: every entry carries exactly N readings (or is an
+    "= all …" entry); catches silent mis-merges on corpora with a different
+    number of palaeographers
+Exits non-zero if any check fails.
+"""
+import argparse
+import pathlib
+import re
+import sys
+
+
+def reading_counts(middle):
+    """Count the reading markers of every [n] entry in a fenced block.
+
+    Reading markers are only recognised in sequence (1., 2., 3., …), matching
+    make_reference.py, so embedded numbering ("3. Nouicos.") is not counted.
+    "= all …" entries count as 0 readings.
+    """
+    counts = {}
+    cur = None
+    expected = 0
+    for ln in middle.splitlines():
+        s = ln.strip()
+        if s == "" or s == "```":
+            continue
+        m = re.match(r"^\[(\d+)\]", s)
+        if m:
+            cur = int(m.group(1))
+            counts[cur] = 0
+            expected = 1
+            s = s[m.end():].strip()
+        if cur is None:
+            continue
+        mm = re.match(r"^(\d+)\.\s+", s)
+        if mm and int(mm.group(1)) == expected:
+            counts[cur] += 1
+            expected += 1
+    return counts
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("folder", nargs="?", default="comparison")
+    ap.add_argument("--readings", type=int, default=None, metavar="N",
+                    help="expected number of readings per entry")
+    args = ap.parse_args()
+
+    folder = pathlib.Path(args.folder)
+    if not folder.is_dir():
+        print(f"error: {folder} is not a directory", file=sys.stderr)
+        return 2
+
+    failures = 0
+    files = [p for p in sorted(folder.glob("*.md")) if p.name != "overview.md"]
+    for p in files:
+        text = p.read_text()
+        problems = []
+
+        fences = [ln for ln in text.splitlines() if ln.strip() == "```"]
+        if len(fences) != 2:
+            problems.append(f"expected 2 fence lines, found {len(fences)}")
+
+        sections = re.findall(r"^## (.+)$", text, flags=re.M)
+        if sections != ["Entry-by-entry comparison", "Key differences on this page"]:
+            problems.append(f"sections are {sections!r}")
+
+        if "## Entry-by-entry comparison" in text and "## Key differences on this page" in text:
+            i = text.index("## Entry-by-entry comparison")
+            j = text.index("## Key differences on this page")
+            middle = text[i + len("## Entry-by-entry comparison"):j]
+
+            if not middle.startswith("\n\n```"):
+                problems.append("no blank line before the opening fence")
+            if not middle.rstrip().endswith("```"):
+                problems.append("entry block not closed by a fence")
+
+            body = [ln for ln in middle.splitlines()
+                    if ln.strip() not in ("", "```")]
+            nums = []
+            for ln in body:
+                m = re.match(r"^\[(\d+)\]", ln.strip())
+                if m:
+                    nums.append(int(m.group(1)))
+            if not nums:
+                problems.append("no [n] entry markers found")
+            elif nums != list(range(1, len(nums) + 1)):
+                problems.append(f"entry numbers not continuous: {nums[:8]}...")
+
+            if args.readings is not None:
+                counts = reading_counts(middle)
+                nonzero = [c for c in counts.values() if c]
+                divergent = bool(nonzero) and all(c == 1 for c in nonzero)
+                if divergent:
+                    pass  # page kept unconsolidated (one full reading per entry)
+                else:
+                    bad = {n: c for n, c in counts.items()
+                           if c not in (0, args.readings)}
+                    if bad:
+                        preview = ", ".join(f"[{n}]={c}" for n, c in sorted(bad.items())[:6])
+                        problems.append(
+                            f"entries whose reading count != {args.readings}: {preview}")
+
+        if problems:
+            failures += 1
+            print(f"FAIL {p.name}:")
+            for pr in problems:
+                print(f"     - {pr}")
+        else:
+            print(f"ok   {p.name}")
+
+    print(f"\n{len(files) - failures}/{len(files)} files OK")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+# The skills pha ships, as (folder_name, SKILL.md body). Embedded
 # so seeding works with no source checkout; the repo's skills/ folder is the
 # authored copy and a test keeps the two identical.
 SKILLS: tuple[tuple[str, str], ...] = (
+    ("palaeographers-compare", _SKILL_PALEOGRAPHERS_COMPARE),
     ("pha-document-operations", _SKILL_DOCUMENT_OPERATIONS),
     ("pha-search-context", _SKILL_SEARCH_CONTEXT),
     ("pha-zotero-bibliography", _SKILL_ZOTERO_BIBLIOGRAPHY),
+)
+
+# Extra files that travel with a skill (helper scripts, examples, licence, its
+# own README), as (folder_name, ((path relative to the skill folder, text),
+# ...)). SKILL.md is implicit and always first; a skill with no entry here is
+# just its SKILL.md.
+SKILL_FILES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "palaeographers-compare",
+        (
+            ("README.md", _SKILL_PALEOGRAPHERS_COMPARE_README),
+            ("LICENSE", _SKILL_PALEOGRAPHERS_COMPARE_LICENSE),
+            ("examples/entry-format.md", _SKILL_PALEOGRAPHERS_COMPARE_ENTRY_FORMAT),
+            ("scripts/make_reference.py", _SKILL_PALEOGRAPHERS_COMPARE_MAKE_REFERENCE),
+            ("scripts/normalize_comparison.py", _SKILL_PALEOGRAPHERS_COMPARE_NORMALIZE),
+            ("scripts/verify_comparison.py", _SKILL_PALEOGRAPHERS_COMPARE_VERIFY),
+        ),
+    ),
 )
 
 
@@ -773,13 +1764,29 @@ def bundled_skills() -> tuple[tuple[str, str], ...]:
     return SKILLS
 
 
-def seed_archive_skills(archive_dir: str | Path) -> list[str]:
-    """Create `<archive>/skills/` and seed it: the README plus every bundled
-    pha-specific skill (each `<name>/SKILL.md`), **only when missing**.
+def bundled_skill_files() -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    """Every file of every bundled skill, as
+    (folder_name, ((path relative to the skill folder, text), ...)).
 
-    Never overwrites an existing file, so a user's edits and additions survive
-    every later pha run. Returns the archive-relative paths it created, e.g.
-    ['README.md', 'pha-search-context/SKILL.md'], for callers that report it.
+    `SKILL.md` is always first, followed by the files in `SKILL_FILES`. The
+    order is deterministic (skills follow `SKILLS`), so seeding is reproducible.
+    """
+    extras = dict(SKILL_FILES)
+    return tuple(
+        (name, (("SKILL.md", body),) + extras.get(name, ()))
+        for name, body in bundled_skills()
+    )
+
+
+def seed_archive_skills(archive_dir: str | Path) -> list[str]:
+    """Create `<archive>/skills/` and seed it: the README plus every file of
+    every bundled skill, **only when missing**.
+
+    An existing file is never overwritten, so a user's edits survive every
+    later pha run. A bundled file that is missing (including a whole skill
+    added in a newer pha version) is (re)created, which is how an updated
+    install reaches an existing archive. Returns the archive-relative paths it
+    created, e.g. ['README.md', 'pha-search-context/SKILL.md'].
     """
     root = Path(archive_dir) / "skills"
     root.mkdir(parents=True, exist_ok=True)
@@ -788,11 +1795,12 @@ def seed_archive_skills(archive_dir: str | Path) -> list[str]:
     if not readme.exists():
         readme.write_text(SKILLS_README_MD, encoding="utf-8")
         created.append("README.md")
-    for name, body in bundled_skills():
-        target = root / name / "SKILL.md"
-        if target.exists():
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(body, encoding="utf-8")
-        created.append(f"{name}/SKILL.md")
+    for name, files in bundled_skill_files():
+        for relative_path, body in files:
+            target = root / name / relative_path
+            if target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body, encoding="utf-8")
+            created.append(f"{name}/{relative_path}")
     return created

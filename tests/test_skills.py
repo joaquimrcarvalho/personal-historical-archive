@@ -61,6 +61,23 @@ EXPECTED = {
         # presence-only, and metadata never re-transcribes
         "no inheritance",
         "never re-transcribes a document",
+    ],    "palaeographers-compare": [
+        # trigger language in the description
+        "compare or collate transcriptions",
+        "compare palaeographers or transcription models",
+        # the uniform comparative edition
+        "uniform comparative edition",
+        "## Entry-by-entry comparison",
+        "## Key differences on this page",
+        "= all readings:",
+        "overview.md",
+        # the bundled helper scripts and the reference variant
+        "scripts/normalize_comparison.py",
+        "scripts/verify_comparison.py",
+        "scripts/make_reference.py",
+        "human/",
+        "never harmonise",
+        "verbatim",
     ],
 }
 
@@ -89,3 +106,19 @@ def test_skill_carries_required_guidance(name, markers):
     text = _read_skill(name)
     for m in markers:
         assert m in text, f"{name}/SKILL.md missing {m!r}"
+
+
+def test_palaeographers_compare_ships_usable_scripts():
+    root = SKILLS / "palaeographers-compare"
+    for rel in (
+        "examples/entry-format.md",
+        "scripts/make_reference.py",
+        "scripts/normalize_comparison.py",
+        "scripts/verify_comparison.py",
+    ):
+        path = root / rel
+        assert path.is_file(), f"missing {rel}"
+        text = path.read_text(encoding="utf-8")
+        assert text.strip()
+        if rel.endswith(".py"):
+            compile(text, str(path), "exec")

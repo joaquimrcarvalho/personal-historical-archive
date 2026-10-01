@@ -50,6 +50,47 @@ def _dotenv() -> dict[str, str]:
     return _DOTENV
 
 
+def _dotenv_first(root: Path, name: str) -> str | None:
+    """The FIRST `NAME=...` line's value in ``<root>/.env``, or None when the
+    line (or the file) is absent.
+
+    First-match wins, as ``Config.load`` has always resolved these settings.
+    The value is returned as written (quotes stripped); an EMPTY value comes
+    back as ``""``, which is left to the caller to judge — see
+    `_warn_empty_setting`.
+    """
+    envp = root / ".env"
+    if not envp.exists():
+        return None
+    try:
+        text = envp.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(name + "="):
+            return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return None
+
+
+def _warn_empty_setting(name: str, where: str) -> None:
+    """An EMPTY value is evidence of an accident, not a configuration (D5).
+
+    `PHA_ARCHIVE_DIR=` is what a truncated file or a shell redirect leaves
+    behind, and treating it as unset silently is how an emptied pointer made
+    every pha run resolve the source checkout as the archive — see
+    ``enhancements/pha-archive-pointer-loss-bug-report.md``. The value is still
+    ignored (falling through to the next pointer is the only safe reading), but
+    the user is told.
+    """
+    print(
+        f"warning: {name} is set but EMPTY in {where} — ignoring it. An empty "
+        f"value is usually an accident (a truncated file or a redirect), and "
+        f"the fallback may point pha at a different archive.",
+        file=sys.stderr,
+    )
+
+
 # --------------------------------------------------------------------------- native secret stores
 
 def _secret_get(name: str) -> str:
@@ -502,6 +543,12 @@ class Config:
     update_timeout: int
     update_repo: str
     update_branch: str
+    # WHERE archive_dir came from: "env" | "dotenv" | "config" | "default".
+    # Recorded at load time, where the precedence is decided, so `pha info`,
+    # the resolved-archive notice and the fresh-install guard report what was
+    # ACTUALLY used instead of re-deriving it from three files (and drifting —
+    # see D3 in enhancements/pha-archive-pointer-loss-bug-report.md).
+    archive_source_kind: str = "default"
 
     @classmethod
     def load(cls, root: Path | None = None) -> "Config":
@@ -518,20 +565,34 @@ class Config:
         srv = raw.get("serve", {}) or {}
         upd = raw.get("update", {}) or {}
 
-        def _env_setting(name: str) -> str | None:
+        def _env_setting_source(name: str) -> tuple[str | None, str | None]:
             """Read a setting from the real environment, then a line NAME=... in
             the gitignored .env AT THIS ROOT (so tests with a tmp root are
-            isolated). Returns None if unset."""
-            v = os.environ.get(name)
-            if v:
-                return v
-            envp = root / ".env"
-            if envp.exists():
-                for line in envp.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if line.startswith(name + "="):
-                        return line.split("=", 1)[1].strip().strip('"').strip("'")
-            return None
+            isolated). Returns ``(value, where)`` with ``where`` one of
+            ``"env"`` / ``"dotenv"`` / None.
+
+            An EMPTY value is treated as unset and WARNED about: "the variable
+            exists but is empty" is the signature of an accident, and silently
+            falling back is how an emptied `PHA_ARCHIVE_DIR` made every pha run
+            resolve the source checkout as the archive — see
+            ``enhancements/pha-archive-pointer-loss-bug-report.md`` (D5).
+            """
+            raw = os.environ.get(name)
+            if raw is not None and raw.strip():
+                return raw, "env"
+            if raw is not None:
+                _warn_empty_setting(name, "the environment")
+            value = _dotenv_first(root, name)
+            if value is None:
+                return None, None
+            if value.strip():
+                return value, "dotenv"
+            _warn_empty_setting(name, str(root / ".env"))
+            return None, None
+
+        def _env_setting(name: str) -> str | None:
+            """The value of a setting, ignoring (and warning about) empties."""
+            return _env_setting_source(name)[0]
 
         # archive_dir is the single self-contained data root. Everything the
         # archive owns — documents, model definitions, generated output —
@@ -547,8 +608,22 @@ class Config:
         # effective. Kept in sync with AGENTS.md, config.yaml's header and
         # README.md — see
         # tests/test_config.py::test_config_archive_dir_dotenv_beats_explicit_yaml.
-        archive_env = _env_setting("PHA_ARCHIVE_DIR")
-        archive_dir = _p(root, str(archive_env or paths.get("archive_dir", ".")))
+        #
+        # WHICH pointer won is recorded on the Config (`archive_source_kind`),
+        # decided here and nowhere else: `pha info`, the resolved-archive
+        # notice and the fresh-install guard all used to re-derive it from the
+        # same three files, and an empty `.env` value made them disagree with
+        # what was actually used (D3/D5).
+        archive_env, archive_from = _env_setting_source("PHA_ARCHIVE_DIR")
+        yaml_archive = paths.get("archive_dir")
+        if archive_from:
+            archive_source_kind = archive_from
+        elif yaml_archive is not None and str(yaml_archive).strip() not in ("", "."):
+            archive_source_kind = "config"
+        else:
+            # no pointer at all, or the shipped `archive_dir: .` default
+            archive_source_kind = "default"
+        archive_dir = _p(root, str(archive_env or yaml_archive or "."))
 
         # engine-level prompts stay in the PROJECT (not the archive).
         prompts_dir = _p(root, paths.get("prompts", "prompts"))
@@ -641,6 +716,7 @@ class Config:
             update_timeout=int(upd.get("timeout", 5)),
             update_repo=str(upd.get("repo", "joaquimrcarvalho/personal-historical-archive")),
             update_branch=str(upd.get("branch", "main")),
+            archive_source_kind=archive_source_kind,
         )
 
     def get_palaeographer(self, pal_id: str | None = None) -> Palaeographer:

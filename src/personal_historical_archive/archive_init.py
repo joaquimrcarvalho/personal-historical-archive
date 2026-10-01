@@ -135,6 +135,7 @@ pha search "query"               # search the extracted text
 pha review [--doc N]             # import human corrections from library/
 pha reindex [--doc N] [--page P]        # re-embed what changed (--force: everything)
 pha prune [--dry-run]            # delete orphaned render image caches
+pha version [--short]            # which pha is running, and where it is installed
 pha help                         # full command list
 pha help agents                  # agent conventions
 ```
@@ -224,11 +225,18 @@ one before the task, no pha source checkout needed:
   bibliographic sidecar, or build/refresh one document's reference from the
   owner's Zotero library (local-API MODS, an RDF export,
   `pha bib <doc> --to-json --write`).
+- `skills/palaeographers-compare/SKILL.md` — compare two or more palaeographers'
+  (or transcription models') readings of the same pages into a uniform
+  comparative edition (per-page files with the readings stacked,
+  `overview.md`), with bundled `scripts/` to normalise, verify and build the
+  `reference/` variant.
 
-Each skill is `<name>/SKILL.md` with YAML front matter whose `name` matches the
-folder; `skills/README.md` documents the format and how to install a skill into
-an agent runtime (`cp -R skills/<name> ~/.agents/skills/`). `pha` seeds this
-folder once and never overwrites it — edit or extend it freely.
+Each skill is a folder with a `SKILL.md` (YAML front matter whose `name`
+matches the folder) and may ship helper files (`scripts/`, `examples/`, a
+licence). `skills/README.md` documents the format and how to install a skill
+into an agent runtime (`cp -R skills/<name> ~/.agents/skills/`). A bundled
+file missing from the archive is (re)created on the next pha run; an existing
+file is never overwritten — edit or extend the skills freely.
 
 ## Operating discipline
 
@@ -367,13 +375,23 @@ it:
   (`curl "http://localhost:23119/api/users/0/items/<KEY>?format=mods"`), a
   Zotero RDF export package, `pha bib <doc> --to-json --write`, and the
   provenance rules that keep an unverified reference from being cited as fact.
+- `skills/palaeographers-compare/SKILL.md` — compare or collate two or more
+  readings (palaeographers or transcription models) of the same pages into a
+  uniform comparative edition: per-page files with the readings stacked under
+  `## Entry-by-entry comparison` and a `## Key differences on this page` list,
+  plus an `overview.md`. Normalise and verify with the bundled
+  `scripts/normalize_comparison.py` and `scripts/verify_comparison.py`; build
+  the slashed one-line `reference/` variant with `scripts/make_reference.py`.
+  `human/` is read-only for agents.
 
-Each skill is `skills/<name>/SKILL.md` with YAML front matter whose `name`
-matches its folder name. `skills/README.md` documents the format, and how to
-make a runtime pick a skill up automatically (copy it to that runtime's
-user-level skills directory, e.g. `cp -R skills/pha-search-context
-~/.agents/skills/`). `pha` seeds the folder once and never overwrites it —
-edit, delete or add skills freely.
+Each skill is a folder with `skills/<name>/SKILL.md` (YAML front matter whose
+`name` matches its folder name) and may ship helper files (`scripts/`,
+`examples/`, a licence). `skills/README.md` documents the format, and how to
+make a runtime pick a skill up automatically (copy the whole folder to that
+runtime's user-level skills directory, e.g. `cp -R
+skills/palaeographers-compare ~/.agents/skills/`). A bundled file missing
+from the archive is (re)created on the next pha run; an existing file is
+never overwritten — edit, extend or add skills freely.
 
 ## How an agent should operate
 

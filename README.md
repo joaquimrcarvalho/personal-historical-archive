@@ -204,13 +204,20 @@ pha --help
 #    WHICH ARCHIVE AM I USING? `pha info` prints the resolved archive plus an
 #    `archive_source` line saying WHY that one (environment / legacy .env /
 #    config.yaml / the default) — check it before a long background job.
+#    `pha info --json` adds `configured` (false = the project-root default, i.e.
+#    no archive is configured and the default one is empty) and
+#    `archive_source_kind` (`env`/`dotenv`/`config`/`default`) for callers that
+#    must not string-match the prose. `pha info` never prompts and never creates
+#    anything, so it is the safe way to ask.
 #    `pha status` etc. also warn when a configured archive holds no documents
 #    but another archive.db sits in a parent directory (the shape of a stale
 #    pointer). The location itself lives in config.yaml (`paths.archive_dir`,
 #    written by `pha set archive-dir`), and an explicit PHA_ARCHIVE_DIR in the
 #    environment overrides it for a single run. In full: environment > legacy
 #    .env line > paths.archive_dir in config.yaml > default "." (see the note
-#    above on why the legacy line is checked first).
+#    above on why the legacy line is checked first). An EMPTY value (an
+#    `PHA_ARCHIVE_DIR=` left by a truncated file or a redirect) counts as unset
+#    and warns — it never silently lands you on a different archive.
 
 # 4. start LM Studio, load qwen/qwen3-vl-8b (or your palaeo model), and the
 #    embedding model; start the local server on port 1234
@@ -242,7 +249,9 @@ setup on a shared/archive machine). Do NOT guess or invent a path.
      /path/to/python -m personal_historical_archive status
    ```
    `pha info` prints the same tool fields (`pha_command`, `pha_version`,
-   `pha_module_command`, `location_file`) once pha does run. Since the file is
+   `pha_module_command`, `location_file`) once pha does run, and
+   `pha version` prints the version, install kind and source checkout without
+   needing an archive at all. Since the file is
    machine-local, a reinstall or a move can leave it stale — if the recorded
    path fails, use the interpreter form just above.
 2. Confirm it is actually missing: `command -v pha` → if it prints nothing,
@@ -381,7 +390,18 @@ installed by anyone who sets up agents from the repo:
   `pha page`. It branches by capability: CLI+files agents, dsh-pha plugin
   `pha_*` tools, and FastMCP tools (which lack a per-document re-scan).
 
-Both branch by capability: MCP-tools-only agents vs agents with CLI + library
+- Zotero bibliography — [`skills/pha-zotero-bibliography/SKILL.md`](skills/pha-zotero-bibliography/SKILL.md):
+  import a PDF from Zotero with its bibliographic sidecar, or build/refresh
+  one document's reference from the owner's Zotero library (local-API MODS,
+  an RDF export, `pha bib <doc> --to-json --write`), with the provenance
+  rules that keep an unverified reference from being cited as fact.
+- Palaeographers compare — [`skills/palaeographers-compare/SKILL.md`](skills/palaeographers-compare/SKILL.md):
+  compare or collate two or more readings (palaeographers or transcription
+  models) of the same pages into a uniform comparative edition (per-page
+  files with the readings stacked plus `overview.md`); ships `scripts/` to
+  normalise, verify and build the slashed one-line `reference/` variant.
+
+The first two branch by capability: MCP-tools-only agents vs agents with CLI + library
 file access. **Installing them for your agents:** copy the folders into the
 user-level skills directory used by agent runtimes on this machine
 (`~/.agents/skills/` — where DSH and other agent tools pick skills up from):
@@ -389,6 +409,8 @@ user-level skills directory used by agent runtimes on this machine
 ```bash
 cp -R skills/pha-search-context ~/.agents/skills/
 cp -R skills/pha-document-operations ~/.agents/skills/
+cp -R skills/pha-zotero-bibliography ~/.agents/skills/
+cp -R skills/palaeographers-compare ~/.agents/skills/
 ```
 
 (Re-copy to update after pulling a newer repo version. A skill's front matter
@@ -403,22 +425,27 @@ the archive holds its own copy:
 <archive>/skills/README.md                  what these are, and the format
 <archive>/skills/pha-search-context/SKILL.md
 <archive>/skills/pha-document-operations/SKILL.md
+<archive>/skills/pha-zotero-bibliography/SKILL.md
+<archive>/skills/palaeographers-compare/SKILL.md
+    (+ its scripts/, examples/, README and LICENSE - every bundled file is seeded)
 ```
 
 `pha init-archive` seeds it, and every pha run seeds it into an existing
-dedicated archive that lacks it (`Config.ensure_dirs`). Seeding happens **once
-and is never overwritten** — like `notes/README.md`, and unlike README.md /
-AGENTS.md (which are marker-stamped and refreshed) — so an archive owner's
-edits, deletions and extra skills survive every later run. The archive's own
-`AGENTS.md` and `README.md` point agents at `<archive>/skills/` first.
+dedicated archive that lacks it (`Config.ensure_dirs`). A bundled file is
+written only when it is missing and is never overwritten, so an archive
+owner's edits and extra skills survive every later run; a missing file (e.g.
+a skill added in a newer pha version) is (re)created, which is how updates
+reach an existing archive. The archive's own `AGENTS.md` and `README.md`
+point agents at `<archive>/skills/` first.
 
-The skill bodies are **embedded in the pha package** (`archive_skills.py`), not
-read from the source tree, precisely because the machine that owns the archive
-may have pha installed with no access to this repository. This `skills/` folder
-stays the authored copy; `tests/test_skills.py` asserts the embedded constants
-match these files byte for byte, so the two cannot drift. To ship an update to
-existing archives, edit here (the embedded constant is regenerated from these
-files) and bump the version.
+Every file of a bundled skill is **embedded in the pha package**
+(`archive_skills.py`), not read from the source tree, precisely because the
+machine that owns the archive may have pha installed with no access to this
+repository. This `skills/` folder stays the authored copy;
+`tests/test_archive_skills.py` asserts the embedded files match these byte
+for byte, so the two cannot drift. To ship an update to existing archives,
+edit here (the embedded data is regenerated from these files) and bump the
+version.
 
 ## DeepSeek Harness plugin (dsh-pha)
 
@@ -1100,9 +1127,17 @@ pha config [--doc DOC] [--json] [--write]
                                 #   is inherited, resolved stages/encoders); --write generates one
                                 #   from the legacy configuration, but only when none is in scope
 pha info [--json]               # archive paths + versions, without walking the library
+pha version [--short|--json]    # which pha is this, and where it is installed (also
+                                #   `pha --version`); works before an archive is configured,
+                                #   reads no DB — the answer when two installs both
+                                #   provide a `pha` and only one is the one you run
 pha status [--json]            # archive summary; --json is the PHA view's source for what
                                #   is not scanned yet and what is parked in the inbox
-pha export
+pha export [--doc N] [--path collections/COLX]
+                                # rewrite the library page files from the database (no
+                                #   re-extraction, no model call); --doc/--path scope it to
+                                #   one document or one collection — the repair for a library
+                                #   folder that was deleted or is missing
 pha reindex [--doc N] [--page P] [--path collections/COLX] [--force]
                           # re-embed; INCREMENTAL by default — only chunks whose text
                           #   changed (or whose vector came from another embed model) are
@@ -1446,8 +1481,12 @@ layout keep working and can be migrated with `pha migrate-config`.
 
 Per-page files are written **incrementally** while a document is being
 extracted, so output is visible immediately (no need to wait for completion).
-`pha export` regenerates all per-page files from the database without
-re-extracting. Running a different palaeographer over the same document adds
+`pha export` regenerates per-page files from the database without
+re-extracting — `pha export --doc N` or `--path collections/COLX` limits it to
+one document or collection, which is what you want when repairing a single
+document (a blanket export rewrites every library file and would overwrite an
+un-imported human correction before `pha review` imported it). Running a
+different palaeographer over the same document adds
 a sibling `transcription-<palaeographer>/` folder for side-by-side
 comparison.
 
@@ -1457,6 +1496,13 @@ creation date of that version. When a document's content changes, pha creates
 a NEW document row (with a new date), so versions never collide and the old
 folder stays on disk. Pages of a directory-of-images document are named after
 their source scan (`502V.md`); PDF pages use `page-NNN.md`.
+
+**That date is rendered in the machine's LOCAL timezone, and the folder name is
+recomputed rather than stored**, so the same document addresses different
+folders on machines (or in zones) whose calendar date differs for its
+`created_at` — a finished document can end up with no library files where pha
+looks, with nothing reported. Repair with `pha export --doc N`; the design fix
+is tracked in `enhancements/pha-library-slug-timezone-bug-report.md`.
 
 A variant folder may carry a **model suffix** — `edited-<editor>@<model>` — so
 the same stage run with a different model keeps both readings side by side. The

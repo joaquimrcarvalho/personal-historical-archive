@@ -47,7 +47,13 @@
   archive. `config.yaml` is still the tracked, reviewable home — `pha set
   archive-dir` writes it AND removes the legacy `.env` line, which is what
   makes it effective; `pha info` names the source that won
-  (`archive_source`). A fresh archive is seeded with
+  (`archive_source`, with the machine-readable `archive_source_kind` and a
+  `configured` boolean in `--json`: `configured: false` means the project-root
+  default, so a caller must not treat that directory as a usable archive —
+  `pha info` answers instead of prompting and creates nothing, so it is the
+  safe discovery probe). An EMPTY `PHA_ARCHIVE_DIR` — in the environment or a
+  `.env` line — counts as unset and warns: it is an accident, never a pointer.
+  A fresh archive is seeded with
   `default.md` for model/palaeographer/editor/encoder (all qwen3-vl-8b) so it
   works with zero config.
 - **Three config layers.** (1) `models/<id>.md` — pure model interface
@@ -363,28 +369,32 @@ Run `pha help` (or `pha help <readme|mcp|historians|agents>`) for an
 orientation that points at this file, README.md, MCP_CLIENTS.md and
 HISTORIANS_README.md — it always works, even before an archive is configured.
 
-Bundled **skills** (`skills/*/SKILL.md`, installable to `~/.agents/skills/`)
-cover two common agent mistakes: `pha-search-context` (don't answer from a
-search snippet — recover the full page/document) and `pha-document-operations`
-(re-run the pipeline on an already-ingested document: `pha scan --path …`,
-`--reprocess` to force it, `pha edit --path … --page N`, `pha test`). An
-archive created with `pha init-archive` carries its own `AGENTS.md`/`README.md`
-with the same re-run-one-document guidance, so an agent working only from the
-archive directory does not need the source.
+Bundled skills (`skills/<name>/`, installable to `~/.agents/skills/`) cover
+the common agent tasks: `pha-search-context` (don't answer from a search
+snippet — recover the full page/document), `pha-document-operations` (re-run
+the pipeline on an already-ingested document), `pha-zotero-bibliography`
+(import a Zotero PDF with its sidecar; build/refresh a document's reference),
+and `palaeographers-compare` (compare two or more readings of the same pages
+into a uniform comparative edition, with bundled `scripts/` to normalise,
+verify and build the `reference/` variant). An archive created with
+`pha init-archive` carries its own `AGENTS.md`/`README.md` with the same
+guidance, so an agent working only from the archive directory does not need
+the source.
 
-**The archive carries its own `skills/` folder** — the pha-specific skills as
-`<archive>/skills/<name>/SKILL.md` plus `skills/README.md` (the format, and how
-to install one into a runtime). `pha init-archive` seeds it, and every run
-seeds it into an existing dedicated archive that lacks it (`Config.ensure_dirs`);
-seeding is **once and never overwritten**, so an archive owner's edits, extra
-skills and deletions survive. The bodies are **embedded in the pha package**
-(not read from this checkout), precisely because the agent operating an archive
-may have pha installed with no access to this repository — and the archive's
-own `AGENTS.md`/`README.md` point agents at `<archive>/skills/` first. The repo
-`skills/*/SKILL.md` files remain the authored copies; a test
-(`tests/test_skills.py`) asserts the embedded constants match them byte for
-byte, so the two cannot drift. Keep the folder name equal to the front-matter
-`name`.
+The archive carries its own `skills/` folder — every bundled skill as
+`<archive>/skills/<name>/SKILL.md` (plus the skill's helper files) and
+`skills/README.md` (the format, and how to install one into a runtime).
+`pha init-archive` seeds it, and every run adds anything missing to an
+existing dedicated archive (`Config.ensure_dirs`): an existing file is never
+overwritten, so the owner's edits survive, and a file or whole skill added in
+a newer pha version appears on the next run. Every bundled file is embedded in
+the pha package (not read from this checkout), precisely because the agent
+operating an archive may have pha installed with no access to this repository
+— and the archive's own `AGENTS.md`/`README.md` point agents at
+`<archive>/skills/` first. The repo `skills/<name>/` files remain the authored
+copies; a test (`tests/test_archive_skills.py`) asserts the embedded files
+match them byte for byte, so the two cannot drift. Keep the folder name equal
+to the front-matter `name`.
 
 ### Notes (research notes generated from archive queries)
 

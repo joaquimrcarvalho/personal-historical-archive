@@ -1,6 +1,7 @@
 # Bug report — losing the archive pointer makes `pha` seed definitions into the wrong tree, and the PHA View dies
 
-**Status:** open. **Found:** 2026-09-21, on the `jesuit-archive` machine, when the
+**Status:** partly fixed — **D3 and D5 closed 2026-09-29**; D1, D2 and D4 open
+(see §8). **Found:** 2026-09-21, on the `jesuit-archive` machine, when the
 DSH **PHA View** could not open any page: every click answered *"No pha archive
 is configured or found."* pha `0.28.0` (installed tool + editable checkout).
 
@@ -115,3 +116,61 @@ cd / && pha info --json     # must report archive_dir …/jesuit-archive
 Running `pha set archive-dir /Users/jrc/jesuit-archive` as well makes the pointer
 survive a `.env` accident, at the price of putting a machine-local path into the
 tracked `config.yaml`.
+
+## 8. Progress — 2026-09-29 (pha 0.35.0)
+
+**D3 closed.** `pha info --json` now answers instead of refusing:
+
+```json
+{
+  "archive_dir": "/private/tmp/bare",
+  "archive_source": "default (project root)",
+  "archive_source_kind": "default",
+  "configured": false,
+  ...
+}
+```
+
+- `configured` is the boolean a discovery caller needs, and
+  `archive_source_kind` (`env` / `dotenv` / `config` / `default`) is the stable,
+  machine-readable twin of the prose `archive_source`, which is unchanged.
+- `pha info` is now dispatched **before** the fresh-install guard and before
+  `ensure_dirs()` (like `pha version`), so it neither prompts/exits nor creates
+  an archive layout in whatever directory resolution fell back to. Verified: on
+  a bare root it exits 0 with the JSON above and creates no `library/`,
+  `dropbox/`, `data/`, `archive.db` or `pha-location.md`.
+- Both facts are **recorded by `Config.load`** (`Config.archive_source_kind`),
+  where the precedence is decided. `pha info`, the resolved-archive one-liner
+  and `_archive_explicitly_set` used to re-derive the source from the same three
+  files independently — which is how an empty `.env` value made them disagree
+  with what was actually used.
+- **Still to do on the consumer side:** `dsh-pha`'s `discover()`
+  (`dsh-pha/lib/index.js:122-162`) still runs with `cwd = '/'` and accepts any
+  `archive_dir`. It should treat `configured: false` as "no archive" so the view
+  reports that clearly instead of acting on the project-root fallback.
+
+**D5 closed.** An empty value is ignored *and* warned about, in both sources:
+
+```
+$ PHA_ARCHIVE_DIR= pha info
+warning: PHA_ARCHIVE_DIR is set but EMPTY in the environment — ignoring it. An
+empty value is usually an accident (a truncated file or a redirect), and the
+fallback may point pha at a different archive.
+```
+
+- `_env_setting` was `if v: return v`; the reader now reports **where** a value
+  came from and treats whitespace-only as empty too.
+- An empty `PHA_ARCHIVE_DIR=` line in `.env` no longer counts as a pointer:
+  `_archive_explicitly_set` returns False for it (it previously returned **True**,
+  so an emptied line suppressed the fresh-install guard while resolving the
+  project-root default), `_dotenv_archive_dir` returns None, and a real
+  `paths.archive_dir` still wins the precedence.
+- Both directions are covered by 12 tests in `tests/test_archive_pointer.py`.
+
+**D1, D2, D4 remain open** — defaults are still seeded by `Config.load()` into
+whatever root resolution produces (so `pha info` on a bare directory still
+creates the four `default.md` files, just no longer a whole archive layout), the
+project-root fallback is still silent at resolution time, and there is still no
+machine-level pointer. D1 is now the most visible remaining defect, and the
+`dsh-pha` wiring above is the shortest path to making the original incident
+impossible to repeat.

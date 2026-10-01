@@ -4054,10 +4054,14 @@ def _documents_under(cfg: Config, conn, path: str) -> list | None:
     if not root.is_absolute():
         root = cfg.dropbox / root
     root = root.resolve()
-    if root != cfg.dropbox.resolve() and cfg.dropbox.resolve() not in root.parents:
-        if not root.exists():
-            print(f"  target path does not exist: {path}", flush=True)
-            return None
+    # A target that does not exist is reported as such whatever its shape. The
+    # check used to apply only outside the dropbox, so a typo'd
+    # `--path collections/NOPE` fell through to `discover()` and came back as
+    # an empty document list — which reads like an empty collection rather than
+    # a mistyped path.
+    if not root.exists():
+        print(f"  target path does not exist: {path}", flush=True)
+        return None
     if root.is_file():
         units = [root] if is_supported(root.name) else []
     else:

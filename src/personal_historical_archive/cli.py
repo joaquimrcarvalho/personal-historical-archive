@@ -939,21 +939,30 @@ def cmd_info(cfg: Config, args) -> None:
     callers that just need to LOCATE the archive (the PHA view, an agent):
     `pha status` walks every library page file (minutes on a large archive) and
     `pha doctor` probes the engine binaries, while this is just config loading.
+
+    It also ANSWERS "is there an archive here?" instead of refusing to: the
+    fresh-install guard prompts (and on a non-interactive run, exits) for most
+    commands, which left a discovery caller with prose on stderr and no
+    structured answer — the DSH PHA View died on exactly that. So `info`
+    reports `configured` plus a machine-readable source and always emits its
+    JSON; `pha info` on a bare directory is a successful report, not an error.
+    See D3 in enhancements/pha-archive-pointer-loss-bug-report.md.
     """
-    # `archive_source` says WHY this archive: env / legacy .env / config.yaml /
-    # the default. A wrong archive is otherwise silent (an empty archive is a
-    # valid archive), so this is the answer to "which one am I actually on?".
-    if os.environ.get("PHA_ARCHIVE_DIR"):
-        source = "PHA_ARCHIVE_DIR environment variable"
-    elif _dotenv_archive_dir(cfg) is not None:
-        source = "PHA_ARCHIVE_DIR in .env (legacy)"
-    elif (cfg.root / "config.yaml").exists():
-        source = "paths.archive_dir in config.yaml"
-    else:
-        source = "default (project root)"
+    # WHERE the archive came from is recorded by `Config.load`, where the
+    # precedence (env > legacy .env > config.yaml > default) is decided, so this
+    # cannot disagree with what was actually used.
+    source = _ARCHIVE_SOURCE_TEXT.get(cfg.archive_source_kind, "default (project root)")
+    configured = not _archive_unconfigured(cfg)
     info = {
         "archive_dir": str(cfg.archive_dir),
         "archive_source": source,
+        # stable, machine-readable twin of `archive_source` (prose is for humans
+        # and must stay parseable-by-eye, not by string-matching)
+        "archive_source_kind": cfg.archive_source_kind,
+        # False = the project-root fallback, i.e. no archive is configured AND
+        # the default one holds no documents. Discovery must not treat the
+        # directory as usable on this answer alone.
+        "configured": configured,
         "db_path": str(cfg.db_path),
         "dropbox": str(cfg.dropbox),
         "library": str(cfg.library),
@@ -985,6 +994,13 @@ def cmd_info(cfg: Config, args) -> None:
         return
     for key, value in info.items():
         print(f"{key}: {value}")
+    if not configured:
+        # stderr, never stdout: the paths above stay pipeable, and this is a
+        # NOTICE about them rather than part of them.
+        print(f"warning: no archive is configured — this is the project-root "
+              f"default ({cfg.archive_dir}). Point pha at one with "
+              f"`pha set archive-dir <path>`, or create one with "
+              f"`pha init-archive ~/pha-home`.", file=sys.stderr)
 
 
 def cmd_config(cfg: Config, args) -> None:
@@ -2382,21 +2398,61 @@ def cmd_unbundle(cfg: Config, args) -> None:
 
 def cmd_export(cfg: Config, args) -> None:
     """Regenerate per-page transcription + editor files from the DB (no
-    re-extraction / re-editing)."""
-    from .ingest import write_edited_pages
+    re-extraction / re-editing).
 
+    Scope it with `--doc N` (one document id) or `--path <dropbox-relative
+    path>` (a collection, a single document, or a directory-of-images); with
+    neither, every document is exported, as before.
+
+    This is the repair command for a library folder that went missing, or that
+    was written under a folder name this machine no longer computes: the text
+    comes from the database, the folder name from `ingest._doc_slug()`, so the
+    result is what a scan/edit pass would have written — no model is called and
+    nothing in the DB changes apart from the `exported_at` write stamps. It
+    reads and writes only `library/`, so it takes no model-server lock; do not
+    run it over a document a scan/edit is writing at the same moment.
+    """
+    from .ingest import _documents_under, write_edited_pages
+
+    if args.doc is not None and args.path:
+        print("--doc and --path are mutually exclusive", file=sys.stderr)
+        sys.exit(2)
     conn = db.connect(cfg.db_path)
     try:
-        docs = db.list_documents(conn, limit=10000)
+        scoped = args.doc is not None or bool(args.path)
+        if args.doc is not None:
+            one = db.get_document(conn, args.doc)
+            if one is None:
+                print(f"no document #{args.doc}", file=sys.stderr)
+                sys.exit(2)
+            docs = [one]
+        elif args.path:
+            docs = _documents_under(cfg, conn, args.path)
+            if docs is None:
+                sys.exit(2)
+            if not docs:
+                print(f"no ingested document under {args.path}", file=sys.stderr)
+                sys.exit(2)
+        else:
+            docs = db.list_documents(conn, limit=10000)
         n = 0
         for d in docs:
             out = write_document_pages(cfg, conn, d["id"])
-            if out:
-                n += 1
+            if not out:
+                continue
+            n += 1
             if d["editor"]:
                 write_edited_pages(cfg, conn, d["id"], d["editor"],
                                    model=d["editor_model"] or None)
-        print(f"exported {n} document(s) to {cfg.library}")
+            # A scoped run names each document (and where it landed) — that is
+            # how an operator confirms the folder whose loss they are repairing.
+            if scoped:
+                print(f"  #{d['id']:3d} {d['filename']}  ->  {out}")
+        if scoped:
+            prefix = f"doc #{args.doc}" if args.doc is not None else args.path
+            print(f"exported {n} document(s) ({prefix}) to {cfg.library}")
+        else:
+            print(f"exported {n} document(s) to {cfg.library}")
     finally:
         conn.close()
 
@@ -3248,6 +3304,58 @@ def cmd_update(cfg: Config, args) -> None:
           "archive are refreshed if they are outdated.")
 
 
+def cmd_version(cfg: Config, args) -> None:
+    """`pha version` — which pha is this, and where did it come from?
+
+    Read-only and archive-independent by design: it answers "which pha am I
+    actually running?" BEFORE anything else runs, because the version number
+    alone is ambiguous on a machine with more than one install — a `uv tool`
+    shim and an editable checkout both put a `pha` on PATH, and the same
+    archive can be driven by either. The install kind and source checkout say
+    which one this is.
+
+    Writes nothing of its own — no DB, no `ensure_dirs`, no `pha-location.md` —
+    and works before an archive is configured, like `pha help`; it is dispatched
+    before the fresh-install guard and the daily self-update notice. (Like every
+    command it still goes through `Config.load()`, which seeds the sample
+    definitions into the resolved project tree — the separate, already-reported
+    defect in `enhancements/pha-archive-pointer-loss-bug-report.md`.) `--short`
+    prints just the number for scripts; `--json` the same facts for agents. For
+    the ARCHIVE's paths use `pha info`; for a newer release, `pha update --check`.
+    """
+    from . import __version__
+    from .location import build_location
+
+    # Best-effort: discovery must never stop the version from printing.
+    try:
+        loc = build_location(cfg)["pha"]
+        command, python = loc["command"], loc["python"]
+        kind, source = loc["install_kind"], loc["source_checkout"]
+    except Exception:  # noqa: BLE001 - a version command always answers
+        command, python, kind, source = None, sys.executable, None, None
+    info = {
+        "version": __version__,
+        "command": command or f"{python} -m personal_historical_archive",
+        "python": python,
+        "install_kind": kind,
+        "source_checkout": source,
+        "archive_configured": not _archive_unconfigured(cfg),
+    }
+    if getattr(args, "json", False):
+        print(json.dumps(info, ensure_ascii=False, indent=2))
+        return
+    if getattr(args, "short", False):
+        print(__version__)
+        return
+    print(f"pha {__version__}")
+    print(f"  command:  {info['command']}")
+    print(f"  python:   {info['python']}")
+    if kind:
+        print(f"  install:  {kind}")
+    if source:
+        print(f"  source:   {source}")
+
+
 def cmd_help(cfg: Config, args) -> None:
     """`pha help [topic]` — orientation and pointers to the instruction files.
 
@@ -3294,6 +3402,7 @@ def cmd_help(cfg: Config, args) -> None:
     print("  pha handoff status            what is out on hand-over; `cancel <id>` releases it")
     print("  pha test [target] [--pages N] [--random]  test a config on a sample; --show/--list/--clean manage reports")
     print("  pha update                    check GitHub for a newer pha and install it")
+    print("  pha version [--short|--json]  which pha is this, and where it is installed")
     print("  pha help <topic>              details on readme|mcp|historians|agents")
     print()
     print("FIRST-TIME SETUP")
@@ -3320,29 +3429,13 @@ def cmd_help(cfg: Config, args) -> None:
 # point at an existing archive or create a new one under $HOME/pha-home.
 
 def _archive_explicitly_set(cfg: Config) -> bool:
-    """True if PHA_ARCHIVE_DIR was set explicitly (env / .env / config.yaml),
-    as opposed to falling back to the default project-root archive."""
-    if os.environ.get("PHA_ARCHIVE_DIR"):
-        return True
-    envp = cfg.root / ".env"
-    if envp.exists() and any(
-        l.strip().startswith("PHA_ARCHIVE_DIR=")
-        for l in envp.read_text(encoding="utf-8").splitlines()
-    ):
-        return True
-    cfg_path = cfg.root / "config.yaml"
-    if cfg_path.exists():
-        import yaml
-        try:
-            raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            return False
-        val = (raw.get("paths", {}) or {}).get("archive_dir")
-        # "." is the backward-compatible DEFAULT (archive == project root),
-        # so it does not count as an explicit real archive.
-        if val and str(val).strip() not in ("", "."):
-            return True
-    return False
+    """True if the archive was resolved from a real pointer (env / legacy .env /
+    config.yaml), as opposed to the default project root.
+
+    Read from the source `Config.load` recorded, so this cannot drift from the
+    resolution it describes — and so an EMPTY value counts as no pointer (D5).
+    """
+    return cfg.archive_source_kind in ("env", "dotenv", "config")
 
 
 def _archive_unconfigured(cfg: Config) -> bool:
@@ -3403,32 +3496,44 @@ def _archive_is_empty(cfg: Config) -> bool:
         return False
 
 
+# HOW the archive was resolved, in two spellings of the same fact: the prose
+# `pha info` reports as `archive_source` (long-standing wording — callers and
+# tests read it), and the phrasing the one-line resolved-archive notice uses.
+# Both are keyed by `Config.archive_source_kind`, which `Config.load` sets.
+_ARCHIVE_SOURCE_TEXT = {
+    "env": "PHA_ARCHIVE_DIR environment variable",
+    "dotenv": "PHA_ARCHIVE_DIR in .env (legacy)",
+    "config": "paths.archive_dir in config.yaml",
+    "default": "default (project root)",
+}
+_RESOLVED_SOURCE_TEXT = {
+    "env": "from PHA_ARCHIVE_DIR in the environment",
+    "dotenv": "from the legacy PHA_ARCHIVE_DIR line in .env",
+    "config": "from paths.archive_dir in config.yaml",
+    "default": ("the default (no archive configured) — "
+                "`pha set archive-dir <path>` to choose one"),
+}
+
+
 def _resolve_archive_dir_line(cfg: Config) -> str:
-    """One line naming the archive in use, and how it was chosen."""
-    if os.environ.get("PHA_ARCHIVE_DIR"):
-        how = "from PHA_ARCHIVE_DIR in the environment"
-    elif _dotenv_archive_dir(cfg) is not None:
-        how = "from the legacy PHA_ARCHIVE_DIR line in .env"
-    else:
-        cfg_yaml = (cfg.root / "config.yaml")
-        val = None
-        if cfg_yaml.exists():
-            try:
-                import yaml
-                raw = yaml.safe_load(cfg_yaml.read_text(encoding="utf-8")) or {}
-                val = (raw.get("paths", {}) or {}).get("archive_dir")
-            except Exception:  # noqa: BLE001
-                val = None
-        if val and str(val).strip() not in ("", "."):
-            how = "from paths.archive_dir in config.yaml"
-        else:
-            how = ("the default (no archive configured) — "
-                   "`pha set archive-dir <path>` to choose one")
+    """One line naming the archive in use, and how it was chosen.
+
+    Reads the source `Config.load` recorded (`archive_source_kind`) rather than
+    re-deriving it: this line, `pha info` and the fresh-install guard each used
+    to parse the same three files independently, and an empty `.env` value made
+    them disagree with what was actually used (D3/D5).
+    """
+    how = _RESOLVED_SOURCE_TEXT.get(
+        cfg.archive_source_kind, _RESOLVED_SOURCE_TEXT["default"])
     return f"archive: {cfg.archive_dir}   ({how})"
 
 
 def _dotenv_archive_dir(cfg: Config) -> str | None:
-    """The legacy PHA_ARCHIVE_DIR value in .env, as an absolute string."""
+    """The legacy PHA_ARCHIVE_DIR value in .env, as an absolute string.
+
+    An EMPTY line is not a configuration (D5): it returns None, the same as no
+    line at all, so callers cannot mistake an accident for a pointer.
+    """
     envp = cfg.root / ".env"
     if not envp.exists():
         return None
@@ -3436,6 +3541,8 @@ def _dotenv_archive_dir(cfg: Config) -> str | None:
         for line in envp.read_text(encoding="utf-8").splitlines():
             if line.strip().startswith("PHA_ARCHIVE_DIR="):
                 raw = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if not raw:
+                    return None
                 return str((cfg.root / raw).resolve()) if not os.path.isabs(raw) else raw
     except OSError:
         return None
@@ -3524,6 +3631,11 @@ def main(argv: list[str] | None = None) -> None:
         prog="pha",
         description="Personal Historical Archive (pha): drop folder -> VLM extraction -> index -> MCP search.",
     )
+    # The conventional spelling of the `version` command, for scripts and habit.
+    from . import __version__ as _version
+
+    parser.add_argument("--version", action="version", version=f"pha {_version}",
+                        help="print the pha version and exit (same as `pha version --short`)")
     sub = parser.add_subparsers(dest="cmd")
     # `cmd` is optional so a bare `pha` prints help instead of a terse error.
 
@@ -3587,6 +3699,15 @@ def main(argv: list[str] | None = None) -> None:
         help="print the archive's resolved paths (fast, read-only: no DB, no engine probing)")
     inf.add_argument("--json", action="store_true", help="structured output")
     inf.set_defaults(fn=cmd_info)
+
+    ver = sub.add_parser(
+        "version",
+        help="print the pha version and the install it came from "
+             "(read-only; works before an archive is configured)")
+    ver.add_argument("--short", action="store_true",
+                     help="print only the version number (for scripts)")
+    ver.add_argument("--json", action="store_true", help="structured output")
+    ver.set_defaults(fn=cmd_version)
 
     ib = sub.add_parser("inbox", help="list documents on hold, or move them into the dropbox")
     ib.add_argument("path", nargs="?", default=None,
@@ -3727,7 +3848,12 @@ def main(argv: list[str] | None = None) -> None:
     _add_wait_args(r)
     r.set_defaults(fn=cmd_reindex)
 
-    e = sub.add_parser("export", help="regenerate per-page transcription files from the DB")
+    e = sub.add_parser("export", help="regenerate per-page transcription + editor files from the DB")
+    e.add_argument("--path", "--collection", default=None,
+                   help="only export the document or collection at this dropbox subpath "
+                        "(e.g. collections/COLX or collections/COLX/doc.pdf); default: every document")
+    e.add_argument("--doc", type=int, default=None, metavar="N",
+                   help="only export document #N (see `pha status`)")
     e.set_defaults(fn=cmd_export)
 
     fl = sub.add_parser("filters", help="list the archive's stage filters (filters/<id>/)")
@@ -4032,6 +4158,28 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd is None:
         from types import SimpleNamespace
         cmd_help(cfg, SimpleNamespace(topic=None))
+        return
+
+    # `pha version` answers before anything else runs: it must work in any
+    # directory and before an archive is configured (like `pha help`), and it
+    # writes nothing — so it deliberately skips the fresh-install guard,
+    # `ensure_dirs()` and the daily self-update notice below.
+    if args.cmd == "version":
+        cmd_version(cfg, args)
+        return
+
+    # `pha info` is the DISCOVERY command — the one a caller (the PHA View, an
+    # agent) uses to ask "is there an archive here?". It must therefore ANSWER
+    # (configured: true|false) rather than be intercepted by the fresh-install
+    # guard, which prompts interactively and, on a non-interactive run, exits 1
+    # with prose on stderr — exactly what made the view die on every page click.
+    # Dispatching it here, before `ensure_dirs()`, also keeps it genuinely
+    # read-only: `ensure_dirs()` would CREATE an archive layout (dropbox,
+    # library, seeded defaults, the location trace) in whatever directory
+    # resolution fell back to. See D1/D3 in
+    # enhancements/pha-archive-pointer-loss-bug-report.md.
+    if args.cmd == "info":
+        cmd_info(cfg, args)
         return
 
     # Fresh-install guard: if no archive is configured and the default one is

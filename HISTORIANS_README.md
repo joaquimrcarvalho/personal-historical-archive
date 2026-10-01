@@ -35,7 +35,7 @@ RAG creates indexes by processing chunks of text into matematical representation
 
 Historical documents in computers are special because they consist mainly of images of old books or manuscript documents which cannot be easily searched to extract relevant context. 
 
-Unlike modern PDFs, which are generated from texts produced orignally in computers, historical documents in PDF form are made by scanning or photographing texts. They may contain a layer of text produced by OCR (Optical Character Recognition).  OCR attempts to reconstruct the text from images by identfying the form of characters and embeds the result into the PDF so it can be searched and copied. 
+Unlike modern PDFs, which are generated from texts produced originally in computers, historical documents in PDF form are made by scanning or photographing texts. They may contain a layer of text produced by OCR (Optical Character Recognition).  OCR attempts to reconstruct the text from images by identfying the form of characters and embeds the result into the PDF so it can be searched and copied. 
 
 The quality of OCR text varies with the clarity of the original printed text, the quality of the scan and the effiency of the OCR software. Mmany of the digital copies of historical sources available in digital libraries and archives have poor quality embeded text. Manuscripts and many books don't have any text layer at all. 
 
