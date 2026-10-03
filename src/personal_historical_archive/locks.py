@@ -36,12 +36,23 @@ A server admits ``slots`` concurrent jobs (default 1), declared in config.yaml::
 
 The knob is declared because pha cannot read the server's auto-evict settings
 and never pre-loads or unloads anything itself.
+
+Staleness
+---------
+A lock whose holder is gone is reclaimed: its pid is dead, or the pid is
+alive but its command line belongs to some other program (the number was
+reused). Reading another process's command line can fail, and on Windows
+only its image path is available; when identity cannot be shown the lock is
+kept: a live lock must never be stolen on a guess. The 6 h age rule still
+applies only to a file with no pid yet.
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
+import shlex
+import subprocess
 import sys
 import time
 from collections.abc import Iterable
@@ -51,8 +62,10 @@ from urllib.parse import urlsplit
 
 WILDCARD = "*"
 
-# A lock whose pid looks alive is still stolen past this age: pids get reused,
-# and a stale lock must never wedge every future job (same rule as before).
+# Age threshold for a lock with no pid recorded yet. The intended companion
+# rule -- steal a live-looking pid's lock past this age too, because pids get
+# reused -- is NOT implemented (tracked as F1 in
+# enhancements/pha-orphaned-model-lock-wedges-every-job-bug-report.md).
 STALE_AFTER_S = 6 * 3600
 
 # Local engines run as subprocesses and touch no model server at all.
@@ -225,23 +238,197 @@ def _holder(path: Path) -> tuple[int, str]:
     return pid, label.strip()
 
 
-def _stale(path: Path, pid: int) -> bool:
+# A lock label names the pha command that took the slot ("pha scan",
+# "pha reindex", ...). "pha job" is the default for callers that pass no
+# label; it names no command, so it can never prove a pid was reused.
+_DEFAULT_LABELS = frozenset({"", "pha job"})
+
+# Tokens that mark a command line as some pha invocation: the console script
+# (`.../pha`) or the package run as a module (`python -m
+# personal_historical_archive`). Substring matches so `.exe` suffixes and
+# shebang lines both count.
+_PHA_MARKERS = ("personal_historical_archive", "personal-historical-archive")
+
+# A long-lived pha host runs jobs in its own process and therefore holds their
+# locks under its own pid: the MCP server's `pha_scan_now` calls `scan_once`
+# directly, and its command line names `mcp`, not `scan`. Treat it as a valid
+# holder for every action.
+_IN_PROCESS_HOST_TOKENS = frozenset({"mcp", "mcp.exe", "fastmcp", "fastmcp.exe"})
+
+
+def _basename(token: str) -> str:
+    """The executable-ish last component of a command-line token."""
+    return token.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].strip().lower()
+
+
+def _split_cmdline(cmdline: str) -> list[str]:
+    if os.name == "nt":
+        return cmdline.split()          # keep Windows path backslashes
+    try:
+        return shlex.split(cmdline)
+    except ValueError:                  # unbalanced quotes in `ps` output
+        return cmdline.split()
+
+
+def _tokens_look_like_pha(tokens: list[str]) -> bool:
+    for token in tokens:
+        base = _basename(token)
+        if base in ("pha", "pha.exe") or any(m in base for m in _PHA_MARKERS):
+            return True
+    return False
+
+
+def _tokens_are_in_process_host(tokens: list[str]) -> bool:
+    for token in tokens:
+        base = _basename(token)
+        if base in _IN_PROCESS_HOST_TOKENS or "mcp_server" in base or "mcp-server" in base:
+            return True
+    return False
+
+
+def _label_action(label: str) -> str:
+    """The pha subcommand a lock label names, or "" when it names none.
+
+    "pha scan" -> "scan"; "pha scan --unpin" -> "scan"; "pha handoff fetch"
+    -> "handoff". The default "pha job" names no command.
+    """
+    tokens = (label or "").split()
+    if tokens and tokens[0].lower() in ("pha", "pha.exe"):
+        tokens = tokens[1:]
+    for token in tokens:
+        if not token.startswith("-"):
+            return token.lower()
+    return ""
+
+
+def _looks_like_holder(cmdline: str | None, label: str) -> bool | None:
+    """Is a live pid plausibly the job a lock file names?
+
+    Three-valued on purpose:
+
+    * ``True``  -- the command line is consistent with the recorded job (or
+      is an in-process pha host that may run any action): the lock is live.
+    * ``False`` -- the command line is readable and is provably a different
+      program: the pid was reused.
+    * ``None``  -- the command line could not be read, so nothing is proven;
+      callers keep the lock, because a live lock must not be stolen on a guess.
+    """
+    if not cmdline:
+        return None
+    tokens = _split_cmdline(cmdline)
+    if not tokens:
+        return None
+    if _tokens_are_in_process_host(tokens):
+        return True
+    if not _tokens_look_like_pha(tokens):
+        return False                       # some other program got the pid
+    if len(tokens) == 1:
+        # Only the image is known (Windows), not the action: unverifiable.
+        return None
+    if (label or "").strip().lower() in _DEFAULT_LABELS:
+        return True
+    action = _label_action(label)
+    if not action:
+        return True
+    lowered = [token.lower() for token in tokens]
+    return action in lowered
+
+
+def _pid_cmdline(pid: int) -> str | None:
+    """The command line of a live process, or None when it cannot be read.
+
+    Linux reads ``/proc/<pid>/cmdline`` (exact argv, no subprocess); other
+    POSIX systems ask ``ps``. Windows can only return the image path without
+    reading the target's PEB, so there may be no arguments. None means
+    "unknown", never "not running".
+    """
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        return _windows_pid_cmdline(pid)
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        raw = b""
+    if raw:
+        parts = [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
+        if parts:
+            return " ".join(parts)
+    try:
+        proc = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    out = proc.stdout.strip()
+    return out or None
+
+
+def _windows_pid_cmdline(pid: int) -> str | None:
+    """Image path of a Windows process, or None.
+
+    Windows does not expose another process's argv without reading its PEB, so
+    only the image is available; `_looks_like_holder` treats a bare pha image
+    as unverifiable rather than as a mismatch.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return None
+        try:
+            size = wintypes.DWORD(32768)
+            buf = ctypes.create_unicode_buffer(size.value)
+            if not kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                return None
+            return buf.value or None
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001 - identity is best-effort
+        return None
+
+
+def _stale(path: Path, pid: int, label: str = "") -> bool:
     """Is this lock file reclaimable?
 
     - A recorded pid that is no longer alive -> stale (its holder died).
+    - A recorded pid that is alive but whose command line belongs to a
+      different program -> stale: the pid was reused. If the command line
+      cannot be read, the lock is kept (`_looks_like_holder` returns None).
+      The 6 h age rule does NOT yet apply to a live-looking pid; that gap is
+      F1 in enhancements/pha-orphaned-model-lock-wedges-every-job-bug-report.md.
     - A pid-less file (created but not yet written) -> stale only after the
       6 h age threshold: it may belong to a job that is still starting, and
       stealing it would let two jobs run together.
-    - A lock OLDER than 6 h is always stale even when its pid looks alive
-      (pids get reused; a stale lock must never wedge every future job).
     """
     try:
         age = time.time() - path.stat().st_mtime
     except OSError:
         age = 0.0
-    if pid > 0:
-        return pid != os.getpid() and not _pid_alive(pid)
-    return age > STALE_AFTER_S
+    if pid <= 0:
+        return age > STALE_AFTER_S
+    if pid == os.getpid():
+        return False                       # idempotent re-acquire by this job
+    if not _pid_alive(pid):
+        return True                        # the holder died
+    if not label:
+        _, label = _holder(path)
+    return _looks_like_holder(_pid_cmdline(pid), label) is False
 
 
 @dataclass
@@ -306,7 +493,7 @@ def _acquire_key(cfg, key: str, label: str) -> tuple[str, Path | None, str]:
                 pid, holder = _holder(path)
                 if pid == os.getpid():
                     return "already", path, holder   # idempotent re-acquire
-                if _stale(path, pid):
+                if _stale(path, pid, holder):
                     # Reclaim. A racer may replace the file between the staleness
                     # check and the unlink, so loop back to the atomic create.
                     try:
@@ -345,7 +532,7 @@ def _first_foreign(key: str | None) -> tuple[bool, str]:
         pid, label = _holder(path)
         if pid == os.getpid():
             continue
-        if not _stale(path, pid):
+        if not _stale(path, pid, label):
             return True, label
     return False, ""
 
@@ -444,8 +631,8 @@ def holder_age_s(key: str | None = None) -> float | None:
         return None
     ages: list[float] = []
     for path in files:
-        pid, _label = _holder(path)
-        if pid == os.getpid() or _stale(path, pid):
+        pid, label = _holder(path)
+        if pid == os.getpid() or _stale(path, pid, label):
             continue
         try:
             ages.append(max(0.0, time.time() - path.stat().st_mtime))
@@ -481,10 +668,10 @@ def job_running(cfg, key: str | None = None, include_self: bool = False) -> bool
     except OSError:
         return False
     for path in files:
-        pid, _label = _holder(path)
+        pid, label = _holder(path)
         if not include_self and pid == os.getpid():
             continue
-        if not _stale(path, pid):
+        if not _stale(path, pid, label):
             return True
     return False
 

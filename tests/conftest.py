@@ -34,6 +34,19 @@ def _isolated_lock_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("PHA_LOCK_DIR", str(tmp_path / "pha-locks"))
 
 
+@pytest.fixture(autouse=True)
+def _no_real_process_probe(monkeypatch):
+    """Keep the F2 identity probe off real pids in tests.
+
+    Tests plant foreign locks owned by pid 999999 and force `_pid_alive` true;
+    an unreadable command line is the conservative "keep the lock" case they
+    assume. Tests that exercise the probe override `locks._pid_cmdline`.
+    """
+    from personal_historical_archive import locks
+
+    monkeypatch.setattr(locks, "_pid_cmdline", lambda pid: None)
+
+
 @pytest.fixture
 def cfg(tmp_path) -> Config:
     c = _make_cfg(tmp_path)

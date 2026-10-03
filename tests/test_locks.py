@@ -260,3 +260,136 @@ def test_job_running_ignores_dead_and_stale(tmp_path, monkeypatch):
     old = time.time() - 7 * 3600
     os.utime(pidless, (old, old))
     assert not locks.job_running(cfg, "mac-studio")
+
+# --------------------------------------------------------------------------- holder identity (F2)
+
+# Captured before the autouse conftest fixture replaces the attribute.
+_REAL_PID_CMDLINE = locks._pid_cmdline
+
+
+@pytest.mark.parametrize(
+    "cmdline,label,expected",
+    [
+        # the recorded job really is the process
+        ("/Users/x/pha scan --path collections/a", "pha scan", True),
+        ("/Users/x/.venv/bin/python -m personal_historical_archive scan", "pha scan", True),
+        ("/Users/x/pha scan --unpin --page 3", "pha scan --unpin", True),
+        ("/Users/x/pha handoff fetch --wait", "pha handoff fetch", True),
+        # in-process hosts run any action under their own pid
+        ("/Users/x/pha mcp --transport stdio", "pha scan", True),
+        ("/Users/x/.venv/bin/fastmcp run mcp_server.py", "pha reindex", True),
+        # a readable command line that is not this job
+        ("/Users/x/pha reindex --doc 3", "pha scan", False),
+        ("/usr/bin/time-machine-backup --run", "pha scan", False),
+        ("/usr/bin/python /tmp/scan.py", "pha scan", False),
+        # a label that names no command keeps the lock once it is a pha process
+        ("/Users/x/pha whatever", "pha job", True),
+        ("/usr/bin/whatever", "pha job", False),
+        # unreadable or argument-less: never call it a mismatch
+        (None, "pha scan", None),
+        ("", "pha scan", None),
+        ("/opt/pha", "pha scan", None),
+    ],
+)
+def test_looks_like_holder(cmdline, label, expected):
+    assert locks._looks_like_holder(cmdline, label) is expected
+
+
+def test_label_action():
+    assert locks._label_action("pha scan") == "scan"
+    assert locks._label_action("pha scan --unpin") == "scan"
+    assert locks._label_action("pha handoff fetch") == "handoff"
+    assert locks._label_action("pha job") == "job"
+    assert locks._label_action("") == ""
+
+
+def test_pid_cmdline_parses_ps_output(monkeypatch):
+    """The POSIX fallback (macOS/BSD) is parsed; this test does not need a real
+    `ps` (some sandboxes refuse to spawn it)."""
+    import subprocess as _sp
+
+    def fake_run(cmd, **kwargs):
+        assert cmd[0] == "ps"
+        return _sp.CompletedProcess(cmd, 0, stdout="/Users/x/pha scan --path a\n", stderr="")
+
+    monkeypatch.setattr(locks.subprocess, "run", fake_run)
+    assert _REAL_PID_CMDLINE(987654) == "/Users/x/pha scan --path a"
+    assert _REAL_PID_CMDLINE(-1) is None
+
+
+def _live_foreign(cfg, key="mac-studio", label="pha scan"):
+    """A lock whose pid looks alive; the caller patches `_pid_cmdline`."""
+    return _foreign(cfg, key, pid=999999, label=label)
+
+
+def test_reused_pid_is_not_a_holder(tmp_path, monkeypatch):
+    """The incident shape: the recorded pid belongs to a live process, but not
+    to the pha job the lock names. It must be reclaimed, not left to wedge."""
+    cfg = _cfg(tmp_path)
+    monkeypatch.setattr(locks, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(locks, "_pid_cmdline",
+                        lambda pid: "/usr/bin/time-machine-backup --run")
+    _live_foreign(cfg)
+    h = locks.acquire(cfg, ["mac-studio"], label="pha edit")
+    assert h.ok
+    assert locks._holder(h.held[0])[0] == os.getpid()
+    locks.release(h)
+
+
+def test_live_holder_running_this_job_is_respected(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    monkeypatch.setattr(locks, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(locks, "_pid_cmdline",
+                        lambda pid: "/Users/x/pha scan --path collections/a")
+    planted = _live_foreign(cfg)
+    h = locks.acquire(cfg, ["mac-studio"], label="pha edit")
+    assert not h.ok
+    assert "pha scan" in h.reason()
+    assert planted.exists()
+
+
+def test_live_holder_running_a_different_pha_command_is_reclaimed(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    monkeypatch.setattr(locks, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(locks, "_pid_cmdline", lambda pid: "/Users/x/pha reindex --doc 3")
+    _live_foreign(cfg)
+    h = locks.acquire(cfg, ["mac-studio"], label="pha edit")
+    assert h.ok
+    locks.release(h)
+
+
+def test_in_process_mcp_host_holds_any_action(tmp_path, monkeypatch):
+    """`pha mcp` runs `pha_scan_now` in its own process, so its command line
+    names `mcp`, not `scan`; F2 must not mistake it for a reused pid."""
+    cfg = _cfg(tmp_path)
+    monkeypatch.setattr(locks, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(locks, "_pid_cmdline",
+                        lambda pid: "/Users/x/pha mcp --transport stdio")
+    _live_foreign(cfg)
+    h = locks.acquire(cfg, ["mac-studio"], label="pha edit")
+    assert not h.ok
+
+
+def test_unreadable_cmdline_keeps_the_lock(tmp_path, monkeypatch):
+    """No evidence is not evidence of reuse: if the command line cannot be
+    read, a live-looking lock is kept (never stolen on a guess)."""
+    cfg = _cfg(tmp_path)
+    monkeypatch.setattr(locks, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(locks, "_pid_cmdline", lambda pid: None)
+    _live_foreign(cfg)
+    h = locks.acquire(cfg, ["mac-studio"], label="pha edit")
+    assert not h.ok
+
+
+def test_job_running_ignores_a_reused_pid(tmp_path, monkeypatch):
+    """The search-degradation half of the incident: an orphan must not look
+    like a running job (or make search name its dead holder)."""
+    cfg = _cfg(tmp_path)
+    _live_foreign(cfg)
+    monkeypatch.setattr(locks, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(locks, "_pid_cmdline", lambda pid: "/usr/bin/backup --run")
+    assert locks.job_running(cfg, "mac-studio") is False
+    assert locks.holder_label("mac-studio") is None
+    monkeypatch.setattr(locks, "_pid_cmdline", lambda pid: "/Users/x/pha scan")
+    assert locks.job_running(cfg, "mac-studio") is True
+    assert locks.holder_label("mac-studio") == "pha scan"
