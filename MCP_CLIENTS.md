@@ -15,7 +15,11 @@ processed (palaeographer / editor / encoder).
 | `pha_get_page(document_id, page_no, include_image)` | all versions of one page: transcribed, edited (per editor), encoded (per-page records), and the cached page image as base64 |
 | `pha_list_documents(status, limit, collection)` | browse the archive |
 | `pha_upload(kind, name, content_b64, replace, merge)` | put a file into the dropbox (send base64 bytes) |
-| `pha_get_archive()` | diagnostic: effective archive_dir + its dropbox/library/renders/db paths, and whether each registered doc's file exists on disk |
+| `pha_get_archive()` | diagnostic: effective archive_dir + its dropbox/library/renders/bin/db paths, and whether each registered doc's file exists on disk |
+| `pha_remove_document(document_id, mode, dry_run, force)` | remove ONE document: `mode="bin"` (default) moves its dropbox payload + library folder to the archive bin and clears the index (reversible); `"purge"` deletes the files for good; `"keep-files"` clears only the index |
+| `pha_bin_list()` | list the reversible removals parked in `<archive>/bin/` (batch id, documents, paths) |
+| `pha_bin_restore(batch, document_ids, dry_run, force)` | move one bin batch's files back to their original locations; the DB row is not resurrected, so run `pha_scan_now()` afterwards |
+| `pha_move_document(document_id, dest, dry_run, force)` | move a processed document to another dropbox directory IN PLACE (same id; pages/chunks/edits/records/renders survive) instead of making the next scan re-extract it |
 | `pha_palaeographers()` | list configured vision (palaeographer) models and the active default |
 | `pha_editors()` | list configured text (editor) models |
 | `pha_encoders(document_relpath)` | list the encoder files that apply to a document |

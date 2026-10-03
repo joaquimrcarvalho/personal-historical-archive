@@ -15,6 +15,7 @@ from pathlib import Path
 from . import addresses
 from . import bibliography
 from . import db
+from . import manage
 from .config import Config
 from .extract import is_supported, resolve_editor_id, resolve_encoder_id, resolve_palaeographer_id, resolve_prompt, encoder_files_for
 from .ingest import (
@@ -25,8 +26,6 @@ from .ingest import (
     prune_orphan_renders,
     prune_redundant_edited_dirs,
     reindex_all,
-    remove_library_artifact,
-    remove_render_if_orphaned,
     scan_once,
     sync_bibliography,
     unpin_pages,
@@ -967,6 +966,7 @@ def cmd_info(cfg: Config, args) -> None:
         "dropbox": str(cfg.dropbox),
         "library": str(cfg.library),
         "renders": str(cfg.renders),
+        "bin": str(cfg.bin),
         "notes": str(cfg.notes),
         "models": str(cfg.models_dir),
         "palaeographers": str(cfg.palaeographers_dir),
@@ -2475,28 +2475,211 @@ def cmd_prompts(cfg: Config, args) -> None:
         print(f"dropbox: {f}")
 
 
+def _rm_mode(args) -> str:
+    if getattr(args, "purge", False):
+        return "purge"
+    if getattr(args, "keep_files", False):
+        return "keep-files"
+    return "bin"
+
+
 def cmd_rm(cfg: Config, args) -> None:
+    """Remove document(s) named by id or filename substring.
+
+    Default: move the dropbox payload AND the library folder to `bin/<stamp>/`
+    and clear the index (reversible with `pha bin restore`). `--purge` deletes
+    them for good; `--keep-files` clears only the index.
+
+    A non-numeric target that matches MORE than one document is refused unless
+    `--all` is given: `pha rm DOCUMENTA-INDICA` would otherwise bin 17 volumes
+    in one keystroke.
+    """
+    mode = _rm_mode(args)
+    dry = bool(getattr(args, "dry_run", False))
+    as_json = bool(getattr(args, "json", False))
+    force = bool(getattr(args, "force", False))
+
     conn = db.connect(cfg.db_path)
     try:
-        target = args.target
-        if target.isdigit():
-            docs = [db.get_document(conn, int(target))] if db.get_document(conn, int(target)) else []
-        else:
-            docs = [d for d in db.list_documents(conn, limit=1000) if target in d["filename"]]
+        docs = manage.documents_matching(conn, args.target)
         if not docs:
-            print(f"no document matches {target!r}")
-            return
-        for d in docs:
-            remove_library_artifact(cfg, d)
-            db.delete_document(conn, d["id"])
-            print(f"removed #{d['id']} {d['filename']}")
-        conn.commit()
-        # drop the render cache for the removed docs (skipped when another
-        # live document still shares the content hash)
-        for d in docs:
-            remove_render_if_orphaned(cfg, conn, d["sha256"])
+            msg = f"no document matches {repr(args.target)}"
+            if as_json:
+                print(json.dumps({"ok": False, "error": msg}))
+            else:
+                print(msg, file=sys.stderr)
+            sys.exit(2)
+        if len(docs) > 1 and not getattr(args, "all", False):
+            listing = "\n".join(f"  #{d['id']:<4d} {d['filename']}" for d in docs)
+            print(
+                f"{len(docs)} documents match {repr(args.target)}; refusing to {mode} "
+                f"them all without --all:\n{listing}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+        try:
+            if mode == "purge":
+                res = manage.purge_documents(cfg, conn, docs, dry_run=dry, force=force)
+            elif mode == "keep-files":
+                res = manage.unregister_documents(cfg, conn, docs, dry_run=dry, force=force)
+            else:
+                res = manage.bin_documents(cfg, conn, docs, dry_run=dry, force=force)
+        except manage.ManageError as e:
+            if as_json:
+                print(json.dumps({"ok": False, "error": str(e)}))
+            else:
+                print(str(e), file=sys.stderr)
+            sys.exit(2)
+
+        res["target"] = args.target
+        pending = sum(d.get("pending_reviews", 0) for d in res.get("documents", []))
+        if as_json:
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+        else:
+            verb = {"bin": "would bin" if dry else "binned",
+                    "purge": "would delete" if dry else "deleted",
+                    "keep-files": "would unregister" if dry else "unregistered"}[mode]
+            for d in res["documents"]:
+                print(f"  {verb} #{d['id']} {d['filename']}")
+            if mode == "bin" and not dry:
+                print(f"  -> {res['bin_dir']}  (restore with `pha bin restore {res['batch']}`)")
+            elif mode == "bin" and dry:
+                print("  -> bin/<new batch>/{dropbox,library}")
+            if pending:
+                where = "preserved in the bin" if mode == "bin" else "left on disk"
+                print(f"  note: {pending} unimported library correction(s) {where}")
+            print(f"  index cleared: {len(res['documents'])} document(s)")
     finally:
         conn.close()
+
+
+def cmd_mv(cfg: Config, args) -> None:
+    """Move ONE processed document to another dropbox directory, in place.
+
+    The DB row (and its pages/chunks/edits/records/renders) is rewritten, not
+    re-created: a plain `mv` in the shell would make the next scan treat the
+    document as new and re-extract every page.
+    """
+    as_json = bool(getattr(args, "json", False))
+    conn = db.connect(cfg.db_path)
+    try:
+        docs = manage.documents_matching(conn, args.target)
+        if not docs:
+            msg = f"no document matches {repr(args.target)}"
+            if as_json:
+                print(json.dumps({"ok": False, "error": msg}))
+            else:
+                print(msg, file=sys.stderr)
+            sys.exit(2)
+        if len(docs) > 1:
+            listing = "\n".join(f"  #{d['id']:<4d} {d['filename']}" for d in docs)
+            msg = (f"{len(docs)} documents match {repr(args.target)}; name exactly "
+                   f"one by id:\n{listing}")
+            if as_json:
+                print(json.dumps({"ok": False, "error": msg}))
+            else:
+                print(msg, file=sys.stderr)
+            sys.exit(2)
+        try:
+            res = manage.move_document(cfg, conn, docs[0], args.dest,
+                                       dry_run=bool(getattr(args, "dry_run", False)),
+                                       force=bool(getattr(args, "force", False)))
+        except manage.ManageError as e:
+            if as_json:
+                print(json.dumps({"ok": False, "error": str(e)}))
+            else:
+                print(str(e), file=sys.stderr)
+            sys.exit(2)
+        if as_json:
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+            return
+        if not res.get("moved"):
+            print(f"  #{res['document_id']} is already in {res.get('rel_path')}")
+            return
+        prefix = "would move" if res.get("dry_run") else "moved"
+        print(f"  {prefix} #{res['document_id']}: {res['from_rel']}")
+        print(f"      -> {res['to_rel']}")
+        print(f"  library: {res['library_from']} -> {res['library_to']}")
+        print(f"  citation slug: {res['slug_from']} -> {res['slug_to']}")
+        if res.get("warning"):
+            print(f"  warning: {res['warning']}")
+    finally:
+        conn.close()
+
+
+def cmd_bin(cfg: Config, args) -> None:
+    """List, restore or purge removals parked in `bin/`."""
+    sub = getattr(args, "bin_cmd", None) or "list"
+    as_json = bool(getattr(args, "json", False))
+    dry = bool(getattr(args, "dry_run", False))
+
+    if sub == "list":
+        batches = manage.list_batches(cfg)
+        if as_json:
+            print(json.dumps({"ok": True, "bin": str(cfg.bin), "batches": batches},
+                             ensure_ascii=False, indent=2))
+            return
+        if not batches:
+            print("bin is empty")
+            return
+        total_bytes = sum(b.get("bytes", 0) for b in batches)
+        print(f"bin: {cfg.bin}  ({len(batches)} batch(es), {total_bytes / 1e6:.1f} MB)")
+        for b in batches:
+            print(f"  {b.get('batch')}  {b.get('removed_at', '?')}  "
+                  f"{len(b.get('documents', []))} document(s)")
+            for d in b.get("documents", []):
+                print(f"      #{d.get('id'):<4} {d.get('rel_path')}")
+        print("  restore: pha bin restore <batch>   purge: pha bin purge <batch>")
+        return
+
+    try:
+        batch = manage.resolve_batch(cfg, args.target)
+    except manage.ManageError as e:
+        if as_json:
+            print(json.dumps({"ok": False, "error": str(e)}))
+        else:
+            print(str(e), file=sys.stderr)
+        sys.exit(2)
+
+    if sub == "restore":
+        conn = db.connect(cfg.db_path)
+        try:
+            res = manage.restore_batch(cfg, conn, batch,
+                                       doc_ids=getattr(args, "doc", None),
+                                       dry_run=dry,
+                                       force=bool(getattr(args, "force", False)))
+        except manage.ManageError as e:
+            if as_json:
+                print(json.dumps({"ok": False, "error": str(e)}))
+            else:
+                print(str(e), file=sys.stderr)
+            sys.exit(2)
+        finally:
+            conn.close()
+        if as_json:
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+            return
+        verb = "would restore" if dry else "restored"
+        for d in res["restored"]:
+            print(f"  {verb} #{d.get('id')} {d.get('rel_path')}")
+        if res.get("remaining"):
+            print(f"  {len(res['remaining'])} document(s) stay in the bin")
+        if res.get("rescan"):
+            print("  rebuild the index with:")
+            for cmd in res["rescan"]:
+                print(f"      {cmd}")
+        return
+
+    res = manage.purge_batch(cfg, batch, doc_ids=getattr(args, "doc", None), dry_run=dry)
+    if as_json:
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return
+    verb = "would purge" if dry else "purged"
+    for d in res["purged"]:
+        print(f"  {verb} #{d.get('id')} {d.get('rel_path')}")
+    if not res["purged"]:
+        print("  nothing matched")
 
 
 def cmd_prune(cfg: Config, args) -> None:
@@ -3891,9 +4074,53 @@ def main(argv: list[str] | None = None) -> None:
                          "can be re-scanned/re-edited (undoes a review; keeps the text)")
     rv.set_defaults(fn=cmd_review)
 
-    rm = sub.add_parser("rm", help="remove document(s) from the index (by id or filename substring)")
+    rm = sub.add_parser("rm", aliases=["remove"],
+                        help="remove document(s): bin their files and clear the index")
     rm.add_argument("target")
+    mode = rm.add_mutually_exclusive_group()
+    mode.add_argument("--purge", action="store_true",
+                      help="delete the files for good instead of moving them to bin/")
+    mode.add_argument("--keep-files", action="store_true",
+                      help="clear only the index; leave the dropbox and library files in place")
+    rm.add_argument("--all", action="store_true",
+                    help="allow one filename substring to remove several documents")
+    rm.add_argument("--force", action="store_true",
+                    help="proceed despite unimported corrections / a processing document")
+    rm.add_argument("--dry-run", action="store_true", help="print the plan; touch nothing")
+    rm.add_argument("--json", action="store_true", help="machine-readable output")
     rm.set_defaults(fn=cmd_rm)
+
+    bn = sub.add_parser("bin", help="list / restore / purge documents removed to bin/")
+    bsub = bn.add_subparsers(dest="bin_cmd")
+    bl = bsub.add_parser("list", help="list the bin batches")
+    bl.add_argument("--json", action="store_true")
+    bl.set_defaults(fn=cmd_bin)
+    br = bsub.add_parser("restore", help="move binned files back to their original locations")
+    br.add_argument("target", help="batch stamp, or a document id/filename inside the bin")
+    br.add_argument("--doc", type=int, action="append", default=None,
+                    help="restore only this document id (repeatable)")
+    br.add_argument("--force", action="store_true",
+                    help="overwrite a destination that exists again")
+    br.add_argument("--dry-run", action="store_true")
+    br.add_argument("--json", action="store_true")
+    br.set_defaults(fn=cmd_bin)
+    bp = bsub.add_parser("purge", help="delete a bin batch (or --doc some of it) for good")
+    bp.add_argument("target")
+    bp.add_argument("--doc", type=int, action="append", default=None)
+    bp.add_argument("--dry-run", action="store_true")
+    bp.add_argument("--json", action="store_true")
+    bp.set_defaults(fn=cmd_bin)
+    bn.set_defaults(bin_cmd="list", json=False, dry_run=False, fn=cmd_bin)
+
+    mvp = sub.add_parser("mv", aliases=["move"],
+                         help="move an already-processed document to another dropbox directory")
+    mvp.add_argument("target", help="document id, or a filename substring matching exactly one document")
+    mvp.add_argument("dest", help="destination directory inside the dropbox (created if missing)")
+    mvp.add_argument("--force", action="store_true",
+                     help="overwrite an existing destination / move a processing document")
+    mvp.add_argument("--dry-run", action="store_true")
+    mvp.add_argument("--json", action="store_true")
+    mvp.set_defaults(fn=cmd_mv)
 
     prn = sub.add_parser("prune", help="remove orphaned render image caches (no registered document)")
     prn.add_argument("--dry-run", action="store_true",

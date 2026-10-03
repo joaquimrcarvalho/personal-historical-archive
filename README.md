@@ -291,7 +291,7 @@ Model notes for a new machine:
   books (qwen reads fine at 72 dpi). Bump it in `config.yaml` if your source
   needs more detail. Rendered page images are cached under
   `renders/<content-sha>/`. Changing a document's content supersedes that
-  folder, and `pha rm` / `pha bundle --move` remove the document — so orphaned
+  folder, and `pha rm` (or `--purge`) / `pha bundle --move` remove the document — so orphaned
   render folders are deleted automatically when no other document still uses
   their content hash. Anything left behind (pre-existing orphans, manual
   deletions) can be swept with `pha prune` (`--dry-run` to preview).
@@ -516,6 +516,63 @@ To actually process them: `pha inbox --dry-run` shows what would move
 (nothing is touched), then `pha inbox --move` relocates everything into the
 dropbox preserving the relative layout, then `pha scan` ingests them. `pha
 inbox` with no flags just lists the held documents.
+
+## Removing and moving documents
+
+An ingested document is more than its file in the dropbox: it has a DB row,
+per-page transcriptions/edits in `library/`, a render cache keyed by content
+hash, and a bibliography snapshot. Use pha (not the shell) to take one out or
+relocate it, so all of those stay consistent.
+
+**Remove** (`pha rm ID|NAME`, default reversible):
+
+```bash
+pha rm 47                       # -> bin/<stamp>/, index cleared
+pha rm DOCUMENTA-INDICA --all   # a substring may name several documents
+pha rm 47 --purge               # delete the files for good (refuses to discard
+                                #   unimported library corrections unless --force)
+pha rm 47 --keep-files          # clear only the index; leave every file in place
+pha rm 47 --dry-run             # show the plan first
+```
+
+The default mode MOVES the dropbox payload (plus its bibliographic sidecars)
+and the document's library folder into `<archive_dir>/bin/<stamp>/`, writes a
+`manifest.json`, and then deletes the DB row, chunks, FTS entries and any
+render cache no other document still shares. The `bin/` location is
+configurable via `paths.bin`.
+
+```bash
+pha bin                         # list batches and their documents
+pha bin restore 20261004-101530 # put the files back; prints the `pha scan` to run
+pha bin purge 20261004-101530   # empty that batch for good
+```
+
+Restoring files does not rebuild the index: the removed row is gone, so
+`pha bin restore` prints `pha scan --path ...` for each document, and that scan
+re-reads the pages (the library markdown is preserved, but it is not re-imported
+as raw transcriptions). Renders are a regenerable cache and are dropped on
+removal, so a restore may re-render.
+
+**Move** (`pha mv ID|NAME DEST`):
+
+```bash
+pha mv 93 collections/academic-works   # bare names resolve under collections/
+pha mv 93 collections/academic-works --dry-run
+```
+
+The source file(s), sidecars and library folder move together, and the SAME DB
+row is rewritten, so the id, pages, chunks, edits, records and sha-keyed render
+cache all survive. Two things change and are reported:
+
+- the **citation slug** (derived from the dropbox-relative path) changes, so
+  external links to the old path break;
+- if the destination directory resolves to a different palaeographer/editor,
+  the next scan re-reads the document, because the recorded reading no longer
+  matches the collection's configuration.
+
+A destination that exists is refused unless `--force`; a document already
+registered there is never overwritten. A processing document is refused (pass
+`--force` only if you know the scan is dead).
 
 ## Custom extraction prompts
 
@@ -1159,7 +1216,26 @@ pha edit [--reprocess] [--path collections/COLX] [--page N]
                           # --page N re-edits one page with the document's editor;
                           #   --editor X --model Y override that page (pinned);
                           #   --dry-run prints the plan, --unpin releases a pin
-pha rm ID|NAME            # remove document(s) from the index
+pha rm ID|NAME [--purge | --keep-files] [--all] [--force] [--dry-run] [--json]
+                          # remove document(s) by id or filename substring. Default:
+                          #   MOVE the dropbox file(s) AND the library folder into
+                          #   bin/<stamp>/ and clear the index (reversible with
+                          #   `pha bin restore`); --purge deletes the files for good;
+                          #   --keep-files clears only the index (a later scan
+                          #   re-adds the document). A substring matching several
+                          #   documents is refused without --all; --dry-run previews
+pha bin [list] [--json]   # list what has been removed to bin/
+pha bin restore BATCH [--doc N] [--force] [--dry-run] [--json]
+                          # move binned files back to their original locations
+                          #   (then run the printed `pha scan --path ...` to rebuild
+                          #   the index; the DB row is not resurrected)
+pha bin purge BATCH [--doc N] [--dry-run] [--json]
+                          # delete a bin batch for good
+pha mv ID|NAME DEST [--force] [--dry-run] [--json]
+                          # move ONE already-processed document to another dropbox
+                          #   directory IN PLACE (same id, pages/chunks/edits/records
+                          #   and renders survive). A plain shell `mv` would make the
+                          #   next scan treat the file as new and re-extract it
 pha prune [--dry-run]     # delete orphaned render image caches (no registered document)
 pha prune --library-variants [--dry-run] [--doc N]
                           # delete a bare `edited-<rules>` folder whose pages all
@@ -1465,6 +1541,8 @@ archive_dir/
   notes/                    ← Obsidian-compatible markdown notes generated from
                               ←   queries to this archive (see notes/README.md)
   renders/<sha>/            ← cached page JPEGs fed to the VLM
+  bin/<stamp>/              <- reversible removals (`pha rm`): dropbox/ + library/
+                              copies plus a manifest.json for `pha bin restore`
   archive.db                ← documents / pages / chunks + FTS5 + embeddings
 ```
 

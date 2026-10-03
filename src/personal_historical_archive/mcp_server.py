@@ -7,6 +7,7 @@ from fastmcp import FastMCP
 from . import addresses
 from . import db
 from . import doctor
+from . import manage
 from .config import Config
 from .ingest import make_vision_client, scan_once
 from .model_client import ModelClient
@@ -52,7 +53,7 @@ def make_server(cfg: Config) -> FastMCP:
             "`pha_list_documents` to browse, `pha_upload` to add a document/collection file "
             "into the dropbox (send its base64 bytes — the client and server may be on "
             "different machines), `pha_scan_now` after new files are dropped into the "
-            "dropbox, and `pha_extraction_status` to see ingestion progress. "
+            "dropbox, and `pha_extraction_status` to see ingestion progress. Use `pha_remove_document` to remove a document (default: reversible, to the archive bin), `pha_bin_list` / `pha_bin_restore` to inspect or undo a removal, and `pha_move_document` to move a processed document to another dropbox directory without re-extracting it. "
             "Call `pha_doctor` to check whether the local OCR/parse engines "
             "(tesseract, liteparse) are installed on this machine."
         ),
@@ -397,6 +398,118 @@ def make_server(cfg: Config) -> FastMCP:
         return save_upload(cfg, kind, name, blob, dest, exists, replace, merge)
 
     @mcp.tool()
+    def pha_remove_document(document_id: int, mode: str = "bin", dry_run: bool = False,
+                            force: bool = False) -> dict:
+        """Remove ONE document from the archive (by id) and clear its index entry.
+
+        Args:
+            document_id: id from `pha_list_documents`.
+            mode: "bin" (default) moves the dropbox payload and the library
+                folder into <archive>/bin/<stamp>/ and clears the index; it is
+                reversible with the `pha bin restore` command. "purge" deletes
+                the files for good. "keep-files" clears only the index and
+                leaves everything on disk (a later scan re-adds the document).
+            dry_run: report what would happen without touching anything.
+            force: with "purge", proceed even when the library holds unimported
+                human corrections.
+
+        Returns the structured report from the removal, including the bin batch
+        id when mode is "bin".
+        """
+        if mode not in ("bin", "purge", "keep-files"):
+            return {"ok": False, "error": f"unknown mode {repr(mode)}"}
+        conn = db.connect(cfg.db_path)
+        try:
+            doc = db.get_document(conn, int(document_id))
+            if doc is None:
+                return {"ok": False, "error": f"no document with id {document_id}"}
+            try:
+                if mode == "purge":
+                    res = manage.purge_documents(cfg, conn, [doc], dry_run=dry_run, force=force)
+                elif mode == "keep-files":
+                    res = manage.unregister_documents(cfg, conn, [doc], dry_run=dry_run, force=force)
+                else:
+                    res = manage.bin_documents(cfg, conn, [doc], dry_run=dry_run, force=force)
+            except manage.ManageError as e:
+                return {"ok": False, "error": str(e)}
+            return res
+        finally:
+            conn.close()
+
+    @mcp.tool()
+    def pha_move_document(document_id: int, dest: str, dry_run: bool = False,
+                          force: bool = False) -> dict:
+        """Move ONE processed document to another directory inside the dropbox.
+
+        The document's dropbox file(s), bibliographic sidecars and library
+        folder move together, and the SAME database row is rewritten (pages,
+        chunks, edits, records and the render cache survive). A plain
+        filesystem move would instead make the next scan re-extract everything.
+
+        Args:
+            document_id: id from `pha_list_documents`.
+            dest: destination directory inside the dropbox, e.g.
+                "collections/pfister-notices"; created if missing.
+            dry_run: print the plan without moving anything.
+            force: overwrite an existing destination / move a processing doc.
+
+        Returns the move report, including the new relative path and the new
+        citation slug (note: citations derived from the path change on a move).
+        """
+        conn = db.connect(cfg.db_path)
+        try:
+            doc = db.get_document(conn, int(document_id))
+            if doc is None:
+                return {"ok": False, "error": f"no document with id {document_id}"}
+            try:
+                return manage.move_document(cfg, conn, doc, dest,
+                                            dry_run=dry_run, force=force)
+            except manage.ManageError as e:
+                return {"ok": False, "error": str(e)}
+        finally:
+            conn.close()
+
+    @mcp.tool()
+    def pha_bin_list() -> dict:
+        """List the documents parked in <archive>/bin/ (reversible removals).
+
+        Each batch records where its files came from, so `pha_bin_restore` can
+        put them back. Read-only.
+        """
+        return {"ok": True, "bin": str(cfg.bin), "batches": manage.list_batches(cfg)}
+
+    @mcp.tool()
+    def pha_bin_restore(batch: str, document_ids: list[int] | None = None,
+                        dry_run: bool = False, force: bool = False) -> dict:
+        """Move one bin batch's files back to their original dropbox/library paths.
+
+        Restoring files does NOT rebuild the index: the database row was deleted
+        when the document was removed, so run `pha_scan_now` (or `pha scan`)
+        afterwards to re-read the document. Returns the `rescan` commands to use.
+
+        Args:
+            batch: a batch stamp from `pha_bin_list`, or a document id/filename
+                that identifies exactly one batch.
+            document_ids: restore only these document ids from the batch.
+            dry_run: print the plan without moving anything.
+            force: overwrite a destination that exists again (never one that a
+                registered document owns).
+        """
+        try:
+            target = manage.resolve_batch(cfg, batch)
+        except manage.ManageError as e:
+            return {"ok": False, "error": str(e)}
+        conn = db.connect(cfg.db_path)
+        try:
+            try:
+                return manage.restore_batch(cfg, conn, target, doc_ids=document_ids,
+                                            dry_run=dry_run, force=force)
+            except manage.ManageError as e:
+                return {"ok": False, "error": str(e)}
+        finally:
+            conn.close()
+
+    @mcp.tool()
     def pha_palaeographers() -> list[dict]:
         """List the configured palaeographer (vision) models and the active default."""
         out = []
@@ -477,6 +590,7 @@ def make_server(cfg: Config) -> FastMCP:
             "dropbox": str(cfg.dropbox),
             "library": str(cfg.library),
             "renders": str(cfg.renders),
+            "bin": str(cfg.bin),
             "db": str(cfg.db_path),
             "dropbox_index": list(cfg.dropbox.rglob("*.pdf"))[:10] if cfg.dropbox.exists() else [],
             "documents": [

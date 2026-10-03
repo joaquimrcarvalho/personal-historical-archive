@@ -263,6 +263,22 @@ def get_document(conn: sqlite3.Connection, doc_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
 
 
+def find_documents_by_filename(conn: sqlite3.Connection, needle: str) -> list[sqlite3.Row]:
+    """Every document whose filename contains `needle` (case-insensitive).
+
+    Substring matching is what `pha rm <name>` and `pha mv <name> <dir>` use to
+    name a document without knowing its id. LIKE's wildcards in the needle are
+    escaped so a filename containing `%` or `_` cannot accidentally match
+    something else; ranked newest-first to match `list_documents`.
+    """
+    escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return conn.execute(
+        "SELECT * FROM documents WHERE filename LIKE ? ESCAPE '\\' "
+        "ORDER BY updated_at DESC",
+        (f"%{escaped}%",),
+    ).fetchall()
+
+
 def add_document(
     conn: sqlite3.Connection,
     *,
@@ -311,6 +327,29 @@ def update_document(conn: sqlite3.Connection, doc_id: int, **fields) -> None:
     keys = ", ".join(f"{k} = ?" for k in fields)
     _write(conn, f"UPDATE documents SET {keys}, updated_at = ? WHERE id = ?",
            (*fields.values(), _now(), doc_id))
+
+
+def move_document_path(
+    conn: sqlite3.Connection,
+    doc_id: int,
+    *,
+    path: str,
+    dir_path: str,
+    filename: str,
+) -> None:
+    """Rewrite a document's location after a dropbox move.
+
+    Deliberately does NOT touch `updated_at`: a move is not a re-process, and
+    bumping the timestamp would hide a config/prompt change that was already
+    pending (`_prompt_newer_than` compares the prompt mtime against it). Pages,
+    chunks, edits, records, the bibliography snapshot and the render cache are
+    all keyed on the document id or the content sha, so none of them move.
+    """
+    _write(
+        conn,
+        "UPDATE documents SET path = ?, dir_path = ?, filename = ? WHERE id = ?",
+        (path, dir_path, filename, doc_id),
+    )
 
 
 def touch_document(conn: sqlite3.Connection, doc_id: int) -> None:
@@ -1093,6 +1132,19 @@ def set_bibliography(
 def clear_bibliography(conn: sqlite3.Connection, doc_id: int) -> None:
     """Drop a document's reference (its sidecar was removed)."""
     _write(conn, "DELETE FROM document_bibliography WHERE document_id = ?", (doc_id,))
+
+
+def set_bibliography_sidecar_path(conn: sqlite3.Connection, doc_id: int, sidecar_path: str) -> None:
+    """Repoint a stored reference at its (moved) sidecar file.
+
+    Only the path changes: `sidecar_sha` still identifies the content, so a
+    later scan does not re-parse the file merely because it moved.
+    """
+    _write(
+        conn,
+        "UPDATE document_bibliography SET sidecar_path = ? WHERE document_id = ?",
+        (sidecar_path, doc_id),
+    )
 
 
 def get_bibliography(conn: sqlite3.Connection, doc_id: int) -> sqlite3.Row | None:

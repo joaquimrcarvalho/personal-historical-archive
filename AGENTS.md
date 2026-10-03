@@ -629,6 +629,19 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   `pha encode`) so staleness-by-mtime picks up the change, then confirm with
   `pha status` / `pha_extraction_status`.
 
+- **Removing or moving a document**: use `pha rm` / `pha mv`, never a shell
+  `mv` or `rm`. `pha rm ID|NAME` (default) moves the dropbox file(s) + sidecars
+  and the library folder into `<archive>/bin/<stamp>/` and clears the index; it
+  is reversible with `pha bin restore BATCH`, which prints the `pha scan` needed
+  to rebuild the index. `--purge` deletes for good; `--keep-files` clears only
+  the index. A filename substring that matches several documents is refused
+  without `--all`. `pha mv ID|NAME DEST` relocates a processed document IN
+  PLACE: the same DB row, pages, chunks, edits, records and sha-keyed renders
+  survive; a shell `mv` would make the next scan treat the file as new and
+  re-extract every page. A move changes the dropbox-relative path, hence the
+  citation slug, and may change the resolved palaeographer/editor (reported; the
+  next scan re-reads if so). A processing document is refused by both commands.
+
 ### Remote / machine-to-machine
 
 - **Moving collections between archives without redoing scan/edit**: `pha

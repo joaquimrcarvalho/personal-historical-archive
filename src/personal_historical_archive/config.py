@@ -479,6 +479,10 @@ class Config:
     library: Path
     data: Path
     renders: Path
+    # bin: the reversible trash can. `pha rm` (default) moves a document's
+    # dropbox payload and library folder into bin/<stamp>/, so a removal can be
+    # undone with `pha bin restore`; `pha rm --purge` deletes outright.
+    bin: Path
     # notes: user-facing Obsidian-compatible markdown notes generated from
     # queries to the archive (sibling of dropbox/library; NOT pipeline output).
     notes: Path
@@ -679,6 +683,7 @@ class Config:
             library=_p(archive_dir, paths.get("library", "library")),
             data=archive_dir,  # runtime state (e.g. the scan lock) lives at the root of the archive
             renders=_p(archive_dir, paths.get("renders", "renders")),
+            bin=_p(archive_dir, paths.get("bin", "bin")),
             notes=_p(archive_dir, paths.get("notes", "notes")),
             prompts=prompts_dir,
             palaeographers_dir=pal_dir,
@@ -839,7 +844,7 @@ class Config:
         return f"http://{host}:{self.serve_port}"
 
     def ensure_dirs(self) -> None:
-        for d in (self.dropbox, self.inbox, self.library, self.data, self.renders, self.notes,
+        for d in (self.dropbox, self.inbox, self.library, self.data, self.renders, self.bin, self.notes,
                   self.prompts, self.palaeographers_dir, self.editors_dir, self.encoders_dir,
                   self.models_dir, self.filters_dir):
             d.mkdir(parents=True, exist_ok=True)
