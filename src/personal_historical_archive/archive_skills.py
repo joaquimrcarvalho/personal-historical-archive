@@ -482,7 +482,7 @@ most common tasks:
   transcription models') readings of the same pages into a uniform comparative
   edition: a `comparison/` folder with one file per page (readings stacked
   under `## Entry-by-entry comparison` plus a `## Key differences on this
-  page` list) and an `overview.md`. Ships `scripts/normalize_comparison.py`
+  page` list) and an `overview.md`; the compared pages' images are copied to a sibling `images/` folder. Ships `scripts/normalize_comparison.py`
   (skeleton normalisation), `scripts/verify_comparison.py` (skeleton +
   reading-count checks) and `scripts/make_reference.py` (one-line-per-entry
   `reference/` variant); a reviewed `human/` folder is read-only for agents.
@@ -797,26 +797,33 @@ Produces a **uniform comparative edition** from two or more independent readings
 - one markdown file per page, in a **fixed uniform skeleton**, showing every entry with the readings stacked as `1.` … `N.` (or `= all readings:` when identical), plus a "Key differences" bullet list;
 - an `overview.md` summarising corpus, palaeographer mapping, systematic conventions, and the most significant disagreements.
 
-The reference implementation of the workflow (and of the expected output format) is `palaeographers/comparison/` under the 1577 Portuguese Jesuit catalogue benchmark — the same layout must be reproduced for every new corpus.
+The reference implementation of the workflow (and of the expected output format) is `palaeographers/comparison/` under the 1577 Portuguese Jesuit catalogue benchmark — the same layout (corpus readings + sibling `images/` + `comparison/`) must be reproduced for every new corpus.
 
 ## Inputs
 
 - An **input directory** containing one subdirectory per palaeographer (e.g. `palaeographers/DeepSeek-V4-FVE/`, `palaeographers/M3/`, `palaeographers/Qwen3.8-Max/`). Each subdirectory has one markdown file per page of the same document, with **matching basenames across palaeographers** (e.g. `507v.md`, `508.md`, …).
+- **`images/`** (required): a sibling of the `palaeographers/` folder holding a copy of
+  the **source image of every compared page**, with the same basename as the page files
+  (`507v.md` -> `507v.jpg`; `.jpg`/`.jpeg`/`.png`/`.tif`/`.tiff`/`.webp` accepted). It is
+  what a reviewer reads against when correcting a reading, and it keeps the benchmark
+  self-contained. `verify_comparison.py` checks it (`--require-images` makes a missing image a hard failure).
 - Each page file contains a transcription section. The transcription may be inside a fenced code block (under `## Transcription`) or be the body before `## Notes`. Only the transcription content is compared; `Notes` / `Named entities` / `Content summary` sections are context, never part of the comparison.
 
 ## Workflow
 
 1. **Name the palaeographers.** List the subdirectories of the input dir. Fix their order with the user (this becomes the numbering used everywhere); default to folder order or alphabetical. Example: `1. DeepSeek-V4-FVE · 2. M3 · 3. Qwen3.8-Max`.
 
-2. **Discover the pages.** Take the intersection of filenames across all palaeographer subdirectories (a page must exist for every palaeographer). Sort them in reading order (recto/verso).
+2. **Copy the page images.** Make sure an **`images/`** folder sits next to `palaeographers/` with a copy of every compared page image, named with the same basename as the page files (`507v.jpg`, `508.jpg`, ...). The comparison and the reference are meant to be corrected by a human **against the image**, so the benchmark must be self-contained. `verify_comparison.py` checks this.
 
-3. **Read every transcription** for every page×palaeographer. Note per-page context (community/college, column layout, rotation, damage, show-through) from the notes sections.
+3. **Discover the pages.** Take the intersection of filenames across all palaeographer subdirectories (a page must exist for every palaeographer). Sort them in reading order (recto/verso).
 
-4. **Generate the per-page comparison files** (see "Output format" below). This step fans out naturally — generate each page's file independently; you may parallelise pages across subagents, but every file must follow the same skeleton exactly.
+4. **Read every transcription** for every page×palaeographer. Note per-page context (community/college, column layout, rotation, damage, show-through) from the notes sections.
 
-5. **Generate `overview.md`** (see "Overview" below).
+5. **Generate the per-page comparison files** (see "Output format" below). This step fans out naturally — generate each page's file independently; you may parallelise pages across subagents, but every file must follow the same skeleton exactly.
 
-6. **Normalise + verify** the whole output folder with the bundled scripts (see "Scripts" below) so every file shares the exact skeleton.
+6. **Generate `overview.md`** (see "Overview" below).
+
+7. **Normalise + verify** the whole output folder with the bundled scripts (see "Scripts" below) so every file shares the exact skeleton.
 
 ## Alignment rules
 
@@ -975,17 +982,26 @@ no pha install, no special tooling, no network.
 ### What you need first
 
 A folder containing **one subdirectory per palaeographer**, each with **one markdown
-file per page, using the same filenames across all of them**:
+file per page, using the same filenames across all of them**, plus an **`images/`**
+folder next to it with a copy of the same pages:
 
 ```
-1577/palaeographers/
-├── DeepSeek-V4-FVE/   507v.md   508.md   508v.md   ...   511.md
-├── M3/                507v.md   508.md   508v.md   ...   511.md
-└── Qwen3.8-Max/       507v.md   508.md   508v.md   ...   511.md
+1577/
+├── images/                      507v.jpg  508.jpg  508v.jpg  ...  511.jpg
+└── palaeographers/
+    ├── DeepSeek-V4-FVE/         507v.md   508.md   508v.md   ...  511.md
+    ├── M3/                      507v.md   508.md   508v.md   ...  511.md
+    └── Qwen3.8-Max/             507v.md   508.md   508v.md   ...  511.md
 ```
 
-Each file needs its transcription (the readable text of the page). The `Notes` /
+Each page file needs its transcription (the readable text of the page). The `Notes` /
 named-entity sections are ignored; they are only used as context.
+
+The `images/` folder holds the **source image of every compared page**, with the same
+basename as the page file (`507v.jpg` for `507v.md`; `.jpg`/`.jpeg`/`.png`/`.tif`/
+`.tiff`/`.webp` accepted). It is required: a reviewer correcting a reading needs the
+original next to it, and it keeps the benchmark self-contained. `verify_comparison.py`
+checks that every page has its image.
 
 ### 1. Ask the agent
 
@@ -1615,12 +1631,29 @@ Checks per page file (not overview.md):
   - with --readings N: every entry carries exactly N readings (or is an
     "= all …" entry); catches silent mis-merges on corpora with a different
     number of palaeographers
+  - the corpus images/ folder sits next to palaeographers/ and every
+    compared page has its image there (warn by default;
+    --require-images makes it a failure)
 Exits non-zero if any check fails.
 """
 import argparse
 import pathlib
 import re
 import sys
+
+
+def find_images_dir(folder):
+    """Locate the images/ folder that should sit next to the corpus.
+
+    The comparison folder is normally <corpus>/palaeographers/comparison, so
+    images/ can be a sibling of the comparison folder, of palaeographers/, or
+    of the corpus. Return the nearest existing one, or None.
+    """
+    for cand in (folder / "images", folder.parent / "images",
+                 folder.parent.parent / "images"):
+        if cand.is_dir():
+            return cand
+    return None
 
 
 def reading_counts(middle):
@@ -1657,6 +1690,8 @@ def main() -> int:
     ap.add_argument("folder", nargs="?", default="comparison")
     ap.add_argument("--readings", type=int, default=None, metavar="N",
                     help="expected number of readings per entry")
+    ap.add_argument("--require-images", action="store_true",
+                    help="fail when the images/ folder or a page image is missing")
     args = ap.parse_args()
 
     folder = pathlib.Path(args.folder)
@@ -1666,6 +1701,18 @@ def main() -> int:
 
     failures = 0
     files = [p for p in sorted(folder.glob("*.md")) if p.name != "overview.md"]
+
+    images_dir = find_images_dir(folder)
+    image_exts = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp")
+    if images_dir is None:
+        msg = (f"no images/ folder for the corpus (looked in {folder}/images, "
+               f"{folder.parent}/images, {folder.parent.parent}/images)")
+        if args.require_images:
+            print(f"FAIL {msg}", file=sys.stderr)
+            return 1
+        print(f"WARN {msg} - copy each page image next to palaeographers/")
+    else:
+        print(f"images: {images_dir}")
     for p in files:
         text = p.read_text()
         problems = []
@@ -1713,6 +1760,14 @@ def main() -> int:
                         preview = ", ".join(f"[{n}]={c}" for n, c in sorted(bad.items())[:6])
                         problems.append(
                             f"entries whose reading count != {args.readings}: {preview}")
+
+        if images_dir is not None and not any(
+                (images_dir / (p.stem + e)).exists() for e in image_exts):
+            msg = f"no image for {p.name} in {images_dir}"
+            if args.require_images:
+                problems.append(msg)
+            else:
+                print(f"warn {p.name}: {msg}")
 
         if problems:
             failures += 1

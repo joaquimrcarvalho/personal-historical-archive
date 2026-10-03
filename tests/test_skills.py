@@ -76,6 +76,8 @@ EXPECTED = {
         "scripts/verify_comparison.py",
         "scripts/make_reference.py",
         "human/",
+        "images/",
+        "--require-images",
         "never harmonise",
         "verbatim",
     ],

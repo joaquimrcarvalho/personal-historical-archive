@@ -50,7 +50,7 @@ most common tasks:
   transcription models') readings of the same pages into a uniform comparative
   edition: a `comparison/` folder with one file per page (readings stacked
   under `## Entry-by-entry comparison` plus a `## Key differences on this
-  page` list) and an `overview.md`. Ships `scripts/normalize_comparison.py`
+  page` list) and an `overview.md`; the compared pages' images are copied to a sibling `images/` folder. Ships `scripts/normalize_comparison.py`
   (skeleton normalisation), `scripts/verify_comparison.py` (skeleton +
   reading-count checks) and `scripts/make_reference.py` (one-line-per-entry
   `reference/` variant); a reviewed `human/` folder is read-only for agents.

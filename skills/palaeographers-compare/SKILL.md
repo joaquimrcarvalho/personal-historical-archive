@@ -10,26 +10,33 @@ Produces a **uniform comparative edition** from two or more independent readings
 - one markdown file per page, in a **fixed uniform skeleton**, showing every entry with the readings stacked as `1.` … `N.` (or `= all readings:` when identical), plus a "Key differences" bullet list;
 - an `overview.md` summarising corpus, palaeographer mapping, systematic conventions, and the most significant disagreements.
 
-The reference implementation of the workflow (and of the expected output format) is `palaeographers/comparison/` under the 1577 Portuguese Jesuit catalogue benchmark — the same layout must be reproduced for every new corpus.
+The reference implementation of the workflow (and of the expected output format) is `palaeographers/comparison/` under the 1577 Portuguese Jesuit catalogue benchmark — the same layout (corpus readings + sibling `images/` + `comparison/`) must be reproduced for every new corpus.
 
 ## Inputs
 
 - An **input directory** containing one subdirectory per palaeographer (e.g. `palaeographers/DeepSeek-V4-FVE/`, `palaeographers/M3/`, `palaeographers/Qwen3.8-Max/`). Each subdirectory has one markdown file per page of the same document, with **matching basenames across palaeographers** (e.g. `507v.md`, `508.md`, …).
+- **`images/`** (required): a sibling of the `palaeographers/` folder holding a copy of
+  the **source image of every compared page**, with the same basename as the page files
+  (`507v.md` -> `507v.jpg`; `.jpg`/`.jpeg`/`.png`/`.tif`/`.tiff`/`.webp` accepted). It is
+  what a reviewer reads against when correcting a reading, and it keeps the benchmark
+  self-contained. `verify_comparison.py` checks it (`--require-images` makes a missing image a hard failure).
 - Each page file contains a transcription section. The transcription may be inside a fenced code block (under `## Transcription`) or be the body before `## Notes`. Only the transcription content is compared; `Notes` / `Named entities` / `Content summary` sections are context, never part of the comparison.
 
 ## Workflow
 
 1. **Name the palaeographers.** List the subdirectories of the input dir. Fix their order with the user (this becomes the numbering used everywhere); default to folder order or alphabetical. Example: `1. DeepSeek-V4-FVE · 2. M3 · 3. Qwen3.8-Max`.
 
-2. **Discover the pages.** Take the intersection of filenames across all palaeographer subdirectories (a page must exist for every palaeographer). Sort them in reading order (recto/verso).
+2. **Copy the page images.** Make sure an **`images/`** folder sits next to `palaeographers/` with a copy of every compared page image, named with the same basename as the page files (`507v.jpg`, `508.jpg`, ...). The comparison and the reference are meant to be corrected by a human **against the image**, so the benchmark must be self-contained. `verify_comparison.py` checks this.
 
-3. **Read every transcription** for every page×palaeographer. Note per-page context (community/college, column layout, rotation, damage, show-through) from the notes sections.
+3. **Discover the pages.** Take the intersection of filenames across all palaeographer subdirectories (a page must exist for every palaeographer). Sort them in reading order (recto/verso).
 
-4. **Generate the per-page comparison files** (see "Output format" below). This step fans out naturally — generate each page's file independently; you may parallelise pages across subagents, but every file must follow the same skeleton exactly.
+4. **Read every transcription** for every page×palaeographer. Note per-page context (community/college, column layout, rotation, damage, show-through) from the notes sections.
 
-5. **Generate `overview.md`** (see "Overview" below).
+5. **Generate the per-page comparison files** (see "Output format" below). This step fans out naturally — generate each page's file independently; you may parallelise pages across subagents, but every file must follow the same skeleton exactly.
 
-6. **Normalise + verify** the whole output folder with the bundled scripts (see "Scripts" below) so every file shares the exact skeleton.
+6. **Generate `overview.md`** (see "Overview" below).
+
+7. **Normalise + verify** the whole output folder with the bundled scripts (see "Scripts" below) so every file shares the exact skeleton.
 
 ## Alignment rules
 

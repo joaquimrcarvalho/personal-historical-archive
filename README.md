@@ -398,7 +398,7 @@ installed by anyone who sets up agents from the repo:
 - Palaeographers compare — [`skills/palaeographers-compare/SKILL.md`](skills/palaeographers-compare/SKILL.md):
   compare or collate two or more readings (palaeographers or transcription
   models) of the same pages into a uniform comparative edition (per-page
-  files with the readings stacked plus `overview.md`); ships `scripts/` to
+  files with the readings stacked plus `overview.md`, and the page images in a sibling `images/` folder); ships `scripts/` to
   normalise, verify and build the slashed one-line `reference/` variant.
 
 The first two branch by capability: MCP-tools-only agents vs agents with CLI + library

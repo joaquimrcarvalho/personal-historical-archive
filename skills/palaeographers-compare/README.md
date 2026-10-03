@@ -19,17 +19,26 @@ no pha install, no special tooling, no network.
 ### What you need first
 
 A folder containing **one subdirectory per palaeographer**, each with **one markdown
-file per page, using the same filenames across all of them**:
+file per page, using the same filenames across all of them**, plus an **`images/`**
+folder next to it with a copy of the same pages:
 
 ```
-1577/palaeographers/
-├── DeepSeek-V4-FVE/   507v.md   508.md   508v.md   ...   511.md
-├── M3/                507v.md   508.md   508v.md   ...   511.md
-└── Qwen3.8-Max/       507v.md   508.md   508v.md   ...   511.md
+1577/
+├── images/                      507v.jpg  508.jpg  508v.jpg  ...  511.jpg
+└── palaeographers/
+    ├── DeepSeek-V4-FVE/         507v.md   508.md   508v.md   ...  511.md
+    ├── M3/                      507v.md   508.md   508v.md   ...  511.md
+    └── Qwen3.8-Max/             507v.md   508.md   508v.md   ...  511.md
 ```
 
-Each file needs its transcription (the readable text of the page). The `Notes` /
+Each page file needs its transcription (the readable text of the page). The `Notes` /
 named-entity sections are ignored; they are only used as context.
+
+The `images/` folder holds the **source image of every compared page**, with the same
+basename as the page file (`507v.jpg` for `507v.md`; `.jpg`/`.jpeg`/`.png`/`.tif`/
+`.tiff`/`.webp` accepted). It is required: a reviewer correcting a reading needs the
+original next to it, and it keeps the benchmark self-contained. `verify_comparison.py`
+checks that every page has its image.
 
 ### 1. Ask the agent
 
