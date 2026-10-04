@@ -42,14 +42,21 @@
   dir holds only code, `prompts/`, `schema/` and the `_sample.md` templates.
   Precedence: `PHA_ARCHIVE_DIR` in the environment > a legacy
   `PHA_ARCHIVE_DIR` line in a gitignored `.env` > `paths.archive_dir` in
-  `config.yaml` (written by `pha set archive-dir`) > the default `.` (the
+  `config.yaml` (written by `pha set archive-dir`) > `paths.archive_dir` in the
+  **per-user settings** (`~/.config/pha/config.yaml`, `%APPDATA%\pha\config.yaml`
+  on Windows — `PHA_CONFIG_DIR` overrides the location; written by
+  `pha set archive-dir --global`) > the default `.` (the
   project root). The legacy `.env` line sits ABOVE `config.yaml` on purpose:
   the shipped `config.yaml` carries `archive_dir: .` as a default, so treating
   that as authoritative would silently move every pre-existing `.env` user's
-  archive. `config.yaml` is still the tracked, reviewable home — `pha set
+  archive. The per-user pointer sits BELOW a real project `config.yaml` (a
+  checkout config is more specific) and exists for the case with no project at
+  all: an installed pha launched by an MCP/agent wrapper from an arbitrary cwd
+  (often `/`). `config.yaml` is still the tracked, reviewable home — `pha set
   archive-dir` writes it AND removes the legacy `.env` line, which is what
   makes it effective; `pha info` names the source that won
-  (`archive_source`, with the machine-readable `archive_source_kind` and a
+  (`archive_source`, with the machine-readable `archive_source_kind` —
+  `env` | `dotenv` | `config` | `user` | `default` — and a
   `configured` boolean in `--json`: `configured: false` means the project-root
   default, so a caller must not treat that directory as a usable archive —
   `pha info` answers instead of prompting and creates nothing, so it is the

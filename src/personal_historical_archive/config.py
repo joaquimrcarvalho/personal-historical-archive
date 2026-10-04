@@ -249,6 +249,62 @@ def find_project_root(start: Path | None = None) -> Path:
     return cur
 
 
+# --------------------------------------------------------------------------- per-user settings
+#
+# Settings that belong to a PERSON on a MACHINE (not to an archive and not to a
+# checkout) live in a per-user config directory instead of a project's
+# config.yaml: which archive to use, and later things like several archives or
+# settings for auxiliary software. It is also the fallback a BUILT pha needs —
+# an MCP/agent wrapper launches it with no project around it, so there is no
+# config.yaml to find (see _archive_is_seedable for what that used to break).
+
+def user_config_dir() -> Path:
+    """The per-user pha settings directory.
+
+    `PHA_CONFIG_DIR` overrides it (used by the test suite to stay out of the
+    real one). Otherwise: `$XDG_CONFIG_HOME/pha`, defaulting to
+    `~/.config/pha`, on macOS and Linux; `%APPDATA%\\pha` on Windows.
+    """
+    env = (os.environ.get("PHA_CONFIG_DIR") or "").strip()
+    if env:
+        return Path(env).expanduser()
+    if sys.platform == "win32":
+        base = (os.environ.get("APPDATA") or "").strip() or str(Path.home() / "AppData" / "Roaming")
+        return Path(base) / "pha"
+    xdg = (os.environ.get("XDG_CONFIG_HOME") or "").strip()
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".config"
+    return base / "pha"
+
+
+def user_settings_file() -> Path:
+    """The per-user settings file (`config.yaml` inside `user_config_dir()`)."""
+    return user_config_dir() / "config.yaml"
+
+
+def _user_config_archive_dir() -> str:
+    """`paths.archive_dir` from the per-user settings, or "" when there is none.
+
+    Never fatal: a missing file is the normal case, and an unreadable or
+    malformed one must not stop pha from starting — the caller falls through to
+    the project-root default (and the unconfigured-archive guard reports that).
+    """
+    f = user_settings_file()
+    try:
+        raw = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+    except FileNotFoundError:
+        return ""
+    except (OSError, yaml.YAMLError) as e:
+        print(f"warning: cannot read the user settings {f}: {e}", file=sys.stderr)
+        return ""
+    if not isinstance(raw, dict):
+        return ""
+    paths = raw.get("paths") or {}
+    if not isinstance(paths, dict):
+        return ""
+    value = paths.get("archive_dir")
+    return str(value).strip() if value is not None else ""
+
+
 @dataclass
 class Model:
     """A named model interface: how to reach and talk to a model, plus its
@@ -582,6 +638,12 @@ class Config:
 
     @classmethod
     def load(cls, root: Path | None = None) -> "Config":
+        # An explicit root is AUTHORITATIVE (see find_project_root): a caller
+        # that names a tree must not be redirected by the per-user settings
+        # either, so the user-level pointer is consulted only on the ambient
+        # path — the one a built/installed pha takes when it is launched with
+        # no project around it.
+        explicit_root = root is not None
         root = find_project_root(root)
         cfg_path = root / "config.yaml"
         raw: dict = {}
@@ -646,14 +708,29 @@ class Config:
         # what was actually used (D3/D5).
         archive_env, archive_from = _env_setting_source("PHA_ARCHIVE_DIR")
         yaml_archive = paths.get("archive_dir")
+        project_archive = str(yaml_archive).strip() if yaml_archive is not None else ""
+        if project_archive == ".":
+            project_archive = ""  # the shipped zero-config default
+        # A per-user pointer (see user_config_dir) is the fallback a BUILT pha
+        # needs when it is launched with no project to read config.yaml from —
+        # an MCP/agent wrapper runs from "/", where the old default "." made
+        # archive_dir "/" (see _archive_is_seedable). It sits BELOW an env
+        # value, the legacy .env line and a real project config.yaml, because
+        # those are more specific than a machine-wide default.
+        user_archive = "" if explicit_root else _user_config_archive_dir()
         if archive_from:
             archive_source_kind = archive_from
-        elif yaml_archive is not None and str(yaml_archive).strip() not in ("", "."):
+            archive_dir = _p(root, str(archive_env))
+        elif project_archive:
             archive_source_kind = "config"
+            archive_dir = _p(root, project_archive)
+        elif user_archive:
+            archive_source_kind = "user"
+            archive_dir = _p(user_config_dir(), user_archive)
         else:
-            # no pointer at all, or the shipped `archive_dir: .` default
+            # no pointer at all, or only the shipped `archive_dir: .` default
             archive_source_kind = "default"
-        archive_dir = _p(root, str(archive_env or yaml_archive or "."))
+            archive_dir = _p(root, ".")
 
         # engine-level prompts stay in the PROJECT (not the archive).
         prompts_dir = _p(root, paths.get("prompts", "prompts"))
@@ -686,15 +763,25 @@ class Config:
 
         # Seed the zero-config defaults BEFORE parsing, so a fresh archive has
         # working default model/palaeographer/editor/encoder on first load.
-        _seed_default_model(models_dir, _DEFAULT_MODEL)
-        _seed_default(pal_dir, _DEFAULT_PAL)
-        _seed_default(ed_dir, _DEFAULT_ED)
-        _seed_default(enc_dir, _DEFAULT_ENC)
+        #
+        # Seeding is a WRITE during what is otherwise a read, so it only runs
+        # for an archive someone pointed at (see _archive_is_seedable). A built
+        # pha launched from "/" with no pointer used to seed into the
+        # filesystem root and die in `mkdir('/models')` (PermissionError; as
+        # root it would have written model definitions into "/"). An
+        # unseedable location stays unconfigured and the caller's
+        # unconfigured-archive guard reports it.
+        pointed_at = archive_source_kind != "default" or cfg_path.exists()
+        if _archive_is_seedable(archive_dir, pointed_at=pointed_at):
+            _seed_default_model(models_dir, _DEFAULT_MODEL)
+            _seed_default(pal_dir, _DEFAULT_PAL)
+            _seed_default(ed_dir, _DEFAULT_ED)
+            _seed_default(enc_dir, _DEFAULT_ENC)
 
-        # Migrate legacy definitions that live in the project dir (before the
-        # archive_dir split) into the archive dir, preserving their ids.
-        _migrate_legacy_defs(root / "palaeographers", pal_dir)
-        _migrate_legacy_defs(root / "editors", ed_dir)
+            # Migrate legacy definitions that live in the project dir (before
+            # the archive_dir split) into the archive dir, preserving their ids.
+            _migrate_legacy_defs(root / "palaeographers", pal_dir)
+            _migrate_legacy_defs(root / "editors", ed_dir)
 
         models = _parse_models(models_dir)
         palaeographers, active = _parse_palaeographers(raw, vis, prompts_dir, root, pal_dir, models)
@@ -869,7 +956,56 @@ class Config:
             host = "127.0.0.1"
         return f"http://{host}:{self.serve_port}"
 
+    def archive_explicitly_set(self) -> bool:
+        """True when the archive came from a real pointer — `PHA_ARCHIVE_DIR`
+        in the environment or a legacy `.env` line, a project `config.yaml`, or
+        the per-user settings — rather than the default project-root fallback."""
+        return self.archive_source_kind in ("env", "dotenv", "config", "user")
+
+    def archive_unconfigured(self) -> bool:
+        """No real archive: no explicit pointer AND the default one holds no
+        documents (DB missing or empty).
+
+        This is the condition a caller must check BEFORE anything writes (the
+        CLI's fresh-install guard, `pha mcp`), so it lives on Config where the
+        resolution is decided and every entry point can share it instead of
+        re-deriving it — see D3 in
+        enhancements/pha-archive-pointer-loss-bug-report.md.
+        """
+        if self.archive_explicitly_set():
+            return False
+        dbp = self.db_path
+        if not dbp.exists():
+            return True
+        import sqlite3
+        try:
+            conn = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
+            n = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+            conn.close()
+            return n == 0
+        except Exception:
+            return True
+
+    def owns_archive(self) -> bool:
+        """May pha create the archive's directories?
+
+        True when the archive was pointed at (an explicit env / legacy .env /
+        project config.yaml / per-user pointer) or when the project root is a
+        real pha project (it has a `config.yaml`). False for the case that bit
+        the MCP wrapper: an installed pha launched from an arbitrary cwd — "/"
+        — with no project and no pointer, where building `dropbox/`,
+        `library/`, `models/`… would write outside any archive pha owns.
+        """
+        return self.archive_explicitly_set() or (self.root / "config.yaml").exists()
+
     def ensure_dirs(self) -> None:
+        # Never build an archive tree for a directory that is neither a pha
+        # project nor a pointed-at archive (see owns_archive): that is the
+        # "installed pha launched from /" case, where a read-only-ish command
+        # (`pha help`, `pha mcp`) used to create dropbox/library/renders/...
+        # wherever it happened to run.
+        if not self.owns_archive():
+            return
         for d in (self.dropbox, self.inbox, self.library, self.data, self.renders, self.bin, self.notes,
                   self.prompts, self.palaeographers_dir, self.editors_dir, self.encoders_dir,
                   self.models_dir, self.filters_dir):
@@ -1325,6 +1461,32 @@ def _opt_int(v) -> int | None:
 def _p(root: Path, s: str) -> Path:
     p = Path(s).expanduser()  # support '~/...' paths in config.yaml
     return p if p.is_absolute() else (root / p).resolve()
+
+
+def _archive_is_seedable(archive_dir: Path, *, pointed_at: bool) -> bool:
+    """May `Config.load` create default definitions under `archive_dir`?
+
+    Seeding is a WRITE during what is otherwise a read, so it must not be
+    possible for it to land somewhere pha does not own:
+
+    - **only an archive someone pointed at** (`pointed_at`: a real project
+      config.yaml, or an explicit env / .env / per-user pointer). A
+      built/installed pha launched from an arbitrary cwd — an MCP or agent
+      wrapper starts `pha mcp` from "/" — has no project and no pointer, and
+      the default `archive_dir: .` resolved to that cwd: pha seeded model
+      definitions there, and on "/" it died in `mkdir('/models')` with
+      PermissionError (run as root it would have written into "/" instead).
+    - **never the filesystem root** (`/`, or a Windows drive root).
+    - **never a location that refuses the write** (a read-only mount).
+    """
+    if archive_dir.parent == archive_dir:  # "/" or "C:\\"
+        return False
+    if not pointed_at:
+        return False
+    probe = archive_dir
+    while not probe.exists() and probe.parent != probe:
+        probe = probe.parent
+    return probe.is_dir() and os.access(probe, os.W_OK)
 
 
 def _seed_sample(directory: Path, name: str, content: str) -> None:

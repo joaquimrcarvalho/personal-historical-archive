@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 from fastmcp import FastMCP
 
@@ -739,6 +740,26 @@ def make_server(cfg: Config) -> FastMCP:
 
 def main(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8000) -> None:
     cfg = Config.load()
+    # An MCP client launches this with whatever cwd it happens to have (often
+    # "/") and with no TTY, so the CLI's interactive fresh-install guard never
+    # runs here — and `ensure_dirs()` below MUST NOT be reached with an
+    # unconfigured archive, or it would create a dropbox/library/renders/... tree
+    # under the filesystem root. Say what is missing and stop. This was the
+    # "MCP wrapper runs from / with no PHA_HOME" failure: Config.load used to
+    # seed "/models" and die with PermissionError before anything could report.
+    if cfg.archive_unconfigured():
+        print(
+            "error: no pha archive is configured for the MCP server.\n"
+            f"  project root: {cfg.root}\n"
+            f"  archive:      {cfg.archive_dir}\n"
+            "Point pha at one, in order of precedence:\n"
+            "  - PHA_ARCHIVE_DIR (or PHA_HOME) in the MCP client's environment,\n"
+            "  - `pha set archive-dir --global <path>` for this machine, or\n"
+            "  - `pha set archive-dir <path>` in the pha project directory.\n"
+            "Refusing to start with an archive it does not own.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     cfg.ensure_dirs()
     mcp = make_server(cfg)
     if transport == "sse":

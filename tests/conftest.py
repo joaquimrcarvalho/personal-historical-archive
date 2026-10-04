@@ -35,6 +35,18 @@ def _isolated_lock_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_user_config_dir(tmp_path, monkeypatch):
+    """Keep tests out of the real per-user settings directory.
+
+    `config.user_config_dir()` resolves to ~/.config/pha (or %APPDATA%\\pha) by
+    default, and an archive pointer there is a resolution fallback — reading the
+    developer's real settings would make every path test machine-dependent. The
+    env var is read at call time, so monkeypatching it is enough.
+    """
+    monkeypatch.setenv("PHA_CONFIG_DIR", str(tmp_path / "pha-user-config"))
+
+
+@pytest.fixture(autouse=True)
 def _no_real_process_probe(monkeypatch):
     """Keep the F2 identity probe off real pids in tests.
 

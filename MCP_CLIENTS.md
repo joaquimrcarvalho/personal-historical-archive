@@ -49,8 +49,17 @@ processed (palaeographer / editor / encoder).
   served — e.g. LM Studio `qwen/qwen3-vl-8b`.
 - Set `PHA_HOME` so the server finds `config.yaml` regardless of where the
   client launches it: `PHA_HOME=/path/to/personal-historical-archive`.
-- Set the archive data root for this machine first:
-  `pha set archive-dir /path/to/archive` (stored in the gitignored `.env`).
+- Point pha at the archive data root **once for this machine**:
+  `pha set archive-dir --global /path/to/archive`. That writes the per-user
+  settings (`~/.config/pha/config.yaml`; `%APPDATA%\pha\config.yaml` on
+  Windows), which pha finds even when the client launches it from an arbitrary
+  working directory such as `/`. Inside a pha **project** you can instead run
+  `pha set archive-dir /path/to/archive` (this project's `config.yaml`), or set
+  `PHA_ARCHIVE_DIR` in the client's `env` — it wins over both.
+- An MCP client often starts the server with no useful working directory. pha
+  therefore **refuses to serve an unconfigured archive** instead of creating
+  one wherever it happens to run; if the client log shows *"no pha archive is
+  configured for the MCP server"*, do one of the three things above.
 
 ---
 

@@ -16,7 +16,7 @@ from . import addresses
 from . import bibliography
 from . import db
 from . import manage
-from .config import Config
+from .config import Config, user_settings_file
 from .extract import is_supported, resolve_editor_id, resolve_encoder_id, resolve_palaeographer_id, resolve_prompt, encoder_files_for
 from .ingest import (
     edit_all,
@@ -3143,15 +3143,11 @@ def _clear_dotenv_archive_dir(cfg: Config) -> bool:
     return True
 
 
-def _set_archive_dir_in_config(cfg: Config, path: str | None) -> None:
-    """Prompt for (or accept) an archive root and store it in config.yaml.
+def _resolve_archive_path_arg(cfg: Config, path: str | None) -> str | None:
+    """The archive path to store: the argument, stdin, or an interactive prompt.
 
-    `config.yaml` is the tracked, reviewable home for the archive location
-    (DEC: one visible pointer instead of a gitignored `.env` line that can go
-    stale unnoticed). `PHA_ARCHIVE_DIR` in the real environment still wins, so
-    a one-off or per-machine override needs no file edit — and the legacy
-    `.env` line, which is checked BEFORE config.yaml, is removed here so that
-    this write actually takes effect (see `Config.load`).
+    Returns an absolute, `~`-expanded path — or None when nothing was given,
+    which means "keep the current one".
     """
     current = str(getattr(cfg, "archive_dir", "") or "")
     if not path:
@@ -3169,10 +3165,26 @@ def _set_archive_dir_in_config(cfg: Config, path: str | None) -> None:
             path = ""
     if not path:
         print(f"archive_dir unchanged: {current}")
-        return
+        return None
     expanded = os.path.expanduser(path).strip()
     if not os.path.isabs(expanded):
         expanded = str((cfg.root / expanded).resolve())
+    return expanded
+
+
+def _set_archive_dir_in_config(cfg: Config, path: str | None) -> None:
+    """Prompt for (or accept) an archive root and store it in config.yaml.
+
+    `config.yaml` is the tracked, reviewable home for the archive location
+    (DEC: one visible pointer instead of a gitignored `.env` line that can go
+    stale unnoticed). `PHA_ARCHIVE_DIR` in the real environment still wins, so
+    a one-off or per-machine override needs no file edit — and the legacy
+    `.env` line, which is checked BEFORE config.yaml, is removed here so that
+    this write actually takes effect (see `Config.load`).
+    """
+    expanded = _resolve_archive_path_arg(cfg, path)
+    if expanded is None:
+        return
     cfgp = cfg.root / "config.yaml"
     try:
         text = cfgp.read_text(encoding="utf-8") if cfgp.exists() else ""
@@ -3190,16 +3202,56 @@ def _set_archive_dir_in_config(cfg: Config, path: str | None) -> None:
               "(config.yaml is now the source of truth)")
 
 
-def cmd_set_archive_dir(cfg: Config, args) -> None:
-    """`pha set archive-dir` (or `pha archive-dir`) — set the archive data root.
+def _set_archive_dir_in_user_config(cfg: Config, path: str | None) -> None:
+    """`pha set archive-dir --global`: store the pointer in the PER-USER
+    settings instead of a project's `config.yaml`.
 
-    Stores `paths.archive_dir` in config.yaml, so the archive location is a
-    tracked, reviewable line rather than a gitignored `.env` value.
-    `PHA_ARCHIVE_DIR` in the environment still overrides it for a one-off run.
-    All data — documents (dropbox), model definitions
+    This is what a built/installed pha needs when it is launched with no
+    project around it — an MCP client starts `pha mcp` from whatever cwd it
+    has, often "/", so there is no `config.yaml` to find. It is also where
+    settings that belong to the person rather than to a checkout live (see
+    `config.user_config_dir`; several archives and auxiliary-software settings
+    will join it). `PHA_ARCHIVE_DIR` in the environment, a legacy `.env` line
+    and a real project `config.yaml` all still outrank it.
+    """
+    expanded = _resolve_archive_path_arg(cfg, path)
+    if expanded is None:
+        return
+    f = user_settings_file()
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        text = f.read_text(encoding="utf-8") if f.exists() else ""
+    except OSError as e:
+        print(f"error: cannot read {f}: {e}", file=sys.stderr)
+        return
+    try:
+        f.write_text(_write_paths_archive_dir(text, expanded), encoding="utf-8")
+    except OSError as e:
+        print(f"error: cannot write {f}: {e}", file=sys.stderr)
+        return
+    print(f"stored paths.archive_dir -> {expanded}  (in {f})")
+    if cfg.archive_source_kind in ("env", "dotenv"):
+        print("note: PHA_ARCHIVE_DIR is set for this shell (or in .env) and "
+              "still wins over the per-user setting.", file=sys.stderr)
+
+
+def cmd_set_archive_dir(cfg: Config, args) -> None:
+    """`pha set archive-dir [--global]` (or `pha archive-dir`) — set the
+    archive data root.
+
+    By default stores `paths.archive_dir` in this project's config.yaml, so the
+    archive location is a tracked, reviewable line rather than a gitignored
+    `.env` value. With `--global` it stores it in the per-user settings
+    (`~/.config/pha/config.yaml`, `%APPDATA%\\pha\\config.yaml` on Windows)
+    instead, which is the pointer a built pha can find with no project around
+    it. `PHA_ARCHIVE_DIR` in the environment still overrides both for a one-off
+    run. All data — documents (dropbox), model definitions
     (palaeographers/editors/encoders) and generated output (library, renders,
     db) — lives under this directory."""
     path = getattr(args, "path", None)
+    if getattr(args, "global_", False):
+        _set_archive_dir_in_user_config(cfg, path)
+        return
     _set_archive_dir_in_config(cfg, path)
 
 
@@ -3691,30 +3743,20 @@ def cmd_help(cfg: Config, args) -> None:
 
 def _archive_explicitly_set(cfg: Config) -> bool:
     """True if the archive was resolved from a real pointer (env / legacy .env /
-    config.yaml), as opposed to the default project root.
+    project config.yaml / the per-user settings), as opposed to the default
+    project root.
 
-    Read from the source `Config.load` recorded, so this cannot drift from the
-    resolution it describes — and so an EMPTY value counts as no pointer (D5).
+    Delegates to Config, where the resolution is recorded, so this cannot drift
+    from the resolution it describes — and so an EMPTY value counts as no
+    pointer (D5).
     """
-    return cfg.archive_source_kind in ("env", "dotenv", "config")
+    return cfg.archive_explicitly_set()
 
 
 def _archive_unconfigured(cfg: Config) -> bool:
     """A real archive is absent: no explicit archive_dir and the default
-    archive holds no documents (DB missing or empty)."""
-    if _archive_explicitly_set(cfg):
-        return False
-    dbp = cfg.db_path
-    if not dbp.exists():
-        return True
-    import sqlite3
-    try:
-        conn = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
-        n = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
-        conn.close()
-        return n == 0
-    except Exception:
-        return True
+    archive holds no documents (DB missing or empty). Delegates to Config."""
+    return cfg.archive_unconfigured()
 
 
 def _prospective_archive(cfg: Config) -> Path | None:
@@ -3765,6 +3807,7 @@ _ARCHIVE_SOURCE_TEXT = {
     "env": "PHA_ARCHIVE_DIR environment variable",
     "dotenv": "PHA_ARCHIVE_DIR in .env (legacy)",
     "config": "paths.archive_dir in config.yaml",
+    "user": "paths.archive_dir in the per-user settings (pha set archive-dir --global)",
     "default": "default (project root)",
 }
 _RESOLVED_SOURCE_TEXT = {
@@ -4322,6 +4365,10 @@ def main(argv: list[str] | None = None) -> None:
     ssub = sset.add_subparsers(dest="setting", required=True)
     sad = ssub.add_parser("archive-dir", help="set the archive data root (documents + definitions + generated output)")
     sad.add_argument("path", nargs="?", help="path to the archive directory (or prompted)")
+    sad.add_argument("--global", dest="global_", action="store_true",
+                     help="store the pointer in the per-user settings "
+                          "(~/.config/pha/config.yaml, %%APPDATA%%\\pha\\config.yaml) "
+                          "instead of this project's config.yaml")
     sad.set_defaults(fn=cmd_set_archive_dir)
     sdb = ssub.add_parser("dropbox", help="DEPRECATED: set only the dropbox documents folder")
     sdb.add_argument("path", nargs="?", help="path to the documents folder (or prompted)")
@@ -4509,9 +4556,12 @@ def main(argv: list[str] | None = None) -> None:
     # Fresh-install guard: if no archive is configured and the default one is
     # empty, ask the user/agent where the archive is before running a command
     # that needs it. Setup commands (`set archive-dir`, `init-archive`,
-    # `dropbox`, `key`) and `help` must always run so the guard can be
-    # resolved and orientation is always available.
-    if args.cmd not in ("set", "archive-dir", "dropbox", "init-archive", "key", "help", "update", "doctor") \
+    # `dropbox`, `key`), `help`, and `mcp` must always run: the first so the
+    # guard can be resolved, and `mcp` because a stdio MCP client's stdin
+    # carries JSON-RPC, so prompting there would consume protocol input —
+    # `mcp_server.main` reports an unconfigured archive itself.
+    if args.cmd not in ("set", "archive-dir", "dropbox", "init-archive", "key",
+                        "help", "update", "doctor", "mcp") \
             and _archive_unconfigured(cfg):
         if _prompt_archive_setup(cfg):
             cfg = Config.load()  # reload now that archive_dir may have changed
@@ -4522,7 +4572,7 @@ def main(argv: list[str] | None = None) -> None:
     # `--json` output and piping must stay clean). Setup/diagnostic commands
     # are excluded so the notice cannot get in the way of fixing the problem.
     if args.cmd not in ("set", "archive-dir", "dropbox", "init-archive", "key",
-                        "help", "update", "doctor", "info"):
+                        "help", "update", "doctor", "info", "mcp"):
         try:
             _warn_resolved_archive(cfg)
         except Exception:  # noqa: BLE001 - a notice must never break a command
@@ -4531,8 +4581,11 @@ def main(argv: list[str] | None = None) -> None:
     cfg.ensure_dirs()
 
     # Daily self-update notice: at most once per day, best-effort, and only
-    # outside the `update` command itself (which does its own reporting).
-    if args.cmd != "update":
+    # outside the `update` command itself (which does its own reporting). It
+    # keeps its state under the project root, so it is skipped when that root is
+    # not a pha project pha owns: the notice would otherwise write `data/` into
+    # whatever cwd an installed pha happened to be launched from.
+    if args.cmd != "update" and cfg.owns_archive():
         try:
             from .update import maybe_notify_update
 

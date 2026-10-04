@@ -1271,6 +1271,7 @@ pha test [target] [--pages N] [--random] [--seed S] [--show]
                                     #    --show re-prints, --list lists, --clean deletes test run dirs)
 pha init-archive [PATH]      # create a new self-contained archive directory
 pha set archive-dir [PATH]   # set the archive data root (stored in config.yaml)
+pha set archive-dir --global [PATH]  # …or in the per-user settings (~/.config/pha/config.yaml)
 pha archive-dir              # alias for `pha set archive-dir`
 pha set dropbox [PATH]       # DEPRECATED: set only the documents folder
 pha upload document PATH [--name N] [--replace] [--merge]
@@ -1481,9 +1482,15 @@ or per-invocation with the `PHA_NO_UPDATE_CHECK=1` environment variable.
   so the location is a tracked, reviewable line; an explicit
   `PHA_ARCHIVE_DIR` in the environment overrides it for one run, which is how
   to keep a machine-specific path out of the committed file. Precedence:
-  environment > a legacy `PHA_ARCHIVE_DIR` line in `.env` > this key > `.`;
+  environment > a legacy `PHA_ARCHIVE_DIR` line in `.env` > this key > the
+  **per-user settings** (`~/.config/pha/config.yaml`,
+  `%APPDATA%\pha\config.yaml` on Windows; `PHA_CONFIG_DIR` overrides the
+  location, and `pha set archive-dir --global` writes it) > `.`;
   `pha set archive-dir` also removes the legacy `.env` line, which is what
-  makes this key effective.
+  makes this key effective. The per-user layer sits below a real project
+  `config.yaml` and exists for a machine with **no project around pha** — an
+  installed pha started by an MCP/agent wrapper from an arbitrary cwd (often
+  `/`), where a project config would not be found at all.
 - `vision.*` — model server + vision model for extraction
 - `embeddings.*` — model server + embedding model; `batch_size` caps how many
   chunks go in each `/embeddings` request (some endpoints reject an input over
