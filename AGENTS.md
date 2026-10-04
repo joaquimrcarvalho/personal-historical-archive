@@ -9,18 +9,20 @@
   commit message).
 - Commits made by the human do NOT carry the trailer — it is manual only
   (there is no hook).
-- **Version bumps are manual and user-driven.** The version lives in two
-  places that must stay in sync: `pyproject.toml` (`version = ...`) and
-  `src/personal_historical_archive/__init__.py` (`__version__ = ...`). It is
-  NOT bumped automatically per commit/push. When the human says **"push"**
-  they mean push without a bump; **"push and update version"** (or "bump the
+- **Version bumps are manual and user-driven, but the release unit is the
+  whole repository.** The version lives in three places that must stay in
+  sync: `pyproject.toml`, `src/personal_historical_archive/__init__.py`, and
+  `dsh-pha/package.json`. Bump all three together with
+  `python scripts/bump_release.py patch` (or `minor` / `major`). Any change to
+  the Python tool or the shipped `dsh-pha` payload must bump the release:
+  `pha update` watches remote `__version__`, so an unbumped push never reaches
+  installed machines. Repo-only docs/tests do not need a bump unless they must
+  reach installed machines. `python scripts/check_release_bump.py origin/main`
+  is the CI guard for plugin-only changes. When the human says **"push"** they
+  mean push without a bump; **"push and update version"** (or "bump the
   version") means bump first (semver: patch for fixes, minor for features),
-  then commit + push. When asked to just "push", advise whether a bump seems
-  warranted (e.g. a user-visible feature landed since the last bump) and let
-  the human decide. The self-update check compares the installed
-  `__version__` against the one on the GitHub default branch, so a push only
-  reaches the installed base as an "update available" notice when the version
-  was actually bumped.
+  then commit and push. When asked to just "push", advise whether a bump is
+  warranted and let the human decide. Full runbook: [RELEASING.md](RELEASING.md).
 - Verify with `git log -1 --format='%B'`.
 
 ## Project essentials
@@ -334,7 +336,7 @@
   `pha cite` labels the citation with the pair the text actually came from. An
   explicit `--editor X` on `pha page`/`pha cite` still selects a VARIANT FOLDER
   by name; the page's own folder is the document's.
-- Full usage: README.md; planned web UI: WEB_INTERFACE_PLAN.md.
+- Full usage: README.md; release/update runbook: RELEASING.md; planned web UI: WEB_INTERFACE_PLAN.md.
 
 ## Usage — how agents operate the archive (not just develop it)
 
@@ -497,9 +499,10 @@ A Harness agent on a machine with pha + a Harness install can expose the archive
 repo's bundled `dsh-pha` plugin: it registers the `pha_*` model tools (`pha_status`,
 `pha_documents`, `pha_document`, `pha_page`, `pha_search`, `pha_archive`,
 `pha_job_start`/`pha_job_status`/`pha_job_kill`) and a same-origin `/pha/*` JSON API. See
-[`DSH_PLUGIN.md`](DSH_PLUGIN.md) and [`dsh-pha/README.md`](dsh-pha/README.md). Install it into
-a Harness profile (`pnpm add <repo>/dsh-pha` + the [`cordis.patch` row](dsh-pha/cordis.patch.example.yml)
-+ restart). Reads are read-only (`immutable=1` sqlite / the `pha` CLI); mutations still go
+[`DSH_PLUGIN.md`](DSH_PLUGIN.md) and [`dsh-pha/README.md`](dsh-pha/README.md). Install or update it
+with `pha view install` (also run automatically by `pha update` after the tool update), then
+restart DSH. Manual fallback: `pnpm add <repo>/dsh-pha` + the
+[`cordis.patch` row](dsh-pha/cordis.patch.example.yml) + restart. Reads are read-only (`immutable=1` sqlite / the `pha` CLI); mutations still go
 through the real `pha` CLI, so the model-server lock, staleness and review round-trip rules
 below still apply — never start `pha scan`/`pha edit` while another job holds the server they
 need.

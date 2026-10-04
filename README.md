@@ -1434,6 +1434,7 @@ is available, offers to install it:
 - **release policy:** any `dsh-pha/` change bumps pha's patch version, so
   `pha update` notices it too. `scripts/bump_release.py patch` updates the three
   version files together; `scripts/check_release_bump.py <base>` keeps CI honest.
+  Full runbook and bootstrap notes: [RELEASING.md](RELEASING.md).
 
 > [!NOTE]
 > **Archive agent docs refresh automatically.** An archive created with
