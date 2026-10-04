@@ -1,6 +1,6 @@
 # Bug report -- a wheel-installed pha cannot find schema/pha-sidecar.schema.json, so every sidecar-resolving command dies
 
-**Status:** **OPEN**. **Found:** 2026-10-04, `jesuit-archive` machine, pha 0.36.0
+**Status:** **FIXED** (branch `fix/ship-sidecar-schema`, see sec. 10). **Found:** 2026-10-04, `jesuit-archive` machine, pha 0.36.0
 (uv-tool install built from the checkout). **Impact:** every pha command that
 resolves a `pha.yaml` sidecar (`scan`, `edit`, `test`, `palaeographer`,
 `editor`, `handoff`, `bundle`, `render`, ...) exits 1 with a traceback and does
@@ -193,3 +193,32 @@ An explicit `uv tool install --reinstall /Users/jrc/develop/personal-historical-
 run on 2026-10-04 left the tool in the same state: `<tool>/lib/python3.13/schema/`
 was still absent, and `/Users/jrc/.local/bin/pha palaeographer <doc>` still
 raised the same `FileNotFoundError`. Reinstallation is not the fix; F1 is.
+
+## 10. Fix (2026-10-04)
+
+Fixed on branch `fix/ship-sidecar-schema`.
+
+- **F1** -- `sidecar._schema()` no longer counts parents from `__file__`. It
+  reads the schema from, in order: `PHA_SCHEMA` (the F5 override) -> the copy
+  shipped inside the package via `importlib.resources` -> `<checkout>/schema/`
+  located by walking up for `pyproject.toml` (source and editable runs).
+- **The canonical file stays at the repo root.** `pyproject.toml` force-includes
+  it into the wheel at `personal_historical_archive/schema/`, so the schema's
+  published `$id`, the `.vscode` mapping and the `yaml-language-server`
+  module-line that `migrate._SCHEMA_MODELINE` bakes into `pha.yaml` all keep
+  working. Nothing moves, so no archive is disturbed; a comment-only `pha.yaml`
+  edit does not trigger reprocessing anyway (staleness keys off resolved config
+  values, not the file's bytes or mtime).
+- **F4 gate** -- `scripts/check_wheel_ships_schema.py` builds a wheel, asserts
+  the member is present, and imports `_schema()` from the unpacked wheel outside
+  the checkout. `tests/test_sidecar.py` guards the force-include config plus the
+  env-override and clear-error paths.
+
+Verified: the `uv build` wheel contains
+`personal_historical_archive/schema/pha-sidecar.schema.json`; a clean venv
+install loads `_schema()` and validates a `pha.yaml`; source/editable and
+zipimport paths also load; full test suite 890 passed.
+
+Still open: F2 for `config.find_project_root()` and `update.project_root()`
+(same `parents[N]` pattern, separate change), and F3 (audit of the other
+repo-root runtime assets).

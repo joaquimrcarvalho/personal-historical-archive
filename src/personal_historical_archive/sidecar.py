@@ -13,19 +13,57 @@ Code via the YAML language server) and the loader share one definition.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 
 import yaml
 
 _SCHEMA: dict | None = None
+_SCHEMA_REL = ("schema", "pha-sidecar.schema.json")
+
+
+def _schema_text() -> str:
+    """Read pha-sidecar.schema.json from wherever this install keeps it.
+
+    Order: ``PHA_SCHEMA`` (explicit override) -> the copy shipped INSIDE the
+    package -> ``<checkout>/schema/pha-sidecar.schema.json`` for source and
+    editable runs, where only the repo-root canonical file exists.
+
+    Built distributions carry the schema under the package because
+    ``pyproject.toml`` force-includes the repo-root file there; the checkout
+    fallback is located by walking up for ``pyproject.toml`` rather than by
+    counting parents from this module, which only ever worked in a checkout
+    (see enhancements/pha-installed-wheel-missing-schema-bug-report.md).
+    """
+    override = os.environ.get("PHA_SCHEMA")
+    if override:
+        return Path(override).read_text(encoding="utf-8")
+    try:
+        resource = files(__package__).joinpath(*_SCHEMA_REL)
+        if resource.is_file():
+            return resource.read_text(encoding="utf-8")
+    except (ModuleNotFoundError, TypeError, FileNotFoundError, OSError):
+        pass  # not a packaged install; fall through to the checkout copy
+    here = Path(__file__).resolve()
+    for parent in (here, *here.parents):
+        if (parent / "pyproject.toml").is_file():
+            candidate = parent.joinpath(*_SCHEMA_REL)
+            if candidate.is_file():
+                return candidate.read_text(encoding="utf-8")
+            break
+    raise FileNotFoundError(
+        "pha-sidecar.schema.json not found: checked PHA_SCHEMA, the copy "
+        "shipped inside the personal_historical_archive package, and "
+        "<checkout>/schema/pha-sidecar.schema.json"
+    )
 
 
 def _schema() -> dict:
     global _SCHEMA
     if _SCHEMA is None:
-        path = Path(__file__).resolve().parents[2] / "schema" / "pha-sidecar.schema.json"
-        _SCHEMA = json.loads(path.read_text(encoding="utf-8"))
+        _SCHEMA = json.loads(_schema_text())
     return _SCHEMA
 
 

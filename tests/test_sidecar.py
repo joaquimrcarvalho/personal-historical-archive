@@ -113,3 +113,58 @@ def test_effective_render_overrides_globals():
 def test_effective_render_falls_back_to_globals():
     dpi, max_px, q = effective_render(_Cfg(), Sidecar())
     assert (dpi, max_px, q) == (200, 3000, 88)
+
+
+# --------------------------------------------------------------------------- schema resource
+
+
+def test_schema_loads_wherever_pha_is_imported():
+    """`_schema()` must resolve for source, editable and packaged installs."""
+    from personal_historical_archive.sidecar import _schema
+
+    schema = _schema()
+    assert schema["title"].startswith("pha.yaml")
+    assert "palaeographer" in schema["properties"]
+
+
+def test_schema_env_override(tmp_path, monkeypatch):
+    """PHA_SCHEMA wins, so a broken install can be pointed at a known schema."""
+    import personal_historical_archive.sidecar as sidecar
+
+    override = tmp_path / "schema.json"
+    override.write_text('{"title": "override"}', encoding="utf-8")
+    monkeypatch.setenv("PHA_SCHEMA", str(override))
+    monkeypatch.setattr(sidecar, "_SCHEMA", None)
+    assert sidecar._schema() == {"title": "override"}
+
+
+def test_schema_missing_names_where_it_looked(tmp_path, monkeypatch):
+    """A missing schema is a clear error, never a bogus parents[N] path."""
+    import personal_historical_archive.sidecar as sidecar
+
+    monkeypatch.setenv("PHA_SCHEMA", str(tmp_path / "absent.json"))
+    monkeypatch.setattr(sidecar, "_SCHEMA", None)
+    with pytest.raises(FileNotFoundError, match="absent.json"):
+        sidecar._schema()
+
+
+def test_wheel_force_includes_the_schema():
+    """Regression gate for the wheel that shipped without its schema.
+
+    The canonical file stays at the repo root (its published `$id`, and what
+    existing pha.yaml files point their editors at), so the wheel build MUST
+    force-include it under the package or an installed pha cannot validate any
+    sidecar at all. See
+    enhancements/pha-installed-wheel-missing-schema-bug-report.md.
+    """
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    canonical = root / "schema" / "pha-sidecar.schema.json"
+    assert canonical.is_file()
+    cfg = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    wheel = cfg["tool"]["hatch"]["build"]["targets"]["wheel"]
+    force = wheel.get("force-include", {})
+    assert force.get("schema/pha-sidecar.schema.json") == (
+        "personal_historical_archive/schema/pha-sidecar.schema.json"
+    )

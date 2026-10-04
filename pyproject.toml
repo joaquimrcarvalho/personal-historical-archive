@@ -27,3 +27,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/personal_historical_archive"]
+
+# Ship the canonical JSON Schema inside the wheel. It lives at the repo root
+# (schema/pha-sidecar.schema.json) because that path is the schema's published
+# $id and what existing pha.yaml files point their editors at, but a built
+# distribution must also carry a copy under the package so the loader can find
+# it via importlib.resources on any install. See
+# enhancements/pha-installed-wheel-missing-schema-bug-report.md.
+[tool.hatch.build.targets.wheel.force-include]
+"schema/pha-sidecar.schema.json" = "personal_historical_archive/schema/pha-sidecar.schema.json"
