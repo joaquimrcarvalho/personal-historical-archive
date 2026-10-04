@@ -1,7 +1,7 @@
 # Bug report — losing the archive pointer makes `pha` seed definitions into the wrong tree, and the PHA View dies
 
-**Status:** partly fixed — **D3 and D5 closed 2026-09-29**; D1, D2 and D4 open
-(see §8). **Found:** 2026-09-21, on the `jesuit-archive` machine, when the
+**Status:** partly fixed — **D3 and D5 closed** (D3's consumer side closed 2026-10-04 in `0ed96f0`); D1, D2 and D4 open
+(see §§8-9). **Found:** 2026-09-21, on the `jesuit-archive` machine, when the
 DSH **PHA View** could not open any page: every click answered *"No pha archive
 is configured or found."* pha `0.28.0` (installed tool + editable checkout).
 
@@ -144,10 +144,10 @@ tracked `config.yaml`.
   and `_archive_explicitly_set` used to re-derive the source from the same three
   files independently — which is how an empty `.env` value made them disagree
   with what was actually used.
-- **Still to do on the consumer side:** `dsh-pha`'s `discover()`
-  (`dsh-pha/lib/index.js:122-162`) still runs with `cwd = '/'` and accepts any
-  `archive_dir`. It should treat `configured: false` as "no archive" so the view
-  reports that clearly instead of acting on the project-root fallback.
+- **Consumer side closed 2026-10-04 (`0ed96f0`) — see sec. 9.** `dsh-pha`'s
+  `discover()` now refuses to act on the project-root fallback when `pha info`
+  reports `configured: false`, and resolves the project root itself rather than
+  inheriting the harness's cwd.
 
 **D5 closed.** An empty value is ignored *and* warned about, in both sources:
 
@@ -171,6 +171,21 @@ fallback may point pha at a different archive.
 whatever root resolution produces (so `pha info` on a bare directory still
 creates the four `default.md` files, just no longer a whole archive layout), the
 project-root fallback is still silent at resolution time, and there is still no
-machine-level pointer. D1 is now the most visible remaining defect, and the
-`dsh-pha` wiring above is the shortest path to making the original incident
+machine-level pointer. D1 is now the most visible remaining defect; with the
+consumer side wired up (sec. 9), closing D1 makes the original incident
 impossible to repeat.
+
+## 9. Progress — 2026-10-04 (consumer side of D3)
+
+`0ed96f0` (dsh-pha) closes the consumer-side work sec. 8 left open.
+
+- `discover()` calls `pha info --json` first and, when it answers
+  `configured: false`, throws `no pha archive is configured or found` instead of
+  accepting the project-root `archive_dir`. The view reports "no archive"
+  rather than pointing at (and seeding definitions into) the wrong tree.
+- It resolves the pha project root from the row's `projectRoot` config or
+  `PHA_HOME`, and exports it to the child `pha`, so discovery no longer depends
+  on the harness's cwd (`/`).
+- Covered by the plugin smoke tests (`dsh-pha/scripts/smoke.mjs`).
+
+D1, D2 and D4 remain open (sec. 8).
