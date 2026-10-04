@@ -71,6 +71,7 @@ ROW_ID="dsh-pha"
 ROW_NAME="@personal-historical-archive/dsh-pha"
 if [ -f "$PATCH" ] && grep -q "id: $ROW_ID\|name: '$ROW_NAME'" "$PATCH"; then
   echo ">> row for dsh-pha already present in $PATCH"
+  echo "   (run \`pha view install\` to add/update its projectRoot/archiveDir config)"
 else
   # The harness patch file is a top-level YAML ARRAY. The stock file is an
   # empty flow array `[]`; appending a block `- insert:` item AFTER that `[]`
@@ -88,6 +89,8 @@ else
 - insert:
     - id: dsh-pha
       name: '@personal-historical-archive/dsh-pha'
+      config:
+        projectRoot: $REPO
 YAML
   else
     echo ">> appending composition row to $PATCH"
@@ -95,6 +98,8 @@ YAML
     echo "- insert:" >> "$PATCH"
     echo "    - id: dsh-pha" >> "$PATCH"
     echo "      name: '@personal-historical-archive/dsh-pha'" >> "$PATCH"
+    echo "      config:" >> "$PATCH"
+    echo "        projectRoot: $REPO" >> "$PATCH"
   fi
 fi
 

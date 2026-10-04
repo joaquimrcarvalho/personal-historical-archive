@@ -457,10 +457,12 @@ API, and a PHA conversation view (client module).
 
 - **Quick-start / what-you-get:** [`DSH_PLUGIN.md`](DSH_PLUGIN.md)
 - **Full install + build reference:** [`dsh-pha/README.md`](dsh-pha/README.md)
-- **Install:** `pnpm add <repo>/dsh-pha` into a Harness profile + the
-  [`cordis.patch` row](dsh-pha/cordis.patch.example.yml) + restart. The `pha_*` tools and
-  `/pha/*` API are live immediately; the PHA view additionally needs the Harness `dev:web`
-  client build (`dsh-pha/src/client/index.js` → `lib/client.js`) and a restart.
+- **Install/update:** `pha view install` (or `pha update`, which runs it after updating
+  pha) links the bundled plugin into every DSH profile that already has it, writes the
+  [`cordis.patch` row](dsh-pha/cordis.patch.example.yml), and asks for a restart. The
+  `pha_*` tools and `/pha/*` API are live immediately; the PHA view additionally needs the
+  Harness `dev:web` client build (`dsh-pha/src/client/index.js` → `lib/client.js`) and a
+  restart.
 
 ## Dropbox layout: documents and collections
 
@@ -1282,7 +1284,8 @@ pha handoff back DIR [--out DIR] [--dry-run] [--send PEER] # (worker) build the 
 pha handoff fetch DIR [--dry-run] [--index]  # (owner) merge the returned work into the same doc
                           #   (--index also embeds; default: apply + print `pha reindex`)
 pha handoff status [--json] | cancel ID      # what is out, and how to take it back
-pha update [--check] [--yes]  # check GitHub for a newer pha and install it
+pha update [--check] [--yes]  # update pha and the PHA view plugin
+pha view install|status       # install/inspect the PHA view plugin in DSH profiles
 ```
 
 ### Stable page addresses (`pha cite`, `pha serve`)
@@ -1424,6 +1427,13 @@ is available, offers to install it:
   --editable .` layout) the checkout is fast-forwarded with `git pull
   --ff-only` and the new version is active immediately; otherwise it is
   reinstalled from the repository.
+- after updating pha, `pha update` runs `pha view install` to install or refresh
+  the bundled `dsh-pha` plugin in every DeepSeek Harness profile that uses it.
+  A running DSH host loads the plugin at startup, so restart DSH to activate it
+  (`pha view status` reports what each profile has).
+- **release policy:** any `dsh-pha/` change bumps pha's patch version, so
+  `pha update` notices it too. `scripts/bump_release.py patch` updates the three
+  version files together; `scripts/check_release_bump.py <base>` keeps CI honest.
 
 > [!NOTE]
 > **Archive agent docs refresh automatically.** An archive created with

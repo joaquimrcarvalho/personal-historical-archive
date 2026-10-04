@@ -77,8 +77,12 @@ function apply(ctx, config) {
   const checkoutRoot = dirname(packageRoot)
   const autoRoot = existsSync(resolve(checkoutRoot, 'config.yaml')) ? checkoutRoot : ''
   const projectRoot = explicitRoot || autoRoot
+  const configuredArchive = String((config && (config.archiveDir || config.archive_dir)) || '').trim()
   const cwd = projectRoot || '/'
-  const childEnv = projectRoot ? { PHA_HOME: projectRoot } : undefined
+  const childEnv = {}
+  if (projectRoot) childEnv.PHA_HOME = projectRoot
+  if (configuredArchive) childEnv.PHA_ARCHIVE_DIR = configuredArchive
+  const spawnEnv = Object.keys(childEnv).length ? childEnv : undefined
   const jobs = new Map()
   let jobSeq = 1
   let phaBin = null
@@ -120,7 +124,7 @@ function apply(ctx, config) {
         handle = ctx.subprocess.spawn({
           argv,
           cwd,
-          env: childEnv,
+          env: spawnEnv,
           graceMs: 1500,
           stdio: {
             stdin: 'ignore',
@@ -247,7 +251,7 @@ function apply(ctx, config) {
     const handle = ctx.subprocess.spawn({
       argv: [bin, ...argv],
       cwd,
-      env: childEnv,
+      env: spawnEnv,
       graceMs: 2000,
       stdio: {
         stdin: 'ignore',

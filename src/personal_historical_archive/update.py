@@ -4,6 +4,8 @@ Two entry points are used by the CLI:
 
 - ``pha update`` — check GitHub for a newer release and, if one exists, offer
   to install it (``--check`` only reports, ``--yes`` skips the confirmation).
+  After a successful tool update it also runs ``pha view install`` so the
+  bundled PHA view plugin is refreshed for every DSH profile that uses it.
 - a lightweight **daily startup check** — the first ``pha`` invocation of each
   day compares the installed version against the GitHub default branch and, if
   a newer one is available, prints a one-line notice. It is best-effort (never

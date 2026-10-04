@@ -106,12 +106,13 @@ const spawnCtx = {
   tools: { register: (def) => { spawnTools.push(def); return () => {} } },
   inject: () => {},
 }
-const spawnPlugin = mod.apply(spawnCtx, { projectRoot: '/tmp/pha-checkout' })
+const spawnPlugin = mod.apply(spawnCtx, { projectRoot: '/tmp/pha-checkout', archiveDir: '/tmp/pha-archive' })
 const archiveTool = spawnTools.find((t) => t.name === 'pha_archive')
 await archiveTool.execute({})
 check(spawns.length === 1, 'projectRoot config spawns pha')
 check(spawns[0].cwd === '/tmp/pha-checkout', 'projectRoot config sets child cwd')
 check(spawns[0].env && spawns[0].env.PHA_HOME === '/tmp/pha-checkout', 'projectRoot config pins child PHA_HOME')
+check(spawns[0].env && spawns[0].env.PHA_ARCHIVE_DIR === '/tmp/pha-archive', 'archiveDir config pins child PHA_ARCHIVE_DIR')
 spawnPlugin.dispose()
 
 // 5. The client half stays loadable as a harness client module.

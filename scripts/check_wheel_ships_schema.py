@@ -20,6 +20,11 @@ import zipfile
 from pathlib import Path
 
 MEMBER = "personal_historical_archive/schema/pha-sidecar.schema.json"
+VIEW_MEMBERS = {
+    "personal_historical_archive/_view/package.json",
+    "personal_historical_archive/_view/lib/index.js",
+    "personal_historical_archive/_view/lib/client.js",
+}
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -81,6 +86,11 @@ def main():
                 raise SystemExit(f"FAIL: {MEMBER} absent from {wheel.name}"
                                  + (f"; schema-ish members: {near}" if near else ""))
             print("ok: wheel contains", MEMBER)
+            missing_view = sorted(VIEW_MEMBERS - set(names))
+            if missing_view:
+                raise SystemExit("FAIL: bundled dsh-pha payload absent: "
+                                 + ", ".join(missing_view))
+            print("ok: wheel contains the bundled dsh-pha payload")
             unpacked = tmp_path / "unpacked"
             zf.extractall(unpacked)
 

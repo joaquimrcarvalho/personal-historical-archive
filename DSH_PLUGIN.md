@@ -23,13 +23,16 @@ drive the **personal-historical-archive** tool from chat, on any machine that ha
 See the full step-by-step in [`dsh-pha/README.md`](dsh-pha/README.md). In short:
 
 ```sh
-# 1. make the package resolvable in the harness profile (pnpm workspace)
-pnpm add /path/to/repo/dsh-pha
+# 1. install/update the bundled plugin into the DSH profile(s)
+pha view install --profile web
+#    omit --profile to update profiles that already have the dsh-pha row
 
-# 2. add the composition row (see dsh-pha/cordis.patch.example.yml)
-#    -> id: dsh-pha / name: '@personal-historical-archive/dsh-pha'
-#       config:
-#         projectRoot: /path/to/personal-historical-archive   # dir holding config.yaml
+# `pha update` runs this step automatically after updating pha, so normally
+# you only need to restart DSH after an update.
+
+# 2. (fallback) manual install into a profile:
+# pnpm add /path/to/repo/dsh-pha
+# add the composition row (see dsh-pha/cordis.patch.example.yml)
 
 # 3. restart the harness profile
 ```

@@ -52,6 +52,23 @@ single-model lock, staleness, and review round-trip semantics are respected.
 The harness composes plugins from **profiles** of `cordis` patch layers. To attach this
 plugin to a profile there are two parts: make the package resolvable, and add one row.
 
+### 0. Recommended: let pha install it
+
+If the `pha` CLI is installed (and this is a source checkout or a wheel that
+carries the plugin payload), use the command that `pha update` also runs after
+every tool update:
+
+```sh
+pha view install --profile web
+# omit --profile to update every profile that already has the dsh-pha row
+pha view status                # show what each profile has
+```
+
+`pha view install` links the bundled payload into the profile, writes or updates
+the `cordis.patch.yml` row (including `projectRoot` and/or `archiveDir`), and
+tells you to restart DSH. The manual steps below are the fallback for a source
+checkout or a profile the CLI cannot find.
+
 ### 1. Make the package resolvable in the profile
 
 The profile's workspace lives under `$DSH_HOME/profiles/<name>/` (e.g. `desktop`). Add this

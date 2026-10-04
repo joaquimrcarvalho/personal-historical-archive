@@ -3482,9 +3482,86 @@ def cmd_update(cfg: Config, args) -> None:
         print(e.stderr or e.stdout or e, file=sys.stderr)
         sys.exit(2)
     print(msg)
+    archive_dir = None
+    if getattr(cfg, "archive_source_kind", "default") != "default" or cfg.db_path.exists():
+        archive_dir = str(cfg.archive_dir)
+    try:
+        from .view import install_after_tool_update
+        view_msg = install_after_tool_update(archive_dir=archive_dir)
+    except Exception as e:  # noqa: BLE001 - the tool update already succeeded
+        print(f"warning: pha was updated, but the PHA view plugin was not: {e}", file=sys.stderr)
+    else:
+        if view_msg:
+            print(view_msg)
     print("restart pha to use the new version.")
     print("On the next pha command the agent docs (AGENTS.md / README.md) in your "
           "archive are refreshed if they are outdated.")
+
+
+def cmd_view(cfg: Config, args) -> None:
+    """`pha view` — inspect or install the PHA view plugin (dsh-pha).
+
+    The plugin is a separate npm package that lives inside this repository.  A
+    running DeepSeek Harness host loads it once at startup, so any install or
+    update ends by asking the caller to restart DSH.
+    """
+    from .config import source_checkout_root
+    from .view import ViewError, dsh_home, install, status
+
+    home = dsh_home()
+    if getattr(args, "view_cmd", "install") == "status":
+        report = status(profile=getattr(args, "profile", None), home=home)
+        if getattr(args, "json", False):
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return
+        print("PHA view plugin")
+        print(f"  version: {report.get('version') or '(unknown)'}")
+        print(f"  payload: {report.get('payload') or '(missing)'}")
+        print(f"  DSH home: {report.get('home')}")
+        if report.get("error"):
+            print(f"  error: {report['error']}")
+        profiles = report.get("profiles") or []
+        if not profiles:
+            print("  profiles: (none found)")
+            return
+        for entry in profiles:
+            state = "linked" if entry.get("linked") else "not linked"
+            row = "row" if entry.get("row_present") else "no row"
+            print(f"  profile {entry['profile']}: {state}, {row}")
+            if entry.get("projectRoot"):
+                print(f"    projectRoot: {entry['projectRoot']}")
+            if entry.get("archiveDir"):
+                print(f"    archiveDir: {entry['archiveDir']}")
+        return
+
+    archive_dir = getattr(args, "archive_dir", None)
+    if not archive_dir:
+        if getattr(cfg, "archive_source_kind", "default") != "default" or cfg.db_path.exists():
+            archive_dir = str(cfg.archive_dir)
+    project_root = source_checkout_root()
+    try:
+        report = install(
+            profile=getattr(args, "profile", None),
+            all_profiles=bool(getattr(args, "all_profiles", False)),
+            project_root=str(project_root) if project_root is not None else None,
+            archive_dir=archive_dir,
+            home=home,
+        )
+    except (ViewError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
+    if getattr(args, "json", False):
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+    if report.get("skipped"):
+        print(report["skipped"])
+        return
+    print(f"PHA view plugin {report.get('version') or '(unknown)'} installed from {report.get('payload')}")
+    for entry in report.get("profiles", []):
+        note = " (row updated)" if entry.get("row_updated") else ""
+        print(f"  profile {entry['profile']}: {entry['path']}{note}")
+    if report.get("restart_required"):
+        print("restart the DSH host to load the updated plugin.")
 
 
 def cmd_version(cfg: Config, args) -> None:
@@ -3584,7 +3661,8 @@ def cmd_help(cfg: Config, args) -> None:
     print("  pha handoff out|in|back|fetch lend a document to another machine, take the work back")
     print("  pha handoff status            what is out on hand-over; `cancel <id>` releases it")
     print("  pha test [target] [--pages N] [--random]  test a config on a sample; --show/--list/--clean manage reports")
-    print("  pha update                    check GitHub for a newer pha and install it")
+    print("  pha update                    update pha and the PHA view plugin")
+    print("  pha view install|status       manage the PHA view plugin in DSH profiles")
     print("  pha version [--short|--json]  which pha is this, and where it is installed")
     print("  pha help <topic>              details on readme|mcp|historians|agents")
     print()
@@ -3997,12 +4075,27 @@ def main(argv: list[str] | None = None) -> None:
     sv.add_argument("--quiet", action="store_true", help="suppress per-request logging")
     sv.set_defaults(fn=cmd_serve)
 
-    up = sub.add_parser("update", help="check GitHub for a newer pha and install it")
+    up = sub.add_parser("update", help="update pha and the PHA view plugin")
     up.add_argument("--check", action="store_true",
                     help="only compare versions and report; do not install")
     up.add_argument("--yes", "-y", action="store_true",
                     help="install without asking for confirmation")
     up.set_defaults(fn=cmd_update)
+
+    vw = sub.add_parser("view", help="install/update the PHA view plugin used by DeepSeek Harness")
+    vsub = vw.add_subparsers(dest="view_cmd", required=True)
+    vi = vsub.add_parser("install", help="install or update the PHA view plugin in DSH profiles")
+    vi.add_argument("--profile", default=None,
+                    help="DSH profile name (default: running profile, or profiles that already have the plugin)")
+    vi.add_argument("--all-profiles", action="store_true", help="update every DSH profile")
+    vi.add_argument("--archive-dir", default=None, help=argparse.SUPPRESS)
+    vi.add_argument("--from-update", action="store_true", help=argparse.SUPPRESS)
+    vi.add_argument("--json", action="store_true", help="print a JSON report")
+    vi.set_defaults(fn=cmd_view)
+    vs = vsub.add_parser("status", help="show PHA view plugin status in DSH profiles")
+    vs.add_argument("--profile", default=None, help="DSH profile name")
+    vs.add_argument("--json", action="store_true", help="print a JSON report")
+    vs.set_defaults(fn=cmd_view)
 
     doc = sub.add_parser("doctor", help="check that local OCR/parse engines (tesseract, liteparse) are installed")
     doc.add_argument("--engine", action="append", choices=sorted(DOCTOR_ENGINES),
@@ -4407,6 +4500,10 @@ def main(argv: list[str] | None = None) -> None:
     # enhancements/pha-archive-pointer-loss-bug-report.md.
     if args.cmd == "info":
         cmd_info(cfg, args)
+        return
+
+    if args.cmd == "view":
+        cmd_view(cfg, args)
         return
 
     # Fresh-install guard: if no archive is configured and the default one is

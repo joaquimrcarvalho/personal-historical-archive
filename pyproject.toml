@@ -1,6 +1,6 @@
 [project]
 name = "personal-historical-archive"
-version = "0.36.0"
+version = "0.36.1"
 description = "Personal Historical Archive (pha): local archive of historical documents (manuscripts, old books, maps, ...) — drop folder + VLM text extraction (Ollama/LM Studio) + index + MCP search"
 requires-python = ">=3.11"
 dependencies = [
@@ -36,3 +36,6 @@ packages = ["src/personal_historical_archive"]
 # enhancements/pha-installed-wheel-missing-schema-bug-report.md.
 [tool.hatch.build.targets.wheel.force-include]
 "schema/pha-sidecar.schema.json" = "personal_historical_archive/schema/pha-sidecar.schema.json"
+"dsh-pha/package.json" = "personal_historical_archive/_view/package.json"
+"dsh-pha/lib/index.js" = "personal_historical_archive/_view/lib/index.js"
+"dsh-pha/lib/client.js" = "personal_historical_archive/_view/lib/client.js"
