@@ -2,10 +2,10 @@
 
 > Updated 18 September 2026
 
-DeepSeek provides a low-cost LLM with vision capabilities on pre-paid credits —
-no subscription. You can create separate API keys for the archive, which makes
-the cost of reading manuscripts easy to see apart from the cost of running the
-harness.
+DeepSeek provides a low-cost LLM with vision capabilities on pre-paid
+credits — no subscription. You can create separate API keys for the archive,
+which makes the cost of reading manuscripts easy to tell apart from the cost
+of running the harness.
 
 DeepSeek Harness is also customisable, which lets the archive manage its own
 user interface: a GUI for browsing documents, reading pages and moving parked
@@ -33,7 +33,8 @@ The quickest start is DeepSeek Harness Desktop (DSH Desktop): install from
 [GitHub](https://github.com/anywhere-labs/dsh-desktop) or
 [dshdesktop.cn](https://www.dshdesktop.cn/dsh/en/).
 
-## Provide a API Key for the DeepSeek Harness
+## Provide an API key for DeepSeek Harness
+
 On first run it asks for a DeepSeek API key — give it `DSH_API_KEY`.
 
 Once it starts, create a workspace for your archive with "Add workspace" (+)
@@ -47,13 +48,23 @@ you will be asked for that key at model setup time.
 
 For now just store `PHA_ARCHIVIST` where you can get it back easily.
 
-## Select the right model when interacting with harness
+## Select the right model when interacting with the harness
 
-DeepSeek provides alternative models for handling your requests. The names may vary in the future, but currently three models are available:
+DeepSeek provides alternative models for handling your requests. The names may
+vary in the future, but currently three models are available:
 
-1. DeepSeek_VNN_Flash - this is a fast model, low cost, use for generic work in the archive, like status, schedulling scans, making "normal" queries.
-2. DeepSeek_VNN__Vision__ - this is a model that can "see". Use it when you query requires the model to read from your documents. It is usefull to read sample pages and then check the chepeast and fastest models for a specific document, by comparing its own reading with alternatives. When querying the archive a vision model can solve problems related to errors in reading by reading again selected pages and extract better readings.
-3. DeepSeek_VNN_Pro - more capable and more expensive model, use for development of special filters to clean readding, or to make complex queries that the Flash model is not up to requirements. More expensive than Flash models and currently without vision.
+1. DeepSeek_VNN_Flash — a fast, low-cost model; use it for generic work in the
+   archive, such as status checks, scheduling scans and "normal" queries.
+2. DeepSeek_VNN__Vision__ — a model that can "see". Use it when your query
+   requires the model to read from your documents. It is useful for reading
+   sample pages and then choosing the cheapest and fastest model for a specific
+   document, by comparing its own reading with the alternatives. When querying
+   the archive, a vision model can also solve reading errors by reading selected
+   pages again and extracting better readings.
+3. DeepSeek_VNN_Pro — a more capable, more expensive model; use it to develop
+   special filters that clean up readings, or for complex queries that the
+   Flash model cannot handle. More expensive than the Flash models and
+   currently without vision.
 
 ## Next
 

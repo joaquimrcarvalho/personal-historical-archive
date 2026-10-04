@@ -1,60 +1,61 @@
 # pha for historians — a step-by-step guide
 
-**pha** (Personal Historical Archive) keeps scanned copies of manuscripts, old books and maps in a local archive in your computer and enables AI agents to answer your queries about them. Worflow: 
-1. you drop files into a folder (PDFs, JPEGs, PNG)
-2. an AI palaeographer reads each page and generates text files with the content;
-3. optionally, an AI Editor transforms the result and perfomrs editing tasks such as expand abreviations, modernize names or translate certain languages (for instance from Latin).
-4. The resulting text is stored in a semantic database and everything becomes searchable by your AI assistant
+**pha** (Personal Historical Archive) keeps scanned copies of manuscripts, old books and maps in a local archive on your computer and enables AI agents to answer your queries about them. Workflow:
+
+1. You drop files into a folder (PDFs, JPEGs, PNGs).
+2. An AI palaeographer reads each page and generates text files with the content.
+3. Optionally, an AI editor transforms the result and performs editing tasks such as expanding abbreviations, modernizing names or translating from certain languages (for instance from Latin).
+4. The resulting text is stored in a semantic index and everything becomes searchable by your AI assistant.
 
 ## What problem **pha** solves
 
-### Ai needs context to be smart
+### AI needs context to be smart
 
-To understand what **pha** does it helps to understand how AI deals with queries and the role of what is called "context". 
+To understand what **pha** does, it helps to understand how AI deals with queries and the role of what is called "context".
 
-"Context" is the information that is provided to the LLM to facilitate answering your queries. The AI has no memory of your conversations nor any capacity to learn from its interactions with you. It knows what it learned during training before being released in the world. Everything that is relevant to answer your query and is not part of its initial training must be provided as context, including the record of your past interactions. 
+"Context" is the information provided to the LLM to help it answer your queries. The AI has no memory of your conversations and no capacity to learn from its interactions with you. It knows what it learned during training, before being released into the world. Everything relevant to answering your query that is not part of its initial training must be provided as context, including the record of your past interactions.
 
-You can attach a document to a query and ask the LLM to answer a query about it. The information you provide, plus the record of past interactions, plus some generic instructions about how to answer, together, make the so called "context" of the query. 
+You can attach a document and ask the LLM to answer a question about it. The information you provide, plus the record of past interactions, plus some generic instructions about how to answer, together make the so-called "context" of the query.
 
-Moreover, in order to be able to answer queries with updated information, most AI interfaces first search the internet for the topics of the question, collect relevant information, put it in the context along with the record of previous converstations and append your question. The question might have 10 words but the LLM will receive substatially longer text in which to base its answer.
+Moreover, in order to be able to answer queries with updated information, most AI interfaces first search the internet for the topics of the question, collect relevant information, put it in the context along with the record of previous conversations, and append your question. The question might have 10 words, but the LLM will receive substantially longer text on which to base its answer.
 
 ### Context is limited
 
-But here is the catch: the amount of information that is possible to put into the context is limited. You cannot attach the 12 voluments of Documenta Indica and ask a question about its contents. Also, as time goes by, the record of your conversations might not fit in the context.  Processing long context is computationaly expensive, so AI providers need to limit its length, while trying to find new methods to deal with it efficiently. AI forgets things that it remembered before. The size of files you can attach to a query is also strictly limited.
+But here is the catch: the amount of information that can be put into the context is limited. You cannot attach the 12 volumes of Documenta Indica and ask a question about its contents. Also, as time goes by, the record of your conversations might not fit in the context. Processing long context is computationally expensive, so AI providers need to limit its length, while trying to find new methods to deal with it efficiently. AI forgets things it remembered before. The size of files you can attach to a query is also strictly limited.
 
+### Putting your documents in the context
 
-### Puting your documents in the context
+But what if your relevant information is stored in dozens of documents on your computer, such as PDFs and digital images downloaded from digital libraries and archives or scanned by yourself? In that case, it is your local files and not the internet that needs to be searched to create the context that enables the LLM to answer your questions.
 
-But what if your relevant information is stored in dozens documents in your computer, such as PDFs and digital images downloaded from digital libraries and archives or scanned by yourself? In that case, it is your local files and not the internet that needs to be searched to create the context that enables the LLM to answer your questions.
+This is a common scenario in many organizations, and tools exist that search PDFs, word-processor documents, spreadsheets and databases to extract information and compose the context sent with queries to LLMs. The process is known as "RAG" (Retrieval-Augmented Generation), and RAG tools maintain and search repositories of documents, allowing AI agents to extract meaningful information for the context of queries.
 
-This is a common scenario in many organizations and tools exist that search PDFs, word processor documents, spreadsheets and  databases to extract information to compose the context sent with queries to LLMs. The process is kown as "RAG" (Retrieval Augmented Generation) and RAG tools maintain and search repositories of documentsm allowing AI agents to extract meaninfull information for the context of queries.
-
-RAG creates indexes by processing chunks of text into matematical representations similar to those used internally by LLMs, in a process known as "embedding". This allows the tools to gather results that are semantically related to the question posed and not just those that contain the exact words
+RAG creates indexes by processing chunks of text into mathematical representations similar to those used internally by LLMs, in a process known as "embedding". This allows the tools to gather results that are semantically related to the question posed, and not just those that contain the exact words.
 
 ### Why is historical information special?
 
-Historical documents in computers are special because they consist mainly of images of old books or manuscript documents which cannot be easily searched to extract relevant context. 
+Historical documents on computers are special because they consist mainly of images of old books or manuscript documents, which cannot easily be searched to extract relevant context.
 
-Unlike modern PDFs, which are generated from texts produced originally in computers, historical documents in PDF form are made by scanning or photographing texts. They may contain a layer of text produced by OCR (Optical Character Recognition).  OCR attempts to reconstruct the text from images by identfying the form of characters and embeds the result into the PDF so it can be searched and copied. 
+Unlike modern PDFs, which are generated from texts produced originally on computers, historical documents in PDF form are made by scanning or photographing texts. They may contain a layer of text produced by OCR (Optical Character Recognition). OCR attempts to reconstruct the text from images by identifying the form of characters and embeds the result into the PDF so it can be searched and copied.
 
-The quality of OCR text varies with the clarity of the original printed text, the quality of the scan and the effiency of the OCR software. Mmany of the digital copies of historical sources available in digital libraries and archives have poor quality embeded text. Manuscripts and many books don't have any text layer at all. 
+The quality of OCR text varies with the clarity of the original printed text, the quality of the scan and the efficiency of the OCR software. Many of the digital copies of historical sources available in digital libraries and archives have poor-quality embedded text. Manuscripts and many books don't have any text layer at all.
 
-Moreover, in historical contexts, spelling varies greatly and abreviations are intensively used in writing. Even if good OCR is possible, the result is not ideal for RAG.
+Moreover, in historical contexts, spelling varies greatly and abbreviations are used heavily in writing. Even if good OCR is possible, the result is not ideal for RAG.
 
 ### The solution: read the sources, edit the result, store in a semantic index
 
-The solution is to read the documents and the manuscripts using today's technology. OCR software has evolved and may produce more accurate readings that the one included in the documents. But the most relevant breakthrough brough by AI is that some modern LLMs have "vision" capabilities: they are able to generate text from images and can be asked to read old prints and manuscripts provided as context.
+The solution is to read the documents and the manuscripts using today's technology. OCR software has evolved and may produce more accurate readings than the one included in the documents. But the most relevant breakthrough brought by AI is that some modern LLMs have "vision" capabilities: they are able to generate text from images and can be asked to read old prints and manuscripts provided as context.
 
-LLMs read by reasoning over the image. If adequately instructed they can use background information of what they are reading to clarify dubious content. They operate more like an human reader than the pattern matching OCR softare.
+LLMs read by reasoning over the image. If adequately instructed, they can use background information about what they are reading to clarify dubious content. They operate more like a human reader than the pattern-matching OCR software.
 
-Also LLMs are able to analyse the result of the reading and perform operations like modernization of language, expansion of abrivations, extraction of personal and geographic names, or other named entities and translation from language in which the reader is unfamiliar.
+Also, LLMs are able to analyse the result of the reading and perform operations like modernization of language, expansion of abbreviations, extraction of personal and geographic names, or other named entities, and translation from languages unfamiliar to the reader.
 
-This implies a specific pipeline to create repositories of historical documents that play well with context generation for LLM inference. 
+This implies a specific pipeline to create repositories of historical documents that play well with context generation for LLM inference.
 
 The pipeline consists of:
-1. Identify the best approach to generate text from the document. Options are: use the embeded OCR if adequate; redo the OCR with recent software; use vision enabled models with specific reading prompts; 
-2. Edit the resulting text: modernizing ortography,  extracting named entities (people, places, institutions), translating if relevant. This step may be skipped if text is usable in the original embeded form.
-3. Store the result in a semantic index, searchable by  AI agents for the purpose of providing context of queries to LLMs.
+
+1. Identify the best approach to generate text from the document. Options are: use the embedded OCR if adequate; redo the OCR with recent software; use vision-enabled models with specific reading prompts.
+2. Edit the resulting text: modernizing orthography, extracting named entities (people, places, institutions), translating if relevant. This step may be skipped if the text is usable in its original embedded form.
+3. Store the result in a semantic index, searchable by AI agents to provide context for queries to LLMs.
 
 The workflow, left to right:
 
@@ -96,7 +97,7 @@ You need:
   - **Local models**, run on your own machine by **LM Studio** (free, from
     lmstudio.ai). Nothing ever leaves your computer, but your hardware limits
     which models can run and the speed at which they work.
-  - **Remote models**, hosted by a provider (DeepSeek, MiniMax, OpenAI, Anthropic, OpenRouter,…)
+  - **Remote models**, hosted by a provider (DeepSeek, MiniMax, OpenAI, Anthropic, OpenRouter, …)
     and reached over the internet. They are far more powerful, but you need an
     **API key** from the provider and the page images are sent there. See
     step 1c.
@@ -255,7 +256,7 @@ Two important facts in September 2026:
   uses a remote model**. This will tend to change in the future as stronger
   models run locally — but don't be surprised that the manuscript-reading model
   is not on your machine yet. For **old printed / typeset text**, by contrast,
-  a local vision model (or OCR — see below) is normally fine; printed letters
+  a local vision model (or OCR — see the ladder above) is normally fine; printed letters
   and shapes don't need that much judgement.
 - **Editing/translating text is lighter than reading a page** — no images are
   involved, so a local text model is often enough (it can also be remote if you
@@ -532,7 +533,8 @@ is designed so the heavy AI models only ever run on **your** machine. The file
 
 ## Where the results are
 
-For each document, in the `library/` folder, mirroring the dropbox layout.
+For each document there is a folder under the `library/` folder, mirroring the
+dropbox layout.
 Each document version has a readable folder named after it and its date
 (e.g. `1567-Coimbra_2026-08-22`); pages are named after their source scan
 (for a folder of images) or `page-NNN` (for a PDF):
