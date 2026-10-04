@@ -392,19 +392,19 @@ def install(
     home: Path | None = None,
 ) -> dict:
     home = home or dsh_home()
-    payload = plugin_payload()
-    version = plugin_version(payload)
     profiles = target_profiles(profile, all_profiles, home)
     if not profiles:
         return {
             "ok": True,
             "skipped": "no DeepSeek Harness profiles found",
             "home": str(home),
-            "payload": str(payload),
-            "version": version,
+            "payload": None,
+            "version": "",
             "profiles": [],
             "restart_required": False,
         }
+    payload = plugin_payload()
+    version = plugin_version(payload)
     installed = []
     for prof in profiles:
         link = ensure_plugin_link(prof, payload)
@@ -497,6 +497,8 @@ def install_after_tool_update(archive_dir: str | None = None) -> str | None:
     """
     home = dsh_home()
     if not (home / "profiles").is_dir():
+        return None
+    if not list_profiles(home):
         return None
     root = source_checkout_root()
     kwargs: dict = {}
