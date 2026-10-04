@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import urlopen
 
+from .config import source_checkout_root
+
 DEFAULT_REPO = "joaquimrcarvalho/personal-historical-archive"
 DEFAULT_BRANCH = "main"
 DEFAULT_INTERVAL_H = 24
@@ -238,12 +240,21 @@ def maybe_notify_update(cfg) -> None:
 # --------------------------------------------------------------------------- applying the update
 
 def project_root() -> Path:
-    """The pha source checkout (directory containing pyproject.toml)."""
-    here = Path(__file__).resolve()
-    for p in (here, *here.parents):
-        if (p / "pyproject.toml").exists():
-            return p
-    return here.parents[2]
+    """The pha source checkout (directory containing pyproject.toml).
+
+    Raises :class:`UpdateError` when pha runs from a built distribution: there
+    is no checkout to fast-forward. The old fallback of counting parents from
+    ``__file__`` returned a path inside the interpreter's ``lib/``, which is
+    never a project root (see
+    enhancements/pha-installed-wheel-missing-schema-bug-report.md, F2).
+    """
+    root = source_checkout_root()
+    if root is None:
+        raise UpdateError(
+            "pha is not running from a source checkout, so there is no checkout "
+            "to fast-forward; reinstall it from the repository instead"
+        )
+    return root
 
 
 def _is_git_checkout(root: Path) -> bool:
@@ -295,8 +306,8 @@ def install_update(repo: str = DEFAULT_REPO, branch: str = DEFAULT_BRANCH) -> st
     Raises :class:`UpdateError` (or ``subprocess.CalledProcessError``) on
     failure so the CLI can report it.
     """
-    root = project_root()
-    if _is_git_checkout(root):
+    root = source_checkout_root()
+    if root is not None and _is_git_checkout(root):
         _git_update(root, branch)
         return (f"updated the pha source checkout at {root} (branch {branch}); "
                 f"the new version is active now.")

@@ -620,3 +620,68 @@ def test_stage_deadline_s_is_parsed_and_reaches_the_client(tmp_path):
         assert derived.deadline_s == 1800
     finally:
         derived.close()
+
+
+# --------------------------------------------------------------------- checkout detection
+
+
+def test_source_checkout_root_finds_this_checkout():
+    from personal_historical_archive.config import source_checkout_root
+
+    root = source_checkout_root()
+    assert root is not None
+    assert (root / "pyproject.toml").is_file()
+    assert (root / "schema" / "pha-sidecar.schema.json").is_file()
+
+
+def test_source_checkout_root_stops_at_site_packages(tmp_path, monkeypatch):
+    """A built install is never mistaken for a checkout, even when the venv
+    happens to live inside a real checkout (the repo/.venv layout)."""
+    import personal_historical_archive.config as config
+
+    pkg = (tmp_path / "checkout" / ".venv" / "lib" / "python3.13"
+           / "site-packages" / "personal_historical_archive")
+    pkg.mkdir(parents=True)
+    (pkg / "config.py").write_text("")
+    (tmp_path / "checkout" / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    monkeypatch.setattr(config, "__file__", str(pkg / "config.py"))
+    assert config.source_checkout_root() is None
+
+
+def test_find_project_root_falls_back_to_the_checkout(tmp_path, monkeypatch):
+    """Source/editable runs still resolve the developer checkout when the cwd
+    has no config.yaml: the fallback now walks up for pyproject.toml."""
+    from personal_historical_archive.config import (
+        find_project_root, source_checkout_root,
+    )
+
+    monkeypatch.delenv("PHA_HOME", raising=False)
+    monkeypatch.chdir(tmp_path)
+    root = find_project_root()
+    checkout = source_checkout_root()
+    assert checkout is not None
+    assert root == checkout
+    assert (root / "config.yaml").is_file()
+
+
+def test_find_project_root_never_guesses_the_install_tree(tmp_path, monkeypatch):
+    """Regression for the old parents[2] fallback.
+
+    Installed at <venv>/lib/python3.13/site-packages/..., parents[2] is
+    <venv>/lib/python3.13. A config.yaml sitting there must NOT be returned as
+    a project root; with no checkout the answer stays the cwd.
+    """
+    import personal_historical_archive.config as config
+
+    lib = tmp_path / "venv" / "lib" / "python3.13"
+    pkg = lib / "site-packages" / "personal_historical_archive"
+    pkg.mkdir(parents=True)
+    (pkg / "config.py").write_text("")
+    (lib / "config.yaml").write_text("paths:\n  archive_dir: .\n")
+    monkeypatch.setattr(config, "__file__", str(pkg / "config.py"))
+    monkeypatch.delenv("PHA_HOME", raising=False)
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    assert config.find_project_root() == work.resolve()
+    assert config.find_project_root() != lib.resolve()

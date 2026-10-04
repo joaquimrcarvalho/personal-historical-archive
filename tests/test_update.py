@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import personal_historical_archive.update as u
 from personal_historical_archive.update import check_and_notify, version_greater
 
@@ -121,3 +123,60 @@ def test_check_and_notify_silent_on_network_error(monkeypatch, tmp_path):
     assert check_and_notify(tmp_path, timeout=1) is None
     # timestamp still stamped so we do not hammer GitHub every run
     assert _state_file(tmp_path).exists()
+
+
+# --------------------------------------------------------------------- install location
+
+
+def _fake_installed_layout(tmp_path, monkeypatch):
+    """Point config.__file__ at a site-packages layout: no checkout above it."""
+    import personal_historical_archive.config as config
+
+    pkg = (tmp_path / "venv" / "lib" / "python3.13"
+           / "site-packages" / "personal_historical_archive")
+    pkg.mkdir(parents=True)
+    (pkg / "config.py").write_text("")
+    monkeypatch.setattr(config, "__file__", str(pkg / "config.py"))
+
+
+def test_project_root_is_this_checkout():
+    root = u.project_root()
+    assert (root / "pyproject.toml").is_file()
+    assert (root / "src" / "personal_historical_archive").is_dir()
+
+
+def test_project_root_raises_clearly_when_installed(tmp_path, monkeypatch):
+    """No bogus <env>/lib/python3.13 path: say there is no checkout."""
+    _fake_installed_layout(tmp_path, monkeypatch)
+    with pytest.raises(u.UpdateError, match="not running from a source checkout"):
+        u.project_root()
+
+
+def test_install_update_reinstalls_when_not_a_checkout(tmp_path, monkeypatch):
+    _fake_installed_layout(tmp_path, monkeypatch)
+    seen = []
+    monkeypatch.setattr(
+        u, "_reinstall",
+        lambda repo, branch: seen.append((repo, branch)) or "reinstalled",
+    )
+    assert u.install_update("owner/repo", "main") == "reinstalled"
+    assert seen == [("owner/repo", "main")]
+
+
+def test_install_update_fast_forwards_a_checkout(tmp_path, monkeypatch):
+    import personal_historical_archive.config as config
+
+    root = tmp_path / "checkout"
+    pkg = root / "src" / "personal_historical_archive"
+    pkg.mkdir(parents=True)
+    (pkg / "config.py").write_text("")
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (root / ".git").mkdir()
+    monkeypatch.setattr(config, "__file__", str(pkg / "config.py"))
+    seen = []
+    monkeypatch.setattr(u, "_git_update", lambda r, b: seen.append((str(r), b)) or "pulled")
+    monkeypatch.setattr(u, "_reinstall", lambda repo, branch: "reinstalled")
+    msg = u.install_update("owner/repo", "main")
+    assert seen == [(str(root.resolve()), "main")]
+    assert "updated the pha source checkout" in msg
+    assert str(root.resolve()) in msg

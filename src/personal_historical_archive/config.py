@@ -194,6 +194,28 @@ def _dpapi_read(name: str) -> bytes:
     return b""
 
 
+def source_checkout_root() -> Path | None:
+    """The pha source checkout this module runs from, or None if installed.
+
+    A checkout is the directory holding the project's ``pyproject.toml``, found
+    by walking up from this file. The walk STOPS at a ``site-packages`` /
+    ``dist-packages`` boundary, so a wheel installed into a venv that happens to
+    live inside a checkout (the ``repo/.venv`` layout) is still reported as an
+    install rather than as that checkout.
+
+    This replaces counting parents from ``__file__``: ``parents[2]`` from
+    site-packages is the interpreter's ``lib/``, which is never a project root
+    (see enhancements/pha-installed-wheel-missing-schema-bug-report.md, F2).
+    """
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if parent.name in ("site-packages", "dist-packages"):
+            return None
+        if (parent / "pyproject.toml").is_file():
+            return parent
+    return None
+
+
 def find_project_root(start: Path | None = None) -> Path:
     """The project root — the directory holding `config.yaml`.
 
@@ -216,10 +238,14 @@ def find_project_root(start: Path | None = None) -> Path:
             return p
     if start is not None:
         return cur  # never fall back to the package tree for an explicit root
-    # Fallback: the editable install lives inside the project tree.
-    pkg = Path(__file__).resolve().parents[2]
-    if (pkg / "config.yaml").exists():
-        return pkg
+    # Fallback: an editable/source install lives inside its own checkout. Only
+    # accept a REAL checkout (pyproject.toml) that also holds config.yaml; a
+    # built distribution has no checkout, and the old parents[2] arithmetic
+    # could return the interpreter's lib/ if a config.yaml happened to sit
+    # there (see enhancements/pha-installed-wheel-missing-schema-bug-report.md).
+    checkout = source_checkout_root()
+    if checkout is not None and (checkout / "config.yaml").exists():
+        return checkout
     return cur
 
 

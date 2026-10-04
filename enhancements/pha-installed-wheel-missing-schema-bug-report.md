@@ -1,6 +1,6 @@
 # Bug report -- a wheel-installed pha cannot find schema/pha-sidecar.schema.json, so every sidecar-resolving command dies
 
-**Status:** **FIXED** (branch `fix/ship-sidecar-schema`, see sec. 10). **Found:** 2026-10-04, `jesuit-archive` machine, pha 0.36.0
+**Status:** **FIXED** (F1/F4/F5 in sec. 10, F2 in sec. 11). **Found:** 2026-10-04, `jesuit-archive` machine, pha 0.36.0
 (uv-tool install built from the checkout). **Impact:** every pha command that
 resolves a `pha.yaml` sidecar (`scan`, `edit`, `test`, `palaeographer`,
 `editor`, `handoff`, `bundle`, `render`, ...) exits 1 with a traceback and does
@@ -219,6 +219,25 @@ Verified: the `uv build` wheel contains
 install loads `_schema()` and validates a `pha.yaml`; source/editable and
 zipimport paths also load; full test suite 890 passed.
 
-Still open: F2 for `config.find_project_root()` and `update.project_root()`
-(same `parents[N]` pattern, separate change), and F3 (audit of the other
-repo-root runtime assets).
+F2 was still open when this landed; it is fixed separately in sec. 11. F3 (audit
+of the other repo-root runtime assets) remains open.
+
+## 11. F2 fix (2026-10-04)
+
+Branch `fix/project-root-resolution` removes the last two `parents[N]` sites.
+
+- New `config.source_checkout_root()` walks up from `__file__` for
+  `pyproject.toml` and STOPS at a `site-packages` / `dist-packages` boundary, so
+  a wheel installed into a venv that lives inside a checkout (the `repo/.venv`
+  layout) is not mistaken for that checkout.
+- `config.find_project_root()` only accepts a real checkout that also holds
+  `config.yaml`; it no longer returns `<env>/lib/python3.x` when a `config.yaml`
+  happens to sit there.
+- `update.project_root()` raises a clear `UpdateError` when there is no
+  checkout, and `install_update()` reinstalls from the repository in that case
+  (a built distribution has no checkout to fast-forward).
+
+Regression tests fail against the previous code (confirmed by stashing only the
+source change). Full suite: 898 passed. Remaining: F3 (the other repo-root
+runtime assets: `prompts/`, `models/`, `palaeographers/`, `editors/`,
+`encoders/`, `filters/`, `notes/README.md`, `skills/`).
