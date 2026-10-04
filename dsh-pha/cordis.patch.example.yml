@@ -8,3 +8,10 @@
 - insert:
     - id: dsh-pha
       name: '@personal-historical-archive/dsh-pha'
+      config:
+        # The pha checkout (directory holding config.yaml), NOT the archive data
+        # root. pha resolves the archive from this project. Without it the
+        # plugin runs pha from cwd `/`, where a built/installed pha cannot find
+        # its config and the PHA view reports no archive. PHA_HOME in the
+        # harness environment is the fallback.
+        projectRoot: /path/to/personal-historical-archive

@@ -39,7 +39,13 @@ single-model lock, staleness, and review round-trip semantics are respected.
 - The `personal-historical-archive` package installed and its CLI on PATH (`pha`), with an
   archive configured (`pha set archive-dir <path>` or `PHA_ARCHIVE_DIR`). The plugin
   discovers the archive from `pha info --json` at runtime (falling back to
-  `pha doctor --json`, then `pha status`).
+  `pha doctor --json`, then `pha status`), and treats `configured: false` as "no archive"
+  rather than accepting pha's project-root fallback.
+- The **pha project root** — the directory holding `config.yaml`, not the archive data root.
+  The harness starts plugins with an arbitrary/empty cwd, so set `projectRoot` on the
+  composition row (below) or `PHA_HOME` in the harness environment. The plugin runs every
+  `pha` child with that as cwd and with `PHA_HOME` pinned to it; without one, a
+  built/installed `pha` cannot find `config.yaml` and the PHA view reports no archive.
 
 ## Install (per machine / per harness)
 
@@ -80,7 +86,15 @@ Append to the profile's `cordis.patch.yml` (see `cordis.patch.example.yml` in th
 - insert:
     - id: dsh-pha
       name: '@personal-historical-archive/dsh-pha'
+      config:
+        projectRoot: /path/to/personal-historical-archive   # dir holding config.yaml
 ```
+
+`projectRoot` is the pha checkout (where `config.yaml` and, typically, the gitignored `.env`
+live) — **not** the archive data root. pha still resolves the archive from that project:
+`PHA_ARCHIVE_DIR` in its environment > `.env` > `paths.archive_dir` > default. Set
+`PHA_HOME` in the harness environment instead if you prefer not to touch the row; an explicit
+`config.projectRoot` wins over `PHA_HOME`.
 
 If the file is the stock empty flow array `[]`, replace that `[]` with the block sequence
 above instead of appending after it — a patch file is a single top-level YAML array, and

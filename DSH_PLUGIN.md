@@ -28,6 +28,8 @@ pnpm add /path/to/repo/dsh-pha
 
 # 2. add the composition row (see dsh-pha/cordis.patch.example.yml)
 #    -> id: dsh-pha / name: '@personal-historical-archive/dsh-pha'
+#       config:
+#         projectRoot: /path/to/personal-historical-archive   # dir holding config.yaml
 
 # 3. restart the harness profile
 ```
@@ -45,6 +47,12 @@ build needed on the end-user machine. To rebuild it after editing the source, ru
   and an archive configured (`pha set archive-dir <path>` or `PHA_ARCHIVE_DIR`). The plugin
   discovers the archive from `pha info --json` at runtime (falling back to
   `pha doctor --json`, then `pha status`).
+- Tell the plugin where the **pha project root** is: set `projectRoot` in the row's `config`
+  (directory holding `config.yaml` — not the archive data root) or `PHA_HOME` in the harness
+  environment. The plugin runs `pha` with that cwd and exports `PHA_HOME` to the child.
+  Without it, a built/installed `pha` launched from the harness's empty cwd cannot find
+  `config.yaml`, so the PHA view reports no archive. `pha info`'s `configured: false` is
+  treated as "no archive" rather than silently accepting the project-root fallback.
 - The `dsh.client.inject` list in `dsh-pha/package.json` is a best-effort guess against the
   installed client-module contract; if the view doesn't mount, adjust it. The host tools and
   `/pha/*` API are independent of it.

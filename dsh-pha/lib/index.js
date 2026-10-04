@@ -1,10 +1,15 @@
-// This plugin deliberately imports NOTHING. A profile install links the package
-// (pnpm `link:`), so the ESM loader resolves it to this real path and any bare
-// import of a harness package (`@deepseek-ai/dsh-tools`) would be looked up from
-// here — outside the profile's node_modules — and fail, which makes the whole
-// harness refuse to start ("plugin(s) failed to load"). Tool definitions are
-// therefore built as plain objects, exactly the raw JSON Schema `defineTool`
-// compiles to, and registered on the `tools` service.
+// This plugin deliberately imports no harness package. A profile install links
+// the package (pnpm `link:`), so the ESM loader resolves it to this real path
+// and any bare import of a harness package (`@deepseek-ai/dsh-tools`) would be
+// looked up from here — outside the profile's node_modules — and fail, which
+// makes the whole harness refuse to start ("plugin(s) failed to load"). The
+// only imports are Node builtins (node:fs/path/url), which resolve in core.
+// Tool definitions are therefore built as plain objects, exactly the raw JSON
+// Schema `defineTool` compiles to, and registered on the `tools` service.
+
+import { existsSync, realpathSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const name = 'dsh-pha'
 const inject = ['subprocess', 'tools']
@@ -55,8 +60,25 @@ const DB_SCRIPT = [
 const LIST_NOTES = "import os,sys,json\nd=sys.argv[1]\nout=[]\nfor f in sorted(os.listdir(d)) if os.path.isdir(d) else []:\n    if f.endswith('.md') and f.lower() != 'readme.md':\n        out.append({'name': f[:-3], 'file': f})\nprint(json.dumps(out, ensure_ascii=False))"
 const READ_NOTE = "import sys\nsys.stdout.write(open(sys.argv[1], encoding='utf-8').read())"
 
-function apply(ctx) {
-  const cwd = '/'
+function apply(ctx, config) {
+  // pha resolves its project root (the directory holding config.yaml) from
+  // PHA_HOME or the process cwd. The harness launches plugins with no
+  // meaningful cwd, so a `projectRoot` config row (or PHA_HOME in the
+  // environment) is the reliable machine-local pointer. PHA_HOME is passed to
+  // every child because a built/installed pha has no checkout to fall back to.
+  const configuredRoot = String((config && (config.projectRoot || config.phaHome)) || '').trim()
+  const explicitRoot = configuredRoot || String(process.env.PHA_HOME || '').trim()
+  // Zero-config fallback for the recommended install: this package lives at
+  // <checkout>/dsh-pha/lib/index.js, so when it is linked from a pha checkout
+  // the checkout root is its grandparent. Verify config.yaml before trusting
+  // it, so a copy installed under node_modules never becomes a bogus
+  // PHA_HOME that pha would seed definitions into.
+  const packageRoot = dirname(dirname(realpathSync(fileURLToPath(import.meta.url))))
+  const checkoutRoot = dirname(packageRoot)
+  const autoRoot = existsSync(resolve(checkoutRoot, 'config.yaml')) ? checkoutRoot : ''
+  const projectRoot = explicitRoot || autoRoot
+  const cwd = projectRoot || '/'
+  const childEnv = projectRoot ? { PHA_HOME: projectRoot } : undefined
   const jobs = new Map()
   let jobSeq = 1
   let phaBin = null
@@ -98,6 +120,7 @@ function apply(ctx) {
         handle = ctx.subprocess.spawn({
           argv,
           cwd,
+          env: childEnv,
           graceMs: 1500,
           stdio: {
             stdin: 'ignore',
@@ -126,15 +149,24 @@ function apply(ctx) {
         // 1) cheapest and always correct: `pha info` reads only the config, opens
         //    no DB and probes no engine. This must come first — the view's initial
         //    load waits on discovery, and `pha doctor` queries the login shell.
+        // `pha info` is authoritative about whether an archive is configured.
+        // When it says `configured: false`, do NOT accept the project-root
+        // fallback it also prints — that is exactly the tree pha would seed
+        // definitions into, and the view must report "no archive" instead.
+        let infoSaidUnconfigured = false
         try {
           const r = await phaRun(['info', '--json'])
           const data = parseJson(r.out)
-          if (data && data.archive_dir) {
+          if (data && data.configured === false) infoSaidUnconfigured = true
+          else if (data && data.archive_dir) {
             archiveDir = String(data.archive_dir).replace(/\/+$/, '')
             dbPath = data.db_path ? String(data.db_path) : archiveDir + '/archive.db'
             return dbPath
           }
         } catch (e) { /* fall through to the slower probes */ }
+        if (infoSaidUnconfigured) {
+          throw new Error('no pha archive is configured or found (pha info reported configured: false)')
+        }
         // 2) `pha doctor --json` reports the archive but probes the engine binaries
         //    (tens of seconds when it queries the login-shell PATH).
         try {
@@ -215,6 +247,7 @@ function apply(ctx) {
     const handle = ctx.subprocess.spawn({
       argv: [bin, ...argv],
       cwd,
+      env: childEnv,
       graceMs: 2000,
       stdio: {
         stdin: 'ignore',

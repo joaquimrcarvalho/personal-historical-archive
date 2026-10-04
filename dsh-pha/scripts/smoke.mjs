@@ -21,9 +21,11 @@ const check = (cond, label) => {
 
 console.log('dsh-pha self-check — ' + root)
 
-// 1. Zero dependencies: the package must import nothing.
+// 1. Zero dependencies: the package may import only node: builtins.
 const src = readFileSync(join(root, 'lib', 'index.js'), 'utf8')
-check(!/(^|\n)\s*import\s/.test(src), 'lib/index.js imports nothing (a linked install cannot resolve harness peers)')
+const froms = [...src.matchAll(/(?:^|\n)\s*import\s+[^;\n]*?\bfrom\s+[\x27\x22]([^\x27\x22]+)[\x27\x22]/g)].map((m) => m[1])
+check(froms.every((spec) => spec.startsWith("node:")), "lib/index.js imports only node: builtins (no harness peers)")
+check(froms.every((spec) => spec.startsWith("node:")), "lib/index.js imports only node: builtins (no harness peers)")
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 check(Object.keys(pkg.dependencies || {}).length === 0, 'package.json declares no runtime dependencies')
 check(Object.keys(pkg.peerDependencies || {}).length === 0, 'package.json declares no peer dependencies')
@@ -82,6 +84,35 @@ const EXPECTED_ROUTES = ['/pha/status', '/pha/archive', '/pha/documents', '/pha/
   '/pha/search', '/pha/pageImage', '/pha/open', '/pha/pending', '/pha/config', '/pha/notes', '/pha/note',
   '/pha/defs', '/pha/def', '/pha/collectionEncoders', '/pha/bib', '/pha/inbox/plan', '/pha/inbox/move']
 for (const path of EXPECTED_ROUTES) check(routes.includes(path), 'route ' + path)
+
+// 4b. A configured projectRoot becomes the child cwd and PHA_HOME, so a
+// built/installed pha can find config.yaml even when the harness cwd is `/`.
+const spawns = []
+const spawnTools = []
+const spawnCtx = {
+  subprocess: {
+    resolveExecutable: async (cand) => (cand === 'pha' ? '/usr/bin/pha' : null),
+    spawn: (spec) => {
+      spawns.push(spec)
+      const reader = (text) => ({ readFrom: () => ({ text, nextOffset: text.length, lossy: false }) })
+      const stdout = JSON.stringify({ archive: '/tmp/pha-checkout-archive', ok: true, broken: [], engines: [] })
+      return {
+        collected: { stdout: reader(stdout), stderr: reader('') },
+        done: Promise.resolve({ exitCode: 0, signal: null }),
+      }
+    },
+  },
+  effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : () => {} },
+  tools: { register: (def) => { spawnTools.push(def); return () => {} } },
+  inject: () => {},
+}
+const spawnPlugin = mod.apply(spawnCtx, { projectRoot: '/tmp/pha-checkout' })
+const archiveTool = spawnTools.find((t) => t.name === 'pha_archive')
+await archiveTool.execute({})
+check(spawns.length === 1, 'projectRoot config spawns pha')
+check(spawns[0].cwd === '/tmp/pha-checkout', 'projectRoot config sets child cwd')
+check(spawns[0].env && spawns[0].env.PHA_HOME === '/tmp/pha-checkout', 'projectRoot config pins child PHA_HOME')
+spawnPlugin.dispose()
 
 // 5. The client half stays loadable as a harness client module.
 const bundle = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
