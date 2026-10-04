@@ -465,7 +465,7 @@ agent should reach for it), followed by the instructions:
 ## How an agent should use these
 
 **Using the archive:** before the matching task, read
-`skills/<name>/SKILL.md` and follow it. The four skills seeded here cover the
+`skills/<name>/SKILL.md` and follow it. The six skills seeded here cover the
 most common tasks:
 
 - `pha-search-context` — a search hit is a *snippet*; recover the full page
@@ -486,6 +486,15 @@ most common tasks:
   (skeleton normalisation), `scripts/verify_comparison.py` (skeleton +
   reading-count checks) and `scripts/make_reference.py` (one-line-per-entry
   `reference/` variant); a reviewed `human/` folder is read-only for agents.
+- `obsidian-vault` - search, create and organise notes in the owner's
+  Obsidian vault (wikilinks, index notes), and keep archive-derived notes in
+  sync: YAML provenance is checked/stamped with
+  `scripts/archive_note_sync.py` (`OBSIDIAN_VAULT`, `PHA_ARCHIVE_DIR`; flags
+  `--vault`/`--archive` override).
+- `timelink-kleio-provenance` - cite facts from Timelink/Dehergne
+  prosopography by going from the SQLite attribute row back to the Kleio
+  file and line, and render a `vscode://file/<absolute-path>:<line>` link;
+  helper `timelink_provenance.py` (`MHK_HOME`).
 
 **Installing them into an agent runtime:** some runtimes (DeepSeek Harness and
 other tools that read the shared agent-skills convention) discover skills from
@@ -1785,14 +1794,521 @@ if __name__ == "__main__":
     sys.exit(main())
 '''
 
+_SKILL_OBSIDIAN_VAULT = r'''---
+name: obsidian-vault
+description: Search, create, and manage notes in the Obsidian vault with wikilinks and index notes. Use when user wants to find, create, or organize notes in Obsidian, or when syncing archive-derived notes between the pha archive and the main Obsidian vault.
+---
+
+# Obsidian Vault
+
+## Vault location
+
+The vault path is machine-specific: use the `OBSIDIAN_VAULT` environment
+variable (or pass `--vault <path>` to the bundled script). The examples below
+write it as `$OBSIDIAN_VAULT`.
+
+Mostly flat at root level, with a main `01 Notes/` folder for topic notes.
+
+## Naming conventions
+
+- **Index notes**: aggregate related topics, e.g. `Ralph Wiggum Index.md`
+- **Title case** for note names: `Cosme de Torres.md`
+- No folders for organisation inside `01 Notes`; use links and index notes instead.
+
+## Linking
+
+- Use Obsidian `[[wikilinks]]`.
+- Add related notes at the bottom under `## See also`.
+- If the exact note title differs, use an alias link: `[[Nicolau Lanciloto|Nicolau Lancillotto]]`.
+
+## Archive-derived notes and sync provenance
+
+Some vault notes are summaries or mirrors of pha archive notes living in
+`<archive>/notes/`, where `<archive>` is the pha archive root (`PHA_ARCHIVE_DIR`
+when set):
+
+When creating such a vault note, record provenance in YAML frontmatter:
+
+```yaml
+archive_source: notes/cosme-de-torres.md
+archive_source_sha256: <sha256 of the archive note>
+archive_source_mtime: 2026-10-04T19:02:04
+vault_note_created: 2026-10-04
+vault_note_updated: 2026-10-04
+vault_synced_at: 2026-10-04T19:50:46+08:00
+sync_policy: archive-note-is-source-of-truth
+```
+
+Never invent an archive hash: compute it from the archive note at the moment
+the vault note is created or updated.
+
+### Checking for stale vault notes
+
+Use the bundled script:
+
+```bash
+python3 <archive>/skills/obsidian-vault/scripts/archive_note_sync.py check \
+    --vault "$OBSIDIAN_VAULT" --archive "<archive>"
+```
+
+It scans the vault for notes carrying `archive_source`, recomputes the source
+SHA-256/mtime, and prints `UP_TO_DATE`, `STALE`, or `MISSING_SOURCE`.
+
+When a note is genuinely reviewed and brought up to date, stamp it with:
+
+```bash
+python3 <archive>/skills/obsidian-vault/scripts/archive_note_sync.py stamp \
+    --vault "$OBSIDIAN_VAULT" --archive "<archive>"
+```
+
+The script defaults to `$OBSIDIAN_VAULT` and `$PHA_ARCHIVE_DIR`, falling back
+to `~/Obsidian` and the current directory; pass `--vault`/`--archive` to
+override. It only edits the frontmatter keys `archive_source_sha256`,
+`archive_source_mtime`, `vault_synced_at`, and `vault_note_updated`; it never
+rewrites the note body. Reviewing the archive change and updating the body is a
+human or agent decision.
+
+## Workflows
+
+### Search for notes
+
+```bash
+find "$OBSIDIAN_VAULT" -name "*.md" | grep -i "keyword"
+grep -rl "keyword" "$OBSIDIAN_VAULT" --include="*.md"
+```
+
+Or use Grep/Glob tools directly on the vault path.
+
+### Create a new note
+
+1. Use **Title Case** for the filename.
+2. Write content as a unit of learning.
+3. Add `[[wikilinks]]` to related existing notes at the bottom.
+4. If derived from an archive note, add the sync provenance frontmatter above.
+5. Run the sync checker and, if desired, `stamp`.
+
+### Find related notes
+
+```bash
+grep -rl "\\[\\[Note Title\\]\\]" "$OBSIDIAN_VAULT"
+```
+
+### Find index notes
+
+```bash
+find "$OBSIDIAN_VAULT" -name "*Index*"
+```
+'''
+
+_SKILL_OBSIDIAN_VAULT_ARCHIVE_NOTE_SYNC = r'''from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import os
+import pathlib
+import re
+import sys
+
+DEFAULT_VAULT = pathlib.Path(
+    os.environ.get('OBSIDIAN_VAULT') or (pathlib.Path.home() / 'Obsidian')
+).expanduser()
+DEFAULT_ARCHIVE = pathlib.Path(
+    os.environ.get('PHA_ARCHIVE_DIR') or pathlib.Path.cwd()
+).expanduser()
+FENCE = '---'
+
+
+def read_frontmatter(path):
+    lines = path.read_text(encoding='utf-8').splitlines()
+    if not lines or lines[0].strip() != FENCE:
+        return None, lines
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == FENCE:
+            end = i
+            break
+    if end is None:
+        return None, lines
+    fm = {}
+    for line in lines[1:end]:
+        m = re.match(r'^([A-Za-z0-9_\-]+):\s*(.*)$', line)
+        if m:
+            fm[m.group(1)] = m.group(2).strip()
+    return fm, lines
+
+
+def write_frontmatter(path, lines, updates):
+    if not lines or lines[0].strip() != FENCE:
+        raise SystemExit(str(path) + ': no YAML frontmatter; refusing to stamp')
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == FENCE:
+            end = i
+            break
+    if end is None:
+        raise SystemExit(str(path) + ': unterminated YAML frontmatter')
+    out = list(lines)
+    for key, value in updates.items():
+        pat = re.compile(r'^' + re.escape(key) + r':\s*')
+        for i in range(1, end):
+            if pat.match(out[i]):
+                out[i] = key + ': ' + value
+                break
+        else:
+            out.insert(end, key + ': ' + value)
+            end += 1
+    path.write_text('\n'.join(out) + '\n', encoding='utf-8')
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with path.open('rb') as fh:
+        for block in iter(lambda: fh.read(1024 * 1024), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+def mtime_iso(path):
+    return dt.datetime.fromtimestamp(path.stat().st_mtime).replace(microsecond=0).isoformat()
+
+
+def iter_archive_notes(vault):
+    for path in sorted(vault.rglob('*.md')):
+        fm, _lines = read_frontmatter(path)
+        if fm and fm.get('archive_source'):
+            yield path, fm
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('command', choices=['check', 'stamp'])
+    parser.add_argument('--vault', type=pathlib.Path, default=DEFAULT_VAULT,
+                        help='Obsidian vault (default: $OBSIDIAN_VAULT or ~/Obsidian)')
+    parser.add_argument('--archive', type=pathlib.Path, default=DEFAULT_ARCHIVE,
+                        help='pha archive root (default: $PHA_ARCHIVE_DIR or cwd)')
+    parser.add_argument('--verbose', action='store_true')
+    args = parser.parse_args()
+
+    changed = 0
+    checked = 0
+    for note, fm in iter_archive_notes(args.vault):
+        checked += 1
+        src = args.archive / fm['archive_source']
+        if not src.exists():
+            print('MISSING_SOURCE\t' + str(note) + '\t' + fm['archive_source'])
+            changed += 1
+            continue
+        current_sha = sha256_file(src)
+        current_mtime = mtime_iso(src)
+        recorded_sha = fm.get('archive_source_sha256', '')
+        status = 'UP_TO_DATE' if recorded_sha == current_sha else 'STALE'
+        if status == 'STALE':
+            changed += 1
+        if args.command == 'check':
+            print(status + '\t' + str(note) + '\t' + fm['archive_source'])
+        else:
+            _, lines = read_frontmatter(note)
+            updates = {
+                'archive_source_sha256': current_sha,
+                'archive_source_mtime': current_mtime,
+                'vault_synced_at': dt.datetime.now().replace(microsecond=0).isoformat(),
+                'vault_note_updated': dt.date.today().isoformat(),
+            }
+            write_frontmatter(note, lines, updates)
+            print('STAMPED\t' + str(note) + '\t' + fm['archive_source'])
+        if args.verbose:
+            shown = recorded_sha[:12] if recorded_sha else 'missing'
+            print('  recorded=' + shown + ' current=' + current_sha[:12] + ' mtime=' + current_mtime)
+    if args.command == 'check':
+        print('checked=' + str(checked) + ' stale_or_missing=' + str(changed))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+'''
+
+_SKILL_TIMELINK_KLEIO_PROVENANCE = r'''---
+name: timelink-kleio-provenance
+description: Use when citing facts that come from Timelink/Dehergne prosopography (entities such as `deh-*`, `bio-*`, `ivc-*`, `manuel-*`) or when a note needs a link to the original Kleio `.cli`/`.kleio` source file and line. Covers where the Timelink SQLite databases live, the `attributes → entities → sources` join that yields the Kleio file path and line number, how to turn that into a `vscode://file/<absolute-path>:<line>` link, and the caveats about line drift, uncertainty markers and file-level bibliographies.
+---
+
+# Timelink / Kleio provenance and citations
+
+## What this is for
+
+Timelink prosopographies (the Dehergne *Répertoire des Jésuites de Chine*, the
+China–Coimbra project, etc.) are built from **Kleio source files** (`.cli` /
+`.kleio`). Those files are imported into a SQLite database, where each fact is
+an **attribute** row. The database keeps enough information to point back to
+the exact **file and line** of the original fact. This skill says how to find
+that file and line, and how to render it as a clickable link (VS Code
+`vscode://file/…:line`).
+
+Never cite the Obsidian `deh-*.md` export as if it were the source. Go to the
+SQLite row and from there to the Kleio file + line.
+
+## Where the data lives
+
+The Timelink home is `$MHK_HOME` (the helper reads `MHK_HOME`, then `MHK`,
+defaulting to `~/mhk-home`; check `.mhk-home`, `.kleio.json`). Useful entry
+points:
+
+| path | what it is |
+| --- | --- |
+| `mhk-home/.db_status` | database schemas and row counts (`dehergne`, `china_coimbra`, `mhk`) |
+| `mhk-home/sources/<project>/database/sqlite/<project>.sqlite` | read-only SQLite backup of the project's database (e.g. `sources/dehergne/database/sqlite/dehergne.sqlite`, `sources/china-coimbra/database/sqlite/china_coimbra.sqlite`) |
+| `mhk-home/sources/<project>/sources/*.cli` | the Kleio source files (e.g. `sources/dehergne/sources/dehergne-t.cli`) |
+| `mhk-home/system/db/mhk/imports/<project>/` | import folders per project |
+| `mhk-home/sources/<project>/inferences/` | derived reports (e.g. the Coimbra lists) |
+
+The live services (Kleio at `http://localhost:8088`, MySQL at `:3306`) may not
+be running. The SQLite backups are read-only and sufficient. Do **not** modify
+them.
+
+## Schema (the bits that matter)
+
+- `attributes`: `id` (the **attr_id**), `entity` (the person id), `the_type`,
+  `the_value`, `the_date`, `obs`.
+- `entities`: `id`, `class`, `inside`, `the_source`, `the_order`, `the_level`,
+  `the_line`, `groupname`, `extra_info`.
+- `sources`: `id`, `the_type`, `the_date`, `loc`, `ref`, `kleiofile`,
+  `replaces`, `obs`.
+
+Key model facts:
+
+- Every attribute is itself an entity: **`attributes.id = entities.id`**; the
+  person it belongs to is `attributes.entity`.
+- The attribute entity's **`the_source`** is the source id; **`the_line`** is
+  the line for the attribute in the Kleio file.
+- **`sources.kleiofile`** is the path of the Kleio file relative to
+  *kleio-home*; **`sources.obs`** is the bibliographic description of the
+  source (file-level, not necessarily person-level).
+
+## The query
+
+```sql
+SELECT a.id AS attr_id, a.entity AS entity_id, a.the_type, a.the_value, a.the_date,
+       e.the_line, e.the_source, s.kleiofile, s.obs AS source_desc
+FROM attributes a
+JOIN entities e ON e.id = a.id
+LEFT JOIN sources s ON s.id = e.the_source
+WHERE a.entity = ? AND a.the_type LIKE ? AND a.the_value LIKE ?;
+```
+
+Worked example:
+
+- `attributes` row: `id = deh-antoine-thomas-att430-124`,
+  `entity = deh-antoine-thomas`, `the_type = estadia-x`,
+  `the_value = Coimbra`, `the_date = 1678000`.
+- `entities` row for that attr_id: `the_line = 670`,
+  `the_source = dehergne-t`.
+- `sources` row `dehergne-t`: `kleiofile = /kleio-home/sources/dehergne-t.cli`,
+  `obs = Dehergne, … Répertoire…, 1973. Letra T…`.
+- Result to cite: **`sources/dehergne-t.cli`, line 670**.
+
+## Kleio-home and the local file
+
+*Kleio-home* is the directory that contains the `database` directory of the
+SQLite database. For
+`$MHK_HOME/sources/dehergne/database/sqlite/dehergne.sqlite`,
+kleio-home is `$MHK_HOME/sources/dehergne`; for
+`…/sources/china-coimbra/database/sqlite/china_coimbra.sqlite`, it is
+`$MHK_HOME/sources/china-coimbra`.
+
+The `kleiofile` value keeps the original container prefix `/kleio-home/…`. To
+get the local file:
+
+1. strip `/kleio-home/` from `kleiofile` (e.g. `sources/dehergne-t.cli`, or
+   `sources/china-coimbra-biografias/sources/coimbra-visitantes.cli`);
+2. locate the file under `mhk-home/sources/**/sources/` by basename, e.g.
+   - `sources/dehergne-t.cli` →
+     `$MHK_HOME/sources/dehergne/sources/dehergne-t.cli`;
+   - `sources/china-coimbra-biografias/sources/coimbra-visitantes.cli` →
+     `$MHK_HOME/sources/china-coimbra-biografias/sources/coimbra-visitantes.cli`.
+
+**Verify the local file exists before writing a link.**
+
+## The citation and the link
+
+Cite the `attr_id`, the Kleio file, the line, the source id and `sources.obs`.
+VS Code link format:
+
+```
+vscode://file/<absolute-path>:<line>
+```
+
+The Markdown form (label = relative path + line):
+
+```markdown
+[sources/dehergne-t.cli:670](vscode://file/<absolute-path-to-kleio-home>/sources/dehergne-t.cli:670)
+```
+
+- No extra slash after `file/`: `vscode://file/<absolute-path>:<line>`, not
+  `vscode://file//<absolute-path>:<line>`.
+- Paths with spaces must be percent-encoded (`%20`).
+- Alternative from a terminal: `code -g <absolute-path>:<line>`.
+- Obsidian may or may not make custom URI schemes clickable; always keep the
+  plain path + line and the `attr_id` visible as a fallback.
+
+## Caveats
+
+- **Line drift:** `entities.the_line` is the line recorded at import time. If
+  the `.cli` has been edited since, the line may have shifted. The `attr_id`
+  disambiguates; if a link lands on the wrong line, give the `attr_id` and/or
+  search the file for the `the_type`/`the_value` token. Example: the DB
+  records line 670 for `deh-antoine-thomas-att430-124`, while the current file
+  may have the `ls$estadia-x/Coimbra` line at a different position.
+- **Uncertainty:** `%?` in the Kleio line (and often the Timelink record)
+  flags the fact as uncertain; keep the `(?)` in the note.
+- **File-level bibliography:** `sources.obs` describes the whole source file
+  (e.g. "Dehergne, … Letra T"), not the individual person.
+- **Multiple projects:** search both `dehergne.sqlite` (entities `deh-*`) and
+  `china_coimbra.sqlite` (entities `bio-*`, `ivc-*`, `duarte-*`,
+  `manuel-*`, …); a person can appear in both with different ids.
+
+## Common searches
+
+Find every attribute of a person that mentions Coimbra:
+
+```sql
+SELECT a.id, a.the_type, a.the_value, a.the_date
+FROM attributes a
+WHERE a.entity = 'deh-antoine-thomas' AND a.the_value LIKE '%Coimbra%';
+```
+
+Find everyone with an `estadia` in Coimbra (not only `jesuita-entrada`):
+
+```sql
+SELECT a.id, a.entity, a.the_type, a.the_value, a.the_date
+FROM attributes a
+WHERE a.the_type LIKE 'estadia%' AND a.the_value LIKE '%Coimbra%';
+```
+
+Then run the provenance query above on each `a.id`/`a.entity`.
+
+## Helper
+
+`timelink_provenance.py` in this skill folder (`<archive>/skills/timelink-kleio-provenance/`
+when seeded into an archive) takes a database or project name and an entity id,
+runs the join and prints the citation and the VS Code link. It reads `MHK_HOME`
+(or `MHK`, defaulting to `~/mhk-home`), and `--db` also accepts a `.sqlite` path.
+See its `--help`.
+'''
+
+_SKILL_TIMELINK_KLEIO_PROVENANCE_HELPER = """#!/usr/bin/env python3
+\"\"\"Timelink/Kleio provenance helper.
+
+Set MHK_HOME (or MHK) to the Timelink home, or pass a .sqlite path as --db.
+
+Usage:
+  python3 timelink_provenance.py --db dehergne --entity deh-antoine-thomas
+  python3 timelink_provenance.py --db china_coimbra --entity duarte-de-sande --value Coimbra
+  python3 timelink_provenance.py --db /path/to/dehergne.sqlite --entity deh-adriano-pestana --json
+
+For each matching attribute it prints the attr_id, the Kleio file and line
+(from entities.the_line / sources.kleiofile), and a vscode://file/<abs>:<line>
+link. Read-only: it never writes to the database or the Kleio files.
+\"\"\"
+import argparse, glob, json, os, sqlite3, sys
+
+MHK = os.path.expanduser(
+    os.environ.get('MHK_HOME') or os.environ.get('MHK') or '~/mhk-home'
+)
+
+def resolve_db(name):
+    if os.path.isfile(name):
+        return os.path.abspath(name)
+    pats = [os.path.join(MHK, 'sources', '*', 'database', 'sqlite', name + '.sqlite'),
+            os.path.join(MHK, 'sources', '*', 'database', 'sqlite', name),
+            os.path.join(MHK, '**', name + '.sqlite')]
+    for p in pats:
+        hits = sorted(glob.glob(p, recursive=True))
+        if hits:
+            return hits[0]
+    sys.exit('database not found: ' + name + ' (set MHK_HOME or pass a .sqlite path)')
+
+def kleio_home(db):
+    # directory containing the 'database' directory of the sqlite db
+    d = os.path.dirname(os.path.abspath(db))
+    while d and d != '/':
+        if os.path.basename(d) == 'database':
+            return os.path.dirname(d)
+        d = os.path.dirname(d)
+    return os.path.dirname(os.path.abspath(db))
+
+def local_file(kleiofile):
+    rel = (kleiofile or '').replace('/kleio-home/', '').lstrip('/')
+    base = os.path.basename(rel)
+    hits = [h for h in glob.glob(os.path.join(MHK, 'sources', '**', base), recursive=True)
+            if os.sep + 'sources' + os.sep in h]
+    hits.sort(key=len)
+    if hits:
+        return hits[0]
+    # fallback: try the relative path under mhk-home
+    cand = os.path.join(MHK, rel)
+    return cand if os.path.exists(cand) else ''
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--db', required=True, help='project name (dehergne, china_coimbra) or path to .sqlite')
+    ap.add_argument('--entity', required=True, help='entity id, e.g. deh-antoine-thomas')
+    ap.add_argument('--type', default='%', help='attribute type (SQL LIKE), default all')
+    ap.add_argument('--value', default='%', help='attribute value (SQL LIKE), default all')
+    ap.add_argument('--json', action='store_true')
+    args = ap.parse_args()
+    db = resolve_db(args.db)
+    con = sqlite3.connect('file:' + db + '?mode=ro', uri=True)
+    con.row_factory = sqlite3.Row
+    q = '''SELECT a.id AS attr_id, a.entity AS entity_id, a.the_type, a.the_value, a.the_date,
+                  e.the_line, e.the_source, s.kleiofile, s.obs AS source_desc
+           FROM attributes a
+           JOIN entities e ON e.id = a.id
+           LEFT JOIN sources s ON s.id = e.the_source
+           WHERE a.entity = ? AND a.the_type LIKE ? AND a.the_value LIKE ?'''
+    rows = [dict(r) for r in con.execute(q, (args.entity, args.type, args.value))]
+    con.close()
+    out = []
+    for r in rows:
+        lf = local_file(r['kleiofile'])
+        line = r['the_line']
+        r['local_file'] = lf
+        r['vscode'] = ('vscode://file' + lf + ':' + str(line)) if lf else ''
+        rel = (r['kleiofile'] or '').replace('/kleio-home/', '')
+        r['cite'] = rel + ':' + str(line)
+        out.append(r)
+    if args.json:
+        print(json.dumps(out, ensure_ascii=False, indent=1))
+        return
+    if not out:
+        print('no attributes for', args.entity)
+        return
+    for r in out:
+        print('entity :', r['entity_id'])
+        print('attr_id:', r['attr_id'])
+        print('type   :', r['the_type'], '=', r['the_value'], '| date:', r['the_date'])
+        print('cite   :', r['cite'])
+        print('file   :', r['local_file'] or r['kleiofile'])
+        print('link   :', r['vscode'])
+        print('source :', r['the_source'])
+        print('desc   :', (r['source_desc'] or '').strip()[:300])
+        print('-' * 70)
+
+if __name__ == '__main__':
+    main()
+"""
+
 # The skills pha ships, as (folder_name, SKILL.md body). Embedded
 # so seeding works with no source checkout; the repo's skills/ folder is the
 # authored copy and a test keeps the two identical.
 SKILLS: tuple[tuple[str, str], ...] = (
+    ("obsidian-vault", _SKILL_OBSIDIAN_VAULT),
     ("palaeographers-compare", _SKILL_PALEOGRAPHERS_COMPARE),
     ("pha-document-operations", _SKILL_DOCUMENT_OPERATIONS),
     ("pha-search-context", _SKILL_SEARCH_CONTEXT),
     ("pha-zotero-bibliography", _SKILL_ZOTERO_BIBLIOGRAPHY),
+    ("timelink-kleio-provenance", _SKILL_TIMELINK_KLEIO_PROVENANCE),
 )
 
 # Extra files that travel with a skill (helper scripts, examples, licence, its
@@ -1800,6 +2316,12 @@ SKILLS: tuple[tuple[str, str], ...] = (
 # ...)). SKILL.md is implicit and always first; a skill with no entry here is
 # just its SKILL.md.
 SKILL_FILES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "obsidian-vault",
+        (
+            ("scripts/archive_note_sync.py", _SKILL_OBSIDIAN_VAULT_ARCHIVE_NOTE_SYNC),
+        ),
+    ),
     (
         "palaeographers-compare",
         (
@@ -1811,11 +2333,17 @@ SKILL_FILES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("scripts/verify_comparison.py", _SKILL_PALEOGRAPHERS_COMPARE_VERIFY),
         ),
     ),
+    (
+        "timelink-kleio-provenance",
+        (
+            ("timelink_provenance.py", _SKILL_TIMELINK_KLEIO_PROVENANCE_HELPER),
+        ),
+    ),
 )
 
 
 def bundled_skills() -> tuple[tuple[str, str], ...]:
-    """The pha-specific skills pha ships, as (folder_name, SKILL.md text)."""
+    """The skills pha ships, as (folder_name, SKILL.md text)."""
     return SKILLS
 
 

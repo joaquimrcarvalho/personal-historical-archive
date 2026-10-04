@@ -230,6 +230,13 @@ one before the task, no pha source checkout needed:
   comparative edition (per-page files with the readings stacked,
   `overview.md`), with bundled `scripts/` to normalise, verify and build the
   `reference/` variant.
+- `skills/obsidian-vault/SKILL.md` — search, create and organise notes in the
+  owner's Obsidian vault and keep archive-derived notes in sync (YAML
+  provenance and `scripts/archive_note_sync.py`; `OBSIDIAN_VAULT` /
+  `PHA_ARCHIVE_DIR`).
+- `skills/timelink-kleio-provenance/SKILL.md` — cite Timelink/Dehergne
+  prosopography from its SQLite rows back to the Kleio file and line
+  (`vscode://file/...`; `MHK_HOME`, helper `timelink_provenance.py`).
 
 Each skill is a folder with a `SKILL.md` (YAML front matter whose `name`
 matches the folder) and may ship helper files (`scripts/`, `examples/`, a
@@ -383,6 +390,14 @@ it:
   `scripts/normalize_comparison.py` and `scripts/verify_comparison.py`; build
   the slashed one-line `reference/` variant with `scripts/make_reference.py`.
   `human/` is read-only for agents.
+- `skills/obsidian-vault/SKILL.md` — find/create/organise notes in the
+  Obsidian vault, with wikilinks and index notes; archive-derived notes carry
+  YAML provenance checked/stamped by `scripts/archive_note_sync.py`
+  (`OBSIDIAN_VAULT`, `PHA_ARCHIVE_DIR`).
+- `skills/timelink-kleio-provenance/SKILL.md` — cite Timelink/Dehergne facts
+  from the SQLite row back to the Kleio `.cli` file and line and render a
+  `vscode://file/<absolute-path>:<line>` link (`MHK_HOME`; helper
+  `timelink_provenance.py`).
 
 Each skill is a folder with `skills/<name>/SKILL.md` (YAML front matter whose
 `name` matches its folder name) and may ship helper files (`scripts/`,

@@ -81,6 +81,34 @@ EXPECTED = {
         "never harmonise",
         "verbatim",
     ],
+    "obsidian-vault": [
+        # the trigger: vault notes and archive-derived sync
+        "Obsidian",
+        "[[wikilinks]]",
+        "archive_source",
+        "archive_source_sha256",
+        # the stale check/stamp helper
+        "scripts/archive_note_sync.py",
+        "UP_TO_DATE",
+        "STALE",
+        "MISSING_SOURCE",
+        # machine-specific paths are configurable, not hardcoded
+        "OBSIDIAN_VAULT",
+        "PHA_ARCHIVE_DIR",
+    ],
+    "timelink-kleio-provenance": [
+        # the model facts
+        "attributes.id = entities.id",
+        "sources.kleiofile",
+        "attr_id",
+        # the citation and helper
+        "vscode://file/",
+        "timelink_provenance.py",
+        "china_coimbra",
+        "MHK_HOME",
+        # never cite the markdown export as the source
+        "Never cite the Obsidian",
+    ],
 }
 
 
@@ -110,17 +138,37 @@ def test_skill_carries_required_guidance(name, markers):
         assert m in text, f"{name}/SKILL.md missing {m!r}"
 
 
-def test_palaeographers_compare_ships_usable_scripts():
-    root = SKILLS / "palaeographers-compare"
-    for rel in (
+EXTRA_FILES = {
+    "palaeographers-compare": (
         "examples/entry-format.md",
         "scripts/make_reference.py",
         "scripts/normalize_comparison.py",
         "scripts/verify_comparison.py",
-    ):
+    ),
+    "obsidian-vault": ("scripts/archive_note_sync.py",),
+    "timelink-kleio-provenance": ("timelink_provenance.py",),
+}
+
+
+@pytest.mark.parametrize("name", sorted(EXTRA_FILES))
+def test_bundled_skill_extra_files_exist_and_compile(name):
+    root = SKILLS / name
+    for rel in EXTRA_FILES[name]:
         path = root / rel
-        assert path.is_file(), f"missing {rel}"
+        assert path.is_file(), f"missing {name}/{rel}"
         text = path.read_text(encoding="utf-8")
         assert text.strip()
         if rel.endswith(".py"):
             compile(text, str(path), "exec")
+
+
+def test_bundled_skills_do_not_hardcode_personal_paths():
+    """Bundled skills are shipped to other machines: machine-specific paths go
+    through environment variables or script flags, never into the files."""
+    for skill_dir in sorted(p for p in SKILLS.iterdir() if p.is_dir()):
+        for path in sorted(skill_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            assert "/Users/jrc" not in text, f"personal path in {path}"
+            assert "~jrc" not in text, f"personal home in {path}"

@@ -378,7 +378,10 @@ the pipeline on an already-ingested document), `pha-zotero-bibliography`
 (import a Zotero PDF with its sidecar; build/refresh a document's reference),
 and `palaeographers-compare` (compare two or more readings of the same pages
 into a uniform comparative edition, with bundled `scripts/` to normalise,
-verify and build the `reference/` variant). An archive created with
+verify and build the `reference/` variant), `obsidian-vault` (search,
+create and organise notes in the owner's Obsidian vault, with archive-note
+sync provenance), and `timelink-kleio-provenance` (cite Timelink/Dehergne
+facts back to the Kleio file and line). An archive created with
 `pha init-archive` carries its own `AGENTS.md`/`README.md` with the same
 guidance, so an agent working only from the archive directory does not need
 the source.

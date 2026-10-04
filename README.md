@@ -400,6 +400,15 @@ installed by anyone who sets up agents from the repo:
   models) of the same pages into a uniform comparative edition (per-page
   files with the readings stacked plus `overview.md`, and the page images in a sibling `images/` folder); ships `scripts/` to
   normalise, verify and build the slashed one-line `reference/` variant.
+- Obsidian vault — [`skills/obsidian-vault/SKILL.md`](skills/obsidian-vault/SKILL.md):
+  search, create and organise notes in an Obsidian vault (wikilinks, index
+  notes) and keep archive-derived notes in sync (YAML provenance, stale
+  check/stamp via `scripts/archive_note_sync.py`; paths come from
+  `OBSIDIAN_VAULT` / `PHA_ARCHIVE_DIR` or `--vault`/`--archive`).
+- Timelink / Kleio provenance — [`skills/timelink-kleio-provenance/SKILL.md`](skills/timelink-kleio-provenance/SKILL.md):
+  go from a Timelink/Dehergne SQLite attribute row to the Kleio `.cli` file
+  and line, and render a `vscode://file/<absolute-path>:<line>` citation
+  (`MHK_HOME`; helper `timelink_provenance.py`).
 
 The first two branch by capability: MCP-tools-only agents vs agents with CLI + library
 file access. **Installing them for your agents:** copy the folders into the
@@ -411,6 +420,8 @@ cp -R skills/pha-search-context ~/.agents/skills/
 cp -R skills/pha-document-operations ~/.agents/skills/
 cp -R skills/pha-zotero-bibliography ~/.agents/skills/
 cp -R skills/palaeographers-compare ~/.agents/skills/
+cp -R skills/obsidian-vault ~/.agents/skills/
+cp -R skills/timelink-kleio-provenance ~/.agents/skills/
 ```
 
 (Re-copy to update after pulling a newer repo version. A skill's front matter
@@ -427,6 +438,8 @@ the archive holds its own copy:
 <archive>/skills/pha-document-operations/SKILL.md
 <archive>/skills/pha-zotero-bibliography/SKILL.md
 <archive>/skills/palaeographers-compare/SKILL.md
+<archive>/skills/obsidian-vault/SKILL.md
+<archive>/skills/timelink-kleio-provenance/SKILL.md
     (+ its scripts/, examples/, README and LICENSE - every bundled file is seeded)
 ```
 

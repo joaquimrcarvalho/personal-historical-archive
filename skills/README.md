@@ -33,7 +33,7 @@ agent should reach for it), followed by the instructions:
 ## How an agent should use these
 
 **Using the archive:** before the matching task, read
-`skills/<name>/SKILL.md` and follow it. The four skills seeded here cover the
+`skills/<name>/SKILL.md` and follow it. The six skills seeded here cover the
 most common tasks:
 
 - `pha-search-context` — a search hit is a *snippet*; recover the full page
@@ -54,6 +54,15 @@ most common tasks:
   (skeleton normalisation), `scripts/verify_comparison.py` (skeleton +
   reading-count checks) and `scripts/make_reference.py` (one-line-per-entry
   `reference/` variant); a reviewed `human/` folder is read-only for agents.
+- `obsidian-vault` - search, create and organise notes in the owner's
+  Obsidian vault (wikilinks, index notes), and keep archive-derived notes in
+  sync: YAML provenance is checked/stamped with
+  `scripts/archive_note_sync.py` (`OBSIDIAN_VAULT`, `PHA_ARCHIVE_DIR`; flags
+  `--vault`/`--archive` override).
+- `timelink-kleio-provenance` - cite facts from Timelink/Dehergne
+  prosopography by going from the SQLite attribute row back to the Kleio
+  file and line, and render a `vscode://file/<absolute-path>:<line>` link;
+  helper `timelink_provenance.py` (`MHK_HOME`).
 
 **Installing them into an agent runtime:** some runtimes (DeepSeek Harness and
 other tools that read the shared agent-skills convention) discover skills from
