@@ -88,6 +88,8 @@ From 0.36.1 onward `pha update` runs both steps itself.
 
 ## Release history
 
+- `0.37.2` `add the lmstudio-model-locality skill` — local vs remote LM Studio
+  model locality under LM Link, with `scripts/lmstudio_locality.py`
 - `0.37.1` `fix(ingest): normalize raw_sha for surrounding whitespace` — the
   edit-staleness trim mismatch (regression test in `tests/test_filter_hooks.py`)
 - `0.37.0` `8e23a32` `fix(pha): never build an unowned archive; per-user settings + --global`

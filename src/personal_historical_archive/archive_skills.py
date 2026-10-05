@@ -465,12 +465,16 @@ agent should reach for it), followed by the instructions:
 ## How an agent should use these
 
 **Using the archive:** before the matching task, read
-`skills/<name>/SKILL.md` and follow it. The six skills seeded here cover the
+`skills/<name>/SKILL.md` and follow it. The seven skills seeded here cover the
 most common tasks:
 
 - `pha-search-context` — a search hit is a *snippet*; recover the full page
   (raw and edited) before quoting or summarizing.
 - `pha-document-operations` — re-scan / re-edit / re-encode one
+- `lmstudio-model-locality` — determine whether an LM Studio model is
+  local or remote when LM Link is enabled, before a `pha scan`/`pha edit`;
+  helper `scripts/lmstudio_locality.py` joins `lms ls` / `lms ps` / `lms link status`
+  and prints the pre-load recipe for a deterministic local instance.
   **already-ingested** document or collection (`pha scan --path … --reprocess`,
   `pha edit --path … --page N`, `pha test`).
 - `pha-zotero-bibliography` — import a PDF from Zotero with its bibliographic
@@ -2299,10 +2303,476 @@ if __name__ == '__main__':
     main()
 """
 
+_SKILL_LMSTUDIO_MODEL_LOCALITY = r'''---
+name: lmstudio-model-locality
+description: Use when configuring or starting `pha scan` / `pha edit` models on a machine with LM Studio and LM Link, especially when a model may be loaded on another device. Determines whether each model copy is local or remote with the `lms` CLI (the LM Studio API does not expose locality), and gives the pre-load recipe that makes a local model immune to LM Link routing.
+---
+
+# LM Studio Model Locality (LM Link)
+
+## Why this exists
+
+pha talks to an OpenAI-compatible endpoint (`base_url`, usually
+`http://127.0.0.1:1234/v1`) and names a model (`model:` in
+`models/<id>.md`). With **LM Link**, that local endpoint can be answered by
+another device: the local LM Studio keeps serving the same port and routes a
+request for a model that is already loaded remotely to that remote instance,
+even when a copy exists on the local disk but is not loaded.
+
+The LM Studio API does **not** tell you where a model is:
+
+- `GET /v1/models` lists ids, nothing about location;
+- `GET /api/v0/models` adds `state: loaded|not-loaded`, but still no device;
+- an id shown as `loaded` can be loaded on a different machine.
+
+The `lms` CLI does expose location. Always decide with `lms`, not with the
+API, when the machine has LM Link enabled (or when you are not sure).
+
+## The locality rules
+
+Run the helper from this skill folder:
+
+```sh
+python3 scripts/lmstudio_locality.py                # all models
+python3 scripts/lmstudio_locality.py --model qwen   # filter by id substring
+python3 scripts/lmstudio_locality.py --json
+python3 scripts/lmstudio_locality.py --model qwen --require-local
+```
+
+The rules it applies:
+
+| view | command | local means | remote means |
+| --- | --- | --- | --- |
+| on disk | `lms ls --json` | `deviceIdentifier` is null / empty / this device's id | `deviceIdentifier` is another device's id (and `path` is often `"<deviceId>:..."`) |
+| loaded | `lms ps --json` | `deviceIdentifier` is null / empty / this device's id | `deviceIdentifier` is another device's id |
+| device names | `lms link status --json` | this device's `deviceIdentifier` / `deviceName` | each `peers[]` entry maps a remote id to a device name |
+| server | `lms server status --json` | `running: true`, `port` | the local server is not running |
+
+`lms ps --json` lists the loaded instances across LM Link; join
+`deviceIdentifier` with `lms link status --json` to get the machine name.
+
+Do not infer locality from:
+
+- `base_url: http://127.0.0.1:1234/v1` — the port is local, the model is not;
+- a `model:` id that appears in `/v1/models` — every LM Link device's models
+  appear there too;
+- `state: loaded` in `/api/v0/models` — loaded somewhere, not necessarily here.
+
+## Preflight before `pha scan` / `pha edit`
+
+1. Read the model the pass will use (for example
+   `models/qwen3-vl-8b.md`) and note its `model:`, `base_url:` and `server:`.
+2. Ask where that model is:
+   ```sh
+   python3 scripts/lmstudio_locality.py --model <model-id>
+   ```
+3. Act on the verdict:
+
+   - **`local_loaded`** — ready. The helper prints the loaded identifier;
+     make sure the model file's `model:` matches an identifier the API lists.
+   - **`local_available_not_loaded`** — the usual LM Link trap. Pre-load the
+     local copy *under a unique identifier* and point pha at that identifier:
+     ```sh
+     lms load <model-key> -y --identifier pha-local-<short-name>
+     ```
+     then in the pha model file:
+     ```yaml
+     model: pha-local-<short-name>
+     ```
+     `model:` must be the identifier, not the shared model key, so the request
+     cannot be routed to the remote loaded instance. `pha`'s own
+     `check_model` looks the identifier up in `/v1/models`, where a locally
+     loaded instance appears immediately.
+   - **`remote_loaded_only` / `remote_only`** — there is no local instance.
+     Either download/pre-load a local copy and follow the step above, or
+     accept remote execution explicitly. For remote execution set the model
+     file's `server:` to the remote device name so pha's model-server lock
+     serialises with other jobs that use that device, and budget for the
+     network latency.
+   - **`not_found`** — not on local disk and not visible through LM Link;
+     download it or choose another model.
+
+4. Re-run the helper with `--require-local` after loading:
+
+   ```sh
+   python3 scripts/lmstudio_locality.py --model <model-id> --require-local
+   ```
+
+   Exit status 0 means every matched model has a locally loaded instance.
+
+5. Then start the pass. `pha doctor` shows the server keys and slots that
+   pha will lock; see `skills/pha-document-operations/SKILL.md` for the
+   targeted scan/edit commands and the model-server lock rules.
+
+## The deterministic local recipe, in full
+
+This was verified against LM Studio with LM Link, including a remote instance
+of the same model already loaded:
+
+```sh
+lms load text-embedding-nomic-embed-text-v1.5@q4_k_m \
+  -y --identifier pha-local-embed
+
+# observe: the local instance has deviceIdentifier null
+lms ps --json
+
+# the API lists the identifier, and requests using it are served locally
+curl -s http://127.0.0.1:1234/v1/models
+curl -s http://127.0.0.1:1234/v1/embeddings \
+  -H 'content-type: application/json' \
+  -d '{"model":"pha-local-embed","input":"locality probe"}'
+```
+
+Set the pha model file accordingly:
+
+```yaml
+# models/embed-local.md
+base_url: http://127.0.0.1:1234/v1
+model: pha-local-embed
+server: this-machine
+```
+
+The unique identifier is the important part: the shared model key can already
+be loaded remotely, while a fresh `pha-local-*` identifier is a local instance
+and nothing else.
+
+## If you cannot pre-load: disable LM Link for the pass
+
+If the local model cannot be pre-loaded reliably, disable LM Link while the
+pass runs, so the local server can only resolve local models:
+
+```sh
+lms link disable
+# run the pha scan/edit pass
+lms link enable
+```
+
+This is deterministic but machine-wide: it also stops other people on this
+machine from reaching remote models while the pass runs. Prefer the unique
+identifier recipe unless remote routing must be impossible.
+
+## Quick reference
+
+```sh
+lms ls --json                # copies on disk; null deviceIdentifier = local
+lms ps --json                # loaded instances; null deviceIdentifier = local
+lms link status --json       # device id -> name, peers, this device
+lms server status --json     # local server running/port
+lms load <key> -y --identifier pha-local-<name>   # force a local instance
+lms unload <identifier>                            # remove an instance
+```
+
+`lms load` is a mutation: load only the model you are about to use, and unload
+it when the pass is over if the machine needs the memory. Never unload or
+restart another user's loaded model without being asked.
+'''
+
+_SKILL_LMSTUDIO_MODEL_LOCALITY_HELPER = r'''#!/usr/bin/env python3
+"""Report where LM Studio models live, for pha/model-server decisions.
+
+LM Studio's own API (`/api/v0/models`, `/v1/models`) reports model ids and
+`state: loaded|not-loaded`, but not *where* a model is loaded. With LM Link a
+request to `localhost:1234` can be served by another device, and a model loaded
+remotely can win over a local copy that is not loaded.
+
+The `lms` CLI does report locality:
+
+* ``lms ls --json``      model copies on disk; ``deviceIdentifier`` null = local
+* ``lms ps --json``      loaded instances; ``deviceIdentifier`` null = local
+* ``lms link status --json``  device id -> device name, this device included
+* ``lms server status --json``  local server running/port
+
+This script joins those views. It never loads or unloads a model; when a local
+copy is present but not loaded it prints the exact ``lms load`` command to make
+one, with a unique identifier that pha can then address directly.
+
+Usage::
+
+    python3 lmstudio_locality.py                 # every model
+    python3 lmstudio_locality.py --model qwen    # filter by id substring
+    python3 lmstudio_locality.py --json
+    python3 lmstudio_locality.py --model qwen --require-local
+
+Exit status is 0 normally, and with --require-local it is 0 only when every
+matched model has a locally loaded instance.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+
+
+def run_json(argv: list[str]) -> object:
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True)
+    except FileNotFoundError:
+        raise SystemExit("lms not found on PATH (LM Studio CLI is not installed)")
+    text = (proc.stdout or "").strip()
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise SystemExit("failed: " + " ".join(argv) + (": " + detail if detail else ""))
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # `lms` sometimes prints progress/log lines before the JSON body.
+        for opener in ("[", "{"):
+            start = text.find(opener)
+            if start >= 0:
+                try:
+                    return json.loads(text[start:])
+                except json.JSONDecodeError:
+                    continue
+        raise SystemExit("could not parse JSON from: " + " ".join(argv))
+
+
+def link_status() -> dict:
+    try:
+        data = run_json(["lms", "link", "status", "--json"])
+    except SystemExit:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def server_status() -> dict:
+    try:
+        data = run_json(["lms", "server", "status", "--json"])
+    except SystemExit:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def device_names(link: dict) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for peer in link.get("peers") or []:
+        dev = peer.get("deviceIdentifier")
+        if dev:
+            names[str(dev)] = str(peer.get("deviceName") or dev)
+    dev = link.get("deviceIdentifier")
+    if dev:
+        names[str(dev)] = str(link.get("deviceName") or dev)
+    return names
+
+
+def is_current(dev, current: str | None) -> bool:
+    if dev in (None, ""):
+        return True
+    if current and str(dev) == str(current):
+        return True
+    return False
+
+
+def is_local_disk(entry: dict, current: str | None) -> bool:
+    dev = entry.get("deviceIdentifier")
+    path = str(entry.get("path") or "")
+    if not is_current(dev, current):
+        return False
+    # Defensive: a remote path is prefixed with the remote device id.
+    match = re.match(r"^([0-9a-f]{32}):", path)
+    if match and (not current or match.group(1) != str(current)):
+        return False
+    return True
+
+
+def suggested_identifier(model_key: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", "pha-local-" + model_key).strip("-")
+    return cleaned[:80] or "pha-local-model"
+
+
+def device_label(dev, names: dict[str, str], current: str | None) -> str:
+    if dev in (None, ""):
+        return "this device"
+    if current and str(dev) == str(current):
+        return str(names.get(str(dev), "this device"))
+    return str(names.get(str(dev), "remote:" + str(dev)[:12]))
+
+
+def collect(ls: list[dict], ps: list[dict], current: str | None) -> dict:
+    models: dict[str, dict] = {}
+
+    def entry_for(key: str, kind: str) -> dict:
+        model = models.setdefault(key, {
+            "modelKey": key,
+            "type": kind,
+            "disk": {"local": False, "local_path": None, "remote": []},
+            "loaded": {"local": [], "remote": []},
+        })
+        if kind and not model.get("type"):
+            model["type"] = kind
+        return model
+
+    for item in ls:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("modelKey") or item.get("indexedModelIdentifier") or item.get("path") or "?")
+        model = entry_for(key, str(item.get("type") or ""))
+        if is_local_disk(item, current):
+            model["disk"]["local"] = True
+            model["disk"]["local_path"] = item.get("path")
+        else:
+            dev = item.get("deviceIdentifier")
+            if dev and dev not in model["disk"]["remote"]:
+                model["disk"]["remote"].append(dev)
+
+    for item in ps:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("modelKey") or item.get("identifier") or "?")
+        model = entry_for(key, str(item.get("type") or ""))
+        record = {
+            "identifier": item.get("identifier"),
+            "status": item.get("status"),
+            "deviceIdentifier": item.get("deviceIdentifier"),
+            "contextLength": item.get("contextLength"),
+            "ttlMs": item.get("ttlMs"),
+        }
+        if is_current(item.get("deviceIdentifier"), current):
+            model["loaded"]["local"].append(record)
+        else:
+            model["loaded"]["remote"].append(record)
+
+    for model in models.values():
+        if model["loaded"]["local"]:
+            model["verdict"] = "local_loaded"
+        elif model["disk"]["local"]:
+            model["verdict"] = "local_available_not_loaded"
+        elif model["loaded"]["remote"]:
+            model["verdict"] = "remote_loaded_only"
+        elif model["disk"]["remote"]:
+            model["verdict"] = "remote_only"
+        else:
+            model["verdict"] = "not_found"
+    return models
+
+
+def recommendation(model: dict) -> str:
+    key = model["modelKey"]
+    if model["verdict"] == "local_loaded":
+        ids = [str(r.get("identifier")) for r in model["loaded"]["local"] if r.get("identifier")]
+        return "local instance loaded; address it by identifier: " + ", ".join(ids)
+    if model["verdict"] == "local_available_not_loaded":
+        ident = suggested_identifier(key)
+        return (f"pre-load the local copy: lms load {key} -y --identifier {ident}; "
+                f"then set `model: {ident}` in the pha model file")
+    if model["verdict"] == "remote_loaded_only":
+        return ("only a remote instance is loaded; pre-load the local copy first if "
+                "the pass must run locally, or accept the remote device and record it "
+                "in the model file's `server:` label")
+    if model["verdict"] == "remote_only":
+        return ("no local disk copy; download it locally or accept the remote copy, "
+                "recording the remote device in the model file's `server:` label")
+    return "not on local disk and not visible through LM Link"
+
+
+def filter_models(models: dict, needle: str | None) -> list[dict]:
+    rows = [m for m in models.values()]
+    if needle:
+        low = needle.lower()
+        rows = [m for m in rows
+                if low in str(m.get("modelKey", "")).lower()
+                or any(low in str(r.get("identifier", "")).lower() for r in m["loaded"]["local"])
+                or any(low in str(r.get("identifier", "")).lower() for r in m["loaded"]["remote"])]
+    return sorted(rows, key=lambda m: str(m.get("modelKey")))
+
+
+def render_human(payload: dict, rows: list[dict]) -> None:
+    link = payload.get("link") or {}
+    server = payload.get("server") or {}
+    print("LM Studio locality")
+    print(f"  this device : {link.get('deviceName') or '(LM Link disabled or unavailable)'}"
+          f" {link.get('deviceIdentifier') or ''}".rstrip())
+    print(f"  LM Link     : {link.get('status') or 'unknown'}"
+          f" ({len(link.get('peers') or [])} peer(s))")
+    if server:
+        print(f"  local server: {'running' if server.get('running') else 'not running'}"
+              f" on port {server.get('port')}")
+    if not rows:
+        print("  models      : none matched")
+        return
+    for model in rows:
+        print()
+        print(f"  {model['modelKey']}  [{model.get('type') or 'model'}]")
+        print(f"    verdict: {model['verdict']}")
+        disk = model["disk"]
+        if disk["local"]:
+            print(f"    local disk copy: {disk['local_path']}")
+        names = payload.get("device_names") or {}
+        if disk["remote"]:
+            remotes = ", ".join(device_label(d, names, payload.get("deviceIdentifier")) for d in disk["remote"])
+            print(f"    remote disk copies: {remotes}")
+        for rec in model["loaded"]["local"]:
+            print(f"    loaded local: {rec.get('identifier')} ({rec.get('status')})")
+        for rec in model["loaded"]["remote"]:
+            name = device_label(rec.get("deviceIdentifier"), names, payload.get("deviceIdentifier"))
+            print(f"    loaded remote: {rec.get('identifier')} on {name} ({rec.get('status')})")
+        print(f"    -> {recommendation(model)}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="report LM Studio model locality")
+    parser.add_argument("--model", default=None,
+                        help="only models whose id contains this substring")
+    parser.add_argument("--json", action="store_true", help="emit JSON")
+    parser.add_argument("--require-local", action="store_true",
+                        help="exit non-zero unless every matched model is loaded locally")
+    args = parser.parse_args()
+
+    link = link_status()
+    server = server_status()
+    current = link.get("deviceIdentifier")
+    try:
+        ls = run_json(["lms", "ls", "--json"]) or []
+        ps = run_json(["lms", "ps", "--json"]) or []
+    except SystemExit as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if not isinstance(ls, list):
+        ls = []
+    if not isinstance(ps, list):
+        ps = []
+
+    models = collect(ls, ps, str(current) if current else None)
+    rows = filter_models(models, args.model)
+    names = device_names(link)
+    if args.json:
+        print(json.dumps({
+            "deviceIdentifier": current,
+            "deviceName": link.get("deviceName"),
+            "link": link,
+            "server": server,
+            "device_names": names,
+            "models": rows,
+        }, ensure_ascii=False, indent=2))
+    else:
+        render_human({
+            "link": link,
+            "server": server,
+            "deviceIdentifier": current,
+            "device_names": names,
+        }, rows)
+
+    if args.require_local:
+        missing = [m for m in rows if m.get("verdict") != "local_loaded"]
+        if missing:
+            print("not loaded locally: " + ", ".join(str(m.get("modelKey")) for m in missing),
+                  file=sys.stderr)
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
 # The skills pha ships, as (folder_name, SKILL.md body). Embedded
 # so seeding works with no source checkout; the repo's skills/ folder is the
 # authored copy and a test keeps the two identical.
 SKILLS: tuple[tuple[str, str], ...] = (
+    ("lmstudio-model-locality", _SKILL_LMSTUDIO_MODEL_LOCALITY),
     ("obsidian-vault", _SKILL_OBSIDIAN_VAULT),
     ("palaeographers-compare", _SKILL_PALEOGRAPHERS_COMPARE),
     ("pha-document-operations", _SKILL_DOCUMENT_OPERATIONS),
@@ -2316,6 +2786,12 @@ SKILLS: tuple[tuple[str, str], ...] = (
 # ...)). SKILL.md is implicit and always first; a skill with no entry here is
 # just its SKILL.md.
 SKILL_FILES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "lmstudio-model-locality",
+        (
+            ("scripts/lmstudio_locality.py", _SKILL_LMSTUDIO_MODEL_LOCALITY_HELPER),
+        ),
+    ),
     (
         "obsidian-vault",
         (

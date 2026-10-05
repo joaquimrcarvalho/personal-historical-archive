@@ -283,6 +283,13 @@ Model notes for a new machine:
   time. A palaeographer and editor that use the SAME local model (e.g. qwen
   for both on Pfister) keep one slot loaded. **Quit LM Studio when you are not
   ingesting** — its model page-out is the thing that eats disk space.
+- **LM Studio + LM Link: model locality is not in the API.** `GET /v1/models`
+  and `/api/v0/models` show ids and loaded state, but not whether an instance
+  is local or on another LM Link device. Before a long `pha scan`/`pha edit`,
+  read [`skills/lmstudio-model-locality/SKILL.md`](skills/lmstudio-model-locality/SKILL.md)
+  and run `python3 skills/lmstudio-model-locality/scripts/lmstudio_locality.py --model <id>`;
+  if the local copy exists but is not loaded, pre-load it under a unique
+  identifier so the request cannot be routed to another machine.
 - **Picking a palaeographer per collection**: put a `palaeographer` file (the
   model id) next to a document/collection;
   `dropbox/collections/COLX/palaeographer -> minimax-vl` for MiniMax, or
@@ -390,6 +397,11 @@ installed by anyone who sets up agents from the repo:
   `pha page`. It branches by capability: CLI+files agents, dsh-pha plugin
   `pha_*` tools, and FastMCP tools (which lack a per-document re-scan).
 
+- **LM Studio model locality** — [`skills/lmstudio-model-locality/SKILL.md`](skills/lmstudio-model-locality/SKILL.md):
+  with LM Studio and LM Link, decide whether the model a `pha scan`/`pha edit`
+  will use is local or remote (`lms ls --json`, `lms ps --json`,
+  `lms link status --json`), and pre-load a local copy under a unique
+  identifier when the same model is already loaded on another device.
 - Zotero bibliography — [`skills/pha-zotero-bibliography/SKILL.md`](skills/pha-zotero-bibliography/SKILL.md):
   import a PDF from Zotero with its bibliographic sidecar, or build/refresh
   one document's reference from the owner's Zotero library (local-API MODS,
@@ -418,6 +430,7 @@ user-level skills directory used by agent runtimes on this machine
 ```bash
 cp -R skills/pha-search-context ~/.agents/skills/
 cp -R skills/pha-document-operations ~/.agents/skills/
+cp -R skills/lmstudio-model-locality ~/.agents/skills/
 cp -R skills/pha-zotero-bibliography ~/.agents/skills/
 cp -R skills/palaeographers-compare ~/.agents/skills/
 cp -R skills/obsidian-vault ~/.agents/skills/
@@ -436,6 +449,7 @@ the archive holds its own copy:
 <archive>/skills/README.md                  what these are, and the format
 <archive>/skills/pha-search-context/SKILL.md
 <archive>/skills/pha-document-operations/SKILL.md
+<archive>/skills/lmstudio-model-locality/SKILL.md
 <archive>/skills/pha-zotero-bibliography/SKILL.md
 <archive>/skills/palaeographers-compare/SKILL.md
 <archive>/skills/obsidian-vault/SKILL.md

@@ -18,6 +18,23 @@ SKILLS = REPO_ROOT / "skills"
 
 EXPECTED = {
     "pha-search-context": ["pha page", "pha_get_page", "variant", "edited"],
+    "lmstudio-model-locality": [
+        "LM Link",
+        "pha scan",
+        "pha edit",
+        "lms ls --json",
+        "lms ps --json",
+        "lms link status --json",
+        "deviceIdentifier",
+        "local_available_not_loaded",
+        "lms load",
+        "model:",
+        "base_url",
+        "server:",
+        "scripts/lmstudio_locality.py",
+        "--require-local",
+        "lms link disable",
+    ],
     "pha-document-operations": [
         "--path",
         "--reprocess",
@@ -139,6 +156,7 @@ def test_skill_carries_required_guidance(name, markers):
 
 
 EXTRA_FILES = {
+    "lmstudio-model-locality": ("scripts/lmstudio_locality.py",),
     "palaeographers-compare": (
         "examples/entry-format.md",
         "scripts/make_reference.py",

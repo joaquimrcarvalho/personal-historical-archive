@@ -33,12 +33,16 @@ agent should reach for it), followed by the instructions:
 ## How an agent should use these
 
 **Using the archive:** before the matching task, read
-`skills/<name>/SKILL.md` and follow it. The six skills seeded here cover the
+`skills/<name>/SKILL.md` and follow it. The seven skills seeded here cover the
 most common tasks:
 
 - `pha-search-context` — a search hit is a *snippet*; recover the full page
   (raw and edited) before quoting or summarizing.
 - `pha-document-operations` — re-scan / re-edit / re-encode one
+- `lmstudio-model-locality` — determine whether an LM Studio model is
+  local or remote when LM Link is enabled, before a `pha scan`/`pha edit`;
+  helper `scripts/lmstudio_locality.py` joins `lms ls` / `lms ps` / `lms link status`
+  and prints the pre-load recipe for a deterministic local instance.
   **already-ingested** document or collection (`pha scan --path … --reprocess`,
   `pha edit --path … --page N`, `pha test`).
 - `pha-zotero-bibliography` — import a PDF from Zotero with its bibliographic

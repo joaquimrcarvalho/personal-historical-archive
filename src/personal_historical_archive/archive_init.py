@@ -221,6 +221,10 @@ one before the task, no pha source checkout needed:
 - `skills/pha-document-operations/SKILL.md` — re-scan / re-edit / re-encode one
   **already-ingested** document or collection (`pha scan --path … --reprocess`,
   `pha edit --path … --page N`, `pha test`).
+- `skills/lmstudio-model-locality/SKILL.md` — before `pha scan`/`pha edit` on a
+  machine with LM Studio and LM Link, decide whether a model is local or remote
+  (`lms ls/ps/link status --json`; helper `scripts/lmstudio_locality.py`) and
+  pre-load a local instance under a unique identifier when needed.
 - `skills/pha-zotero-bibliography/SKILL.md` — import a PDF from Zotero with its
   bibliographic sidecar, or build/refresh one document's reference from the
   owner's Zotero library (local-API MODS, an RDF export,
@@ -376,6 +380,10 @@ it:
   **already-ingested** document or collection (rescan / re-edit / re-encode):
   `pha scan --path collections/COLX [--reprocess]`,
   `pha edit --path collections/COLX --page N`, `pha test collections/COLX --pages 3`.
+- `skills/lmstudio-model-locality/SKILL.md` — with LM Studio and LM Link,
+  decide whether the model a `pha scan`/`pha edit` will use is local or remote
+  (`lms ls --json`, `lms ps --json`, `lms link status --json`); pre-load a
+  local copy under a unique identifier with `lms load … --identifier`.
 - `skills/pha-zotero-bibliography/SKILL.md` — import a PDF from Zotero and give
   it a bibliographic sidecar, or build/refresh one document's reference from
   Zotero: the local API's MODS

@@ -381,7 +381,9 @@ HISTORIANS_README.md — it always works, even before an archive is configured.
 Bundled skills (`skills/<name>/`, installable to `~/.agents/skills/`) cover
 the common agent tasks: `pha-search-context` (don't answer from a search
 snippet — recover the full page/document), `pha-document-operations` (re-run
-the pipeline on an already-ingested document), `pha-zotero-bibliography`
+the pipeline on an already-ingested document), `lmstudio-model-locality`
+(check local vs remote LM Studio models under LM Link before a scan/edit;
+helper `scripts/lmstudio_locality.py`), `pha-zotero-bibliography`
 (import a Zotero PDF with its sidecar; build/refresh a document's reference),
 and `palaeographers-compare` (compare two or more readings of the same pages
 into a uniform comparative edition, with bundled `scripts/` to normalise,
