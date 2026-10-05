@@ -206,6 +206,45 @@ def _is_our_package(path: Path) -> bool:
     return data.get("name") == PLUGIN_PACKAGE
 
 
+def _linked_project_root(profile: Path) -> str | None:
+    """A pha checkout the profile already points at, if it has config.yaml.
+
+    Older installs (and pnpm ``link:`` dependencies) keep the checkout path in
+    the profile's package.json even after the node_modules link has moved to
+    the wheel-bundled payload cache. That path is the machine's project root:
+    using it lets `pha` find config.yaml and the .env archive pointer without a
+    per-profile config rewrite.
+    """
+    candidates: list[Path] = []
+    try:
+        data = json.loads((profile / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    dep = (data.get("dependencies") or {}).get(PLUGIN_PACKAGE)
+    if isinstance(dep, str):
+        raw = None
+        if dep.startswith("link:"):
+            raw = dep[len("link:"):]
+        elif dep.startswith("file:"):
+            raw = dep[len("file:"):]
+        if raw:
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                candidate = (profile / candidate).resolve()
+            candidates.append(candidate.parent if candidate.name == "dsh-pha" else candidate)
+    link = profile_plugin_link(profile)
+    try:
+        if link.exists() or link.is_symlink():
+            target = link.resolve()
+            candidates.append(target.parent if target.name == "dsh-pha" else target)
+    except OSError:
+        pass
+    for candidate in candidates:
+        if (candidate / "config.yaml").is_file():
+            return str(candidate)
+    return None
+
+
 def ensure_plugin_link(profile: Path, payload: Path) -> Path:
     """Link the payload into a profile's node_modules, or pnpm-add it."""
     dest = profile_plugin_link(profile)
@@ -406,14 +445,24 @@ def install(
     payload = plugin_payload()
     version = plugin_version(payload)
     installed = []
+    warnings: list[str] = []
     for prof in profiles:
+        resolved_root = project_root or _linked_project_root(prof)
         link = ensure_plugin_link(prof, payload)
-        changed = patch_profile(prof, project_root=project_root, archive_dir=archive_dir)
+        changed = patch_profile(prof, project_root=resolved_root, archive_dir=archive_dir)
+        if resolved_root is None and archive_dir is None:
+            warnings.append(
+                f"profile {prof.name}: no projectRoot or archiveDir could be resolved; "
+                "run from the pha project/archive, pass --archive-dir, or use "
+                "`pha set archive-dir <path> --global`"
+            )
         installed.append({
             "profile": prof.name,
             "path": str(prof),
             "link": str(link),
             "row_updated": changed,
+            "project_root": resolved_root,
+            "archive_dir": archive_dir,
         })
     return {
         "ok": True,
@@ -421,6 +470,7 @@ def install(
         "payload": str(payload),
         "version": version,
         "profiles": installed,
+        "warnings": warnings,
         "restart_required": True,
     }
 
@@ -489,7 +539,8 @@ def status(profile: str | None = None, home: Path | None = None) -> dict:
     }
 
 
-def install_after_tool_update(archive_dir: str | None = None) -> str | None:
+def install_after_tool_update(archive_dir: str | None = None,
+                              project_root: str | None = None) -> str | None:
     """Ask the freshly installed pha to sync the view plugin.
 
     Returns a human line, or None when there is no DSH install to update.
@@ -509,6 +560,8 @@ def install_after_tool_update(archive_dir: str | None = None) -> str | None:
         fresh = shutil.which("pha")
         argv = [fresh] if fresh else [sys.executable, "-m", "personal_historical_archive"]
     argv = [*argv, "view", "install", "--from-update"]
+    if project_root:
+        argv += ["--project-root", str(project_root)]
     if archive_dir:
         argv += ["--archive-dir", str(archive_dir)]
     env = dict(os.environ)
@@ -517,4 +570,5 @@ def install_after_tool_update(archive_dir: str | None = None) -> str | None:
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()
         raise ViewError(detail or "pha view install failed")
-    return (proc.stdout or "").strip() or "PHA view plugin updated; restart DSH to activate it."
+    parts = [(proc.stdout or "").strip(), (proc.stderr or "").strip()]
+    return "\n".join(p for p in parts if p) or "PHA view plugin updated; restart DSH to activate it."

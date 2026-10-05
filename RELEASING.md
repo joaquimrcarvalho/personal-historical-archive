@@ -88,6 +88,9 @@ From 0.36.1 onward `pha update` runs both steps itself.
 
 ## Release history
 
+- `0.37.3` `fix(view): derive the project root from a profile link` —
+  `pha view install` no longer leaves a DSH profile without an archive
+  pointer when the plugin is installed from a wheel
 - `0.37.2` `add the lmstudio-model-locality skill` — local vs remote LM Studio
   model locality under LM Link, with `scripts/lmstudio_locality.py`
 - `0.37.1` `fix(ingest): normalize raw_sha for surrounding whitespace` — the

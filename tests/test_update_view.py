@@ -24,13 +24,15 @@ def test_cmd_update_runs_view_install_after_tool_update(tmp_path, monkeypatch, c
         calls["tool"] = (repo, branch)
         return "updated pha tool"
 
-    def fake_view_install(archive_dir=None):
+    def fake_view_install(archive_dir=None, project_root=None):
         calls["view_archive"] = archive_dir
+        calls["view_project_root"] = project_root
         return "view plugin updated"
 
     monkeypatch.setattr(update, "install_update", fake_install_update)
     monkeypatch.setattr(view, "install_after_tool_update", fake_view_install)
 
+    (tmp_path / "config.yaml").write_text("paths:\n  archive_dir: .\n", encoding="utf-8")
     archive = tmp_path / "archive"
     cfg = SimpleNamespace(
         root=tmp_path,
@@ -47,6 +49,7 @@ def test_cmd_update_runs_view_install_after_tool_update(tmp_path, monkeypatch, c
 
     assert calls["tool"] == ("repo", "main")
     assert calls["view_archive"] == str(archive)
+    assert calls["view_project_root"] == str(tmp_path)
     out = capsys.readouterr().out
     assert "updated pha tool" in out
     assert "view plugin updated" in out

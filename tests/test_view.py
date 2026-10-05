@@ -139,3 +139,36 @@ def test_install_without_profiles_skips(tmp_path, monkeypatch):
     assert report["ok"] is True
     assert report["skipped"]
     assert report["profiles"] == []
+
+
+def test_install_derives_project_root_from_profile_link(tmp_path, monkeypatch):
+    """A profile that still links to a checkout supplies the missing root."""
+    payload = _payload(tmp_path)
+    monkeypatch.setattr(view, "plugin_payload", lambda: payload)
+    home, prof = _profile(tmp_path)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "config.yaml").write_text("paths:\n  archive_dir: .\n", encoding="utf-8")
+    (prof / "package.json").write_text(
+        json.dumps({"dependencies": {
+            view.PLUGIN_PACKAGE: "link:" + str(checkout / "dsh-pha"),
+        }}),
+        encoding="utf-8",
+    )
+
+    report = view.install(profile="web", home=home)
+
+    row = _row(view.profile_patch_path(prof))
+    assert row["config"]["projectRoot"] == str(checkout)
+    assert report["warnings"] == []
+
+
+def test_install_warns_when_no_archive_context_is_available(tmp_path, monkeypatch):
+    payload = _payload(tmp_path)
+    monkeypatch.setattr(view, "plugin_payload", lambda: payload)
+    home, prof = _profile(tmp_path)
+
+    report = view.install(profile="web", home=home)
+
+    assert report["warnings"]
+    assert "no projectRoot or archiveDir" in report["warnings"][0]

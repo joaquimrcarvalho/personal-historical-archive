@@ -3537,9 +3537,10 @@ def cmd_update(cfg: Config, args) -> None:
     archive_dir = None
     if getattr(cfg, "archive_source_kind", "default") != "default" or cfg.db_path.exists():
         archive_dir = str(cfg.archive_dir)
+    project_root = str(cfg.root) if (cfg.root / "config.yaml").is_file() else None
     try:
         from .view import install_after_tool_update
-        view_msg = install_after_tool_update(archive_dir=archive_dir)
+        view_msg = install_after_tool_update(archive_dir=archive_dir, project_root=project_root)
     except Exception as e:  # noqa: BLE001 - the tool update already succeeded
         print(f"warning: pha was updated, but the PHA view plugin was not: {e}", file=sys.stderr)
     else:
@@ -3590,12 +3591,18 @@ def cmd_view(cfg: Config, args) -> None:
     if not archive_dir:
         if getattr(cfg, "archive_source_kind", "default") != "default" or cfg.db_path.exists():
             archive_dir = str(cfg.archive_dir)
-    project_root = source_checkout_root()
+    project_root = getattr(args, "project_root", None)
+    if not project_root:
+        root = source_checkout_root()
+        if root is None and (cfg.root / "config.yaml").is_file():
+            root = cfg.root
+        if root is not None:
+            project_root = str(root)
     try:
         report = install(
             profile=getattr(args, "profile", None),
             all_profiles=bool(getattr(args, "all_profiles", False)),
-            project_root=str(project_root) if project_root is not None else None,
+            project_root=project_root,
             archive_dir=archive_dir,
             home=home,
         )
@@ -3612,6 +3619,8 @@ def cmd_view(cfg: Config, args) -> None:
     for entry in report.get("profiles", []):
         note = " (row updated)" if entry.get("row_updated") else ""
         print(f"  profile {entry['profile']}: {entry['path']}{note}")
+    for warning in report.get("warnings") or []:
+        print(f"warning: {warning}", file=sys.stderr)
     if report.get("restart_required"):
         print("restart the DSH host to load the updated plugin.")
 
@@ -4131,6 +4140,7 @@ def main(argv: list[str] | None = None) -> None:
     vi.add_argument("--profile", default=None,
                     help="DSH profile name (default: running profile, or profiles that already have the plugin)")
     vi.add_argument("--all-profiles", action="store_true", help="update every DSH profile")
+    vi.add_argument("--project-root", default=None, help=argparse.SUPPRESS)
     vi.add_argument("--archive-dir", default=None, help=argparse.SUPPRESS)
     vi.add_argument("--from-update", action="store_true", help=argparse.SUPPRESS)
     vi.add_argument("--json", action="store_true", help="print a JSON report")
