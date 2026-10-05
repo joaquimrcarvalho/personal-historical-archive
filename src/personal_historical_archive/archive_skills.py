@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_SKILL_DOCUMENT_OPERATIONS = """---
+_SKILL_DOCUMENT_OPERATIONS = r'''---
 name: pha-document-operations
 description: Re-run the pha pipeline on one existing document or collection in personal-historical-archive (pha) — re-scan (re-extract), re-edit, or re-encode it — without inspecting the pha source code. Use when the user asks to "rescan", "re-process", "re-run", "re-edit", "re-encode", "scan this document/collection again", or to change how an already-ingested document is processed. Teaches how to find the document's dropbox path, how to force a re-run (pha scan skips unchanged documents unless --reprocess), and how to verify the result.
 ---
@@ -125,8 +125,11 @@ per document so you can build the relative path.
 **Re-run the encoder:**
 
 - C: `pha encode` (re-runs encoders on documents that have them);
-  `pha encode --reprocess` to re-encode everything matched.
-- D: `pha_job_start({ action: 'encode', reprocess: true })`
+  `pha encode --path collections/COLX` or `--doc <id>` to target ONE
+  document/collection; add `--reprocess` to force, and `--dry-run` to list the
+  encoders that would run without a model call or a write.
+- D: `pha_job_start({ action: 'encode', path: 'collections/COLX', reprocess: true })`
+  (or `doc: '<id>'`); there is no dry-run in the job tool.
 
 **Dry-run a configuration before a full pass** (never touches the DB/library/
 renders — writes to `<archive>/.pha-test/`):
@@ -137,7 +140,7 @@ renders — writes to `<archive>/.pha-test/`):
 volume. This is a MODEL re-read (the machine path); use `pha review` for a
 human correction.
 
-- C: `pha scan --path collections/COLX/vol04.pdf --page 337 \\
+- C: `pha scan --path collections/COLX/vol04.pdf --page 337 \
        --palaeographer <rules> --model <model>` (add `--dry-run` first: it
   prints the plan and calls no model). Only that page is rendered and
   transcribed, its provenance is recorded, and it is **pinned** so a later bulk
@@ -190,7 +193,7 @@ D, poll `pha_job_status`). `pha doctor` lists the servers and their capacity.
 | Re-edit one doc | `pha edit --path <p> --reprocess` | `pha_job_start edit path=… reprocess=true` | not supported |
 | Re-edit one page | `pha edit --path <p> --page 3` | `pha_job_start edit path=… page=3` | not supported |
 | Re-read one page (a chosen model) | `pha scan --path <p> --page 3 --palaeographer X --model Y` | `pha_job_start scan path=… page=3 palaeographer=X model=Y` | preview only: `pha test <p> --page 3` |
-| Re-encode | `pha encode --reprocess` | `pha_job_start encode reprocess=true` | not supported |
+| Re-encode | `pha encode [--path P|--doc ID] [--reprocess] [--dry-run]` | `pha_job_start encode path=… reprocess=true` | not supported |
 | Dry-run config | `pha test <path> --pages 3` | — | — |
 | Inspect config | `pha editor/palaeographer/prompts <file>` | `pha_collection_config(<path>)` | `pha_collection_config(<path>)` |
 | Verify | `pha status`, `pha page` | `pha_status`, `pha_page` | `pha_extraction_status`, `pha_get_page` |
@@ -241,7 +244,7 @@ writes the return payload.
       equivalents).
 - [ ] If asked to change how a doc is processed (palaeographer/editor/
       encoder), config inspected first, *then* the matching pass re-run.
-"""
+'''
 
 _SKILL_SEARCH_CONTEXT = """---
 name: pha-search-context

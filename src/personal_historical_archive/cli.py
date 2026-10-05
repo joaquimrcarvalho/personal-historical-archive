@@ -20,7 +20,7 @@ from .config import Config, user_settings_file
 from .extract import is_supported, resolve_editor_id, resolve_encoder_id, resolve_palaeographer_id, resolve_prompt, encoder_files_for
 from .ingest import (
     edit_all,
-    encode_all,
+    encode_documents,
     make_vision_client,
     plan_page_rescan,
     prune_orphan_renders,
@@ -3468,13 +3468,39 @@ def cmd_encoder(cfg: Config, args) -> None:
 
 
 def cmd_encode(cfg: Config, args) -> None:
-    res = encode_all(cfg, reprocess=args.reprocess, verbose=True)
+    raw_doc = getattr(args, "doc", None)
+    doc_id = None
+    if raw_doc not in (None, ""):
+        try:
+            doc_id = int(raw_doc)
+        except (TypeError, ValueError):
+            print(f"error: --doc must be a document id (got {raw_doc!r})", file=sys.stderr)
+            sys.exit(2)
+    res = encode_documents(
+        cfg,
+        path=getattr(args, "path", None),
+        doc_id=doc_id,
+        reprocess=bool(getattr(args, "reprocess", False)),
+        verbose=True,
+        dry_run=bool(getattr(args, "dry_run", False)),
+        include_leased=bool(getattr(args, "include_leased", False)),
+    )
+    if getattr(args, "dry_run", False):
+        planned = [r for r in res["results"] if r["action"] == "planned"]
+        target = getattr(args, "path", None) or (f"doc {doc_id}" if doc_id is not None else "every document")
+        print(f"would encode {target}: {len(planned)} encoder run(s)")
+        for r in planned:
+            model = f" model={r['model']}" if r.get("model") else ""
+            print(f"  - {r['filename']}: {r['encoder']}{model}")
+        if not planned:
+            print("  (nothing to do)")
+        return
     encoded = sum(1 for r in res["results"] if r["action"] == "encoded")
     print(f"encoded {encoded} document(s)")
     for r in res["results"]:
         if r["action"] == "encoded":
             print(f"  + {r['filename']} [{r['encoder']}] ({r['records']} records)")
-        elif r["reason"] not in ("no encoder configured", "records up to date"):
+        elif r.get("reason") not in ("no encoder configured", "records up to date"):
             print(f"  ! {r['filename']}: {r.get('reason', r['action'])}")
 
 
@@ -4494,7 +4520,13 @@ def main(argv: list[str] | None = None) -> None:
     en.set_defaults(fn=cmd_encoder)
 
     ec = sub.add_parser("encode", help="run the encoder pass (structured records) over documents with an encoder")
-    ec.add_argument("--reprocess", action="store_true", help="re-encode everything")
+    ec.add_argument("--path", "--collection", dest="path", default=None,
+                    help="encode only the document/collection under this dropbox-relative path")
+    ec.add_argument("--doc", default=None, metavar="ID",
+                    help="encode only this document id (see `pha status` / `pha_documents`)")
+    ec.add_argument("--reprocess", action="store_true", help="re-encode even when records are up to date")
+    ec.add_argument("--dry-run", action="store_true",
+                    help="plan only: list the documents and encoders that would run; no model call, no write")
     ec.add_argument("--include-leased", action="store_true",
                         help="also process documents currently out on a hand-over")
     ec.set_defaults(fn=cmd_encode)

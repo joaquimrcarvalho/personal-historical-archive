@@ -151,6 +151,10 @@
   has one file per structure type (table.md, biographies.md, letters.md);
   `pages:` in the front matter scopes an encoder to a page range and
   `pha encode` runs a document's encoders in page order (whole-doc last).
+  `pha encode --path P` (a document/collection) or `--doc ID` targets ONE
+  document; `--dry-run` lists the plan without calls or writes. This is what
+  `pha handoff work` uses per document, so a hand-over no longer has to encode
+  the whole archive.
   The top-level `encoders/` dir holds only the sample template.
 - **The null editor**: editor id `null`/`passthrough` copies the
   transcription verbatim as the "edited" text (no model call), so documents

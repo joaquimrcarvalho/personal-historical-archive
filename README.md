@@ -1004,7 +1004,11 @@ NOT the number printed on the page (e.g. Pfister's chronological table is
 printed i–xv but occupies PDF pages 1-15).
 
 - `pha encode` runs every encoder found next to a document; `pha encoder
-  [file]` shows resolution.
+  [file]` shows resolution. Add `--path <dropbox-relative>` (a document or a
+  collection) or `--doc <id>` to run ONE target instead of the whole archive,
+  and `--dry-run` to list the documents and encoders that would run without a
+  model call or a write. Page-level trials of an encoder stay in `pha test
+  <target> --pages N` / `--page N`, which writes only under `.pha-test/`.
 - **`pha encoder --new` creates an encoder interactively** — a wizard that asks
   a non-technical user plain-language questions (what the material is, a sample
   passage, which things matter and what to record about each), uses the chosen
@@ -1278,7 +1282,7 @@ pha prompts [file]
 pha palaeographer [file]
 pha editor [file]
 pha encoder [file] [--new]
-pha encode [--reprocess]
+pha encode [--path P | --doc ID] [--reprocess] [--dry-run]
 pha test [target] [--pages N] [--random] [--seed S] [--show]
                                     # run transcription+editing+encoding on a sample of pages
                                     #   (safe: writes to a scratch dir; never touches the archive;

@@ -2521,7 +2521,7 @@ def edit_document(
         return {"action": "skipped", "filename": doc["filename"],
                 "reason": "a per-page editor/model override needs --page N"}
     lease = _leases(cfg).get(doc["sha256"])
-    if lease is not None:
+    if lease is not None and not include_leased:
         return {"action": "skipped", "filename": doc["filename"],
                 "reason": f"out on hand-over {lease.handoff_id} "
                           f"(age {_lease_age(lease)})"}
@@ -3202,6 +3202,7 @@ def encode_document(
     reprocess: bool = False,
     verbose: bool = True,
     model_override: str | None = None,
+    include_leased: bool = False,
 ) -> dict:
     """Run the encoder over a document's transcription (edited text when the
     document has an editor, else raw), producing structured records.
@@ -3461,57 +3462,122 @@ def encode_document(
     return {"action": "encoded", "filename": doc["filename"], "encoder": resolved, "records": len(records)}
 
 
-def encode_all(cfg: Config, reprocess: bool = False, verbose: bool = True) -> dict:
-    """Run the encoder pass for every document that has encoders configured.
+def _encoder_specs_for_document(cfg: Config, doc) -> list[tuple[Path, str | None]]:
+    """The collection-local encoders for one document, ordered by page range.
 
-    Encoders live NEXT TO THE SOURCE (dropbox/collections/COLX/encoders/*.md),
-    one file per structure type in the document. All of a document's encoders
-    run in succession, ordered by their `pages` front matter (e.g. the
-    chronological table on pages 1-15 first, then the person notices on the
-    rest)."""
+    Encoders live next to the source (dropbox/collections/COLX/encoders/*.md);
+    a pha.yaml sidecar may list them explicitly and in order.
+    """
     from .extract import encoder_file_named, encoder_files_for
+
+    doc_path = Path(doc["path"])
+    fdir = doc_path if doc_path.is_dir() else doc_path.parent
+    sc = _doc_sidecar(cfg, doc_path)
+    if sc.encoders is not None:
+        specs: list[tuple[Path, str | None]] = []
+        for spec in sc.encoders:
+            f = encoder_file_named(spec.rules, fdir, cfg.dropbox)
+            if f is None:
+                print(f"  warning: unknown encoder {spec.rules!r} for {doc_path.name}", flush=True)
+                continue
+            specs.append((f, spec.model))
+    else:
+        specs = [(f, None) for f in encoder_files_for(doc_path.stem, fdir, cfg.dropbox)]
+
+    def _page_start(item: tuple[Path, str | None]) -> int:
+        f, _m = item
+        e = cfg.encoder_from_file(f)
+        if e and e.pages and "-" in e.pages:
+            try:
+                return int(e.pages.split("-")[0])
+            except ValueError:
+                return 10**9
+        return 10**9  # whole-document encoders run after section ones
+
+    return sorted(specs, key=_page_start)
+
+
+def _encode_one_document(cfg: Config, conn, doc, reprocess: bool, verbose: bool,
+                         dry_run: bool, include_leased: bool) -> list[dict]:
+    """Encode every configured stage of one document, or plan it for --dry-run."""
+    specs = _encoder_specs_for_document(cfg, doc)
+    if not specs:
+        if dry_run:
+            return [{"action": "planned", "filename": doc["filename"],
+                     "encoder": doc["encoder"] or "(legacy/global encoder)",
+                     "path": str(doc["path"])}]
+        return [encode_document(cfg, conn, doc["id"], reprocess=reprocess,
+                                verbose=verbose, include_leased=include_leased)]
+    out: list[dict] = []
+    for enc_file, model_override in specs:
+        if dry_run:
+            out.append({"action": "planned", "filename": doc["filename"],
+                        "encoder": enc_file.stem, "model": model_override,
+                        "path": str(doc["path"])})
+        else:
+            out.append(encode_document(cfg, conn, doc["id"], enc_file=enc_file,
+                                       reprocess=reprocess, verbose=verbose,
+                                       model_override=model_override,
+                                       include_leased=include_leased))
+    return out
+
+
+def encode_documents(cfg: Config, path: str | None = None, doc_id: int | None = None,
+                     reprocess: bool = False, verbose: bool = True,
+                     dry_run: bool = False, include_leased: bool = False) -> dict:
+    """Run the encoder pass for every document (or one --path/--doc target).
+
+    `--path` is a dropbox-relative file/collection, matching `pha scan
+    --path`/`pha edit --path`; `--doc` is a document id. With `dry_run` nothing
+    is called or written: the plan names the document and each encoder that
+    would run.
+    """
+    from .db import get_document, get_document_by_path
 
     cfg.ensure_dirs()
     conn = db.connect(cfg.db_path)
     try:
-        results = []
-        for d in db.list_documents(conn, limit=10000):
-            doc_path = Path(d["path"])
-            fdir = doc_path if doc_path.is_dir() else doc_path.parent
-            sc = _doc_sidecar(cfg, doc_path)
-            if sc.encoders is not None:
-                # pha.yaml lists encoders explicitly (by name), in page order
-                specs: list[tuple[Path, str | None]] = []
-                for spec in sc.encoders:
-                    f = encoder_file_named(spec.rules, fdir, cfg.dropbox)
-                    if f is None:
-                        print(f"  warning: unknown encoder {spec.rules!r} for {doc_path.name}", flush=True)
-                        continue
-                    specs.append((f, spec.model))
-            else:
-                enc_files = encoder_files_for(doc_path.stem, fdir, cfg.dropbox)
-                specs = [(f, None) for f in enc_files]
-            if not specs:
-                # legacy: single global encoder via the 'encoder' selection file
-                results.append(encode_document(cfg, conn, d["id"], reprocess=reprocess, verbose=verbose))
-                continue
-            # order by page range start (empty pages => whole document => last)
-            def _page_start(item: tuple[Path, str | None]) -> int:
-                f, _m = item
-                e = cfg.encoder_from_file(f)
-                if e and e.pages and "-" in e.pages:
-                    try:
-                        return int(e.pages.split("-")[0])
-                    except ValueError:
-                        return 10**9
-                return 10**9  # whole-document encoders run after section ones
-            for f, model_override in sorted(specs, key=_page_start):
-                results.append(encode_document(cfg, conn, d["id"], enc_file=f,
-                                               reprocess=reprocess, verbose=verbose,
-                                               model_override=model_override))
+        targets: list = []
+        if doc_id is not None:
+            doc = get_document(conn, int(doc_id))
+            if doc is None:
+                print(f"  document not found: {doc_id}", flush=True)
+                return {"results": [{"action": "error", "filename": "(encode)",
+                                     "reason": f"document not found: {doc_id}"}]}
+            targets = [doc]
+        elif path:
+            root = Path(path)
+            if not root.is_absolute():
+                root = cfg.dropbox / root
+            root = root.resolve()
+            if root != cfg.dropbox.resolve() and cfg.dropbox.resolve() not in root.parents:
+                if not root.exists():
+                    print(f"  target path does not exist: {path}", flush=True)
+                    return {"results": []}
+            seen: set[int] = set()
+            for f in discover(cfg.dropbox, cfg.dir_documents, root=root, exclude=[cfg.inbox]):
+                doc = get_document_by_path(conn, str(f))
+                if doc is None or doc["id"] in seen:
+                    continue
+                seen.add(doc["id"])
+                targets.append(doc)
+        else:
+            targets = db.list_documents(conn, limit=10000)
+
+        results: list[dict] = []
+        for doc in targets:
+            results.extend(_encode_one_document(cfg, conn, doc, reprocess, verbose,
+                                                dry_run, include_leased))
         return {"results": results}
     finally:
         conn.close()
+
+
+def encode_all(cfg: Config, reprocess: bool = False, verbose: bool = True,
+               include_leased: bool = False) -> dict:
+    """Run the encoder pass for every document that has encoders configured."""
+    return encode_documents(cfg, reprocess=reprocess, verbose=verbose,
+                            include_leased=include_leased)
 
 
 def _defer_index_shas(cfg: Config, force_index: bool = False) -> set[str]:

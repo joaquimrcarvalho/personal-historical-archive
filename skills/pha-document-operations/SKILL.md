@@ -88,8 +88,11 @@ per document so you can build the relative path.
 **Re-run the encoder:**
 
 - C: `pha encode` (re-runs encoders on documents that have them);
-  `pha encode --reprocess` to re-encode everything matched.
-- D: `pha_job_start({ action: 'encode', reprocess: true })`
+  `pha encode --path collections/COLX` or `--doc <id>` to target ONE
+  document/collection; add `--reprocess` to force, and `--dry-run` to list the
+  encoders that would run without a model call or a write.
+- D: `pha_job_start({ action: 'encode', path: 'collections/COLX', reprocess: true })`
+  (or `doc: '<id>'`); there is no dry-run in the job tool.
 
 **Dry-run a configuration before a full pass** (never touches the DB/library/
 renders — writes to `<archive>/.pha-test/`):
@@ -153,7 +156,7 @@ D, poll `pha_job_status`). `pha doctor` lists the servers and their capacity.
 | Re-edit one doc | `pha edit --path <p> --reprocess` | `pha_job_start edit path=… reprocess=true` | not supported |
 | Re-edit one page | `pha edit --path <p> --page 3` | `pha_job_start edit path=… page=3` | not supported |
 | Re-read one page (a chosen model) | `pha scan --path <p> --page 3 --palaeographer X --model Y` | `pha_job_start scan path=… page=3 palaeographer=X model=Y` | preview only: `pha test <p> --page 3` |
-| Re-encode | `pha encode --reprocess` | `pha_job_start encode reprocess=true` | not supported |
+| Re-encode | `pha encode [--path P|--doc ID] [--reprocess] [--dry-run]` | `pha_job_start encode path=… reprocess=true` | not supported |
 | Dry-run config | `pha test <path> --pages 3` | — | — |
 | Inspect config | `pha editor/palaeographer/prompts <file>` | `pha_collection_config(<path>)` | `pha_collection_config(<path>)` |
 | Verify | `pha status`, `pha page` | `pha_status`, `pha_page` | `pha_extraction_status`, `pha_get_page` |
