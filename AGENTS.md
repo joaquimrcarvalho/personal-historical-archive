@@ -55,8 +55,11 @@
   all: an installed pha launched by an MCP/agent wrapper from an arbitrary cwd
   (often `/`). Plain `pha set archive-dir` infers the scope: it updates a real
   project `config.yaml` when one exists, and otherwise writes the per-user
-  settings; `--project` forces the project file. `pha set archive-dir` also
-  removes the legacy `.env` line, which is what
+  settings; `--project` forces the project file. The per-user file also keeps
+  `paths.archives`, a list of alternatives managed by `pha set archive-dir`
+  (register), `pha list archive-dir`, `pha use archive-dir` (switch active),
+  and `pha rm archive-dir` (unregister, never delete files). `pha set
+  archive-dir` also removes the legacy `.env` line, which is what
   makes it effective; `pha info` names the source that won
   (`archive_source`, with the machine-readable `archive_source_kind` —
   `env` | `dotenv` | `config` | `user` | `default` — and a

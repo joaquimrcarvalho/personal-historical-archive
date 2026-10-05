@@ -88,6 +88,11 @@ From 0.36.1 onward `pha update` runs both steps itself.
 
 ## Release history
 
+- `0.38.0` `feat(archive-dir): per-user archive registry` —
+  `paths.archives` alternatives in `~/.config/pha/config.yaml`, with
+  `pha list archive-dir`, `pha use archive-dir` and `pha rm archive-dir`;
+  plain `pha set archive-dir PATH` activates when unset and otherwise
+  registers an alternative
 - `0.37.4` `feat(view): home cwd fallback + user-scoped archive pointer` —
   the DSH plugin starts pha in the user's home when no project root is
   known, and plain `pha set archive-dir` now writes the per-user settings

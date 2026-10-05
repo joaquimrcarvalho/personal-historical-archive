@@ -1288,6 +1288,10 @@ pha set archive-dir [PATH]   # set the archive data root (per-user when there
                                     #   is no project config.yaml, else project config.yaml)
 pha set archive-dir --user [PATH]    # force the per-user settings (~/.config/pha/config.yaml)
 pha set archive-dir --project [PATH] # force/create this project's config.yaml
+pha set archive-dir PATH     # with a default set, registers PATH as an alternative
+pha list archive-dir [--json] # show the active archive + registered alternatives
+pha use archive-dir PATH     # make a registered archive the active per-user default
+pha rm archive-dir PATH      # remove one entry from the registry (files are kept)
 pha archive-dir              # alias for `pha set archive-dir`
 pha set dropbox [PATH]       # DEPRECATED: set only the documents folder
 pha upload document PATH [--name N] [--replace] [--merge]
@@ -1510,6 +1514,13 @@ or per-invocation with the `PHA_NO_UPDATE_CHECK=1` environment variable.
   given, an existing project `config.yaml` is updated; otherwise the pointer
   goes to the per-user settings, which is what an installed pha/DSH needs.
   `--project` forces (and creates, if needed) the project file.
+  The per-user file also carries `paths.archives`, a list of known alternative
+  roots. Plain `pha set archive-dir PATH` activates when no default exists and
+  otherwise registers the path as an alternative; `pha use archive-dir PATH`
+  switches the active/default pointer, `pha list archive-dir` shows the
+  registry, and `pha rm archive-dir PATH` unregisters an alternative. Removing
+  the active entry needs `--force` or another active choice first; registry
+  commands never delete archive files.
 - `vision.*` — model server + vision model for extraction
 - `embeddings.*` — model server + embedding model; `batch_size` caps how many
   chunks go in each `/embeddings` request (some endpoints reject an input over

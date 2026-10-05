@@ -3224,8 +3224,9 @@ def _set_archive_dir_in_user_config(cfg: Config, path: str | None) -> None:
     except OSError as e:
         print(f"error: cannot read {f}: {e}", file=sys.stderr)
         return
+    from . import archive_registry as registry
     try:
-        f.write_text(_write_paths_archive_dir(text, expanded), encoding="utf-8")
+        registry.activate(expanded)
     except OSError as e:
         print(f"error: cannot write {f}: {e}", file=sys.stderr)
         return
@@ -3252,27 +3253,153 @@ def _set_archive_dir_smart(cfg: Config, path: str | None) -> None:
         _set_archive_dir_in_user_config(cfg, path)
 
 
+def _archive_dir_add(cfg: Config, path: str | None) -> None:
+    """Register an archive in the per-user settings.
+
+    No per-user default yet: make this path the active one. A default already
+    exists: keep it and register the new path as an alternative, with the
+    command that switches to it.
+    """
+    from . import archive_registry as registry
+
+    expanded = _resolve_archive_path_arg(cfg, path)
+    if expanded is None:
+        return
+    current = registry.active()
+    if not current:
+        _set_archive_dir_in_user_config(cfg, expanded)
+        return
+    same = str(Path(current).expanduser().resolve()) == str(Path(expanded).expanduser().resolve())
+    if same:
+        print(f"{expanded} is already the active per-user archive")
+        return
+    added = registry.register(expanded)
+    verb = "registered" if added else "already registered"
+    print(f"{verb} {expanded} as an alternative archive")
+    print(f"run `pha set archive-dir --use {expanded}` to make it active")
+
+
+def _archive_dir_list(cfg: Config, as_json: bool = False) -> None:
+    from . import archive_registry as registry
+
+    user_default = registry.active()
+    rows = [
+        {
+            "path": path,
+            "active": bool(user_default) and path == user_default,
+            "exists": Path(path).is_dir(),
+        }
+        for path in registry.archives()
+    ]
+    report = {
+        "archive_dir": str(cfg.archive_dir),
+        "archive_source": cfg.archive_source_kind,
+        "per_user_default": user_default or None,
+        "archives": rows,
+    }
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+    print(f"effective archive: {cfg.archive_dir}  (source: {cfg.archive_source_kind})")
+    if user_default:
+        print(f"per-user default : {user_default}")
+    else:
+        print("per-user default : (none)")
+    if not rows:
+        print("registered       : (none)")
+        return
+    print("registered       :")
+    for row in rows:
+        marks = []
+        if row["active"]:
+            marks.append("active")
+        if not row["exists"]:
+            marks.append("missing")
+        suffix = " (" + ", ".join(marks) + ")" if marks else ""
+        print(f"  - {row['path']}{suffix}")
+
+
+def _archive_dir_use(cfg: Config, path: str) -> int:
+    from . import archive_registry as registry
+
+    try:
+        f = registry.activate(path)
+    except OSError as e:
+        print(f"error: cannot write the per-user settings: {e}", file=sys.stderr)
+        return 1
+    print(f"active per-user archive -> {Path(path).expanduser().resolve()}  (in {f})")
+    print("PHA_ARCHIVE_DIR in the environment, or a project config.yaml, still wins for a run.")
+    return 0
+
+
+def _archive_dir_remove(cfg: Config, path: str, force: bool = False) -> int:
+    from . import archive_registry as registry
+
+    ok, message = registry.remove(path, force=force)
+    if not ok:
+        print(f"error: {message}", file=sys.stderr)
+        known = registry.archives()
+        print("known archives: " + (", ".join(known) if known else "(none)"), file=sys.stderr)
+        return 1
+    print(message)
+    return 0
+
+
 def cmd_set_archive_dir(cfg: Config, args) -> None:
-    """`pha set archive-dir [--user|--project|--global]` (or `pha archive-dir`) — set the
+    """`pha set archive-dir [--user|--project|--global]` — set or register an
     archive data root.
 
-    The default scope is inferred: an existing project `config.yaml` is updated
-    (a tracked, reviewable line); when there is none, the pointer goes to the
-    per-user settings
-    (`~/.config/pha/config.yaml`, `%APPDATA%\\pha\\config.yaml` on Windows)
-    instead, which is the pointer a built pha can find with no project around
-    it. `PHA_ARCHIVE_DIR` in the environment still overrides both for a one-off
-    run. All data — documents (dropbox), model definitions
-    (palaeographers/editors/encoders) and generated output (library, renders,
-    db) — lives under this directory."""
+    The default scope is inferred: an existing project `config.yaml` is
+    updated; otherwise the per-user settings are used. A path argument either
+    activates the pointer (when the target scope has no default yet) or is
+    registered as an alternative; `--use PATH` activates a registered path,
+    `--remove PATH` removes one, and `--list` shows the registry. Registry
+    commands always operate on the per-user settings.
+    """
     path = getattr(args, "path", None)
+    if getattr(args, "list_", False):
+        _archive_dir_list(cfg, as_json=bool(getattr(args, "json", False)))
+        return
+    if getattr(args, "remove", None):
+        rc = _archive_dir_remove(cfg, str(args.remove), force=bool(getattr(args, "force", False)))
+        if rc:
+            sys.exit(rc)
+        return
+    if getattr(args, "use", None):
+        rc = _archive_dir_use(cfg, str(args.use))
+        if rc:
+            sys.exit(rc)
+        return
     if getattr(args, "global_", False) or getattr(args, "user_", False):
-        _set_archive_dir_in_user_config(cfg, path)
+        _archive_dir_add(cfg, path)
         return
     if getattr(args, "project_", False):
         _set_archive_dir_in_config(cfg, path)
         return
-    _set_archive_dir_smart(cfg, path)
+    if (cfg.root / "config.yaml").is_file():
+        _set_archive_dir_in_config(cfg, path)
+    else:
+        _archive_dir_add(cfg, path)
+
+
+def cmd_list_archive_dir(cfg: Config, args) -> None:
+    _archive_dir_list(cfg, as_json=bool(getattr(args, "json", False)))
+
+
+def cmd_use_archive_dir(cfg: Config, args) -> None:
+    rc = _archive_dir_use(cfg, str(args.path))
+    if rc:
+        sys.exit(rc)
+
+
+def cmd_remove_archive_dir(cfg: Config, args) -> None:
+    path = getattr(args, "path", None)
+    if not path:
+        print("usage: pha rm archive-dir PATH [--force]", file=sys.stderr)
+        sys.exit(2)
+    rc = _archive_dir_remove(cfg, str(path), force=bool(getattr(args, "force", False)))
+    if rc:
+        sys.exit(rc)
 
 
 def cmd_init_archive(cfg: Config, args) -> None:
@@ -3735,6 +3862,7 @@ def cmd_help(cfg: Config, args) -> None:
     print("  pha scan                      extract + index new/changed files in dropbox")
     print('  pha search "query"            search the extracted text')
     print("  pha set archive-dir <path>    point pha at an archive")
+    print("  pha list/use/rm archive-dir   manage registered archives")
     print("  pha init-archive <path>       create a new archive")
     print("  pha mcp                       run the MCP server (stdio)")
     print("  pha bundle <collections...>   export collections for another archive (no re-scan there)")
@@ -3959,6 +4087,16 @@ def _prompt_archive_setup(cfg: Config) -> bool:
 
 def main(argv: list[str] | None = None) -> None:
     cfg = Config.load()
+
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if len(raw_argv) >= 2 and raw_argv[0] in ("rm", "remove") and raw_argv[1] == "archive-dir":
+        rest = raw_argv[2:]
+        path = next((arg for arg in rest if not arg.startswith("-")), None)
+        if not path:
+            print("usage: pha rm archive-dir PATH [--force]", file=sys.stderr)
+            sys.exit(2)
+        rc = _archive_dir_remove(cfg, path, force=("--force" in rest))
+        sys.exit(rc)
 
     parser = argparse.ArgumentParser(
         prog="pha",
@@ -4403,12 +4541,32 @@ def main(argv: list[str] | None = None) -> None:
                      help="alias for --global: store in the per-user settings")
     sad.add_argument("--project", dest="project_", action="store_true",
                      help="store in this project's config.yaml (creates one if needed)")
+    sad.add_argument("--list", dest="list_", action="store_true",
+                     help="list the active per-user archive and registered alternatives")
+    sad.add_argument("--use", default=None, metavar="PATH",
+                     help="make a registered archive the active per-user default")
+    sad.add_argument("--remove", default=None, metavar="PATH",
+                     help="remove an archive from the per-user registry (files are not touched)")
+    sad.add_argument("--force", action="store_true",
+                     help="with --remove: clear the active default too")
     sad.set_defaults(fn=cmd_set_archive_dir)
     sdb = ssub.add_parser("dropbox", help="DEPRECATED: set only the dropbox documents folder")
     sdb.add_argument("path", nargs="?", help="path to the documents folder (or prompted)")
     sdb.set_defaults(fn=cmd_set_dropbox)
     sub.add_parser("archive-dir", help="alias for `pha set archive-dir`").set_defaults(fn=cmd_set_archive_dir)
     sub.add_parser("dropbox", help="DEPRECATED alias for `pha set dropbox`").set_defaults(fn=cmd_set_dropbox)
+
+    lst = sub.add_parser("list", help="list registered archive directories")
+    lsub = lst.add_subparsers(dest="list_cmd", required=True)
+    larch = lsub.add_parser("archive-dir", help="list registered archive directories")
+    larch.add_argument("--json", action="store_true")
+    larch.set_defaults(fn=cmd_list_archive_dir)
+
+    use = sub.add_parser("use", help="make a registered archive directory active")
+    usub = use.add_subparsers(dest="use_cmd", required=True)
+    uarch = usub.add_parser("archive-dir", help="make a registered archive directory active")
+    uarch.add_argument("path", help="registered archive root")
+    uarch.set_defaults(fn=cmd_use_archive_dir)
 
     mg = sub.add_parser("migrate-config", help="migrate legacy config to the models/ registry + pha.yaml sidecar layout")
     mg.add_argument("--dry-run", action="store_true", help="report what would change without writing")
@@ -4585,6 +4743,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.cmd == "view":
         cmd_view(cfg, args)
+        return
+
+    if args.cmd in ("list", "use"):
+        args.fn(cfg, args)
         return
 
     # Fresh-install guard: if no archive is configured and the default one is
