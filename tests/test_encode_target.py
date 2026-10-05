@@ -92,3 +92,25 @@ def test_encode_path_outside_dropbox_is_empty(tmp_path, monkeypatch):
 
     assert result["results"] == []
     assert calls == []
+
+
+def test_cmd_encode_reports_lost_windows(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from personal_historical_archive import cli
+
+    monkeypatch.setattr(cli, "encode_documents", lambda *a, **k: {"results": [{
+        "action": "encoded", "filename": "d.pdf", "encoder": "letters",
+        "records": 174, "windows": 56,
+        "lost_windows": [{"pages": "pages 779-796",
+                          "reason": "truncated at the output cap"}],
+    }]})
+    args = SimpleNamespace(path="collections/COLX", doc=None, reprocess=False,
+                           dry_run=False, include_leased=False)
+
+    cli.cmd_encode(None, args)
+
+    out, err = capsys.readouterr()
+    assert "WINDOW(S) LOST" in out
+    assert "lost pages 779-796" in err
+    assert "incomplete" in err

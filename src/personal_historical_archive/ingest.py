@@ -3193,6 +3193,114 @@ def _page_filter(encoder: Encoder) -> set[int] | None:
     return wanted or None
 
 
+def _split_encoder_window(chunk: list, overlap: int):
+    """Halve an over-long answer window, keeping a little page overlap."""
+    n = len(chunk)
+    if n < 2:
+        return None
+    mid = n // 2
+    ov = min(max(0, int(overlap)), max(0, mid - 1), max(0, n - mid - 1))
+    left = chunk[: mid + ov]
+    right = chunk[mid - ov :]
+    if not left or not right or len(left) >= n or len(right) >= n:
+        return None
+    return left, right
+
+
+def _extract_encoder_window(
+    client,
+    encoder,
+    base_prompt: str,
+    doc,
+    chunk: list,
+    block: str,
+    start_page,
+    verbose: bool,
+    mode: str = "chunked",
+) -> tuple[list, list[dict]]:
+    """One encoder window: call the model, parse JSON, split when truncated.
+
+    Returns ``(records_or_empty, lost_windows)``. A ``finish_reason ==
+    "length"`` means the *answer* hit ``max_tokens``: retrying the identical
+    prompt cannot help, so the window is halved and both halves are retried.
+    A single page that still does not fit is recorded as a lost window.
+    Non-length failures get ONE differentiated retry, never three identical
+    calls.
+    """
+    max_tokens = max(8192, encoder.max_tokens)
+    label = (f"pages {chunk[0][0]}-{chunk[-1][0]}" if len(chunk) > 1
+             else f"page {chunk[0][0]}")
+    block = block or "\n\n".join(f"--- page {p} ---\n{t}" for p, t in chunk)
+    if verbose:
+        print(f"  encoding {label} ({mode}, {len(block)} chars)", flush=True)
+
+    def _prompt(extra: str = "") -> str:
+        entry_hint = (
+            f"\n\nAn entry STARTS at page {start_page} in the text below.\n"
+            f"Extract ONLY that entry (and its sub-records). The page\n"
+            f"attribute of its main record MUST be {start_page}.\n"
+            f"If page {start_page} is not really an entry after all, return []."
+        ) if start_page else ""
+        return (
+            f"{base_prompt}{entry_hint}{extra}\n\n"
+            f"Document: {doc['filename']}\nPages: {chunk[0][0]}-{chunk[-1][0]}\n\n"
+            f"{block}"
+        )
+
+    prompt = _prompt()
+    out = ""
+    finish: str | None = None
+    parsed: list | None = None
+    for attempt in range(2):
+        out, finish = client.chat_text_ex(encoder.model, prompt, encoder.temperature,
+                                          max_tokens, thinking=encoder.thinking)
+        parsed = _parse_json_array(out)
+        if parsed is not None:
+            return parsed, []
+        if finish == "length":
+            break  # retrying the same prompt at temperature 0 is futile
+        if attempt == 0:
+            if not out.strip():
+                prompt = _prompt("\n\nYour previous answer was empty. "
+                                 "Return ONLY the JSON array.")
+            elif start_page:
+                # The detector flagged this page: drop the escape hatch and
+                # insist. A valid [] would already have returned above.
+                prompt = prompt.replace(
+                    "If page {0} is not really an entry after all, return [].".format(start_page),
+                    "A detector flagged page {0} as an entry start. Extract it.".format(start_page),
+                )
+            else:
+                prompt = _prompt("\n\nReturn ONLY the JSON array. "
+                                 "No prose, no code fence.")
+            continue
+        break
+
+    truncated = finish == "length" or (finish is None and len(out) >= max_tokens * 3)
+    if truncated and len(chunk) > 1:
+        halves = _split_encoder_window(chunk, getattr(encoder, "overlap_pages", 0))
+        if halves is not None:
+            left, right = halves
+            if verbose:
+                print(f"    ({label}: answer hit the output cap at {max_tokens} tokens; "
+                      f"splitting into {len(left)} + {len(right)} pages)", flush=True)
+            left_start = start_page if any(p == start_page for p, _ in left) else None
+            right_start = start_page if any(p == start_page for p, _ in right) else None
+            lrecs, llost = _extract_encoder_window(
+                client, encoder, base_prompt, doc, left, "", left_start, verbose, mode="split-half")
+            rrecs, rlost = _extract_encoder_window(
+                client, encoder, base_prompt, doc, right, "", right_start, verbose, mode="split-half")
+            return lrecs + rrecs, llost + rlost
+
+    reason = ("truncated at the output cap" if truncated
+              else ("empty response" if not out.strip() else "unparseable response"))
+    if verbose:
+        print(f"    (window {label} lost: {reason}; response {len(out)} chars, "
+              f"head: {out[:120]!r})", flush=True)
+    return [], [{"pages": label, "reason": reason, "chars": len(out),
+                 "finish_reason": finish}]
+
+
 def encode_document(
     cfg: Config,
     conn,
@@ -3340,63 +3448,21 @@ def encode_document(
                         break
                     start += batch - ov
         seen: set = set()
+        windows = 0
+        lost_windows: list[dict] = []
         passes = max(1, encoder.extraction_passes)
         for pass_num in range(passes):
             if verbose and passes > 1:
                 print(f"  pass {pass_num + 1}/{passes}", flush=True)
             for chunk, block, start_page in calls:
-                entry_hint = (
-                    f"\n\nAn entry STARTS at page {start_page} in the text below.\n"
-                    f"Extract ONLY that entry (and its sub-records). The page\n"
-                    f"attribute of its main record MUST be {start_page}.\n"
-                    f"If page {start_page} is not really an entry after all, return []."
-                ) if start_page else ""
-                prompt = (
-                    f"{base_prompt}{entry_hint}\n\n"
-                    f"Document: {doc['filename']}\nPages: {chunk[0][0]}-{chunk[-1][0]}\n\n"
-                    f"{block}"
+                windows += 1
+                mode = "entry-spans" if starts else ("single-pass" if len(calls) == 1 else "chunked")
+                parsed, lost = _extract_encoder_window(
+                    client, encoder, base_prompt, doc, chunk, block, start_page,
+                    verbose, mode=mode,
                 )
-                if verbose:
-                    mode = "entry-spans" if starts else ("single-pass" if len(calls) == 1 else "chunked")
-                    print(f"  encoding pages {chunk[0][0]}-{chunk[-1][0]} "
-                          f"({mode}, {len(block)} chars)", flush=True)
-                # Retry empty/unparseable responses: models sometimes return
-                # '' or prose instead of the JSON array (flaky); a couple of
-                # retries fix most of it. A generous max_tokens matters:
-                # reasoning models emit a <think> block even with thinking
-                # disabled, and a tight cap makes them return [] rather than
-                # risk truncating their answer.
-                #
-                # NOTE: a valid-but-EMPTY array ([]) is an honest answer — the
-                # model used the "not really an entry, return []" escape hatch —
-                # and MUST break the loop. `_parse_json_array` returns None only
-                # when there is genuinely no parseable array, so `parsed is not
-                # None` (rather than truthiness) is what distinguishes success.
-                parsed: list | None = None
-                for attempt in range(3):
-                    out = client.chat_text(encoder.model, prompt, encoder.temperature,
-                                           max(8192, encoder.max_tokens),
-                                           thinking=encoder.thinking)
-                    parsed = _parse_json_array(out)
-                    if parsed is not None or not out.strip():
-                        break
-                    if verbose:
-                        print(f"    (retry {attempt + 1}: response {len(out)} chars not parseable, "
-                              f"head: {out[:120]!r})", flush=True)
-                    if start_page and attempt >= 1:
-                        # The detector flagged this page; drop the escape
-                        # hatch and insist only when the model returned prose
-                        # (not a valid JSON array) — a valid [] above would
-                        # already have broken the loop, so insisting here can
-                        # no longer override an honest "no entry" answer.
-                        prompt = prompt.replace(
-                            "If page {0} is not really an entry after all, return [].".format(start_page),
-                            "A detector flagged page {0} as an entry start. Extract it.".format(start_page),
-                        )
-                if verbose and parsed is None and out.strip():
-                    print(f"    (model returned no parseable JSON array; "
-                          f"response {len(out)} chars, head: {out[:160]!r})", flush=True)
-                for rec in _expand_records(parsed or []):
+                lost_windows.extend(lost)
+                for rec in _expand_records(parsed):
                     key = _record_key(rec)
                     if key in seen:
                         continue
@@ -3459,7 +3525,8 @@ def encode_document(
                 except FilterError:
                     pass
 
-    return {"action": "encoded", "filename": doc["filename"], "encoder": resolved, "records": len(records)}
+    return {"action": "encoded", "filename": doc["filename"], "encoder": resolved,
+            "records": len(records), "windows": windows, "lost_windows": lost_windows}
 
 
 def _encoder_specs_for_document(cfg: Config, doc) -> list[tuple[Path, str | None]]:

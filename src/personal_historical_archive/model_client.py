@@ -474,6 +474,18 @@ def _strip_think(text: str) -> str:
     return _clean_html_entities(t)
 
 
+
+def _normalize_finish_reason(value) -> str | None:
+    """Normalize provider spelling: OpenAI uses ``length``, Anthropic
+    ``max_tokens``; both mean the answer hit the output cap."""
+    if not value:
+        return None
+    value = str(value).strip().lower()
+    if value in ("length", "max_tokens", "max_output_tokens"):
+        return "length"
+    return value
+
+
 def _resize_jpeg_bytes(image_path: Path, max_side: int, jpeg_quality: int) -> bytes:
     """Return the image resized to <=max_side (longest edge) and encoded as
     JPEG at `jpeg_quality`. Tries sips (macOS), then PyMuPDF (cross-platform)."""
@@ -699,30 +711,40 @@ class ModelClient:
                 f"Available: {available or '(none — is the server running? did you load a model?)'}"
             )
 
-    def _anthropic_chat(self, payload: dict[str, Any]) -> str:
-        """POST an Anthropic-format chat payload and return the text."""
+    def _anthropic_chat_ex(self, payload: dict[str, Any]) -> tuple[str, str | None]:
+        """POST an Anthropic-format chat payload; return (text, finish_reason)."""
         data = self._post_to(f"{self._anthropic_root}/anthropic/v1/messages", payload)
         try:
-            return _strip_think(" ".join(
+            text = _strip_think(" ".join(
                 b.get("text", "") for b in data["content"] if b.get("type") == "text"
             ))
         except (KeyError, TypeError) as e:
             raise ModelError(f"Unexpected anthropic response: {data!r}") from e
+        return text, _normalize_finish_reason(data.get("stop_reason"))
 
-    def _openai_chat(self, payload: dict[str, Any]) -> str:
-        """POST an OpenAI-format chat payload and return the text.
+    def _anthropic_chat(self, payload: dict[str, Any]) -> str:
+        """POST an Anthropic-format chat payload and return the text."""
+        return self._anthropic_chat_ex(payload)[0]
+
+    def _openai_chat_ex(self, payload: dict[str, Any]) -> tuple[str, str | None]:
+        """POST an OpenAI-format chat payload; return (text, finish_reason).
 
         A malformed-but-HTTP-200 response (observed from MiniMax: a null
         ``message``) must surface as ``ModelError``, the failure the per-page
         guards recover from — not as a raw ``TypeError`` that would abort the
-        whole run. ``None["content"]`` is exactly that case, so ``TypeError``
-        is caught here as it already is in ``_anthropic_chat``.
+        whole run.
         """
         data = self._post("/chat/completions", payload)
         try:
-            return _strip_think(data["choices"][0]["message"]["content"])
+            choice = data["choices"][0]
+            text = _strip_think(choice["message"]["content"])
         except (KeyError, IndexError, AttributeError, TypeError) as e:
             raise ModelError(f"Unexpected chat response: {data!r}") from e
+        return text, _normalize_finish_reason(choice.get("finish_reason"))
+
+    def _openai_chat(self, payload: dict[str, Any]) -> str:
+        """POST an OpenAI-format chat payload and return the text."""
+        return self._openai_chat_ex(payload)[0]
 
     def chat_vision(
         self,
@@ -781,6 +803,34 @@ class ModelClient:
             payload["thinking"] = {"type": "disabled"}  # reasoning models (e.g. MiniMax-M3)
         return self._openai_chat(payload)
 
+    def chat_text_ex(
+        self,
+        model: str,
+        prompt: str,
+        temperature: float = 0.1,
+        max_tokens: int = 4096,
+        thinking: bool = True,
+    ) -> tuple[str, str | None]:
+        """Text completion; return ``(text, finish_reason)``.
+
+        ``finish_reason`` is normalized to ``"length"`` when the provider
+        reports an output-cap cutoff (OpenAI ``length`` / Anthropic
+        ``max_tokens``), so callers can tell a truncated answer from a
+        malformed one.
+        """
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if not thinking:
+            payload["thinking"] = {"type": "disabled"}
+        if self.api_style == "anthropic":
+            return self._anthropic_chat_ex(payload)
+        payload["temperature"] = temperature
+        payload["stream"] = False
+        return self._openai_chat_ex(payload)
+
     def chat_text(
         self,
         model: str,
@@ -792,18 +842,7 @@ class ModelClient:
         """Text-only completion (no image) — used by editors/encoders to
         transform transcriptions with a DIFFERENT model than the palaeographer.
         Wire format follows self.api_style (openai or anthropic)."""
-        payload = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        if not thinking:
-            payload["thinking"] = {"type": "disabled"}
-        if self.api_style == "anthropic":
-            return self._anthropic_chat(payload)
-        payload["temperature"] = temperature
-        payload["stream"] = False
-        return self._openai_chat(payload)
+        return self.chat_text_ex(model, prompt, temperature, max_tokens, thinking)[0]
 
     def embed(
         self, model: str, texts: Sequence[str], batch_size: int | None = None

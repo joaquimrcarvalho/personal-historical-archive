@@ -70,6 +70,9 @@ class _FakeTextClient:
         self.prompts.append(prompt)
         return self.reply
 
+    def chat_text_ex(self, model, prompt, temperature, max_tokens, thinking=True):
+        return self.chat_text(model, prompt, temperature, max_tokens, thinking), None
+
 
 # --------------------------------------------------------------------- editor hooks
 

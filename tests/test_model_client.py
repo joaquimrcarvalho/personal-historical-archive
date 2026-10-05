@@ -592,3 +592,42 @@ def test_login_shell_path_timeout_returns_none(monkeypatch):
 
     monkeypatch.setattr(mc.subprocess, "run", boom)
     assert mc._login_shell_path() is None
+
+
+# --------------------------------------------------------------------------- finish reasons
+
+def test_openai_finish_reason_length_is_normalized(monkeypatch):
+    client = ModelClient("http://example/v1")
+    monkeypatch.setattr(client, "_post", lambda path, payload: {
+        "choices": [{"message": {"content": "partial"}, "finish_reason": "length"}],
+    })
+
+    text, finish = client.chat_text_ex("m", "p")
+
+    assert text == "partial"
+    assert finish == "length"
+    client.close()
+
+
+def test_anthropic_max_tokens_is_normalized_to_length(monkeypatch):
+    client = ModelClient("http://example/v1")
+    monkeypatch.setattr(client, "_post_to", lambda url, payload: {
+        "content": [{"type": "text", "text": "partial"}],
+        "stop_reason": "max_tokens",
+    })
+
+    text, finish = client._anthropic_chat_ex({})
+
+    assert text == "partial"
+    assert finish == "length"
+    client.close()
+
+
+def test_chat_text_still_returns_the_text(monkeypatch):
+    client = ModelClient("http://example/v1")
+    monkeypatch.setattr(client, "_post", lambda path, payload: {
+        "choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}],
+    })
+
+    assert client.chat_text("m", "p") == "answer"
+    client.close()

@@ -3497,11 +3497,25 @@ def cmd_encode(cfg: Config, args) -> None:
         return
     encoded = sum(1 for r in res["results"] if r["action"] == "encoded")
     print(f"encoded {encoded} document(s)")
+    total_lost = 0
     for r in res["results"]:
         if r["action"] == "encoded":
-            print(f"  + {r['filename']} [{r['encoder']}] ({r['records']} records)")
+            lost = list(r.get("lost_windows") or [])
+            total_lost += len(lost)
+            detail = f"{r['records']} records"
+            if r.get("windows") is not None:
+                detail += f", {r['windows']} windows"
+            if lost:
+                detail += f", {len(lost)} WINDOW(S) LOST"
+            print(f"  + {r['filename']} [{r['encoder']}] ({detail})")
+            for w in lost:
+                print(f"    ! lost {w.get('pages')}: {w.get('reason')}", file=sys.stderr)
         elif r.get("reason") not in ("no encoder configured", "records up to date"):
             print(f"  ! {r['filename']}: {r.get('reason', r['action'])}")
+    if total_lost:
+        print(f"warning: {total_lost} encoder window(s) lost; the records are incomplete "
+              f"(re-run the affected document after raising max_tokens or fixing the encoder)",
+              file=sys.stderr)
 
 
 def cmd_test(cfg: Config, args) -> None:

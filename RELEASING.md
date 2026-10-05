@@ -88,6 +88,9 @@ From 0.36.1 onward `pha update` runs both steps itself.
 
 ## Release history
 
+- `0.40.0` `fix(encoder): split truncated answers and report lost windows` —
+  finish-reason plumbing (`chat_text_ex`), length-aware window splitting,
+  one differentiated retry, and explicit `lost_windows` in the summary
 - `0.39.0` `feat(encode): target one document and plan with --dry-run` —
   `pha encode --path P` / `--doc ID` and `--dry-run`; fixes the
   per-document `encode --path` call made by `pha handoff work`
