@@ -88,6 +88,9 @@ From 0.36.1 onward `pha update` runs both steps itself.
 
 ## Release history
 
+- `0.37.1` `fix(ingest): normalize raw_sha for surrounding whitespace` — the
+  edit-staleness trim mismatch (regression test in `tests/test_filter_hooks.py`)
+- `0.37.0` `8e23a32` `fix(pha): never build an unowned archive; per-user settings + --global`
 - `0.36.2` `db22376` `fix(view): skip gracefully when no DSH profiles are installed`
 - `0.36.1` `c574d83` `feat(update): ship and sync the PHA view plugin with pha`
 - `0.36.0` `0ed96f0` and earlier: no bundled view-plugin sync

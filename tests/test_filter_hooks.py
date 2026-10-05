@@ -377,3 +377,26 @@ encoders:
     row2 = conn.execute("SELECT filters FROM records WHERE document_id=?", (doc_id,)).fetchone()
     assert row2["filters"] != first
     conn.close()
+
+
+def test_edit_needed_ignores_surrounding_whitespace_in_raw_text():
+    """A page is current when its stored edit hash covers the same reading.
+
+    The editor hashes the stripped transcript, so leading/trailing whitespace
+    in ``pages.raw_text`` must not make the page look re-transcribed.
+    """
+    from personal_historical_archive.ingest import _edit_needed, _raw_sha
+
+    editor = SimpleNamespace(prompt_file=None)
+    for raw in ("  RAW", "RAW\n", "\nRAW\n", "\tRAW \n"):
+        page = {"id": 1, "raw_text": raw, "reviewed_at": None}
+        edit_row = {
+            "reviewed_at": None,
+            "status": "done",
+            "text": "out",
+            "raw_sha": _raw_sha("RAW"),
+            "updated_at": time.time(),
+            "filters": "",
+        }
+        assert _edit_needed(page, edit_row, editor, False,
+                            model_files=(), expected_filters="") is False

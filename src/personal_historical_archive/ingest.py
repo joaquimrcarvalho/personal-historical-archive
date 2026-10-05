@@ -119,7 +119,7 @@ def _doc_sidecar(cfg: Config, path: Path) -> Sidecar:
 def _raw_sha(text: str) -> str:
     import hashlib
 
-    return hashlib.sha256((text or "").encode()).hexdigest()
+    return hashlib.sha256((text or "").strip().encode()).hexdigest()
 
 
 _HEADER_WINDOW = 6  # lines after a candidate start line to look for a header
