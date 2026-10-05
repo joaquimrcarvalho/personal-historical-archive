@@ -169,3 +169,60 @@ def test_commands_that_need_an_archive_still_refuse(tmp_path, monkeypatch, capsy
         cli.main(["status"])
     assert exc.value.code == 1
     assert "No pha archive is configured or found." in capsys.readouterr().err
+
+
+def _archive_dir_args(path, *, global_=False, user_=False, project_=False):
+    return SimpleNamespace(path=str(path), global_=global_, user_=user_, project_=project_)
+
+
+def test_set_archive_dir_defaults_to_user_settings_without_project_config(tmp_path, monkeypatch):
+    from personal_historical_archive.config import user_settings_file
+
+    monkeypatch.setenv("PHA_CONFIG_DIR", str(tmp_path / "ucfg"))
+    root = tmp_path / "proj"
+    root.mkdir()
+    cfg = Config.load(root)
+    archive = tmp_path / "archive"
+    archive.mkdir()
+
+    cli.cmd_set_archive_dir(cfg, _archive_dir_args(archive))
+
+    settings = user_settings_file()
+    assert settings.is_file()
+    assert f"archive_dir: {archive}" in settings.read_text(encoding="utf-8")
+    assert not (root / "config.yaml").exists()
+
+
+def test_set_archive_dir_uses_existing_project_config(tmp_path, monkeypatch):
+    from personal_historical_archive.config import user_settings_file
+
+    monkeypatch.setenv("PHA_CONFIG_DIR", str(tmp_path / "ucfg"))
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text("paths:\n  archive_dir: .\n", encoding="utf-8")
+    cfg = Config.load(root)
+    archive = tmp_path / "archive"
+    archive.mkdir()
+
+    cli.cmd_set_archive_dir(cfg, _archive_dir_args(archive))
+
+    assert f"archive_dir: {archive}" in (root / "config.yaml").read_text(encoding="utf-8")
+    assert not user_settings_file().exists()
+
+
+def test_set_archive_dir_user_flag_wins_over_project_config(tmp_path, monkeypatch):
+    from personal_historical_archive.config import user_settings_file
+
+    monkeypatch.setenv("PHA_CONFIG_DIR", str(tmp_path / "ucfg"))
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "config.yaml").write_text("paths:\n  archive_dir: .\n", encoding="utf-8")
+    cfg = Config.load(root)
+    archive = tmp_path / "archive"
+    archive.mkdir()
+
+    cli.cmd_set_archive_dir(cfg, _archive_dir_args(archive, user_=True))
+
+    settings = user_settings_file()
+    assert settings.is_file()
+    assert f"archive_dir: {archive}" in settings.read_text(encoding="utf-8")

@@ -45,15 +45,18 @@
   `config.yaml` (written by `pha set archive-dir`) > `paths.archive_dir` in the
   **per-user settings** (`~/.config/pha/config.yaml`, `%APPDATA%\pha\config.yaml`
   on Windows — `PHA_CONFIG_DIR` overrides the location; written by
-  `pha set archive-dir --global`) > the default `.` (the
+  `pha set archive-dir --user`/`--global`, or by plain `pha set archive-dir`
+  when no project `config.yaml` exists) > the default `.` (the
   project root). The legacy `.env` line sits ABOVE `config.yaml` on purpose:
   the shipped `config.yaml` carries `archive_dir: .` as a default, so treating
   that as authoritative would silently move every pre-existing `.env` user's
   archive. The per-user pointer sits BELOW a real project `config.yaml` (a
   checkout config is more specific) and exists for the case with no project at
   all: an installed pha launched by an MCP/agent wrapper from an arbitrary cwd
-  (often `/`). `config.yaml` is still the tracked, reviewable home — `pha set
-  archive-dir` writes it AND removes the legacy `.env` line, which is what
+  (often `/`). Plain `pha set archive-dir` infers the scope: it updates a real
+  project `config.yaml` when one exists, and otherwise writes the per-user
+  settings; `--project` forces the project file. `pha set archive-dir` also
+  removes the legacy `.env` line, which is what
   makes it effective; `pha info` names the source that won
   (`archive_source`, with the machine-readable `archive_source_kind` —
   `env` | `dotenv` | `config` | `user` | `default` — and a

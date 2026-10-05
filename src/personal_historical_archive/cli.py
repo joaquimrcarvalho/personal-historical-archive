@@ -3235,13 +3235,30 @@ def _set_archive_dir_in_user_config(cfg: Config, path: str | None) -> None:
               "still wins over the per-user setting.", file=sys.stderr)
 
 
+def _set_archive_dir_smart(cfg: Config, path: str | None) -> None:
+    """Default scope for `pha set archive-dir`: user settings unless a real
+    project config.yaml exists.
+
+    An installed pha started from an arbitrary cwd has no project to attach a
+    pointer to; writing a stray config.yaml in the cwd (as the fresh-install
+    prompt used to) is invisible to the MCP/DSH process, which starts at "/".
+    The per-user settings are the pointer such a process can find.
+    """
+    if (cfg.root / "config.yaml").is_file():
+        _set_archive_dir_in_config(cfg, path)
+    else:
+        print("no config.yaml in this context; storing the pointer in the "
+              "per-user settings.", file=sys.stderr)
+        _set_archive_dir_in_user_config(cfg, path)
+
+
 def cmd_set_archive_dir(cfg: Config, args) -> None:
-    """`pha set archive-dir [--global]` (or `pha archive-dir`) — set the
+    """`pha set archive-dir [--user|--project|--global]` (or `pha archive-dir`) — set the
     archive data root.
 
-    By default stores `paths.archive_dir` in this project's config.yaml, so the
-    archive location is a tracked, reviewable line rather than a gitignored
-    `.env` value. With `--global` it stores it in the per-user settings
+    The default scope is inferred: an existing project `config.yaml` is updated
+    (a tracked, reviewable line); when there is none, the pointer goes to the
+    per-user settings
     (`~/.config/pha/config.yaml`, `%APPDATA%\\pha\\config.yaml` on Windows)
     instead, which is the pointer a built pha can find with no project around
     it. `PHA_ARCHIVE_DIR` in the environment still overrides both for a one-off
@@ -3249,10 +3266,13 @@ def cmd_set_archive_dir(cfg: Config, args) -> None:
     (palaeographers/editors/encoders) and generated output (library, renders,
     db) — lives under this directory."""
     path = getattr(args, "path", None)
-    if getattr(args, "global_", False):
+    if getattr(args, "global_", False) or getattr(args, "user_", False):
         _set_archive_dir_in_user_config(cfg, path)
         return
-    _set_archive_dir_in_config(cfg, path)
+    if getattr(args, "project_", False):
+        _set_archive_dir_in_config(cfg, path)
+        return
+    _set_archive_dir_smart(cfg, path)
 
 
 def cmd_init_archive(cfg: Config, args) -> None:
@@ -3816,7 +3836,7 @@ _ARCHIVE_SOURCE_TEXT = {
     "env": "PHA_ARCHIVE_DIR environment variable",
     "dotenv": "PHA_ARCHIVE_DIR in .env (legacy)",
     "config": "paths.archive_dir in config.yaml",
-    "user": "paths.archive_dir in the per-user settings (pha set archive-dir --global)",
+    "user": "paths.archive_dir in the per-user settings (pha set archive-dir --user)",
     "default": "default (project root)",
 }
 _RESOLVED_SOURCE_TEXT = {
@@ -3900,7 +3920,7 @@ def _create_and_set(cfg: Config, path: Path) -> None:
     except (FileExistsError, NotADirectoryError) as e:
         print(f"error: {e}", file=sys.stderr)
         return
-    _set_archive_dir_in_config(cfg, str(p))
+    _set_archive_dir_smart(cfg, str(p))
     print(f"created and pointed pha at {p}")
 
 
@@ -3921,7 +3941,7 @@ def _prompt_archive_setup(cfg: Config) -> bool:
         except (EOFError, KeyboardInterrupt):
             ans = ""
         if ans == "1":
-            _set_archive_dir_in_config(cfg, None)
+            _set_archive_dir_smart(cfg, None)
             return True
         if ans in ("", "2"):
             _create_and_set(cfg, home_pha)
@@ -4377,8 +4397,12 @@ def main(argv: list[str] | None = None) -> None:
     sad.add_argument("path", nargs="?", help="path to the archive directory (or prompted)")
     sad.add_argument("--global", dest="global_", action="store_true",
                      help="store the pointer in the per-user settings "
-                          "(~/.config/pha/config.yaml, %%APPDATA%%\\pha\\config.yaml) "
-                          "instead of this project's config.yaml")
+                          "(~/.config/pha/config.yaml, %%APPDATA%%\\pha\\config.yaml); "
+                          "this is the default when no project config.yaml exists")
+    sad.add_argument("--user", dest="user_", action="store_true",
+                     help="alias for --global: store in the per-user settings")
+    sad.add_argument("--project", dest="project_", action="store_true",
+                     help="store in this project's config.yaml (creates one if needed)")
     sad.set_defaults(fn=cmd_set_archive_dir)
     sdb = ssub.add_parser("dropbox", help="DEPRECATED: set only the dropbox documents folder")
     sdb.add_argument("path", nargs="?", help="path to the documents folder (or prompted)")

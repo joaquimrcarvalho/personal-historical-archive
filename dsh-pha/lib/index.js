@@ -8,6 +8,7 @@
 // Schema `defineTool` compiles to, and registered on the `tools` service.
 
 import { existsSync, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -78,7 +79,10 @@ function apply(ctx, config) {
   const autoRoot = existsSync(resolve(checkoutRoot, 'config.yaml')) ? checkoutRoot : ''
   const projectRoot = explicitRoot || autoRoot
   const configuredArchive = String((config && (config.archiveDir || config.archive_dir)) || '').trim()
-  const cwd = projectRoot || '/'
+  // Last resort: start pha in the user's home, where a home config.yaml (or
+  // the user-level settings under ~/.config/pha) can be found. `/` was the old
+  // fallback and can never carry a user's archive pointer.
+  const cwd = projectRoot || homedir() || '/'
   const childEnv = {}
   if (projectRoot) childEnv.PHA_HOME = projectRoot
   if (configuredArchive) childEnv.PHA_ARCHIVE_DIR = configuredArchive

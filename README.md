@@ -1284,8 +1284,10 @@ pha test [target] [--pages N] [--random] [--seed S] [--show]
                                     #   (safe: writes to a scratch dir; never touches the archive;
                                     #    --show re-prints, --list lists, --clean deletes test run dirs)
 pha init-archive [PATH]      # create a new self-contained archive directory
-pha set archive-dir [PATH]   # set the archive data root (stored in config.yaml)
-pha set archive-dir --global [PATH]  # …or in the per-user settings (~/.config/pha/config.yaml)
+pha set archive-dir [PATH]   # set the archive data root (per-user when there
+                                    #   is no project config.yaml, else project config.yaml)
+pha set archive-dir --user [PATH]    # force the per-user settings (~/.config/pha/config.yaml)
+pha set archive-dir --project [PATH] # force/create this project's config.yaml
 pha archive-dir              # alias for `pha set archive-dir`
 pha set dropbox [PATH]       # DEPRECATED: set only the documents folder
 pha upload document PATH [--name N] [--replace] [--merge]
@@ -1499,12 +1501,15 @@ or per-invocation with the `PHA_NO_UPDATE_CHECK=1` environment variable.
   environment > a legacy `PHA_ARCHIVE_DIR` line in `.env` > this key > the
   **per-user settings** (`~/.config/pha/config.yaml`,
   `%APPDATA%\pha\config.yaml` on Windows; `PHA_CONFIG_DIR` overrides the
-  location, and `pha set archive-dir --global` writes it) > `.`;
+  location, and `pha set archive-dir --user`/`--global` writes it) > `.`;
   `pha set archive-dir` also removes the legacy `.env` line, which is what
   makes this key effective. The per-user layer sits below a real project
   `config.yaml` and exists for a machine with **no project around pha** — an
   installed pha started by an MCP/agent wrapper from an arbitrary cwd (often
-  `/`), where a project config would not be found at all.
+  `/`), where a project config would not be found at all. When no scope flag is
+  given, an existing project `config.yaml` is updated; otherwise the pointer
+  goes to the per-user settings, which is what an installed pha/DSH needs.
+  `--project` forces (and creates, if needed) the project file.
 - `vision.*` — model server + vision model for extraction
 - `embeddings.*` — model server + embedding model; `batch_size` caps how many
   chunks go in each `/embeddings` request (some endpoints reject an input over

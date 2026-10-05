@@ -24,7 +24,7 @@ console.log('dsh-pha self-check — ' + root)
 // 1. Zero dependencies: the package may import only node: builtins.
 const src = readFileSync(join(root, 'lib', 'index.js'), 'utf8')
 const froms = [...src.matchAll(/(?:^|\n)\s*import\s+[^;\n]*?\bfrom\s+[\x27\x22]([^\x27\x22]+)[\x27\x22]/g)].map((m) => m[1])
-check(froms.every((spec) => spec.startsWith("node:")), "lib/index.js imports only node: builtins (no harness peers)")
+check(src.includes('homedir()'), 'child cwd falls back to the user home, not /')
 check(froms.every((spec) => spec.startsWith("node:")), "lib/index.js imports only node: builtins (no harness peers)")
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 check(Object.keys(pkg.dependencies || {}).length === 0, 'package.json declares no runtime dependencies')

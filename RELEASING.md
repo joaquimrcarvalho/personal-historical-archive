@@ -88,6 +88,10 @@ From 0.36.1 onward `pha update` runs both steps itself.
 
 ## Release history
 
+- `0.37.4` `feat(view): home cwd fallback + user-scoped archive pointer` —
+  the DSH plugin starts pha in the user's home when no project root is
+  known, and plain `pha set archive-dir` now writes the per-user settings
+  when no project `config.yaml` exists (`--project`/`--user` force a scope)
 - `0.37.3` `fix(view): derive the project root from a profile link` —
   `pha view install` no longer leaves a DSH profile without an archive
   pointer when the plugin is installed from a wheel
