@@ -1,6 +1,6 @@
 # Bug report — `pha reindex --doc A --doc B …` silently reindexes only the last document
 
-**Status:** **OPEN.** Found 2026-10-06 while reindexing four volumes returned from a
+**Status:** **FIXED (F1/F3, 0.40.2).** Found 2026-10-06 while reindexing four volumes returned from a
 hand-over.
 **Severity:** silent partial work — and it is the tool's *own printed advice*, so
 the failure is systematic: the operator believes N documents were reindexed when
@@ -85,3 +85,21 @@ returned translation works.
   shape (partial work, exit 0), and this session's other instance of it.
 - `pha-handoff-transport-enhancement-request.md` — the hand-over whose closing
   message prints the non-runnable command.
+
+
+## 8. Fix and verification (2026-10-06, 0.40.2)
+
+- **F1 shipped.** `pha reindex --doc` is now repeatable
+  (`action="append"`), and `--page` is repeatable too. The command printed by
+  `handoff fetch` therefore runs as written:
+  `pha reindex --doc 110 --doc 111 --doc 112 --doc 113`.
+- `reindex_all()` resolves EVERY named id and refuses before any work when one
+  is missing, rather than silently doing a subset.
+- **F3 shipped by construction.** Repeating the flags no longer discards any
+  value; `--page` without a document, or with more than one document, is an
+  explicit error.
+- Evidence verified: `.lq-qa/fontes-fetch.log` line 7 prints the repeated form;
+  the scalar parser behaviour was reproduced, then fixed. Regression tests:
+  `tests/test_cli_reindex.py::test_reindex_repeated_doc_flags_accumulate`,
+  `tests/test_cli_reindex.py::test_reindex_page_needs_exactly_one_doc`, and
+  `tests/test_ingest.py::test_reindex_all_multiple_docs_scopes_to_all_named`.

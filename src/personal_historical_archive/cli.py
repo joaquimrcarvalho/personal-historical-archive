@@ -1871,17 +1871,27 @@ def cmd_filter(cfg: Config, args) -> None:
 
 
 def cmd_reindex(cfg: Config, args) -> None:
-    if args.page is not None and args.doc is None:
+    docs = None
+    if args.doc is not None:
+        docs = list(args.doc) if isinstance(args.doc, list) else [args.doc]
+    pages = None
+    if args.page is not None:
+        pages = list(args.page) if isinstance(args.page, list) else [args.page]
+    if pages and not docs:
         print("--page requires --doc (refusing to reindex page N of every document)",
               file=sys.stderr)
         sys.exit(2)
-    if args.doc is not None and args.path:
+    if pages and len(docs) != 1:
+        print("--page requires exactly one --doc (got "
+              f"{len(docs)} document ids)", file=sys.stderr)
+        sys.exit(2)
+    if docs and args.path:
         print("--doc and --path are mutually exclusive", file=sys.stderr)
         sys.exit(2)
     client = _client(cfg, cfg.embed_base_url, cfg.embed_timeout_s)
     try:
-        res = reindex_all(cfg, client, path=args.path, doc=args.doc,
-                          page=args.page, force=args.force,
+        res = reindex_all(cfg, client, path=args.path, doc=docs,
+                          page=pages, force=args.force,
                           wait_s=_lock_wait_s(args))
     finally:
         client.close()
@@ -1890,13 +1900,14 @@ def cmd_reindex(cfg: Config, args) -> None:
         print(f"! {res['reason']}", file=sys.stderr)
         sys.exit(2)
     scope = ""
-    if args.doc is not None:
-        scope = f" (doc #{args.doc}" + (f", page {args.page})" if args.page else ")")
+    if docs:
+        labels = ", ".join(f"#{d}" for d in docs)
+        scope = f" (doc {labels}" + (f", page {pages[0]})" if pages else ")")
     elif args.path:
         scope = f" ({args.path})"
     if args.force:
         mode = "forced: every chunk re-embedded"
-    elif args.page is not None:
+    elif pages:
         mode = "page-scoped: only that page's chunks"
     else:
         mode = "incremental: unchanged chunks reused"
@@ -1908,9 +1919,9 @@ def cmd_reindex(cfg: Config, args) -> None:
         print(f"! {len(not_done)} document(s) NOT reindexed — still `processing`, "
               f"so their transcription is not final:", file=sys.stderr)
         for s in not_done:
-            pages = (f"{s['pages_done']}/{s['page_count']} pages done"
-                     if s["page_count"] else s["status"])
-            print(f"  - #{s['id']} {s['filename']}: {pages} — "
+            pages_done = (f"{s['pages_done']}/{s['page_count']} pages done"
+                          if s["page_count"] else s["status"])
+            print(f"  - #{s['id']} {s['filename']}: {pages_done} — "
                   f"`pha reindex --doc {s['id']}` indexes it now anyway; "
                   f"`pha scan --path …` finishes it", file=sys.stderr)
     if failed:
@@ -4362,11 +4373,12 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--path", "--collection", default=None,
                    help="only reindex the document or collection at this dropbox subpath "
                         "(e.g. collections/COLX or collections/COLX/doc.pdf); default: every document")
-    r.add_argument("--doc", type=int, default=None, metavar="N",
-                   help="only reindex document #N (see `pha status`); with --page, only that page")
-    r.add_argument("--page", type=int, default=None, metavar="P",
-                   help="only reindex page P of --doc N — the other pages keep their "
-                        "chunks and vectors untouched")
+    r.add_argument("--doc", action="append", type=int, default=None, metavar="N",
+                   help="only reindex document #N (repeatable: --doc 110 --doc 111); "
+                        "with --page, exactly one --doc")
+    r.add_argument("--page", action="append", type=int, default=None, metavar="P",
+                   help="only reindex page P of --doc N (repeatable); the other pages "
+                        "keep their chunks and vectors untouched")
     r.add_argument("--force", action="store_true",
                    help="re-embed EVERY chunk even when its text is unchanged "
                         "(default: reuse unchanged chunks and embed only what changed)")

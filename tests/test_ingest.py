@@ -1791,3 +1791,35 @@ def test_reindex_force_bypasses_the_status_gate(monkeypatch, tmp_path):
     res = ingest.reindex_all(cfg, None, force=True)
     assert len(seen) == 1 and seen[0]["incremental"] is False
     assert res["reindexed"] == 1 and res["skipped_not_done"] == []
+
+
+def test_reindex_all_multiple_docs_scopes_to_all_named(monkeypatch, tmp_path):
+    """`--doc A --doc B` accumulates; a missing id refuses before any work."""
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+
+    cfg = _cfg_at(tmp_path)
+    conn, first, _pids = _doc_with_pages(cfg, 1)
+    _db.add_document(conn, filename="second.pdf", path=str(cfg.dropbox / "second.pdf"),
+                     sha256="b", size_bytes=10, mtime=1, kind="pdf",
+                     dir_path="collections/COLX", now="2026-01-01")
+    second = _db.get_document_by_path(conn, str(cfg.dropbox / "second.pdf"))["id"]
+    _db.set_document_status(conn, first, "done")
+    _db.set_document_status(conn, second, "done")
+    conn.commit()
+    conn.close()
+
+    seen = []
+    monkeypatch.setattr(ingest, "index_document",
+                        lambda cfg_, conn_, doc_id, **kw: seen.append(doc_id) or 0)
+    res = ingest.reindex_all(cfg, None, doc=[first, second])
+    assert sorted(seen) == sorted([first, second])
+    assert res["reindexed"] == 2
+
+    seen.clear()
+    res = ingest.reindex_all(cfg, None, doc=[first, 99999])
+    assert seen == []
+    assert "no document #99999" in res["reason"]
+
+    res = ingest.reindex_all(cfg, None, doc=[first, second], page=[3])
+    assert "exactly one --doc" in res["reason"]

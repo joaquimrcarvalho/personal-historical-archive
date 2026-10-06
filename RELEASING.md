@@ -88,6 +88,9 @@ From 0.36.1 onward `pha update` runs both steps itself.
 
 ## Release history
 
+- `0.40.2` `fix(reindex): make --doc and --page repeatable` —
+  the command printed by `handoff fetch` (`reindex --doc A --doc B ...`)
+  now reindexes every named document; missing ids refuse before work
 - `0.40.1` `fix(encoder): cap split overlap so halves are halves` —
   `_split_encoder_window` no longer inherits the window-step
   `overlap_pages`; 20 pages now split 12 + 12 instead of 16 + 16

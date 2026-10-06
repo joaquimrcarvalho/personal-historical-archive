@@ -3990,8 +3990,8 @@ def scan_once(
 
 
 def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
-                path: str | None = None, doc: int | None = None,
-                page: int | None = None, force: bool = False,
+                path: str | None = None, doc: int | list[int] | None = None,
+                page: int | list[int] | None = None, force: bool = False,
                 wait_s: float = 0.0) -> dict:
     """Re-embed chunks for every ingested document, or only for the one named
     by `doc` (`pha reindex --doc N`), or only for the documents under a dropbox
@@ -4040,9 +4040,16 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
     uses the same server is the "two local models at once" swap this lock
     exists to prevent — and embed-endpoint contention is exactly what makes
     `embed()` time out. A scan using a *different* server can run alongside."""
-    if page is not None and doc is None:
+    doc_ids = None
+    if doc is not None:
+        doc_ids = [int(d) for d in (doc if isinstance(doc, list) else [doc])]
+    page_ids = None
+    if page is not None:
+        page_ids = [int(p) for p in (page if isinstance(page, list) else [page])]
+    if page_ids is not None and (not doc_ids or len(doc_ids) != 1):
         return {"reindexed": 0, "chunks": {}, "failed": [],
-                "reason": "--page needs --doc (refusing to reindex page N of every document)"}
+                "reason": "--page needs --doc: exactly one --doc is required "
+                          "(refusing to reindex page N of every document)"}
     cfg.ensure_dirs()
     keys = _job_keys(cfg, [], embed=True)
     lock = locks.acquire(cfg, keys, label="pha reindex", wait_s=wait_s,
@@ -4054,12 +4061,14 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
     conn = db.connect(cfg.db_path)
     try:
         db.backfill_dir_path(conn, cfg.dropbox)
-        if doc is not None:
-            one = db.get_document(conn, doc)
-            if one is None:
-                return {"reindexed": 0, "chunks": {}, "failed": [],
-                        "reason": f"no document #{doc}"}
-            docs = [one]
+        if doc_ids is not None:
+            docs = []
+            for doc_id in doc_ids:
+                one = db.get_document(conn, doc_id)
+                if one is None:
+                    return {"reindexed": 0, "chunks": {}, "failed": [],
+                            "reason": f"no document #{doc_id}"}
+                docs.append(one)
         elif path:
             docs = _documents_under(cfg, conn, path)
             if docs is None:
@@ -4070,10 +4079,10 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
         failed: list[dict] = []
         skipped_not_done: list[dict] = []
         leases = _leases(cfg)
-        pages = None if page is None else {page}
+        pages = None if page_ids is None else set(page_ids)
         # An explicit scope is honoured at any status; a bulk pass is not, unless
         # --force says to do it anyway.
-        explicit = doc is not None or bool(path)
+        explicit = doc_ids is not None or bool(path)
         for d in docs:
             if d["status"] != "done" and not (explicit or force):
                 have = conn.execute(

@@ -31,3 +31,35 @@ def test_reindex_doc_and_path_are_mutually_exclusive(tmp_path, capsys):
                                              force=False))
     assert exc.value.code == 2
     assert "mutually exclusive" in capsys.readouterr().err
+
+
+def test_reindex_repeated_doc_flags_accumulate(monkeypatch, tmp_path, capsys):
+    cfg = _make_cfg(tmp_path)
+    seen = {}
+
+    class _DummyClient:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(cli, "_client", lambda *a, **k: _DummyClient())
+
+    def fake_reindex(cfg_, client, **kwargs):
+        seen.update(kwargs)
+        return {"reindexed": 2, "chunks": {}, "failed": [], "skipped_not_done": []}
+
+    monkeypatch.setattr(cli, "reindex_all", fake_reindex)
+
+    cli.cmd_reindex(cfg, SimpleNamespace(path=None, doc=[110, 111], page=None,
+                                         force=False))
+
+    assert seen["doc"] == [110, 111]
+    assert "#110" in capsys.readouterr().out
+
+
+def test_reindex_page_needs_exactly_one_doc(tmp_path, capsys):
+    cfg = _make_cfg(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_reindex(cfg, SimpleNamespace(path=None, doc=[110, 111], page=[3],
+                                             force=False))
+    assert exc.value.code == 2
+    assert "exactly one --doc" in capsys.readouterr().err
