@@ -36,6 +36,11 @@ packages = ["src/personal_historical_archive"]
 # enhancements/pha-installed-wheel-missing-schema-bug-report.md.
 [tool.hatch.build.targets.wheel.force-include]
 "schema/pha-sidecar.schema.json" = "personal_historical_archive/schema/pha-sidecar.schema.json"
+# The pipeline explanation is authored at the repo root as PIPELINE.md and is
+# seeded into every archive (README.md / AGENTS.md / PIPELINE.md are refreshed
+# on each run). A built install has no repo-root file to read, so the wheel
+# carries a copy under the package for archive_init.pipeline_doc_template.
+"PIPELINE.md" = "personal_historical_archive/PIPELINE.md"
 "dsh-pha/package.json" = "personal_historical_archive/_view/package.json"
 "dsh-pha/lib/index.js" = "personal_historical_archive/_view/lib/index.js"
 "dsh-pha/lib/client.js" = "personal_historical_archive/_view/lib/client.js"

@@ -372,6 +372,12 @@ otherwise:
 - Explain what you are about to do, and why, in plain language and in terms
   of their documents and research — not code, files or internals. Report the
   result the same way ("14 pages transcribed, 2 need your review", not a log).
+- **"Explain how this works" means `PIPELINE.md`.** When they ask how pha
+  works, what happens to their documents, or what the difference between the
+  editor and the encoder is, read `PIPELINE.md` (seeded into every archive
+  beside `README.md`/`AGENTS.md`, and at this repo's root) and explain it in
+  their terms. It is written for the archive owner; AGENTS.md is written for
+  you — do not answer such a question from this file.
 - **Before asking for extra rights on their computer** — installing software,
   reaching files outside the archive, an administrator password — say in
   simple words *what* you need, *what it is for*, and *what will change* on

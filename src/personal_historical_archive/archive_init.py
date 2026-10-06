@@ -36,6 +36,16 @@ transcriptions with a text model, and indexes them for full-text search.
 - Source code & full manual: {PHA_GITHUB}
 - This file and `AGENTS.md` are the first things an AI agent should read
   before operating on this archive.
+- **How the pipeline works, in plain language: `PIPELINE.md`**, next to this
+  file. It is written for the archive owner rather than for an agent: the
+  phases, how a collection is configured, the difference between a prompt and
+  a model, and where every setting lives.
+
+> [!NOTE]
+> **Asking how it works.** If the archive owner asks to explain how pha works,
+> what happens to their documents, or what the difference between the editor
+> and the encoder is, read **`PIPELINE.md`** and explain it in their terms.
+> It is written for them; this file is written for you.
 
 > [!IMPORTANT]
 > **Agents:** the person you are working with here is most likely a
@@ -121,6 +131,7 @@ missing (or the path is wrong): run `pha set archive-dir` with this directory.
 | `palaeographers/`, `editors/`, `encoders/` | model/prompt definitions (one file each; `_sample.md` = template) |
 | `library/` | generated per-page transcriptions and edited text — the human review surface |
 | `notes/` | Obsidian-compatible markdown notes generated from queries to this archive (see `notes/README.md`) |
+| `PIPELINE.md` | how the pipeline works, in plain language — start here to understand the machine (phases, configuration, prompts vs models, filters) |
 | `skills/` | pha-specific agent skills — read the matching `skills/<name>/SKILL.md` before operating (see `skills/README.md`) |
 | `pha-location.md`, `.pha/` | machine-local: where pha is installed on THIS machine (auto-generated, gitignored — see above) |
 | `renders/`, `archive.db` | generated cache and index (do not edit) |
@@ -285,6 +296,11 @@ search.
 - Project / source code: {PHA_GITHUB}
 - The archive layout and the pipeline are documented there (and in this
   directory's README.md).
+- **`PIPELINE.md` in this directory explains how the pipeline works, in plain
+  language, for the archive owner.** When they ask how pha works — "explain how
+  this works", "what happens to my documents?", "what is the difference between
+  the editor and the encoder?" — read that file and explain it in their terms.
+  It is written for them; this file is written for you.
 
 ## Who you are talking to
 
@@ -551,8 +567,9 @@ scan.lock
 pha-location.md
 
 # NOTE: dropbox/, library/, palaeographers/, editors/, encoders/, notes/ and
-# skills/ are kept (they are the user-facing documents, transcriptions,
-# definitions, research notes and agent skills).
+# skills/ are kept, as are the docs (README.md, AGENTS.md, PIPELINE.md) — they
+# are the user-facing documents, transcriptions, definitions, research notes,
+# agent skills and guidance.
 """
 
 # --- archive agent docs: seeding, and refreshing them on pha updates ---------
@@ -575,7 +592,46 @@ _DOC_MARKER_END = " -->"
 _DOC_FILES = (
     ("README.md", "# pha archive"),
     ("AGENTS.md", "# This directory is a pha archive"),
+    ("PIPELINE.md", "# How the pha pipeline works"),
 )
+
+# The pipeline explanation is authored at the repo root (`PIPELINE.md`) and must
+# also reach a wheel install, exactly like the sidecar schema: pyproject.toml
+# force-includes it under the package, and `pipeline_doc_template` reads that
+# copy first, falling back to the checkout's own file for source/editable runs.
+# A historian asking "how does this work?" gets this file, so it has to exist
+# even when pha was installed with no repository beside it.
+_PIPELINE_REL = ("PIPELINE.md",)
+
+
+def pipeline_doc_template(project_root: Path | None = None) -> str:
+    """The `PIPELINE.md` body seeded into (and refreshed in) an archive.
+
+    Order: the copy shipped INSIDE the package (a built install) -> the
+    checkout's `<project_root>/PIPELINE.md` (source and editable runs, where
+    only the repo-root file exists) -> a short pointer, so that seeding can
+    never fail on an unusual install.
+    """
+    try:
+        from importlib.resources import files as _resource_files
+
+        resource = _resource_files(__package__).joinpath(*_PIPELINE_REL)
+        if resource.is_file():
+            return resource.read_text(encoding="utf-8")
+    except (ModuleNotFoundError, TypeError, FileNotFoundError, OSError):
+        pass  # not a packaged install; fall through to the checkout copy
+    root = Path(project_root) if project_root is not None else find_project_root()
+    candidate = root.joinpath(*_PIPELINE_REL)
+    try:
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8")
+    except OSError:
+        pass
+    return (
+        "# How the pha pipeline works\n\n"
+        "The full explanation ships with pha as `PIPELINE.md`; see the pha "
+        "project's documentation.\n"
+    )
 
 
 def _sha256(text: str) -> str:
@@ -617,9 +673,11 @@ def _should_refresh(path: Path, template: str, opening_line: str) -> bool:
     return cur.lstrip().startswith(opening_line)
 
 
-def refresh_archive_agent_docs(archive_dir: str | Path) -> list[tuple[str, str]]:
-    """Refresh the archive's agent-facing docs (README.md, AGENTS.md) to the
-    current pha templates.
+def refresh_archive_agent_docs(
+    archive_dir: str | Path, project_root: Path | None = None
+) -> list[tuple[str, str]]:
+    """Refresh the archive's owner- and agent-facing docs (README.md,
+    AGENTS.md, PIPELINE.md) to the current pha templates.
 
     Creates a doc when missing, refreshes a pristine (unmodified) doc, and
     leaves a user-customised doc alone. Never touches notes/README.md (that is
@@ -631,9 +689,13 @@ def refresh_archive_agent_docs(archive_dir: str | Path) -> list[tuple[str, str]]
     archive_dir.mkdir(parents=True, exist_ok=True)
     results: list[tuple[str, str]] = []
     # Look the templates up by name so a bump in one place takes effect here.
+    # PIPELINE.md is read from the package/checkout (see pipeline_doc_template)
+    # rather than embedded as a literal, because the repo-root file is the one
+    # people edit.
     templates = {
         "README.md": ARCHIVE_README_MD,
         "AGENTS.md": ARCHIVE_AGENTS_MD,
+        "PIPELINE.md": pipeline_doc_template(project_root),
     }
     for name, opening_line in _DOC_FILES:
         template = templates[name]
@@ -716,9 +778,14 @@ def init_archive(path: str | Path, project_root: Path | None = None) -> Path:
     except Exception:  # noqa: BLE001 - a missing template must not break init
         pass
 
-    # agent guidance + git hygiene (stamped so later pha updates can refresh
-    # a pristine generated doc without clobbering a user's edits)
+    # owner + agent guidance, and git hygiene (stamped so later pha updates can
+    # refresh a pristine generated doc without clobbering a user's edits).
+    # PIPELINE.md is the plain-language explanation a historian is pointed at
+    # when they ask how pha works.
     (p / "README.md").write_text(_stamp(ARCHIVE_README_MD), encoding="utf-8")
     (p / "AGENTS.md").write_text(_stamp(ARCHIVE_AGENTS_MD), encoding="utf-8")
+    (p / "PIPELINE.md").write_text(
+        _stamp(pipeline_doc_template(project_root)), encoding="utf-8"
+    )
     (p / ".gitignore").write_text(ARCHIVE_GITIGNORE, encoding="utf-8")
     return p

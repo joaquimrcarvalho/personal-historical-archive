@@ -52,6 +52,9 @@ structured records grounded to the page each one starts on.
                                  pha_list_documents / pha_scan_now / pha_extraction_status
 ```
 
+**How the phases and their configuration files fit together:**
+[PIPELINE.md](PIPELINE.md).
+
 ---
 
 ## Requirements

@@ -1,10 +1,12 @@
-"""The archive's agent docs (README.md, AGENTS.md) must stay current with the
-installed pha version: seeded at init-archive time, then refreshed into an
-existing dedicated archive on every run — without clobbering a user's edits,
-and without touching the project checkout's own docs.
+"""The archive's owner/agent docs (README.md, AGENTS.md, PIPELINE.md) must stay
+current with the installed pha version: seeded at init-archive time, then
+refreshed into an existing dedicated archive on every run — without clobbering a
+user's edits, and without touching the project checkout's own docs.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from personal_historical_archive import archive_init as ai
 from personal_historical_archive.config import Config
@@ -40,26 +42,62 @@ def test_archive_agents_md_carries_the_ocr_install_advice():
 def test_init_archive_stamps_the_docs(tmp_path):
     p = tmp_path / "arc"
     ai.init_archive(p)
-    for name in ("README.md", "AGENTS.md"):
+    for name in ("README.md", "AGENTS.md", "PIPELINE.md"):
         text = (p / name).read_text(encoding="utf-8")
         assert text.startswith(ai._DOC_MARKER), f"{name} missing template marker"
         body, recorded = ai._split_marker(text)
         assert body is not None and ai._sha256(body) == recorded
 
 
+def test_init_archive_seeds_the_pipeline_explanation(tmp_path):
+    """`PIPELINE.md` is what a historian is pointed at when they ask how pha
+    works, and what an agent is told to read; in a checkout it is the repo-root
+    file, byte for byte."""
+    p = tmp_path / "arc"
+    ai.init_archive(p)
+    seeded = (p / "PIPELINE.md").read_text(encoding="utf-8")
+    body, _ = ai._split_marker(seeded)
+    canonical = Path(__file__).resolve().parents[1] / "PIPELINE.md"
+    assert canonical.is_file()
+    assert body == canonical.read_text(encoding="utf-8")
+
+
+def test_the_archive_docs_point_at_the_pipeline_explanation():
+    """Both docs an agent reads first must send owner and agent to PIPELINE.md
+    when the question is 'explain how this works'."""
+    assert "PIPELINE.md" in ai.ARCHIVE_AGENTS_MD
+    assert "PIPELINE.md" in ai.ARCHIVE_README_MD
+    assert "explain how" in ai.ARCHIVE_AGENTS_MD.lower()
+
+
+def test_pyproject_ships_the_pipeline_doc_in_the_wheel():
+    """A built install has no repo root to read, so the wheel must carry
+    PIPELINE.md under the package — archive_init.pipeline_doc_template reads it
+    there via importlib.resources (the sidecar-schema pattern)."""
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    cfg = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    force = cfg["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+    assert force.get("PIPELINE.md") == "personal_historical_archive/PIPELINE.md"
+
+
 def test_refresh_pristine_archive_is_a_noop(tmp_path):
     p = tmp_path / "arc"
     ai.init_archive(p)
     res = ai.refresh_archive_agent_docs(p)
-    assert res == [("README.md", "kept"), ("AGENTS.md", "kept")]
+    assert res == [("README.md", "kept"), ("AGENTS.md", "kept"),
+                   ("PIPELINE.md", "kept")]
 
 
 def test_refresh_creates_missing_docs(tmp_path):
     p = tmp_path / "arc"
     p.mkdir()
     res = ai.refresh_archive_agent_docs(p)
-    assert res == [("README.md", "created"), ("AGENTS.md", "created")]
+    assert res == [("README.md", "created"), ("AGENTS.md", "created"),
+                   ("PIPELINE.md", "created")]
     assert (p / "README.md").exists() and (p / "AGENTS.md").exists()
+    assert (p / "PIPELINE.md").exists()
 
 
 def test_refresh_migrates_legacy_unmarked_doc(tmp_path):
@@ -72,10 +110,11 @@ def test_refresh_migrates_legacy_unmarked_doc(tmp_path):
                        ("AGENTS.md", ai.ARCHIVE_AGENTS_MD)):
         (p / name).write_text(tmpl, encoding="utf-8")
     res = ai.refresh_archive_agent_docs(p)
-    assert res == [("README.md", "updated"), ("AGENTS.md", "updated")]
+    assert res == [("README.md", "updated"), ("AGENTS.md", "updated"),
+                   ("PIPELINE.md", "kept")]
     # now current -> subsequent reflections no-op
     assert ai.refresh_archive_agent_docs(p) == [
-        ("README.md", "kept"), ("AGENTS.md", "kept")]
+        ("README.md", "kept"), ("AGENTS.md", "kept"), ("PIPELINE.md", "kept")]
 
 
 def test_refresh_preserves_user_edited_doc(tmp_path):

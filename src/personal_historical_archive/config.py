@@ -1039,7 +1039,7 @@ class Config:
         try:
             from . import archive_init
             if self.archive_dir.resolve() != self.root.resolve():
-                archive_init.refresh_archive_agent_docs(self.archive_dir)
+                archive_init.refresh_archive_agent_docs(self.archive_dir, self.root)
         except Exception:  # noqa: BLE001 - a doc refresh must never break a command
             pass
         # the pha-specific agent skills live IN the archive (an agent operating
