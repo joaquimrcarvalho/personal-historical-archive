@@ -3194,12 +3194,25 @@ def _page_filter(encoder: Encoder) -> set[int] | None:
 
 
 def _split_encoder_window(chunk: list, overlap: int):
-    """Halve an over-long answer window, keeping a little page overlap."""
+    """Halve an over-long answer window, keeping a little page overlap.
+
+    The encoder's ``overlap_pages`` is a WINDOW-STEP setting (the letters
+    encoder uses 6); borrowing it unchanged made a 20-page window split into
+    16 + 16 and turned the recursion linear. A split is not a window step, so
+    the overlap is capped at a small fraction of the window (``n // 8``, and
+    at least 0/at most 1 page for small windows) to keep the halves genuinely
+    about half.
+    """
     n = len(chunk)
     if n < 2:
         return None
     mid = n // 2
-    ov = min(max(0, int(overlap)), max(0, mid - 1), max(0, n - mid - 1))
+    ov = min(
+        max(0, int(overlap)),
+        max(0, n // 8),
+        max(0, mid - 1),
+        max(0, n - mid - 1),
+    )
     left = chunk[: mid + ov]
     right = chunk[mid - ov :]
     if not left or not right or len(left) >= n or len(right) >= n:

@@ -88,6 +88,9 @@ From 0.36.1 onward `pha update` runs both steps itself.
 
 ## Release history
 
+- `0.40.1` `fix(encoder): cap split overlap so halves are halves` —
+  `_split_encoder_window` no longer inherits the window-step
+  `overlap_pages`; 20 pages now split 12 + 12 instead of 16 + 16
 - `0.40.0` `fix(encoder): split truncated answers and report lost windows` —
   finish-reason plumbing (`chat_text_ex`), length-aware window splitting,
   one differentiated retry, and explicit `lost_windows` in the summary

@@ -173,3 +173,91 @@ index, and that asymmetry is recorded here rather than left to be discovered.
   were truncated the same way but not byte-identical (24 046 / 24 057 /
   24 164 chars); the identical-prompt rule applies to chunked windows without
   a detector `start_page`.
+
+---
+
+## Addendum (2026-10-06, same day) — F1 landed in 0.40, but the split it relies on does not halve
+
+**Status of this addendum: FIXED (0.40.1).** F1/F2/F3 above were implemented in pha 0.40.0
+(`794bd25 fix(encoder): split truncated answers and report lost windows`). The
+detection, the reporting and the *idea* of splitting are right. What the split
+does arithmetically is not.
+
+### What the split does
+
+`_split_encoder_window(chunk, overlap)` (`ingest.py:3196`) takes its overlap from
+the encoder's **`overlap_pages`** — the *sliding-window* setting — clamped only to
+`mid - 1`:
+
+    mid = n // 2
+    ov  = min(max(0, overlap), mid - 1, n - mid - 1)
+    left, right = chunk[: mid + ov], chunk[mid - ov :]
+
+The Litterae letters encoder sets `overlap_pages: 6`. Six pages of overlap is
+sensible for a window *step* — a letter must not be cut at a seam — and ruinous
+for a *split*, whose whole purpose is to make each request smaller:
+
+| window | halves | removed per level |
+|--------|--------|-------------------|
+| 20 pages | 16 + 16 | 4 |
+| 18 pages | 15 + 15 | 3 |
+| 13 pages | 11 + 12 | 2 |
+| 10 pages | 9 + 9 | 1 |
+| 8 pages | 7 + 7 | 1 |
+| 3 pages | 1 + 2 | 2 |
+
+The recursion removes one to four pages per level where the docstring says
+"halve". It is linear where it should be logarithmic, and because each level
+re-sends almost the whole window, the same text is paid for over and over.
+
+### Measured
+
+* **At `max_tokens: 8192`** (tomus-primus's INDEX LITTERARUM window, 18 pages):
+  **129 split calls, 66 capped windows, ~40 minutes**, still descending when it
+  was stopped by hand. This is the thrashing that prompted this addendum.
+* **At `max_tokens: 32768`** (six volumes, 385 windows): **6 splits and 3 capped
+  windows in total.** One level of splitting sufficed, because a half that only
+  has to fit 32768 tokens usually does.
+
+That contrast is why this is not urgent: raising the cap removed the pressure that
+exposed the arithmetic. The arithmetic is unchanged.
+
+### Fix
+
+A split is not a window step. Give it little or no overlap — `ov = min(overlap, 1)`,
+or `min(overlap, n // 4)` — so that each half is genuinely about half. One line.
+
+### A caveat specific to ditto-based indexes
+
+Splitting is the wrong remedy for an `INDEX LITTERARUM` in any case. Its rows
+carry printed dittos (`[same]`), which the encoder resolves into `author_implied`
+by reading the rows *above*; a window beginning mid-index has lost exactly the
+context that field needs, and it fails silently, field by field. For this content
+the honest remedies are a larger output budget (done for the letters encoder) or a
+split at a semantic boundary — by year, or by letter-block — never a blind half.
+
+### Evidence
+
+* `_split_encoder_window` — `ingest.py:3196`; call site `ingest.py:3281`.
+* Run logs in the archive: `.lq-qa/encode-tomus-primus-2.log` (at 8192) and
+  `.lq-qa/encode-litterae-rest.log` (at 32768).
+
+
+### Fix landed (0.40.1)
+
+`_split_encoder_window()` now caps the split overlap at `n // 8` (plus the
+existing bounds), so a split is genuinely close to half:
+
+| window | old halves | new halves |
+|---|---|---|
+| 20 pages | 16 + 16 | 12 + 12 |
+| 18 pages | 15 + 15 | 11 + 11 |
+| 13 pages | 11 + 12 | 7 + 8 |
+| 10 pages | 9 + 9 | 6 + 6 |
+| 8 pages | 7 + 7 | 5 + 5 |
+
+Regression test:
+`tests/test_encoder_truncation.py::test_split_window_is_close_to_half_with_large_step_overlap`.
+The ditto caveat above remains content-specific: no generic split recovers the
+index rows above a mid-index seam; for `INDEX LITTERARUM` keep the larger
+`max_tokens` budget or split at a semantic boundary.

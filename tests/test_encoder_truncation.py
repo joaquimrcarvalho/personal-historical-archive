@@ -101,3 +101,11 @@ def test_split_window_keeps_overlap_and_always_shrinks():
 
 def test_split_window_single_page_returns_none():
     assert _split_encoder_window(_chunk(1), 0) is None
+
+
+def test_split_window_is_close_to_half_with_large_step_overlap():
+    """overlap_pages is a window-step value (6 here); a split must not inherit it."""
+    for n in (8, 10, 13, 18, 20):
+        left, right = _split_encoder_window(_chunk(n), 6)
+        assert max(len(left), len(right)) <= (n + 1) // 2 + 2, (n, len(left), len(right))
+        assert len(left) + len(right) > n  # keep some context at the seam
