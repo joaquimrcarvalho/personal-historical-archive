@@ -3483,11 +3483,11 @@ def encode_document(
                     # starting on the same page with near-identical metadata
                     # (e.g. "Santo" vs "São") is the same letter (LangExtract
                     # drops overlapping extractions from later passes).
-                    page = rec.get("page")
+                    page = db.record_start_page(rec)
                     dup = False
                     if page is not None:
                         for prev in records:
-                            if prev.get("page") == page and _record_similar(prev, rec) >= 0.75:
+                            if db.record_start_page(prev) == page and _record_similar(prev, rec) >= 0.75:
                                 dup = True
                                 break
                     if dup:
@@ -3501,8 +3501,10 @@ def encode_document(
     # Store first, so an artifact filter can read the records file it consumes.
     db.clear_records(conn, doc_id, resolved)
     for rec in records:
+        page = db.record_start_page(rec)
         db.add_record(conn, doc_id, resolved, str(rec.get("kind") or rec.get("type") or "record"),
-                      json.dumps(rec, ensure_ascii=False), str(rec.get("page") or ""),
+                      json.dumps(rec, ensure_ascii=False),
+                      str(page) if page is not None else "",
                       filters=record_filters)
     if doc["encoder"] != resolved:
         db.update_document(conn, doc_id, encoder=resolved)
@@ -3992,7 +3994,7 @@ def scan_once(
 def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
                 path: str | None = None, doc: int | list[int] | None = None,
                 page: int | list[int] | None = None, force: bool = False,
-                wait_s: float = 0.0) -> dict:
+                wait_s: float = 0.0, source: str = "all") -> dict:
     """Re-embed chunks for every ingested document, or only for the one named
     by `doc` (`pha reindex --doc N`), or only for the documents under a dropbox
     subpath (`pha reindex --path collections/COLX`, a document folder, or a
@@ -4050,6 +4052,33 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
         return {"reindexed": 0, "chunks": {}, "failed": [],
                 "reason": "--page needs --doc: exactly one --doc is required "
                           "(refusing to reindex page N of every document)"}
+    if source not in ("pages", "records", "all"):
+        return {"reindexed": 0, "chunks": {}, "failed": [],
+                "reason": f"unknown reindex source {source}; use pages, records or all"}
+    if source == "records":
+        cfg.ensure_dirs()
+        conn = db.connect(cfg.db_path)
+        try:
+            if doc_ids is not None:
+                docs = [db.get_document(conn, d) for d in doc_ids]
+                if any(d is None for d in docs):
+                    return {"reindexed": 0, "chunks": {}, "failed": [],
+                            "reason": "one or more --doc ids do not exist"}
+            elif path:
+                docs = _documents_under(cfg, conn, path)
+                if docs is None:
+                    return {"reindexed": 0, "chunks": {}, "failed": [], "records": 0}
+            else:
+                docs = db.list_documents(conn, limit=10000)
+            ids = [int(d["id"]) for d in docs]
+            n = db.rebuild_records_index(conn, doc_ids=ids, force=force)
+            conn.commit()
+            out = {"reindexed": 0, "chunks": {}, "failed": []}
+            if n:
+                out["records"] = n
+            return out
+        finally:
+            conn.close()
     cfg.ensure_dirs()
     keys = _job_keys(cfg, [], embed=True)
     lock = locks.acquire(cfg, keys, label="pha reindex", wait_s=wait_s,
@@ -4110,8 +4139,16 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
                 failed.append({"id": d["id"], "filename": d["filename"], "error": str(e)})
                 if verbose:
                     print(f"  ! {d['filename']}: {e}", flush=True)
-        return {"reindexed": len(counts), "chunks": counts, "failed": failed,
-                "skipped_not_done": skipped_not_done}
+        records_count = 0
+        if source == "all":
+            ids = [int(d["id"]) for d in docs]
+            records_count = db.rebuild_records_index(conn, doc_ids=ids, force=force)
+            conn.commit()
+        out = {"reindexed": len(counts), "chunks": counts, "failed": failed,
+               "skipped_not_done": skipped_not_done}
+        if records_count:
+            out["records"] = records_count
+        return out
     finally:
         conn.close()
         locks.release(lock)

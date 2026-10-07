@@ -260,7 +260,10 @@ def cmd_search(cfg: Config, args) -> None:
 
             res = run_search(conn, client, cfg, args.query, mode=args.mode, limit=args.limit,
                              collection=args.collection,
-                             allow_embed=bool(getattr(args, "force", False)))
+                             allow_embed=bool(getattr(args, "force", False)),
+                             source=getattr(args, "source", "all"),
+                             encoder=getattr(args, "encoder", None),
+                             record_kind=getattr(args, "record_kind", None))
         except ModelError as e:
             print(f"model error: {e}", file=sys.stderr)
             sys.exit(2)
@@ -272,6 +275,8 @@ def cmd_search(cfg: Config, args) -> None:
                 doc = db.get_document(conn, r["document_id"])
                 r["page_file"] = None
                 if doc is None:
+                    continue
+                if r.get("page_no") is None:
                     continue
                 doc = dict(doc)
                 pg = conn.execute(
@@ -297,12 +302,19 @@ def cmd_search(cfg: Config, args) -> None:
         print("no results")
         return
     for i, r in enumerate(res["results"], 1):
-        print(f"{i:2d}. [{r['source']:8s}][{r.get('variant','raw'):6s}] {r['filename']}  [{r['collection']}]  p.{r['page_no']}  score={r['score']}")
+        if r.get("kind") == "record":
+            rk = r.get("record_kind") or "record"
+            page = r.get("page_no")
+            where = f"p.{page}" if page is not None else "not page-grounded"
+            print(f"{i:2d}. [record:{rk:8s}] {r['filename']}  [{r['collection']}]  {where}  score={r['score']}")
+        else:
+            print(f"{i:2d}. [{r['source']:8s}][{r.get('variant','raw'):6s}] {r['filename']}  [{r['collection']}]  p.{r['page_no']}  score={r['score']}")
         print(f"     {r['snippet']}")
         if r.get("page_file"):
             edited = r.get("variant") == "edited"
             print(f"     full page: {r['page_file']}")
-            print(f"               pha page {r['document_id']} {r['page_no']}" + (" --edited" if edited else ""))
+            if r.get("page_no") is not None:
+                print(f"               pha page {r['document_id']} {r['page_no']}" + (" --edited" if edited else ""))
     print(f"\n{len(res['results'])} result(s) in mode '{res['mode']}'")
 
 
@@ -1892,7 +1904,8 @@ def cmd_reindex(cfg: Config, args) -> None:
     try:
         res = reindex_all(cfg, client, path=args.path, doc=docs,
                           page=pages, force=args.force,
-                          wait_s=_lock_wait_s(args))
+                          wait_s=_lock_wait_s(args),
+                          source=getattr(args, "source", "all"))
     finally:
         client.close()
     failed = res.get("failed") or []
@@ -1911,7 +1924,9 @@ def cmd_reindex(cfg: Config, args) -> None:
         mode = "page-scoped: only that page's chunks"
     else:
         mode = "incremental: unchanged chunks reused"
-    print(f"reindexed {res['reindexed']} document(s){scope} [{mode}]")
+    rec_n = res.get("records") or 0
+    rec_note = f", {rec_n} record(s)" if rec_n else ""
+    print(f"reindexed {res['reindexed']} document(s){scope} [{mode}{rec_note}]")
     not_done = res.get("skipped_not_done") or []
     if not_done:
         # A skip is a REASON, not a silent success: `reindexed 0 document(s)`
@@ -4204,6 +4219,14 @@ def main(argv: list[str] | None = None) -> None:
     q.add_argument("--limit", type=int, default=None)
     q.add_argument("--collection", default=None,
                    help="restrict to a collection/dir, e.g. 'documents', 'COLX' or 'collections/COLX'")
+    q.add_argument("--source", choices=["pages", "records", "all"], default="all",
+                   help="search page chunks, structured encoder records, or both "
+                        "(default: all)")
+    q.add_argument("--encoder", default=None,
+                   help="with --source records/all, restrict to one encoder id")
+    q.add_argument("--record-kind", default=None, metavar="KIND",
+                   help="with --source records/all, restrict to one record kind "
+                        "(e.g. letter, person)")
     q.add_argument("--force", "--allow-embed", dest="force", action="store_true",
                    help="embed the query even while a scan/edit/reindex is using the "
                         "embedding server (loads the embed model there — it may evict "
@@ -4379,6 +4402,9 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--page", action="append", type=int, default=None, metavar="P",
                    help="only reindex page P of --doc N (repeatable); the other pages "
                         "keep their chunks and vectors untouched")
+    r.add_argument("--source", choices=["pages", "records", "all"], default="all",
+                   help="rebuild page chunks, the record keyword index, or both "
+                        "(default: all; no records means all does the same work as pages)")
     r.add_argument("--force", action="store_true",
                    help="re-embed EVERY chunk even when its text is unchanged "
                         "(default: reuse unchanged chunks and embed only what changed)")

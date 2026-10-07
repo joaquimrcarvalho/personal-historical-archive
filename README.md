@@ -1031,6 +1031,11 @@ printed i–xv but occupies PDF pages 1-15).
 - Records are stored in SQLite and written to
   `library/<dir>/<slug>/records-<encoder>.json`, with the exact input
   concatenated text beside it as `concatenated-<encoder>.md` for inspection.
+  They are also indexed for keyword search (`records_fts`); `pha search
+  --source records` finds them, and `--source all` (the default) searches
+  pages and records together. The starting-page field is resolved from
+  `page_start` first, then `page`/`start_page`/`source_page`, and exposed as
+  `page_no` in search hits.
 - Re-encodes when the encoder file, its `encoder.prompt.md`, or the source
   transcription (raw or edited) changes since the records were created.
 - **Long-document techniques** (inspired by
@@ -1201,7 +1206,7 @@ pha help [topic]              # orientation + pointers to README/MCP_CLIENTS/HIS
 pha scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--path COLLECTION] [--reprocess]
 pha scan --path DOC --page N [--palaeographer ID] [--model ID] [--dry-run] [--no-pin]
 pha scan --path DOC [--page N] --unpin      # release the pin, keep the text
-pha search QUERY [--mode hybrid|keyword|semantic] [--collection COLX] [--limit N] [--json]
+pha search QUERY [--mode hybrid|keyword|semantic] [--source pages|records|all] [--collection COLX] [--limit N] [--json]
 pha page DOC PAGE [--edited]    # print the FULL text of one page (doc = id or filename substring)
                                 #   --edited reads the edited/translated variant; when there is
                                 #   none it names the pass that produces it (`pha edit --path …`)
@@ -1231,7 +1236,7 @@ pha export [--doc N] [--path collections/COLX]
                                 #   re-extraction, no model call); --doc/--path scope it to
                                 #   one document or one collection — the repair for a library
                                 #   folder that was deleted or is missing
-pha reindex [--doc N] [--page P] [--path collections/COLX] [--force]
+pha reindex [--doc N] [--page P] [--path collections/COLX] [--source pages|records|all] [--force]
                           # re-embed; INCREMENTAL by default — only chunks whose text
                           #   changed (or whose vector came from another embed model) are
                           #   embedded, so a one-page correction no longer re-embeds the

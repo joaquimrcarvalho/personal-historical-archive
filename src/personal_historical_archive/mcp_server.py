@@ -62,8 +62,9 @@ def make_server(cfg: Config) -> FastMCP:
 
     @mcp.tool()
     def pha_search(query: str, mode: str = "hybrid", limit: int = 10, collection: str | None = None,
-                   allow_embed: bool = False) -> dict:
-        """Search the extracted manuscript text and return ranked passages.
+                   allow_embed: bool = False, source: str = "all",
+                   encoder: str | None = None, record_kind: str | None = None) -> dict:
+        """Search extracted manuscript text and structured encoder records.
 
         Args:
             query: free-text search query (keyword terms or a natural-language description).
@@ -75,6 +76,11 @@ def make_server(cfg: Config) -> FastMCP:
                 embedding server. By default a running job makes hybrid/semantic
                 fall back to keyword results (with a `note`) instead of loading the
                 embed model and evicting the model that job is using.
+            source: pages (page chunks), records (structured encoder records),
+                or all (default).
+            encoder: with source records/all, restrict to one encoder id.
+            record_kind: with source records/all, restrict to one record kind
+                (letter, person, ...).
         Returns:
             The same shape as `pha search --json`: {mode, query, results, note}.
             `results` are ranked passages with document id/name, collection, page
@@ -88,7 +94,8 @@ def make_server(cfg: Config) -> FastMCP:
         client = ModelClient(cfg.embed_base_url, timeout_s=cfg.embed_timeout_s)
         try:
             res = run_search(conn, client, cfg, query, mode=mode, limit=limit,
-                             collection=collection, allow_embed=allow_embed)
+                             collection=collection, allow_embed=allow_embed,
+                             source=source, encoder=encoder, record_kind=record_kind)
         finally:
             client.close()
             conn.close()
@@ -236,6 +243,35 @@ def make_server(cfg: Config) -> FastMCP:
                     out["image_base64"] = None
                     out["image_bytes"] = 0
                     out["render_missing"] = str(cfg.renders / str(doc["sha256"]))
+            return out
+        finally:
+            conn.close()
+
+    @mcp.tool()
+    def pha_get_record(record_id: int) -> dict:
+        """Return one structured encoder record by its record id.
+
+        Args:
+            record_id: id from a record search hit (kind == "record").
+        """
+        conn = db.connect(cfg.db_path, readonly=True)
+        try:
+            row = conn.execute(
+                "SELECT r.*, d.filename, d.path, d.dir_path "
+                "FROM records r JOIN documents d ON d.id = r.document_id "
+                "WHERE r.id = ?",
+                (record_id,),
+            ).fetchone()
+            if row is None:
+                return {"error": f"no record with id {record_id}"}
+            out = {k: row[k] for k in row.keys()}
+            rec = {}
+            try:
+                rec = json.loads(row["data"])
+            except (TypeError, ValueError):
+                rec = {}
+            out["data"] = rec
+            out["page_no"] = db.record_start_page(rec)
             return out
         finally:
             conn.close()

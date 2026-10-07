@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -61,8 +62,10 @@ CREATE TABLE IF NOT EXISTS records (
     kind TEXT,
     data TEXT NOT NULL,
     source TEXT,
-    created_at REAL
+    created_at REAL,
+    search_text TEXT
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(text);
 CREATE TABLE IF NOT EXISTS document_bibliography (
     document_id   INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
     sidecar_path  TEXT,
@@ -130,6 +133,7 @@ def connect(db_path: Path, readonly: bool = False) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     migrate(conn)
     _ensure_optional_indexes(conn)
+    _backfill_records_index(conn)
     conn.commit()
     return conn
 
@@ -246,6 +250,11 @@ def migrate(conn: sqlite3.Connection) -> None:
         # the filter chain that produced this encoder run (same signature as
         # pages/page_edits), so editing an encoder filter re-encodes
         conn.execute("ALTER TABLE records ADD COLUMN filters TEXT")
+    if "search_text" not in rcols:
+        # derived full-text projection of records.data, used by records_fts.
+        # It is safe to backfill from the existing data on the next writer
+        # connection (see _backfill_records_index).
+        conn.execute("ALTER TABLE records ADD COLUMN search_text TEXT")
     # page status vocabulary: failed pages are 'waiting' (retried on next scan).
     # Only writes when rows need converting, so normal connections stay read-only.
     if conn.execute("SELECT COUNT(*) AS n FROM pages WHERE status = 'error'").fetchone()["n"]:
@@ -373,6 +382,7 @@ def set_document_status(
 
 def delete_document(conn: sqlite3.Connection, doc_id: int) -> None:
     conn.execute("DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE document_id = ?)", (doc_id,))
+    conn.execute("DELETE FROM records_fts WHERE rowid IN (SELECT id FROM records WHERE document_id = ?)", (doc_id,))
     conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
 
 
@@ -1064,7 +1074,107 @@ def _write(conn: sqlite3.Connection, sql: str, params=()):
 
 # --------------------------------------------------------------------------- records (encoders)
 
+RECORD_START_PAGE_KEYS = ("page_start", "page", "start_page", "source_page")
+
+
+def _as_record_dict(data) -> dict:
+    """Best-effort parse of a record payload for derived indexing."""
+    if isinstance(data, dict):
+        return data
+    if not isinstance(data, str):
+        return {}
+    try:
+        parsed = json.loads(data)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def record_start_page(rec: dict) -> object | None:
+    """Return the record's starting PDF page using the encoders' spellings.
+
+    The current archive has two live spellings: `page_start` (Documenta
+    Indica / letters / apparatus) and `page` (the older letters encoder and
+    the sample archive). New encoders should emit `page_start`; the others
+    remain accepted aliases so existing records keep working.
+    """
+    for key in RECORD_START_PAGE_KEYS:
+        value = rec.get(key)
+        if value is None or value == "":
+            continue
+        if isinstance(value, (str, int, float)):
+            return value
+    return None
+
+
+def record_search_text(rec: dict) -> str:
+    """Deterministic searchable projection of one record's JSON object.
+
+    Scalar leaves are rendered as `key: value`, one per line, preserving JSON
+    insertion order. Keys are included deliberately: they make vocabulary such
+    as `from` / `to` / `place` searchable in a stable way without indexing the
+    raw JSON punctuation.
+    """
+    if not isinstance(rec, dict):
+        return ""
+    lines: list[str] = []
+    for key, value in rec.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(value, bool):
+            lines.append(f"{key}: {'true' if value else 'false'}")
+        elif isinstance(value, (str, int, float)):
+            text = str(value).strip()
+            if text:
+                lines.append(f"{key}: {text}")
+    return "\n".join(lines)
+
+
+def _backfill_records_index(conn: sqlite3.Connection) -> None:
+    """Backfill derived record search columns/FTS rows on a writer connect.
+
+    Existing archives predate `records.search_text` and `records_fts`; add
+    the missing pieces idempotently. This is a writer-only path (connect()
+    skips it for read-only query commands).
+    """
+    if not records_fts_exists(conn):
+        return
+    rows = conn.execute(
+        "SELECT id, data, search_text, source FROM records "
+        "WHERE search_text IS NULL OR search_text = '' "
+        "OR source IS NULL OR source = ''"
+    ).fetchall()
+    for row in rows:
+        rec = _as_record_dict(row["data"])
+        text = record_search_text(rec)
+        page = record_start_page(rec)
+        if row["search_text"] is None or row["search_text"] == "":
+            _write(conn, "UPDATE records SET search_text = ? WHERE id = ?", (text, row["id"]))
+        if (row["source"] is None or row["source"] == "") and page is not None:
+            _write(conn, "UPDATE records SET source = ? WHERE id = ?", (str(page), row["id"]))
+    missing = conn.execute(
+        "SELECT r.id, r.search_text FROM records r "
+        "WHERE r.search_text IS NOT NULL AND r.search_text <> '' "
+        "AND r.id NOT IN (SELECT rowid FROM records_fts)"
+    ).fetchall()
+    for row in missing:
+        _write(conn, "INSERT INTO records_fts (rowid, text) VALUES (?, ?)",
+               (row["id"], row["search_text"]))
+
+
+def records_fts_exists(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'records_fts'"
+    ).fetchone()
+    return row is not None
+
+
 def clear_records(conn: sqlite3.Connection, doc_id: int, encoder: str) -> None:
+    conn.execute(
+        "DELETE FROM records_fts WHERE rowid IN "
+        "(SELECT id FROM records WHERE document_id = ? AND encoder = ?)",
+        (doc_id, encoder),
+    )
     _write(conn, "DELETE FROM records WHERE document_id = ? AND encoder = ?", (doc_id, encoder))
 
 
@@ -1079,12 +1189,106 @@ def add_record(
 ) -> None:
     import time as _t
 
-    _write(
+    rec = _as_record_dict(data)
+    search_text = record_search_text(rec)
+    if not source:
+        page = record_start_page(rec)
+        source = str(page) if page is not None else ""
+    cur = _write(
         conn,
-        "INSERT INTO records (document_id, encoder, kind, data, source, created_at, filters) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (doc_id, encoder, kind, data, source, _t.time(), filters),
+        "INSERT INTO records (document_id, encoder, kind, data, source, created_at, filters, search_text) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (doc_id, encoder, kind, data, source, _t.time(), filters, search_text),
     )
+    _write(conn, "INSERT INTO records_fts (rowid, text) VALUES (?, ?)",
+           (cur.lastrowid, search_text))
+
+
+def record_keyword_search(
+    conn: sqlite3.Connection,
+    query: str,
+    limit: int = 10,
+    collection: str | None = None,
+    encoder: str | None = None,
+    record_kind: str | None = None,
+) -> list[sqlite3.Row]:
+    """FTS5 search over the derived record search text.
+
+    Returns [] when the archive has not been migrated yet (an older DB opened
+    by a read-only query command), so callers can degrade with a note instead
+    of failing.
+    """
+    if not records_fts_exists(conn):
+        return []
+    fts_q = build_fts_query(query)
+    clause, params = _dir_clause(collection)
+    if encoder:
+        clause += " AND r.encoder = ?"
+        params.append(encoder)
+    if record_kind:
+        clause += " AND r.kind = ?"
+        params.append(record_kind)
+    return conn.execute(
+        """SELECT r.id AS record_id, r.document_id, r.encoder,
+                  r.kind AS record_kind, r.source, r.data,
+                  d.filename, d.dir_path,
+                  -bm25(records_fts) AS bm,
+                  snippet(records_fts, 0, '...', '...', '...', 28) AS snippet
+           FROM records_fts
+           JOIN records r ON r.id = records_fts.rowid
+           JOIN documents d ON d.id = r.document_id
+           WHERE records_fts MATCH ?"""
+        + clause
+        + """
+           ORDER BY bm25(records_fts)
+           LIMIT ?""",
+        (fts_q, *params, limit),
+    ).fetchall()
+
+
+def rebuild_records_index(
+    conn: sqlite3.Connection,
+    doc_ids: list[int] | None = None,
+    force: bool = False,
+) -> int:
+    """Rebuild records.search_text and records_fts for a scope.
+
+    `force` recomputes every selected row; otherwise only rows whose
+    search_text is missing are recomputed, but the FTS rows are always
+    rebuilt for the scope so stale entries cannot survive. Returns the
+    number of records touched.
+    """
+    if not records_fts_exists(conn):
+        return 0
+    where = ""
+    params: list = []
+    if doc_ids:
+        marks = ",".join("?" * len(doc_ids))
+        where = f" WHERE document_id IN ({marks})"
+        params = list(doc_ids)
+    rows = conn.execute(
+        "SELECT id, data, search_text, source FROM records" + where, params
+    ).fetchall()
+    if doc_ids:
+        conn.execute(
+            "DELETE FROM records_fts WHERE rowid IN "
+            "(SELECT id FROM records WHERE document_id IN (" + ",".join("?" * len(doc_ids)) + "))",
+            list(doc_ids),
+        )
+    else:
+        conn.execute("DELETE FROM records_fts")
+    for row in rows:
+        rec = _as_record_dict(row["data"])
+        text = row["search_text"]
+        if force or not text:
+            text = record_search_text(rec)
+            _write(conn, "UPDATE records SET search_text = ? WHERE id = ?", (text, row["id"]))
+        page = record_start_page(rec)
+        if (row["source"] is None or row["source"] == "") and page is not None:
+            _write(conn, "UPDATE records SET source = ? WHERE id = ?", (str(page), row["id"]))
+        if text:
+            _write(conn, "INSERT INTO records_fts (rowid, text) VALUES (?, ?)", (row["id"], text))
+    return len(rows)
 
 
 def records_for_document(conn: sqlite3.Connection, doc_id: int) -> list[sqlite3.Row]:
