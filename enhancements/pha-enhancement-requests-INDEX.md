@@ -51,7 +51,7 @@ stable IDs referenced from the prose, not ranks.
 | 4 | [`pha-post-filter-replay-enhancement-request.md`](pha-post-filter-replay-enhancement-request.md) | Draft — **now unblocked** (#1 is fixed); procedure already proven by hand |
 | 6 | [`pha-notes-search-enhancement-request.md`](pha-notes-search-enhancement-request.md) | Draft — independent, no-op when the notes index is empty |
 | - | [pha-record-search-enhancement-request.md](pha-record-search-enhancement-request.md) | **Phase 1 implemented (working tree, not committed)** - keyword record index and pha search --source records/all; Phase 2 semantic and Phase 3 fielded filters open |
-| - | [pha-markdown-from-records-page-contract-bug-report.md](pha-markdown-from-records-page-contract-bug-report.md) | PARTLY FIXED (working tree) - page_start/page aliases and source backfill fixed; full page-span port open |
+| - | [pha-markdown-from-records-page-contract-bug-report.md](pha-markdown-from-records-page-contract-bug-report.md) | **FIXED (working tree)** - page_start/page aliases, source backfill, shared-page line_start/header split, explicit page_end and no-anchor warning; tests added |
 | 10 | `extends`, encoder prescan | Draft — **re-measure before building**; filters shrank both |
 | — | [`pha-serve-page-text-enhancement-request.md`](pha-serve-page-text-enhancement-request.md) | **Stored for later implementation** — the served page viewer (`/doc/<slug>/p<N>`) gains the raw transcription and the effective edited reading beside the image, DB-authoritative and read-only. |
 | 8 | [`SEARCH_WEB_SPEC.md`](../SEARCH_WEB_SPEC.md) | Proposal **for decision** |

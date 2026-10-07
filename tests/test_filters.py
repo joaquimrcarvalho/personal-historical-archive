@@ -354,3 +354,109 @@ def test_filter_with_syntax_error_reports_clearly(tmp_path):
     with pytest.raises(FilterError) as e:
         run_ref("broken", "x", filters_dir=tmp_path / "filters")
     assert "broken" in str(e.value)
+
+
+def test_markdown_from_records_resolves_page_start_and_legacy_page(tmp_path):
+    """The filter must not fall back to page 1 when a record uses page_start."""
+    import importlib.util
+
+    path = REF_FILTERS / "markdown-from-records" / "filter.py"
+    spec = importlib.util.spec_from_file_location("markdown_from_records", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    chunks = mod._page_chunks([
+        {"kind": "letter", "text": "first", "page_start": 69},
+        {"kind": "letter", "text": "second", "page": 20},
+    ])
+    assert [(rec["text"], start, end) for rec, start, end in chunks] == [
+        ("second", 20, 68),
+        ("first", 69, 69),
+    ]
+
+
+def _load_markdown_filter_module():
+    import importlib.util
+
+    path = REF_FILTERS / "markdown-from-records" / "filter.py"
+    spec = importlib.util.spec_from_file_location("markdown_from_records", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_markdown_from_records_splits_shared_page_at_line_start():
+    mod = _load_markdown_filter_module()
+    records = [
+        {"kind": "document", "text": "First", "page_start": 1},
+        {"kind": "document", "text": "Second", "page_start": 2, "line_start": 3},
+        {"kind": "document", "text": "Third", "page_start": 2, "line_start": 5,
+         "page_end": 3},
+    ]
+    pages = {
+        1: ["p1 line1", "p1 line2"],
+        2: ["p2 line1", "p2 line2", "Second header", "p2 line4",
+            "Third header", "p2 line6"],
+        3: ["p3 line1"],
+    }
+    slices = mod._page_slices(records, pages)
+    assert [(rec["text"], start, end) for rec, start, end, _pieces in slices] == [
+        ("First", 1, 1),
+        ("Second", 2, 2),
+        ("Third", 2, 3),
+    ]
+    assert slices[1][3][0][1] == ["p2 line1", "p2 line2", "Second header", "p2 line4"]
+    assert slices[2][3][0][1] == ["Third header", "p2 line6"]
+
+
+def test_markdown_from_records_shared_page_without_anchor_goes_to_previous():
+    mod = _load_markdown_filter_module()
+    records = [
+        {"kind": "document", "text": "Alpha", "page_start": 5},
+        {"kind": "document", "text": "Beta", "page_start": 5},
+    ]
+    pages = {5: ["only page line"]}
+    slices = mod._page_slices(records, pages)
+    assert slices[0][3][0][1] == ["only page line"]
+    assert slices[1][3][0][1] == []
+
+
+def test_markdown_from_records_warns_on_missing_page_anchor(capsys):
+    mod = _load_markdown_filter_module()
+    chunks = mod._page_chunks([{"kind": "person", "text": "No page"}])
+    assert chunks == []
+    err = capsys.readouterr().err
+    assert "skipped 1 record" in err
+
+
+def test_markdown_from_records_run_uses_page_start_in_front_matter(tmp_path, capsys):
+    mod = _load_markdown_filter_module()
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    pages_dir = tmp_path / "pages"
+    pages_dir.mkdir()
+    (pages_dir / "page-069.md").write_text("---\nsource: x\n---\n\nbody page 69", encoding="utf-8")
+    records_file = tmp_path / "records-letters.json"
+    records_file.write_text(json.dumps({
+        "document": "letters.pdf",
+        "encoder": "letters",
+        "records": {"letter": [
+            {"kind": "letter", "text": "Carta de Malaca", "page_start": 69},
+        ]},
+    }), encoding="utf-8")
+    ctx = {
+        "params": {"out_dir": "segments-letters"},
+        "library_dir": str(lib),
+        "records_file": str(records_file),
+        "pages_dir_edited": str(pages_dir),
+        "pages_dir_raw": None,
+        "encoder": "letters",
+        "document_id": 7,
+        "filename": "letters.pdf",
+    }
+    mod.run([], ctx)
+    out = lib / "segments-letters" / "letter-0069-carta-de-malaca.md"
+    assert out.exists()
+    text = out.read_text(encoding="utf-8")
+    assert 'pages: "69"' in text
+    assert "body page 69" in text

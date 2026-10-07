@@ -37,29 +37,130 @@ def _slug(text: str, limit: int = 60) -> str:
     return (s[:limit].rstrip("-")) or "record"
 
 
-def _page_chunks(records: list[dict]) -> list[tuple[dict, int, int]]:
-    """Attach the page span each record covers.
+_PAGE_KEYS = ("page_start", "page", "start_page", "source_page")
+_TITLE_WORDS = re.compile(r"[\w']+", re.UNICODE)
 
-    Records SPAN pages and a record may START mid-page: `page_end` is inferred
-    as the page before the next record's page (or the last page), so a shared
-    page's top belongs to the previous record.
+
+def _record_start_page(rec: dict) -> int | None:
+    """Canonical starting-page resolver for records.
+
+    Current encoders emit `page_start`; older/sample encoders emit `page`.
+    New encoders should use `page_start`, but the aliases stay accepted.
     """
-    pages = [r.get("page") for r in records if isinstance(r.get("page"), int)]
-    last = max(pages) if pages else 0
-    out: list[tuple[dict, int, int]] = []
-    for i, rec in enumerate(records):
-        start = rec.get("page") if isinstance(rec.get("page"), int) else None
+    for key in _PAGE_KEYS:
+        value = rec.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _page_spans(records: list[dict]) -> list[tuple[dict, int, int]]:
+    """Resolve each record's starting page and inferred end page.
+
+    Records are sorted by (page_start, line_start). A record with no usable
+    page anchor is skipped with a warning; it is never silently assigned page 1.
+    """
+    anchored: list[tuple[int, dict]] = []
+    missing = 0
+    for rec in records:
+        start = _record_start_page(rec)
         if start is None:
-            start = out[-1][2] if out else 1
+            missing += 1
+            continue
+        anchored.append((start, rec))
+    if missing:
+        import sys
+        print(f"markdown-from-records: skipped {missing} record(s) with no "
+              "usable page anchor (page_start/page/start_page/source_page)",
+              file=sys.stderr)
+    if not anchored:
+        return []
+    anchored.sort(key=lambda item: (item[0], int(item[1].get("line_start") or 0)))
+    last = max(start for start, _rec in anchored)
+    spans: list[tuple[dict, int, int]] = []
+    for i, (start, rec) in enumerate(anchored):
+        explicit = rec.get("page_end")
         end = start
-        for nxt in records[i + 1:]:
-            p = nxt.get("page")
-            if isinstance(p, int):
-                end = max(start, p - 1 if p > start else start)
-                break
+        if explicit is not None:
+            try:
+                end = max(start, int(explicit))
+            except (TypeError, ValueError):
+                end = start
+        elif i + 1 < len(anchored):
+            nxt = anchored[i + 1][0]
+            end = max(start, nxt - 1 if nxt > start else start)
         else:
             end = max(start, last)
-        out.append((rec, start, end))
+        spans.append((rec, start, end))
+    return spans
+
+
+def _page_chunks(records: list[dict]) -> list[tuple[dict, int, int]]:
+    """Backward-compatible alias for callers that only need page spans."""
+    return _page_spans(records)
+
+
+def _find_boundary(lines: list[str], rec: dict) -> int | None:
+    """1-based line where rec's header begins inside a page, or None.
+
+    `line_start` is authoritative; otherwise a record number line or the first
+    significant title word is used.
+    """
+    ls = rec.get("line_start")
+    if ls is not None:
+        try:
+            return max(1, int(ls))
+        except (TypeError, ValueError):
+            pass
+    number = str(rec.get("number") or "").strip().strip(".")
+    title = str(rec.get("text") or rec.get("label") or "").upper()
+    words = [w for w in _TITLE_WORDS.findall(title) if len(w) > 3]
+    for i, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if number and re.fullmatch(r"\d{1,3}[a-z]?(?:-[a-z]{1,3})?\.?", line):
+            return i
+    if words:
+        first = words[0]
+        for i, raw in enumerate(lines, 1):
+            if first in raw.upper():
+                return i
+    return None
+
+
+def _page_slices(records: list[dict], page_lines: dict[int, list[str]]
+                 ) -> list[tuple[dict, int, int, list[tuple[int, list[str]]]]]:
+    """Attach the exact page slices each record covers.
+
+    A page shared by two records is split at the next record's `line_start`
+    when possible, otherwise at its header line. When no boundary can be
+    found, the page goes to the previous record (the same documented fallback
+    as the reference implementation).
+    """
+    spans = _page_spans(records)
+    if not spans:
+        return []
+    out: list[tuple[dict, int, int, list[tuple[int, list[str]]]]] = []
+    for i, (rec, start, end) in enumerate(spans):
+        pieces: list[tuple[int, list[str]]] = []
+        for p in range(start, end + 1):
+            lines = list(page_lines.get(p, []))
+            if i + 1 < len(spans) and spans[i + 1][1] == p:
+                boundary = _find_boundary(lines, spans[i + 1][0])
+                if boundary is not None:
+                    lines = lines[:boundary - 1]
+            if i > 0 and spans[i - 1][2] >= start and p == start:
+                if spans[i - 1][2] == start:
+                    own = _find_boundary(page_lines.get(p, []), rec)
+                    if own is not None and own > 1:
+                        lines = lines[own - 1:]
+                    else:
+                        lines = []
+            pieces.append((p, lines))
+        out.append((rec, start, end, pieces))
     return out
 
 
@@ -117,18 +218,16 @@ def run(value, ctx):
 
     encoder = ctx.get("encoder") or ""
     strips_notes = str(params.get("strip_notes", "true")).lower() in ("1", "true", "yes")
+    page_lines: dict[int, list[str]] = {}
+    for pno, f in pages.items():
+        body_text = _read_page_body(f) if strips_notes else f.read_text(encoding="utf-8")
+        page_lines[pno] = body_text.splitlines()
+    slices = _page_slices(flat, page_lines)
     written = 0
-    for rec, start, end in _page_chunks(flat):
+    for rec, start, end, pieces in slices:
         kind = str(rec.get("kind") or "record")
         head = _record_text(rec)
-        body_parts: list[str] = []
-        for pno in range(start, end + 1):
-            f = pages.get(pno)
-            if f is None:
-                continue
-            body = _read_page_body(f) if strips_notes else f.read_text(encoding="utf-8")
-            if body:
-                body_parts.append(body)
+        body_parts = ["\n".join(lines) for _pno, lines in pieces if lines]
         body = "\n\n".join(body_parts).strip()
         if not body:
             continue
@@ -143,8 +242,10 @@ def run(value, ctx):
             "encoder": encoder or payload.get("encoder"),
             "source": str(records_path),
         }
+        skip = {"kind", "class", "text", "page", "page_start", "page_end",
+                "start_page", "source_page", "line_start"}
         extra = {k: v for k, v in rec.items()
-                 if k not in ("kind", "class", "text", "page") and isinstance(v, (str, int, float))}
+                 if k not in skip and isinstance(v, (str, int, float))}
         fm.update(extra)
         text = "---\n"
         for k, v in fm.items():
@@ -159,7 +260,7 @@ def run(value, ctx):
 
     if str(params.get("write_index", "false")).lower() in ("1", "true", "yes") and written:
         lines = ["# Records index", "", f"Document: {payload.get('document') or ''}", ""]
-        for rec, start, end in _page_chunks(flat):
+        for rec, start, end, _pieces in _page_slices(flat, page_lines):
             kind = str(rec.get("kind") or "record")
             head = _record_text(rec) or f"{kind} {start}"
             name = f"{kind}-{start:04d}-{_slug(head)}.md"
