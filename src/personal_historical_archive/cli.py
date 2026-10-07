@@ -3916,9 +3916,11 @@ def cmd_help(cfg: Config, args) -> None:
     root = cfg.root
     docs = {
         "readme": ("README.md", "main manual: pipeline, commands, configuration, quickstart"),
+        "pipeline": ("PIPELINE.md", "plain-language guide to the scan → edit → encode pipeline"),
         "mcp": ("MCP_CLIENTS.md", "connecting an AI agent to the archive (MCP `pha_*` tools)"),
         "historians": ("HISTORIANS_README.md", "step-by-step, non-technical guide for historians"),
         "agents": ("AGENTS.md", "conventions for AI agents operating this archive"),
+        "multi-computer": ("MULTI_COMPUTER.md", "running pha across two computers: models here, archive there"),
     }
     topic = getattr(args, "topic", None)
     if topic:
@@ -3957,7 +3959,7 @@ def cmd_help(cfg: Config, args) -> None:
     print("  pha update                    update pha and the PHA view plugin")
     print("  pha view install|status       manage the PHA view plugin in DSH profiles")
     print("  pha version [--short|--json]  which pha is this, and where it is installed")
-    print("  pha help <topic>              details on readme|mcp|historians|agents")
+    print("  pha help <topic>              details on readme|pipeline|mcp|historians|agents|multi-computer")
     print()
     print("FIRST-TIME SETUP")
     print("  If no archive is configured, pha asks where it is: point at an")
@@ -3965,7 +3967,7 @@ def cmd_help(cfg: Config, args) -> None:
     print("  (Windows: %USERPROFILE%\\pha-home).")
     print()
     print("DOCUMENTATION — read these for full instructions")
-    for key in ("readme", "mcp", "historians", "agents"):
+    for key in ("readme", "pipeline", "mcp", "historians", "agents", "multi-computer"):
         name, what = docs[key]
         print(f"  {name:<22} {what}")
     print()
@@ -4414,7 +4416,7 @@ def main(argv: list[str] | None = None) -> None:
     doc.set_defaults(fn=cmd_doctor)
 
     h = sub.add_parser("help", help="orientation and pointers to the instruction files")
-    h.add_argument("topic", nargs="?", help="readme | mcp | historians | agents")
+    h.add_argument("topic", nargs="?", help="readme | pipeline | mcp | historians | agents | multi-computer")
     h.set_defaults(fn=cmd_help)
 
     r = sub.add_parser("reindex", help="re-embed chunks (incremental; all documents, or a doc/page/path)")

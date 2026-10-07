@@ -390,9 +390,9 @@ otherwise:
 - This applies to every escalation request, including the sandbox / approval
   prompts raised by the agent runtime — not just to commands you type.
 
-Run `pha help` (or `pha help <readme|mcp|historians|agents>`) for an
-orientation that points at this file, README.md, MCP_CLIENTS.md and
-HISTORIANS_README.md — it always works, even before an archive is configured.
+Run `pha help` (or `pha help <readme|pipeline|mcp|historians|agents|multi-computer>`) for an
+orientation that points at this file, README.md, PIPELINE.md, MCP_CLIENTS.md,
+HISTORIANS_README.md and MULTI_COMPUTER.md — it always works, even before an archive is configured.
 
 Bundled skills (`skills/<name>/`, installable to `~/.agents/skills/`) cover
 the common agent tasks: `pha-search-context` (don't answer from a search

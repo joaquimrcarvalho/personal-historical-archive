@@ -123,7 +123,8 @@ def test_help_overview_points_to_docs(tmp_path, capsys, monkeypatch):
     cfg, _ = _make_cfg(tmp_path, ".")
     cli.cmd_help(cfg, type("A", (), {"topic": None})())
     out = capsys.readouterr().out
-    for f in ("README.md", "MCP_CLIENTS.md", "HISTORIANS_README.md", "AGENTS.md"):
+    for f in ("README.md", "PIPELINE.md", "MCP_CLIENTS.md",
+              "HISTORIANS_README.md", "AGENTS.md", "MULTI_COMPUTER.md"):
         assert f in out
     assert "pha status" in out
     assert "pha set archive-dir" in out
@@ -150,6 +151,24 @@ def test_help_topic_prints_path(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "MCP_CLIENTS.md" in out
     assert str(cfg.root / "MCP_CLIENTS.md") in out
+
+
+def test_help_pipeline_topic_prints_path(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    cfg, _ = _make_cfg(tmp_path, ".")
+    cli.cmd_help(cfg, type("A", (), {"topic": "pipeline"})())
+    out = capsys.readouterr().out
+    assert "PIPELINE.md" in out
+    assert str(cfg.root / "PIPELINE.md") in out
+
+
+def test_help_multi_computer_topic_prints_path(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    cfg, _ = _make_cfg(tmp_path, ".")
+    cli.cmd_help(cfg, type("A", (), {"topic": "multi-computer"})())
+    out = capsys.readouterr().out
+    assert "MULTI_COMPUTER.md" in out
+    assert str(cfg.root / "MULTI_COMPUTER.md") in out
 
 
 def test_help_unknown_topic_stderr(tmp_path, capsys, monkeypatch):
