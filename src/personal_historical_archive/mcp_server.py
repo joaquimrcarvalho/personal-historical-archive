@@ -61,13 +61,16 @@ def make_server(cfg: Config) -> FastMCP:
     )
 
     @mcp.tool()
-    def pha_search(query: str, mode: str = "hybrid", limit: int = 10, collection: str | None = None,
+    def pha_search(query: str = "", mode: str = "hybrid", limit: int = 10, collection: str | None = None,
                    allow_embed: bool = False, source: str = "all",
-                   encoder: str | None = None, record_kind: str | None = None) -> dict:
+                   encoder: str | None = None, record_kind: str | None = None,
+                   fields: dict | None = None, ignore_case: bool = False) -> dict:
         """Search extracted manuscript text and structured encoder records.
 
         Args:
-            query: free-text search query (keyword terms or a natural-language description).
+            query: free-text search query. May be empty when `fields` is given
+                with source records/all, in which case records are listed by
+                field match only.
             mode: hybrid (keyword + semantic, default), keyword (FTS5), or semantic (embeddings).
             limit: maximum number of results (1-50).
             collection: restrict to a collection or directory, e.g. 'documents',
@@ -81,6 +84,9 @@ def make_server(cfg: Config) -> FastMCP:
             encoder: with source records/all, restrict to one encoder id.
             record_kind: with source records/all, restrict to one record kind
                 (letter, person, ...).
+            fields: with source records/all, an object of exact record field
+                matches, e.g. {"from": "Xavier", "place": "Malaca"}.
+            ignore_case: match the field values case-insensitively (ASCII).
         Returns:
             The same shape as `pha search --json`: {mode, query, results, note}.
             `results` are ranked passages with document id/name, collection, page
@@ -95,7 +101,8 @@ def make_server(cfg: Config) -> FastMCP:
         try:
             res = run_search(conn, client, cfg, query, mode=mode, limit=limit,
                              collection=collection, allow_embed=allow_embed,
-                             source=source, encoder=encoder, record_kind=record_kind)
+                             source=source, encoder=encoder, record_kind=record_kind,
+                             fields=fields, ignore_case=ignore_case)
         finally:
             client.close()
             conn.close()

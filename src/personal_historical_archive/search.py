@@ -141,11 +141,21 @@ def record_keyword_search(
     collection: str | None = None,
     encoder: str | None = None,
     record_kind: str | None = None,
+    fields: dict | None = None,
+    ignore_case: bool = False,
 ) -> list[dict]:
-    rows = db.record_keyword_search(
-        conn, query, limit, collection=collection,
-        encoder=encoder, record_kind=record_kind,
-    )
+    if query.strip():
+        rows = db.record_keyword_search(
+            conn, query, limit, collection=collection,
+            encoder=encoder, record_kind=record_kind, fields=fields,
+            ignore_case=ignore_case,
+        )
+    else:
+        rows = db.record_field_search(
+            conn, limit, collection=collection,
+            encoder=encoder, record_kind=record_kind, fields=fields,
+            ignore_case=ignore_case,
+        )
     out = []
     for r in rows:
         d = _decorate_record(conn, r, "keyword", None)
@@ -209,10 +219,13 @@ def semantic_record_search(
     collection: str | None = None,
     encoder: str | None = None,
     record_kind: str | None = None,
+    fields: dict | None = None,
+    ignore_case: bool = False,
 ) -> list[dict]:
     rows = db.all_record_embeddings(
         conn, collection=collection, encoder=encoder,
-        record_kind=record_kind, embed_model=model,
+        record_kind=record_kind, embed_model=model, fields=fields,
+        ignore_case=ignore_case,
     )
     if not rows:
         return []
@@ -239,6 +252,8 @@ def _record_semantic_arm(
     encoder: str | None,
     record_kind: str | None,
     allow_embed: bool,
+    fields: dict | None = None,
+    ignore_case: bool = False,
 ) -> tuple[list[dict], str | None]:
     note = _embed_lock_note(cfg, allow_embed)
     if note is not None:
@@ -246,6 +261,7 @@ def _record_semantic_arm(
     hits = semantic_record_search(
         conn, client, cfg.embed_model, query, limit,
         collection=collection, encoder=encoder, record_kind=record_kind,
+        fields=fields, ignore_case=ignore_case,
     )
     if not hits:
         return [], ("Record semantic search unavailable: embedding model "
@@ -264,14 +280,17 @@ def _record_hybrid(
     encoder: str | None,
     record_kind: str | None,
     allow_embed: bool,
+    fields: dict | None = None,
+    ignore_case: bool = False,
 ) -> tuple[list[dict], str | None]:
     kw = record_keyword_search(
         conn, query, limit, collection=collection,
-        encoder=encoder, record_kind=record_kind,
+        encoder=encoder, record_kind=record_kind, fields=fields,
+        ignore_case=ignore_case,
     )
     sem, note = _record_semantic_arm(
         conn, client, cfg, query, limit, collection, encoder,
-        record_kind, allow_embed,
+        record_kind, allow_embed, fields=fields, ignore_case=ignore_case,
     )
     if not kw and not sem:
         return [], note or _record_index_note(conn, "records", 0)
@@ -353,32 +372,50 @@ def search(
     source: str = "all",
     encoder: str | None = None,
     record_kind: str | None = None,
+    fields: dict | None = None,
+    ignore_case: bool = False,
 ) -> dict:
     mode = (mode or cfg.default_mode).lower()
     limit = limit or cfg.top_k
     source = (source or "all").lower()
+    query_text = (query or "").strip()
     if mode not in ("hybrid", "keyword", "semantic"):
         raise ValueError(f"Unknown search mode {mode}; use hybrid, keyword or semantic")
     if source not in SEARCH_SOURCES:
         raise ValueError(f"Unknown search source {source}; use pages, records or all")
+    if fields and source == "pages":
+        raise ValueError("--field only applies to record search (--source records or all)")
+    if not query_text:
+        if source == "pages" or not fields:
+            raise ValueError("a query is required unless --field is given with record search")
+        recs = record_keyword_search(
+            conn, "", limit, collection=collection,
+            encoder=encoder, record_kind=record_kind, fields=fields,
+            ignore_case=ignore_case,
+        )
+        return {"mode": mode, "query": query, "results": recs,
+                "note": "no text query; records filtered by the given field(s)"}
 
     if source == "records":
         if mode == "keyword":
             recs = record_keyword_search(
                 conn, query, limit, collection=collection,
-                encoder=encoder, record_kind=record_kind,
+                encoder=encoder, record_kind=record_kind, fields=fields,
+                ignore_case=ignore_case,
             )
             return {"mode": mode, "query": query, "results": recs,
                     "note": _record_index_note(conn, source, len(recs))}
         if mode == "semantic":
             recs, note = _record_semantic_arm(
                 conn, client, cfg, query, limit, collection,
-                encoder, record_kind, allow_embed,
+                encoder, record_kind, allow_embed, fields=fields,
+                ignore_case=ignore_case,
             )
             return {"mode": mode, "query": query, "results": recs, "note": note}
         recs, note = _record_hybrid(
             conn, client, cfg, query, limit, collection,
-            encoder, record_kind, allow_embed,
+            encoder, record_kind, allow_embed, fields=fields,
+            ignore_case=ignore_case,
         )
         return {"mode": mode, "query": query, "results": recs, "note": note}
 
@@ -394,19 +431,22 @@ def search(
     if mode == "keyword":
         recs = record_keyword_search(
             conn, query, limit, collection=collection,
-            encoder=encoder, record_kind=record_kind,
+            encoder=encoder, record_kind=record_kind, fields=fields,
+            ignore_case=ignore_case,
         )
         if db.records_fts_exists(conn):
             record_note = _record_index_note(conn, source, len(recs))
     elif mode == "semantic":
         recs, record_note = _record_semantic_arm(
             conn, client, cfg, query, limit, collection,
-            encoder, record_kind, allow_embed,
+            encoder, record_kind, allow_embed, fields=fields,
+            ignore_case=ignore_case,
         )
     else:
         recs, record_note = _record_hybrid(
             conn, client, cfg, query, limit, collection,
-            encoder, record_kind, allow_embed,
+            encoder, record_kind, allow_embed, fields=fields,
+            ignore_case=ignore_case,
         )
 
     page_results = page_res.get("results") or []

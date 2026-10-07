@@ -1212,6 +1212,8 @@ def all_record_embeddings(
     encoder: str | None = None,
     record_kind: str | None = None,
     embed_model: str | None = None,
+    fields: dict | None = None,
+    ignore_case: bool = False,
 ) -> list[sqlite3.Row]:
     if not record_embeddings_exist(conn):
         return []
@@ -1228,6 +1230,10 @@ def all_record_embeddings(
     if embed_model:
         where.append("re.embed_model = ?")
         params.append(embed_model)
+    field_sql, field_params = record_field_clause(fields, ignore_case=ignore_case)
+    if field_sql:
+        where.append(field_sql.lstrip(" AND "))
+        params.extend(field_params)
     sql = (
         "SELECT re.record_id, re.embedding, r.document_id, r.encoder, "
         "r.kind AS record_kind, r.source, r.data, d.filename, d.dir_path "
@@ -1296,6 +1302,74 @@ def add_record(
            (cur.lastrowid, search_text))
 
 
+_RECORD_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def record_field_clause(fields: dict | None, alias: str = "r",
+                        ignore_case: bool = False) -> tuple[str, list]:
+    """SQL fragment filtering records by exact JSON field value.
+
+    Field names are restricted to a simple identifier pattern and the value is
+    always parameterised, so this cannot be used for SQL injection. The JSON
+    value is cast to text so "69" matches a numeric page field as well.
+    `ignore_case` uses SQLite NOCASE for ASCII case-insensitivity.
+    """
+    clauses: list[str] = []
+    params: list = []
+    for name, value in (fields or {}).items():
+        name = str(name)
+        if not _RECORD_FIELD_RE.fullmatch(name):
+            raise ValueError(
+                f"invalid record field name {name}; "
+                "use letters, digits and underscores, starting with a letter or underscore"
+            )
+        expr = f"CAST(json_extract({alias}.data, '$.{name}') AS TEXT)"
+        if ignore_case:
+            expr += " COLLATE NOCASE"
+        clauses.append(f"{expr} = ?")
+        params.append(str(value))
+    if not clauses:
+        return "", []
+    return " AND " + " AND ".join(clauses), params
+
+
+def record_field_search(
+    conn: sqlite3.Connection,
+    limit: int = 10,
+    collection: str | None = None,
+    encoder: str | None = None,
+    record_kind: str | None = None,
+    fields: dict | None = None,
+    ignore_case: bool = False,
+) -> list[sqlite3.Row]:
+    """List records matching exact JSON field filters, without a text query."""
+    clause, params = _dir_clause(collection)
+    where: list[str] = []
+    if clause:
+        where.append(clause.lstrip(" AND "))
+    if encoder:
+        where.append("r.encoder = ?")
+        params.append(encoder)
+    if record_kind:
+        where.append("r.kind = ?")
+        params.append(record_kind)
+    field_sql, field_params = record_field_clause(fields, ignore_case=ignore_case)
+    if field_sql:
+        where.append(field_sql.lstrip(" AND "))
+        params.extend(field_params)
+    sql = (
+        "SELECT r.id AS record_id, r.document_id, r.encoder, "
+        "r.kind AS record_kind, r.source, r.data, d.filename, d.dir_path, "
+        "0.0 AS bm, '' AS snippet "
+        "FROM records r JOIN documents d ON d.id = r.document_id"
+    )
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY r.document_id, CAST(r.source AS INTEGER), r.id LIMIT ?"
+    params.append(limit)
+    return conn.execute(sql, params).fetchall()
+
+
 def record_keyword_search(
     conn: sqlite3.Connection,
     query: str,
@@ -1303,6 +1377,8 @@ def record_keyword_search(
     collection: str | None = None,
     encoder: str | None = None,
     record_kind: str | None = None,
+    fields: dict | None = None,
+    ignore_case: bool = False,
 ) -> list[sqlite3.Row]:
     """FTS5 search over the derived record search text.
 
@@ -1320,6 +1396,9 @@ def record_keyword_search(
     if record_kind:
         clause += " AND r.kind = ?"
         params.append(record_kind)
+    field_sql, field_params = record_field_clause(fields, ignore_case=ignore_case)
+    clause += field_sql
+    params += field_params
     return conn.execute(
         """SELECT r.id AS record_id, r.document_id, r.encoder,
                   r.kind AS record_kind, r.source, r.data,

@@ -1,6 +1,6 @@
 # Enhancement request - search the encoder's structured records
 
-**Status:** **Phase 1 committed; Phase 2 implemented in the working tree, not committed/released. Phase 3 open.**
+**Status:** **Phase 1 and Phase 2 committed; Phase 3 implemented in the working tree, not committed/released.**
 **Date:** 2026-10-06
 **Relates to:** PIPELINE.md (the "records in the index" claim), README
 *Encoders*, enhancements/pha-notes-search-enhancement-request.md,
@@ -424,7 +424,7 @@ Phase 1 is implemented in the working tree:
   indexed, 3,258 FTS rows, all `source` values populated, keyword hits for
   Xavier at the expected records.
 
-Phase 2 (semantic record search), Phase 3 (fielded filters) and the full
+Phase 2 and Phase 3 are implemented in the working tree; the full
 shared-page artifact port from `pha-markdown-from-records-page-contract-bug-report.md`
 remain open.
 
@@ -449,4 +449,29 @@ Phase 2 (semantic record search) is implemented in the working tree:
 - Real-data smoke test on a copy of the jesuit-archive DB: 3,258 records
   across 8 documents embedded and stored.
 
-Phase 3 (fielded filters such as `--field from=Xavier`) remains open.
+Phase 3 (fielded filters such as `--field from=Xavier`) is implemented in the working tree; see section 17.
+
+
+## 17. Phase 3 implementation status - 2026-10-06
+
+Phase 3 (fielded filters) is implemented in the working tree:
+
+- `pha search --field NAME=VALUE` / `--where NAME=VALUE` (repeatable) applies
+  exact JSON field filters to the record arm. Values are parameterised and
+  field names are checked against a simple identifier pattern.
+- MCP `pha_search(..., fields={...})` accepts the same object form.
+- Filters are pushed into both the keyword (`records_fts` join) and semantic
+  (`record_embeddings` join) queries, so `--mode keyword`, `semantic` and
+  `hybrid` all honour them.
+- `--field` is rejected with `--source pages` (it only applies to records).
+- With `--source records` or `all`, the text query may be omitted when at
+  least one `--field` is given: `pha search --source records --field
+  place=Malaca` returns every matching record, ordered by document/page,
+  with a note that no text query was used. A query is still required when no
+  field filter is present.
+- `--ignore-case` (alias `--case-insensitive`) matches `--field` values with
+  SQLite `NOCASE` (ASCII case-insensitivity); MCP exposes it as
+  `ignore_case=True`.
+- Tests: `tests/test_record_search_fields.py` covers keyword, semantic,
+  multi-field, field-only listing, case-insensitive matching and
+  invalid-field cases.

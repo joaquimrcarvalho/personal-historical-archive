@@ -255,6 +255,22 @@ def cmd_search(cfg: Config, args) -> None:
     client = _client(cfg, cfg.embed_base_url, cfg.embed_timeout_s)
     try:
         res = None
+        fields = None
+        raw_fields = getattr(args, "field_filters", None) or []
+        if raw_fields:
+            fields = {}
+            for raw in raw_fields:
+                name, sep, value = str(raw).partition("=")
+                if not sep or not name:
+                    print(f"error: --field expects NAME=VALUE (got {raw})", file=sys.stderr)
+                    sys.exit(2)
+                fields[name] = value
+        if not str(args.query or "").strip() and not fields:
+            print("error: a query is required unless --field is given", file=sys.stderr)
+            sys.exit(2)
+        if fields and getattr(args, "source", "all") == "pages":
+            print("error: --field only applies to --source records or all", file=sys.stderr)
+            sys.exit(2)
         try:
             from .search import search as run_search
 
@@ -263,7 +279,9 @@ def cmd_search(cfg: Config, args) -> None:
                              allow_embed=bool(getattr(args, "force", False)),
                              source=getattr(args, "source", "all"),
                              encoder=getattr(args, "encoder", None),
-                             record_kind=getattr(args, "record_kind", None))
+                             record_kind=getattr(args, "record_kind", None),
+                             fields=fields,
+                             ignore_case=bool(getattr(args, "ignore_case", False)))
         except ModelError as e:
             print(f"model error: {e}", file=sys.stderr)
             sys.exit(2)
@@ -4214,7 +4232,7 @@ def main(argv: list[str] | None = None) -> None:
     s.set_defaults(fn=cmd_scan)
 
     q = sub.add_parser("search", help="search the extracted text")
-    q.add_argument("query")
+    q.add_argument("query", nargs="?", default="")
     q.add_argument("--mode", choices=["hybrid", "keyword", "semantic"], default=None)
     q.add_argument("--limit", type=int, default=None)
     q.add_argument("--collection", default=None,
@@ -4227,6 +4245,13 @@ def main(argv: list[str] | None = None) -> None:
     q.add_argument("--record-kind", default=None, metavar="KIND",
                    help="with --source records/all, restrict to one record kind "
                         "(e.g. letter, person)")
+    q.add_argument("--field", "--where", dest="field_filters", action="append",
+                   default=None, metavar="NAME=VALUE",
+                   help="with --source records/all, require an exact record field "
+                        "value (repeatable, e.g. --field from=Xavier)")
+    q.add_argument("--ignore-case", "--case-insensitive", dest="ignore_case",
+                   action="store_true",
+                   help="match --field values case-insensitively (ASCII, SQLite NOCASE)")
     q.add_argument("--force", "--allow-embed", dest="force", action="store_true",
                    help="embed the query even while a scan/edit/reindex is using the "
                         "embedding server (loads the embed model there — it may evict "

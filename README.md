@@ -53,7 +53,9 @@ structured records grounded to the page each one starts on.
 ```
 
 **How the phases and their configuration files fit together:**
-[PIPELINE.md](PIPELINE.md).
+[PIPELINE.md](PIPELINE.md). **Running pha on two computers** — the heavy models
+on a bigger machine, or handing a document out to be processed elsewhere:
+[MULTI_COMPUTER.md](MULTI_COMPUTER.md).
 
 ---
 
@@ -1035,8 +1037,15 @@ printed i–xv but occupies PDF pages 1-15).
   `pha reindex --source records`, for semantic search
   (`record_embeddings`). `pha search --source records` finds them,
   `--source all` (the default) searches pages and records together, and
-  `--mode hybrid` fuses the record keyword + semantic arms. The starting-page
-  field is resolved from `page_start` first, then
+  `--mode hybrid` fuses the record keyword + semantic arms. Exact record
+  fields can be filtered with `--field name=value` (repeatable), e.g.
+  `--field from=Xavier --field place=Malaca`. With `--source records` or
+  `all`, the query may be omitted when at least one field is given, so
+  `pha search --source records --field place=Malaca` lists every record with
+  that exact field value. Add `--ignore-case` to match `--field` values
+  without case (ASCII `NOCASE`, so `coimbra` matches `Coimbra`). The
+  starting-page field is resolved from
+  `page_start` first, then
   `page`/`start_page`/`source_page`, and exposed as `page_no` in search
   hits.
 - Re-encodes when the encoder file, its `encoder.prompt.md`, or the source
@@ -1209,7 +1218,7 @@ pha help [topic]              # orientation + pointers to README/MCP_CLIENTS/HIS
 pha scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--path COLLECTION] [--reprocess]
 pha scan --path DOC --page N [--palaeographer ID] [--model ID] [--dry-run] [--no-pin]
 pha scan --path DOC [--page N] --unpin      # release the pin, keep the text
-pha search QUERY [--mode hybrid|keyword|semantic] [--source pages|records|all] [--collection COLX] [--limit N] [--json]
+pha search [QUERY] [--mode hybrid|keyword|semantic] [--source pages|records|all] [--collection COLX] [--field NAME=VALUE] [--ignore-case] [--limit N] [--json]
 pha page DOC PAGE [--edited]    # print the FULL text of one page (doc = id or filename substring)
                                 #   --edited reads the edited/translated variant; when there is
                                 #   none it names the pass that produces it (`pha edit --path …`)
