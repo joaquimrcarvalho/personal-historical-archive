@@ -187,6 +187,106 @@ def _rrf_merge(kw: list[dict], sem: list[dict], limit: int, k: int = 60) -> list
     return merged
 
 
+def _embed_lock_note(cfg: Config, allow_embed: bool) -> str | None:
+    """The honest note when a running model job owns the embed server."""
+    embed_server = locks.embed_key(cfg)
+    if allow_embed or not locks.job_running(cfg, embed_server):
+        return None
+    who = locks.holder_label(embed_server)
+    subject = f"A model job ({who})" if who else "A model job"
+    return (f"{subject} is using the embedding server; semantic search "
+            "skipped so it keeps its model loaded. Keyword results only - "
+            "re-run when it finishes, pass --force, or point "
+            "embeddings.base_url at a separate server.")
+
+
+def semantic_record_search(
+    conn: sqlite3.Connection,
+    client: ModelClient,
+    model: str,
+    query: str,
+    limit: int,
+    collection: str | None = None,
+    encoder: str | None = None,
+    record_kind: str | None = None,
+) -> list[dict]:
+    rows = db.all_record_embeddings(
+        conn, collection=collection, encoder=encoder,
+        record_kind=record_kind, embed_model=model,
+    )
+    if not rows:
+        return []
+    q = _embed_query(client, model, query)
+    if q is None:
+        return []
+    scored = [(cosine(q, unpack(row["embedding"])), row) for row in rows]
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    out = []
+    for score, row in scored[:limit]:
+        d = _decorate_record(conn, row, "semantic", round(score, 5))
+        if d:
+            out.append(d)
+    return out
+
+
+def _record_semantic_arm(
+    conn: sqlite3.Connection,
+    client: ModelClient,
+    cfg: Config,
+    query: str,
+    limit: int,
+    collection: str | None,
+    encoder: str | None,
+    record_kind: str | None,
+    allow_embed: bool,
+) -> tuple[list[dict], str | None]:
+    note = _embed_lock_note(cfg, allow_embed)
+    if note is not None:
+        return [], note
+    hits = semantic_record_search(
+        conn, client, cfg.embed_model, query, limit,
+        collection=collection, encoder=encoder, record_kind=record_kind,
+    )
+    if not hits:
+        return [], ("Record semantic search unavailable: embedding model "
+                    "unreachable, no record embeddings, or run "
+                    "pha reindex --source records.")
+    return hits, None
+
+
+def _record_hybrid(
+    conn: sqlite3.Connection,
+    client: ModelClient,
+    cfg: Config,
+    query: str,
+    limit: int,
+    collection: str | None,
+    encoder: str | None,
+    record_kind: str | None,
+    allow_embed: bool,
+) -> tuple[list[dict], str | None]:
+    kw = record_keyword_search(
+        conn, query, limit, collection=collection,
+        encoder=encoder, record_kind=record_kind,
+    )
+    sem, note = _record_semantic_arm(
+        conn, client, cfg, query, limit, collection, encoder,
+        record_kind, allow_embed,
+    )
+    if not kw and not sem:
+        return [], note or _record_index_note(conn, "records", 0)
+    if not sem:
+        for r in kw:
+            r["source"] = "keyword"
+        return kw, note
+    if not kw:
+        return sem, note
+    merged = _rrf_merge_many([kw, sem], limit)
+    for r in merged:
+        r["source"] = "hybrid"
+    return merged, note
+
+
 def _page_search(
     conn: sqlite3.Connection,
     client: ModelClient,
@@ -263,18 +363,24 @@ def search(
         raise ValueError(f"Unknown search source {source}; use pages, records or all")
 
     if source == "records":
+        if mode == "keyword":
+            recs = record_keyword_search(
+                conn, query, limit, collection=collection,
+                encoder=encoder, record_kind=record_kind,
+            )
+            return {"mode": mode, "query": query, "results": recs,
+                    "note": _record_index_note(conn, source, len(recs))}
         if mode == "semantic":
-            return {
-                "mode": mode, "query": query, "results": [],
-                "note": "semantic record search is not implemented yet; "
-                        "use --mode keyword or --source pages",
-            }
-        recs = record_keyword_search(
-            conn, query, limit, collection=collection,
-            encoder=encoder, record_kind=record_kind,
+            recs, note = _record_semantic_arm(
+                conn, client, cfg, query, limit, collection,
+                encoder, record_kind, allow_embed,
+            )
+            return {"mode": mode, "query": query, "results": recs, "note": note}
+        recs, note = _record_hybrid(
+            conn, client, cfg, query, limit, collection,
+            encoder, record_kind, allow_embed,
         )
-        return {"mode": mode, "query": query, "results": recs,
-                "note": _record_index_note(conn, source, len(recs))}
+        return {"mode": mode, "query": query, "results": recs, "note": note}
 
     page_res = _page_search(
         conn, client, cfg, query, mode, limit, collection, allow_embed,
@@ -285,7 +391,7 @@ def search(
 
     recs: list[dict] = []
     record_note: str | None = None
-    if mode in ("keyword", "hybrid"):
+    if mode == "keyword":
         recs = record_keyword_search(
             conn, query, limit, collection=collection,
             encoder=encoder, record_kind=record_kind,
@@ -293,7 +399,15 @@ def search(
         if db.records_fts_exists(conn):
             record_note = _record_index_note(conn, source, len(recs))
     elif mode == "semantic":
-        record_note = "semantic record search is not implemented yet; showing page results only"
+        recs, record_note = _record_semantic_arm(
+            conn, client, cfg, query, limit, collection,
+            encoder, record_kind, allow_embed,
+        )
+    else:
+        recs, record_note = _record_hybrid(
+            conn, client, cfg, query, limit, collection,
+            encoder, record_kind, allow_embed,
+        )
 
     page_results = page_res.get("results") or []
     if not recs:

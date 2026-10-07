@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS records (
     search_text TEXT
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(text);
+CREATE TABLE IF NOT EXISTS record_embeddings (
+    record_id   INTEGER PRIMARY KEY REFERENCES records(id) ON DELETE CASCADE,
+    embedding   BLOB NOT NULL,
+    embed_model TEXT,
+    updated_at  REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS document_bibliography (
     document_id   INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
     sidecar_path  TEXT,
@@ -382,6 +388,7 @@ def set_document_status(
 
 def delete_document(conn: sqlite3.Connection, doc_id: int) -> None:
     conn.execute("DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE document_id = ?)", (doc_id,))
+    conn.execute("DELETE FROM record_embeddings WHERE record_id IN (SELECT id FROM records WHERE document_id = ?)", (doc_id,))
     conn.execute("DELETE FROM records_fts WHERE rowid IN (SELECT id FROM records WHERE document_id = ?)", (doc_id,))
     conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
 
@@ -1169,7 +1176,92 @@ def records_fts_exists(conn: sqlite3.Connection) -> bool:
     return row is not None
 
 
+def record_embeddings_exist(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'record_embeddings'"
+    ).fetchone()
+    return row is not None
+
+
+def set_record_embedding(conn: sqlite3.Connection, record_id: int,
+                         embedding: bytes, embed_model: str | None) -> None:
+    import time as _t
+
+    _write(
+        conn,
+        "INSERT INTO record_embeddings (record_id, embedding, embed_model, updated_at) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(record_id) DO UPDATE SET "
+        "embedding = excluded.embedding, embed_model = excluded.embed_model, "
+        "updated_at = excluded.updated_at",
+        (record_id, embedding, embed_model, _t.time()),
+    )
+
+
+def clear_record_embeddings(conn: sqlite3.Connection, doc_id: int) -> None:
+    conn.execute(
+        "DELETE FROM record_embeddings WHERE record_id IN "
+        "(SELECT id FROM records WHERE document_id = ?)",
+        (doc_id,),
+    )
+
+
+def all_record_embeddings(
+    conn: sqlite3.Connection,
+    collection: str | None = None,
+    encoder: str | None = None,
+    record_kind: str | None = None,
+    embed_model: str | None = None,
+) -> list[sqlite3.Row]:
+    if not record_embeddings_exist(conn):
+        return []
+    clause, params = _dir_clause(collection)
+    where = []
+    if clause:
+        where.append(clause.lstrip(" AND "))
+    if encoder:
+        where.append("r.encoder = ?")
+        params.append(encoder)
+    if record_kind:
+        where.append("r.kind = ?")
+        params.append(record_kind)
+    if embed_model:
+        where.append("re.embed_model = ?")
+        params.append(embed_model)
+    sql = (
+        "SELECT re.record_id, re.embedding, r.document_id, r.encoder, "
+        "r.kind AS record_kind, r.source, r.data, d.filename, d.dir_path "
+        "FROM record_embeddings re "
+        "JOIN records r ON r.id = re.record_id "
+        "JOIN documents d ON d.id = r.document_id"
+    )
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    return conn.execute(sql, params).fetchall()
+
+
+def record_embedding_stats(conn: sqlite3.Connection, doc_id: int | None = None) -> dict:
+    if not record_embeddings_exist(conn):
+        return {}
+    where = ""
+    params: list = []
+    if doc_id is not None:
+        where = " WHERE r.document_id = ?"
+        params = [doc_id]
+    rows = conn.execute(
+        "SELECT r.document_id, COUNT(*) n FROM record_embeddings re "
+        "JOIN records r ON r.id = re.record_id" + where + " GROUP BY r.document_id",
+        params,
+    ).fetchall()
+    return {r["document_id"]: r["n"] for r in rows}
+
+
 def clear_records(conn: sqlite3.Connection, doc_id: int, encoder: str) -> None:
+    conn.execute(
+        "DELETE FROM record_embeddings WHERE record_id IN "
+        "(SELECT id FROM records WHERE document_id = ? AND encoder = ?)",
+        (doc_id, encoder),
+    )
     conn.execute(
         "DELETE FROM records_fts WHERE rowid IN "
         "(SELECT id FROM records WHERE document_id = ? AND encoder = ?)",

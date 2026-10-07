@@ -1,6 +1,6 @@
 # Enhancement request - search the encoder's structured records
 
-**Status:** **APPROVED (Phase 1) - implemented in the working tree, not committed/released.**
+**Status:** **Phase 1 committed; Phase 2 implemented in the working tree, not committed/released. Phase 3 open.**
 **Date:** 2026-10-06
 **Relates to:** PIPELINE.md (the "records in the index" claim), README
 *Encoders*, enhancements/pha-notes-search-enhancement-request.md,
@@ -427,3 +427,26 @@ Phase 1 is implemented in the working tree:
 Phase 2 (semantic record search), Phase 3 (fielded filters) and the full
 shared-page artifact port from `pha-markdown-from-records-page-contract-bug-report.md`
 remain open.
+
+
+## 16. Phase 2 implementation status - 2026-10-06
+
+Phase 2 (semantic record search) is implemented in the working tree:
+
+- `record_embeddings(record_id, embedding, embed_model, updated_at)` with
+  `ON DELETE CASCADE`, add/clear/query helpers in `db.py`.
+- `ingest.index_records()` embeds one vector per record using the same embed
+  model and document prefix as page chunks. It reuses current-model vectors
+  incrementally and leaves existing vectors untouched if a re-embed fails.
+- `pha reindex --source records|all` now builds record embeddings and the
+  record keyword index. `--source all` (default) still does the same work as
+  `pages` when no records exist.
+- `search.semantic_record_search()` and record hybrid search are wired into
+  `pha search` / `pha_search` for `--source records` and `--source all`;
+  page+record RRF keys on `(kind, id)`.
+- Tests: `tests/test_record_search_semantic.py`; full suite passes
+  (978 tests).
+- Real-data smoke test on a copy of the jesuit-archive DB: 3,258 records
+  across 8 documents embedded and stored.
+
+Phase 3 (fielded filters such as `--field from=Xavier`) remains open.

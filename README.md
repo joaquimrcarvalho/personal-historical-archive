@@ -1031,11 +1031,14 @@ printed i–xv but occupies PDF pages 1-15).
 - Records are stored in SQLite and written to
   `library/<dir>/<slug>/records-<encoder>.json`, with the exact input
   concatenated text beside it as `concatenated-<encoder>.md` for inspection.
-  They are also indexed for keyword search (`records_fts`); `pha search
-  --source records` finds them, and `--source all` (the default) searches
-  pages and records together. The starting-page field is resolved from
-  `page_start` first, then `page`/`start_page`/`source_page`, and exposed as
-  `page_no` in search hits.
+  They are indexed for keyword search (`records_fts`) and, after
+  `pha reindex --source records`, for semantic search
+  (`record_embeddings`). `pha search --source records` finds them,
+  `--source all` (the default) searches pages and records together, and
+  `--mode hybrid` fuses the record keyword + semantic arms. The starting-page
+  field is resolved from `page_start` first, then
+  `page`/`start_page`/`source_page`, and exposed as `page_no` in search
+  hits.
 - Re-encodes when the encoder file, its `encoder.prompt.md`, or the source
   transcription (raw or edited) changes since the records were created.
 - **Long-document techniques** (inspired by

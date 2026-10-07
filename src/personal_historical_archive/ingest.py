@@ -1467,6 +1467,88 @@ def index_document(
     return len(items)
 
 
+def index_records(cfg: Config, conn, doc_id: int,
+                  embed_client: ModelClient | None = None,
+                  verbose: bool = True, incremental: bool = True,
+                  force: bool = False) -> int:
+    """Embed a document's structured records for semantic record search.
+
+    One vector per record, using the same embedding model and document prefix
+    as page chunks. Incremental by default: an existing vector is reused when
+    its ``embed_model`` matches the configured model and ``force`` is false.
+    Existing vectors are cleared only after the new embeddings are in hand, so
+    an embed failure cannot silently downgrade a working record index.
+    """
+    if not cfg.embed_model:
+        return 0
+    rows = conn.execute(
+        "SELECT id, data, search_text FROM records "
+        "WHERE document_id = ? ORDER BY id",
+        (doc_id,),
+    ).fetchall()
+    if not rows:
+        db.clear_record_embeddings(conn, doc_id)
+        conn.commit()
+        return 0
+    old = conn.execute(
+        "SELECT re.record_id, re.embedding, re.embed_model FROM record_embeddings re "
+        "JOIN records r ON r.id = re.record_id WHERE r.document_id = ?",
+        (doc_id,),
+    ).fetchall()
+    old_map = {r["record_id"]: r for r in old}
+    strict = bool(old)
+    blobs: list[bytes | None] = [None] * len(rows)
+    to_embed: list[tuple[int, str]] = []
+    for i, row in enumerate(rows):
+        previous = old_map.get(row["id"])
+        if (not force) and previous is not None and                 previous["embed_model"] == cfg.embed_model:
+            blobs[i] = previous["embedding"]
+            continue
+        text = row["search_text"] or db.record_search_text(
+            db._as_record_dict(row["data"]))
+        to_embed.append((i, prefixed(cfg.embed_model, text, "doc")))
+    if not to_embed:
+        if verbose:
+            print(f"  record index: {len(rows)} record(s) reused; already current",
+                  flush=True)
+        return len(rows)
+    if verbose:
+        print(f"  record index: {len(rows)} record(s), "
+              f"{len(to_embed)} to embed, {len(rows) - len(to_embed)} reused",
+              flush=True)
+    close_embed = False
+    if embed_client is None:
+        embed_client = ModelClient(cfg.embed_base_url, timeout_s=cfg.embed_timeout_s)
+        close_embed = True
+    try:
+        vecs = embed_client.embed(
+            cfg.embed_model,
+            [t for _i, t in to_embed],
+            batch_size=cfg.embed_batch_size,
+        )
+    except ModelError as e:
+        if strict:
+            raise ModelError(
+                f"record embeddings unavailable ({e}); document #{doc_id} "
+                "record index left unchanged rather than dropping its stored vectors"
+            ) from e
+        vecs = [None] * len(to_embed)
+        if verbose:
+            print(f"  warning: record embeddings unavailable ({e}); "
+                  "records remain keyword-searchable", flush=True)
+    finally:
+        if close_embed:
+            embed_client.close()
+    for (i, _text), vec in zip(to_embed, vecs):
+        blobs[i] = pack(vec) if vec else None
+    db.clear_record_embeddings(conn, doc_id)
+    for row, blob in zip(rows, blobs):
+        if blob:
+            db.set_record_embedding(conn, row["id"], blob, cfg.embed_model)
+    conn.commit()
+    return len(rows)
+
+
 def _library_dir_for(cfg: Config, conn, doc_id: int) -> Path | None:
     """The document's current library version folder (`library/<dir>/<slug>`)."""
     doc = db.get_document(conn, doc_id)
@@ -4055,30 +4137,6 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
     if source not in ("pages", "records", "all"):
         return {"reindexed": 0, "chunks": {}, "failed": [],
                 "reason": f"unknown reindex source {source}; use pages, records or all"}
-    if source == "records":
-        cfg.ensure_dirs()
-        conn = db.connect(cfg.db_path)
-        try:
-            if doc_ids is not None:
-                docs = [db.get_document(conn, d) for d in doc_ids]
-                if any(d is None for d in docs):
-                    return {"reindexed": 0, "chunks": {}, "failed": [],
-                            "reason": "one or more --doc ids do not exist"}
-            elif path:
-                docs = _documents_under(cfg, conn, path)
-                if docs is None:
-                    return {"reindexed": 0, "chunks": {}, "failed": [], "records": 0}
-            else:
-                docs = db.list_documents(conn, limit=10000)
-            ids = [int(d["id"]) for d in docs]
-            n = db.rebuild_records_index(conn, doc_ids=ids, force=force)
-            conn.commit()
-            out = {"reindexed": 0, "chunks": {}, "failed": []}
-            if n:
-                out["records"] = n
-            return out
-        finally:
-            conn.close()
     cfg.ensure_dirs()
     keys = _job_keys(cfg, [], embed=True)
     lock = locks.acquire(cfg, keys, label="pha reindex", wait_s=wait_s,
@@ -4105,6 +4163,7 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
         else:
             docs = db.list_documents(conn, limit=10000)
         counts = {}
+        record_counts: dict[int, int] = {}
         failed: list[dict] = []
         skipped_not_done: list[dict] = []
         leases = _leases(cfg)
@@ -4131,19 +4190,25 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
                           f"skipped", flush=True)
                 continue
             try:
-                counts[d["id"]] = index_document(
-                    cfg, conn, d["id"], embed_client=client, verbose=verbose,
-                    incremental=not force, pages=pages,
-                )
+                if source in ("pages", "all"):
+                    counts[d["id"]] = index_document(
+                        cfg, conn, d["id"], embed_client=client, verbose=verbose,
+                        incremental=not force, pages=pages,
+                    )
+                if source in ("records", "all"):
+                    record_counts[d["id"]] = index_records(
+                        cfg, conn, d["id"], embed_client=client, verbose=verbose,
+                        incremental=not force, force=force,
+                    )
             except ModelError as e:
                 failed.append({"id": d["id"], "filename": d["filename"], "error": str(e)})
                 if verbose:
                     print(f"  ! {d['filename']}: {e}", flush=True)
-        records_count = 0
-        if source == "all":
+        if source in ("records", "all"):
             ids = [int(d["id"]) for d in docs]
-            records_count = db.rebuild_records_index(conn, doc_ids=ids, force=force)
+            db.rebuild_records_index(conn, doc_ids=ids, force=force)
             conn.commit()
+        records_count = sum(record_counts.values())
         out = {"reindexed": len(counts), "chunks": counts, "failed": failed,
                "skipped_not_done": skipped_not_done}
         if records_count:
