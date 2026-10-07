@@ -135,6 +135,7 @@ pha search "doação de Évora ao mosteiro"
 pha search "alfange" --mode keyword
 pha search "monastery donation charter" --mode semantic
 pha search "padroado" --force      # embed even while a scan uses the embed server
+pha search --source records --record-kind letter --field from=Xavier   # structured records
 # every hit prints its library page file + a shortcut to read the full page:
 pha page 12 37              # full raw transcription of doc 12, page 37
 pha page 12 37 --edited     # the edited (modernized/translated) variant
@@ -876,9 +877,10 @@ content-only: copy, rename, pair with a model in `pha.yaml`.
   sibling `transcription-<palaeographer>/` folder. `pha palaeographer [file]`
   shows how a document resolves.
 - The body of the file is the palaeographer's **base prompt**, and it is the
-  **format authority**: it defines the output structure — `## Transcription`,
-  then `## Notes` with `### Named entities` (one bullet per entity) and
-  `### Content summary`.
+  **format authority**: it defines the output structure — the transcription,
+  then a short `## Notes` block holding **reading notes only** (language,
+  script, difficult words). Named entities and content summaries are the
+  editor's and encoder's job, not the palaeographer's.
 - The base prompt is always sent **first**, before the document/collection
   prompt. The document/collection prompt only adds specific aspects (fields
   to prioritise, transcription style such as modernizing spelling) and cannot
@@ -1034,20 +1036,19 @@ printed i–xv but occupies PDF pages 1-15).
   `library/<dir>/<slug>/records-<encoder>.json`, with the exact input
   concatenated text beside it as `concatenated-<encoder>.md` for inspection.
   They are indexed for keyword search (`records_fts`) and, after
-  `pha reindex --source records`, for semantic search
-  (`record_embeddings`). `pha search --source records` finds them,
-  `--source all` (the default) searches pages and records together, and
-  `--mode hybrid` fuses the record keyword + semantic arms. Exact record
-  fields can be filtered with `--field name=value` (repeatable), e.g.
-  `--field from=Xavier --field place=Malaca`. With `--source records` or
-  `all`, the query may be omitted when at least one field is given, so
-  `pha search --source records --field place=Malaca` lists every record with
-  that exact field value. Add `--ignore-case` to match `--field` values
-  without case (ASCII `NOCASE`, so `coimbra` matches `Coimbra`). The
-  starting-page field is resolved from
-  `page_start` first, then
-  `page`/`start_page`/`source_page`, and exposed as `page_no` in search
-  hits.
+  `pha reindex --source records`, for semantic search (`record_embeddings`).
+  `pha search --source records` finds them, `--source all` (the default)
+  searches pages and records together, and `--mode hybrid` fuses the record
+  keyword + semantic arms. Narrow the set with `--encoder <id>` or
+  `--record-kind <kind>` (e.g. `letter`, `person`), and filter exact record
+  fields with `--field name=value` (repeatable), e.g. `--field from=Xavier
+  --field place=Malaca`. With `--source records` or `all`, the query may be
+  omitted when at least one field is given, so `pha search --source records
+  --field place=Malaca` lists every record with that exact field value. Add
+  `--ignore-case` to match `--field` values without case (ASCII `NOCASE`, so
+  `coimbra` matches `Coimbra`). A record's starting page is resolved from
+  `page_start` first, then `page`/`start_page`/`source_page`, and exposed as
+  `page_no` in search hits.
 - Re-encodes when the encoder file, its `encoder.prompt.md`, or the source
   transcription (raw or edited) changes since the records were created.
 - **Long-document techniques** (inspired by
@@ -1218,7 +1219,7 @@ pha help [topic]              # orientation + pointers to README/PIPELINE/MCP_CL
 pha scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--path COLLECTION] [--reprocess]
 pha scan --path DOC --page N [--palaeographer ID] [--model ID] [--dry-run] [--no-pin]
 pha scan --path DOC [--page N] --unpin      # release the pin, keep the text
-pha search [QUERY] [--mode hybrid|keyword|semantic] [--source pages|records|all] [--collection COLX] [--field NAME=VALUE] [--ignore-case] [--limit N] [--json]
+pha search [QUERY] [--mode hybrid|keyword|semantic] [--source pages|records|all] [--encoder ID] [--record-kind KIND] [--collection COLX] [--field NAME=VALUE] [--ignore-case] [--limit N] [--json]
 pha page DOC PAGE [--edited]    # print the FULL text of one page (doc = id or filename substring)
                                 #   --edited reads the edited/translated variant; when there is
                                 #   none it names the pass that produces it (`pha edit --path …`)

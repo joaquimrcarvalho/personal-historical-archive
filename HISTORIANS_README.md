@@ -490,6 +490,17 @@ Ask in plain language, for example:
 - *"In the collection missons-do-oriente, find the pages about Francis Xavier."*
 - *"Show me the full transcription of that page."*
 
+Once your documents have been through the last stage (the encoder, which turns
+the text into structured records — one per letter, per person, per entry), you
+can also ask about **things** rather than about wording:
+
+- *"Find every letter sent by Francis Xavier."*
+- *"List every record whose place is Malacca."*
+- *"Which people appear in this collection, and on which pages?"*
+
+Those answers come from the records, each pointing at the page it came from, so
+no search depends on guessing the exact words of the transcription.
+
 Your agent answers these directly when it is connected to the archive (below).
 
 ### Letting your agent query directly (MCP)

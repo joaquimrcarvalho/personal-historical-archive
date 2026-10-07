@@ -267,6 +267,23 @@
   edited/translated variant with `--edited`); `<doc>` is an id or filename
   substring, and `--json` gives agent-friendly output. Use it to read the
   context around a search snippet.
+- **Search → structured records too**: `--source pages|records|all`
+  (default `all`) searches page text *and* the encoder records. Narrow with
+  `--encoder <id>` / `--record-kind <kind>` (`letter`, `person`, …), and match
+  **exact** record fields with `--field NAME=VALUE` (repeatable; alias
+  `--where`; `--ignore-case` for ASCII case-insensitive values). With records,
+  the text query may be OMITTED when at least one `--field` is given, so
+  `pha search --source records --field place=Malaca` lists every record with
+  that value — this is how you answer "every letter sent by X" without guessing
+  wording. Record *semantic* search needs `pha reindex --source records`
+  (`record_embeddings`); keyword record search works without it. With
+  `--source all`, every hit carries **`kind`** — `"page"` or `"record"` — so
+  filter on that, not on the query. A record hit carries `record_kind`
+  (the class), `encoder`, the document, the page it starts on (`page_no`,
+  resolved from `page_start` then `page`/`start_page`/`source_page`) and
+  **`data`**, the record's own fields. MCP:
+  `pha_search(source="records", record_kind=…, encoder=…, fields={…})`. A
+  record is not a page — to quote the passage, open the page it points at.
 - **SQLite schema — do not guess column names.** The `pages` table links to a
   document via **`document_id`** (not `doc_id`) and has no `path`/`sha256`;
   those columns live on **`documents`**. `page_edits` keys on `(page_id,

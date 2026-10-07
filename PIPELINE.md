@@ -66,6 +66,22 @@ chronological table *and* a run of notices.
 *Result:* a records file (`records-<encoder>.json`), the exact text the model
 was given (`concatenated-<encoder>.md`), and the records in the index.
 
+### What the records let you ask
+
+Once a document has been through the encoder, you can ask about the **things in
+it** rather than about the wording of the pages — which is usually what a
+research question looks like:
+
+- the letters, the people, the entries — one kind of record at a time;
+- **an exact detail**: every record whose place is Malaca, whose sender is
+  Xavier, whose date is 1553;
+- or the records by meaning, the way you search the page text.
+
+This is how *"find every letter sent by Xavier"* returns a list of records — each
+pointing at the page it came from — instead of hoping the right words appear in
+the transcription. Ask for it in those words and your agent will do the rest;
+the same search can also look at pages and records together.
+
 ### Running the phases in practice
 
 - They are separate commands, run in order: scan, then edit, then encode. The
@@ -314,7 +330,7 @@ is installed here.
 | Templates to copy | `_sample*.md` in the folders above | the leading `_` means "never used as-is" |
 | The transcription | `<archive>/library/…/<document>_<date>/transcription-<palaeographer>/page-NNN.md` | the faithful reading |
 | The edited text | `…/edited-<editor>@<model>/page-NNN.md` | modernised / translated |
-| Structured records | `…/records-<encoder>.json` (+ `concatenated-<encoder>.md`) | the input the model was given is kept beside them |
+| Structured records | `…/records-<encoder>.json` (+ `concatenated-<encoder>.md`) | the input the model was given is kept beside them; searchable by kind, by exact field, or by meaning |
 | Files made from records | `…/<out_dir>/` (e.g. `segments-documents/`) | produced by an artifact filter |
 | The searchable index | `<archive>/archive.db` | generated — do not edit |
 | Page image cache | `<archive>/renders/` | generated — swept by `pha prune`; never edited by hand |
@@ -340,5 +356,5 @@ pha filters                           # the filters this archive has
 
 In plain language, the useful questions are: *"Which palaeographer and model
 reads this collection, and where are those two files?"*, *"Which encoder
-handles these pages?"*, and *"Which filters run on this collection, and what do
-they change?"*
+handles these pages?"*, *"Which records does this collection have?"*, and
+*"Which filters run on this collection, and what do they change?"*
