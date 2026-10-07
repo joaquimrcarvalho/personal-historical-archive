@@ -1,6 +1,6 @@
 {
   "name": "@personal-historical-archive/dsh-pha",
-  "version": "0.40.3",
+  "version": "0.41.0",
   "description": "DeepSeek Harness plugin: pha_* model tools + archive runner for personal-historical-archive (pha).",
   "type": "module",
   "main": "lib/index.js",
