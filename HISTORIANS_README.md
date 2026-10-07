@@ -71,7 +71,9 @@ flowchart LR
 
 *pha* is a tool that makes it simple for AI agents to manage this workflow.
 For a fuller, plain-language explanation of what each phase does and where its
-settings live, see [PIPELINE.md](PIPELINE.md).
+settings live, see [PIPELINE.md](PIPELINE.md). If you keep your archive on a
+laptop but the heavy work on a bigger computer, see
+[MULTI_COMPUTER.md](MULTI_COMPUTER.md).
 
 You do not need to touch the command line yourself, and you never need to
 learn a command — you work through **your favourite AI agent**, for example
