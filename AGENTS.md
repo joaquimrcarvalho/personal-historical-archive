@@ -428,6 +428,19 @@ facts back to the Kleio file and line). An archive created with
 guidance, so an agent working only from the archive directory does not need
 the source.
 
+**More skills come from the open pha skill index** —
+<https://github.com/joaquimrcarvalho/pha-skill-index> — a README that *lists*
+skills published elsewhere (name, description, repository, the folder inside
+it, licence; today `digitarq-get` and `bnp-digital-download`, which download
+page images from the Portuguese archives). When the owner asks what else is
+available, or names that repository, read its README, present the entries, and
+**ask which one to install** — never invent a skill, URL, path or licence that
+is not in the index. Installing is a clone plus a copy of the folder the index
+names into `<archive>/skills/` (add `~/.agents/skills/` for the runtime); the
+skill then behaves like a bundled one, and pha never overwrites it. Do not
+confuse the two folders: `skills/` in this repo is the authored copy of what
+pha *bundles*; the index is a catalogue of what it does not.
+
 The archive carries its own `skills/` folder — every bundled skill as
 `<archive>/skills/<name>/SKILL.md` (plus the skill's helper files) and
 `skills/README.md` (the format, and how to install one into a runtime).

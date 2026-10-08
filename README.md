@@ -446,6 +446,17 @@ cp -R skills/timelink-kleio-provenance ~/.agents/skills/
 (Re-copy to update after pulling a newer repo version. A skill's front matter
 `name` must match its folder name, so keep the folder names unchanged.)
 
+**More skills (the open pha skill index).** Skills beyond the bundled ones are
+listed — not copied — in
+[`joaquimrcarvalho/pha-skill-index`](https://github.com/joaquimrcarvalho/pha-skill-index),
+which gives each one's name, description, repository, the folder inside that
+repository, and its licence (today `digitarq-get` and `bnp-digital-download`,
+which download page images from the Portuguese archives). The index README is
+written for agents: point yours at it, and it should present the list and **ask
+which one to install**, never inventing an entry. Installing is a clone plus a
+copy of the folder the index names into `skills/` — and into
+`~/.agents/skills/` to use it in an agent runtime.
+
 #### Every archive carries its own `skills/` folder
 
 An agent handed only the archive directory has no checkout and no network, so

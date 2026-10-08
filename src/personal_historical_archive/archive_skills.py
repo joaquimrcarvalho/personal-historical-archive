@@ -474,12 +474,12 @@ most common tasks:
 - `pha-search-context` — a search hit is a *snippet*; recover the full page
   (raw and edited) before quoting or summarizing.
 - `pha-document-operations` — re-scan / re-edit / re-encode one
+  **already-ingested** document or collection (`pha scan --path … --reprocess`,
+  `pha edit --path … --page N`, `pha test`).
 - `lmstudio-model-locality` — determine whether an LM Studio model is
   local or remote when LM Link is enabled, before a `pha scan`/`pha edit`;
   helper `scripts/lmstudio_locality.py` joins `lms ls` / `lms ps` / `lms link status`
   and prints the pre-load recipe for a deterministic local instance.
-  **already-ingested** document or collection (`pha scan --path … --reprocess`,
-  `pha edit --path … --page N`, `pha test`).
 - `pha-zotero-bibliography` — import a PDF from Zotero with its bibliographic
   sidecar, or build/refresh one document's reference from the owner's Zotero
   library (the local API's MODS, an RDF export, `pha bib <doc> --to-json
@@ -512,6 +512,31 @@ there — including any `scripts/`, `examples/`, … files it ships:
 
 Keep the folder names unchanged — a skill's front-matter `name` must match its
 folder name.
+
+## More skills: the open pha skill index
+
+The skills above ship with pha. More are published openly and listed — with the
+repository and folder each one lives in — in the **pha skill index**:
+
+    https://github.com/joaquimrcarvalho/pha-skill-index
+
+The index holds only the list. For each skill it gives the name, what it does,
+the repository, the folder inside that repository, and the licence (today
+`digitarq-get` and `bnp-digital-download`, which download page images from the
+Portuguese archives). Its README is written for agents: present the list, then
+**ask which one to install** — never invent a skill, a URL or a path that is
+not in the index.
+
+To add one to this archive, clone the repository and copy the folder the index
+names:
+
+    git clone --depth 1 <repository URL> /tmp/pha-skill
+    cp -R /tmp/pha-skill/<skill path> skills/<name>
+
+Then read `skills/<name>/SKILL.md` before the task it covers, and install it
+into your agent runtime as above (`cp -R skills/<name> ~/.agents/skills/`). A
+skill you add by hand is yours: pha seeds only its own, and never overwrites a
+file that is already here.
 
 ## Editing and updating
 

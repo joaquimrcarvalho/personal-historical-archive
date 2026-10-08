@@ -519,6 +519,27 @@ pha_scan_now, pha_extraction_status.
 After that you can simply ask questions and the agent will query the archive
 itself.
 
+### Adding ready-made skills to your agent
+
+Your archive also comes with **skills**: short instruction sheets that teach
+your agent the jobs this archive needs — recovering the whole page behind a
+search result, comparing two readings of the same pages, importing a PDF from
+Zotero and giving it its reference, and more. They are already in your archive
+and need no setting up.
+
+Further skills are published publicly, for instance one that downloads
+high-resolution page images from the Portuguese national archives and national
+library. Ask your agent:
+
+```
+Show me which additional skills are available to use at
+https://github.com/joaquimrcarvalho/pha-skill-index
+```
+
+It will list what is on offer, say what each one does, and ask which you want.
+Nothing is installed without your agreement, and a skill you add is never
+overwritten by an update.
+
 ---
 
 ### Using the archive from another machine (remote)
@@ -543,6 +564,10 @@ search what is already transcribed.
 Keep the network address internal (home/office network or a VPN). The archive
 is designed so the heavy AI models only ever run on **your** machine. The file
 `MCP_CLIENTS.md` has the detailed setup for a technical helper.
+
+If you would rather have the heavy *reading* done on another machine — or lend
+a document out and collect the finished work later, without the two computers
+needing to be connected meanwhile — see [MULTI_COMPUTER.md](MULTI_COMPUTER.md).
 
 ---
 

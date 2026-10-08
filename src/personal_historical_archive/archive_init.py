@@ -260,6 +260,17 @@ into an agent runtime (`cp -R skills/<name> ~/.agents/skills/`). A bundled
 file missing from the archive is (re)created on the next pha run; an existing
 file is never overwritten — edit or extend the skills freely.
 
+**More skills: the open pha skill index.** Beyond the skills bundled here,
+<https://github.com/joaquimrcarvalho/pha-skill-index> lists extra published
+skills with the name, description, repository, folder inside that repository
+and licence of each one (today `digitarq-get` and `bnp-digital-download`,
+which download page images from the Portuguese archives). It is a catalogue,
+not a copy: to add one, clone the repository it names and copy that skill's
+folder into this archive's `skills/` directory (and into `~/.agents/skills/`
+to use it in an agent runtime). Ask your agent — "show me which additional
+skills are available" — and it will read the list and ask which one you want.
+A skill added by hand is yours: pha never overwrites it.
+
 ## Operating discipline
 
 - **Never edit `renders/`, `archive.db`, or other generated files directly.**
@@ -431,6 +442,19 @@ runtime's user-level skills directory, e.g. `cp -R
 skills/palaeographers-compare ~/.agents/skills/`). A bundled file missing
 from the archive is (re)created on the next pha run; an existing file is
 never overwritten — edit, extend or add skills freely.
+
+**Need a skill that is not here? Read the open skill index.**
+<https://github.com/joaquimrcarvalho/pha-skill-index> lists extra published
+skills; for each one it gives the name, description, repository, the folder
+inside that repository, and the licence (today `digitarq-get` and
+`bnp-digital-download`, which download page images from the Portuguese
+archives). When the user asks what else is available, or names that
+repository, read that README, present the entries, and **ask which one to
+install** — never invent a skill, URL, path or licence that is not in the
+index. Installing is a clone plus copying the folder the index names into
+`skills/` (and into `~/.agents/skills/` for the runtime). A skill added by
+hand is never overwritten, and once installed it behaves exactly like a
+bundled one: read `skills/<name>/SKILL.md` before the task it covers.
 
 ## How an agent should operate
 
