@@ -1060,8 +1060,16 @@ printed i–xv but occupies PDF pages 1-15).
   `coimbra` matches `Coimbra`). A record's starting page is resolved from
   `page_start` first, then `page`/`start_page`/`source_page`, and exposed as
   `page_no` in search hits.
-- Re-encodes when the encoder file, its `encoder.prompt.md`, or the source
-  transcription (raw or edited) changes since the records were created.
+- `pages:` may be a literal range, or a per-document structure register:
+  put `<stem>.structure.json` beside the source with a `pages` object, and
+  set the encoder to `pages: "@structure:documents"` (or another named
+  group). The register is resolved per document at encode time and must
+  match the ingested `source_sha256`; a missing/invalid register or group
+  refuses the encode and points at the collection's structure prescan. The
+  register actually used is copied beside the records as `structure.json`.
+- Re-encodes when the encoder file, its `encoder.prompt.md`, the structure
+  register, or the source transcription (raw or edited) changes since the
+  records were created.
 - **Long-document techniques** (inspired by
   [LangExtract](https://github.com/google/langextract)):
   - the whole document is one **concatenated text** (records spanning pages

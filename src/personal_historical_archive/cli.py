@@ -3531,12 +3531,17 @@ def cmd_encode(cfg: Config, args) -> None:
     )
     if getattr(args, "dry_run", False):
         planned = [r for r in res["results"] if r["action"] == "planned"]
+        errors = [r for r in res["results"] if r["action"] == "error"]
         target = getattr(args, "path", None) or (f"doc {doc_id}" if doc_id is not None else "every document")
         print(f"would encode {target}: {len(planned)} encoder run(s)")
         for r in planned:
             model = f" model={r['model']}" if r.get("model") else ""
-            print(f"  - {r['filename']}: {r['encoder']}{model}")
-        if not planned:
+            pages = f" pages={r['pages']}" if r.get("pages") else ""
+            structure = f" structure={r['structure']}" if r.get("structure") else ""
+            print(f"  - {r['filename']}: {r['encoder']}{model}{pages}{structure}")
+        for r in errors:
+            print(f"  ! {r['filename']}: {r['encoder']}: {r.get('reason')}", file=sys.stderr)
+        if not planned and not errors:
             print("  (nothing to do)")
         return
     encoded = sum(1 for r in res["results"] if r["action"] == "encoded")

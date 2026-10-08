@@ -25,8 +25,9 @@ effective parameters in `pha editor`/`pha palaeographer`), the **per-page
 edit override** and the **hand-over workflow gaps G1/G3/G5**. Open: **three
 live defects** (archive-pointer resolution, the untranslated-Latin editor's
 remaining asks, and the model-server orphan lock found 2026-10-03 —
-F2 landed, F1/F3/F4/F5 open), **four feature
-requests** (post-filter replay, notes search, `extends`, the encoder prescan)
+F2 landed, F1/F3/F4/F5 open), **five feature
+requests** (post-filter replay, notes search, `extends`, the encoder prescan,
+the encoder structure register)
 and **four proposals awaiting a decision**. Landed since 0.35.0: the
 hand-over **transport** (Taildrop over the tailnet — `--send` / `pha handoff
 recv`, no ssh keys), documented in `pha-handoff-transport-enhancement-request.md`.
@@ -53,6 +54,7 @@ stable IDs referenced from the prose, not ranks.
 | - | [pha-record-search-enhancement-request.md](pha-record-search-enhancement-request.md) | **Phase 1 + Phase 2 committed; Phase 3 (fielded record filters) implemented in working tree** - not committed |
 | - | [pha-markdown-from-records-page-contract-bug-report.md](pha-markdown-from-records-page-contract-bug-report.md) | **FIXED (working tree)** - page_start/page aliases, source backfill, shared-page line_start/header split, explicit page_end and no-anchor warning; tests added |
 | 10 | `extends`, encoder prescan | Draft — **re-measure before building**; filters shrank both |
+| 11 | [`pha-encoder-structure-register-enhancement-request.md`](pha-encoder-structure-register-enhancement-request.md) | **Implemented in working tree (2026-10-08), not committed** - today the encoder `pages:` line is per-document state: the encoders are collection-level, so this archive's prescan rewrites the shared files before each volume's encode (two measured wrong-range incidents). Proposal: a per-document `<stem>.structure.json` register resolved at encode time (`pages: "@structure:documents"`), with a pass copy kept beside the records. |
 | — | [`pha-serve-page-text-enhancement-request.md`](pha-serve-page-text-enhancement-request.md) | **Stored for later implementation** — the served page viewer (`/doc/<slug>/p<N>`) gains the raw transcription and the effective edited reading beside the image, DB-authoritative and read-only. |
 | 8 | [`SEARCH_WEB_SPEC.md`](../SEARCH_WEB_SPEC.md) | Proposal **for decision** |
 | 9 | [`VLM_BENCHMARK_PLAN.md`](../VLM_BENCHMARK_PLAN.md) + [`VLM_BENCHMARK_INFRA_PLAN.md`](../VLM_BENCHMARK_INFRA_PLAN.md) | Proposal, not implemented (separate repo) |

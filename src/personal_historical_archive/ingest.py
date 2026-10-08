@@ -39,6 +39,13 @@ from .extract import (
 from .model_client import ModelClient, ModelError, ModelStall, PAGE_ENGINES
 from .filters import FilterError, filters_changed, filters_signature, write_stamp
 from .sidecar import Sidecar, effective_render, resolve_sidecar
+from .structure import (
+    StructureError,
+    parse_pages,
+    resolve_encoder_pages,
+    structure_sha256,
+    write_pass_copy,
+)
 
 
 def transcribe_page(
@@ -3072,7 +3079,10 @@ def _parse_json_array(text: str) -> list | None:
 
 def _encode_needed(cfg: Config, conn, doc_id: int, encoder: Encoder, resolved: str,
                    doc_path: Path, reprocess: bool, enc_file: Path | None = None,
-                   expected_filters: str = "") -> bool:
+                   expected_filters: str = "",
+                   structure_path: Path | None = None,
+                   structure_sha: str | None = None,
+                   library_dir: Path | None = None) -> bool:
     """Re-encode when no records yet, or the encoder file / the document's
     encoder.prompt.md / encoder-prompt-langextract.md / the source
     transcription changed since the records were created. A changed encoder
@@ -3089,7 +3099,20 @@ def _encode_needed(cfg: Config, conn, doc_id: int, encoder: Encoder, resolved: s
     latest = row["m"]
     if filters_changed(row["f"], expected_filters):
         return True  # an encoder filter was edited, retuned, added or removed
+    if structure_sha:
+        if library_dir is None:
+            return True
+        stamp = library_dir / f".structure-{resolved}.sha256"
+        try:
+            recorded = stamp.read_text(encoding="utf-8").strip()
+        except OSError:
+            return True
+        if recorded != structure_sha:
+            return True
+        structure_path = None  # the content hash is authoritative; skip mtime
     candidates = []
+    if structure_path is not None and structure_path.exists():
+        candidates.append(structure_path)
     if encoder.prompt_file:
         candidates.append(encoder.prompt_file)
     if enc_file is not None:
@@ -3253,26 +3276,13 @@ def write_records_file(cfg: Config, conn, doc_id: int, encoder_id: str) -> Path 
 
 def _page_filter(encoder: Encoder) -> set[int] | None:
     """Return the set of page numbers this encoder handles, or None for all.
-    `pages` in the encoder front matter: "1-15", "1-15,40", "all"."""
-    if not encoder.pages or encoder.pages.strip().lower() in ("all", "*", ""):
-        return None
-    wanted: set[int] = set()
-    for part in encoder.pages.replace(";", ",").split(","):
-        part = part.strip()
-        if not part:
-            continue
-        if "-" in part:
-            a, _, b = part.partition("-")
-            try:
-                wanted.update(range(int(a), int(b) + 1))
-            except ValueError:
-                continue
-        else:
-            try:
-                wanted.add(int(part))
-            except ValueError:
-                continue
-    return wanted or None
+
+    Literal pages grammar: "1-15", "1-15,40", "all". The @structure form is
+    resolved per document elsewhere; this helper only sees an already resolved
+    literal (or a literal front matter value).
+    """
+    parsed = parse_pages(encoder.pages)
+    return set(parsed) if parsed is not None else None
 
 
 def _split_encoder_window(chunk: list, overlap: int):
@@ -3446,13 +3456,26 @@ def encode_document(
         encoder = cfg.get_encoder(resolved)
 
     encoder = cfg.resolve_model(encoder, model_override)
+    try:
+        resolved_pages = resolve_encoder_pages(
+            cfg, dict(doc), encoder, resolved, page_count=doc["page_count"],
+        )
+    except StructureError as e:
+        return {"action": "error", "filename": doc["filename"],
+                "encoder": resolved, "reason": str(e)}
+    structure_sha = (structure_sha256(resolved_pages.register_path)
+                     if resolved_pages.used_structure else None)
+    if verbose and resolved_pages.used_structure:
+        print(f"  structure: group {resolved_pages.group} -> pages "
+              f"{resolved_pages.pages} ({resolved_pages.register_path})", flush=True)
     pages = db.get_pages(conn, doc_id)
     edits: dict[int, str] = {}
     if doc["editor"]:
         edits = _edited_texts(conn, doc_id, doc["editor"])
     texts = [(p["page_no"], (edits.get(p["id"]) or p["raw_text"] or "").strip())
              for p in pages if (edits.get(p["id"]) or p["raw_text"] or "").strip()]
-    page_filter = _page_filter(encoder)
+    page_filter = (set(resolved_pages.page_filter)
+                   if resolved_pages.page_filter is not None else None)
     if page_filter is not None:
         texts = [x for x in texts if x[0] in page_filter]
     if not texts:
@@ -3476,7 +3499,9 @@ def encode_document(
     record_filters = _configured_filters_signature(cfg, _record_chain)
     acceptable_record_filters = _acceptable_filters_signature(cfg, _record_chain)
     if not _encode_needed(cfg, conn, doc_id, encoder, resolved, doc_path, reprocess,
-                          enc_file, expected_filters=acceptable_record_filters):
+                          enc_file, expected_filters=acceptable_record_filters,
+                          structure_path=resolved_pages.register_path,
+                          structure_sha=structure_sha, library_dir=lib_dir):
         return {"action": "skipped", "filename": doc["filename"], "reason": "records up to date"}
 
     # The encoder's filter chain: `pre` normalises the whole-document text the
@@ -3593,6 +3618,14 @@ def encode_document(
     conn.commit()
     write_records_file(cfg, conn, doc_id, resolved)
     write_concatenated_file(cfg, conn, doc_id, texts, resolved)
+    if resolved_pages.used_structure:
+        write_pass_copy(resolved_pages, lib_dir)
+        if structure_sha and lib_dir:
+            try:
+                (lib_dir / f".structure-{resolved}.sha256").write_text(
+                    structure_sha, encoding="utf-8")
+            except OSError:
+                pass
 
     # encoder.post: the parsed records, once per encoder (NOT per chunk/pass).
     # An artifact filter (returns: none) consumes this list, writes files and
@@ -3651,11 +3684,16 @@ def _encoder_specs_for_document(cfg: Config, doc) -> list[tuple[Path, str | None
     def _page_start(item: tuple[Path, str | None]) -> int:
         f, _m = item
         e = cfg.encoder_from_file(f)
-        if e and e.pages and "-" in e.pages:
+        if e and e.pages:
             try:
-                return int(e.pages.split("-")[0])
-            except ValueError:
+                resolved = resolve_encoder_pages(
+                    cfg, dict(doc), e, f.stem,
+                    page_count=doc["page_count"],
+                )
+            except StructureError:
                 return 10**9
+            if resolved.page_filter:
+                return min(resolved.page_filter)
         return 10**9  # whole-document encoders run after section ones
 
     return sorted(specs, key=_page_start)
@@ -3675,9 +3713,24 @@ def _encode_one_document(cfg: Config, conn, doc, reprocess: bool, verbose: bool,
     out: list[dict] = []
     for enc_file, model_override in specs:
         if dry_run:
-            out.append({"action": "planned", "filename": doc["filename"],
-                        "encoder": enc_file.stem, "model": model_override,
-                        "path": str(doc["path"])})
+            item = {"action": "planned", "filename": doc["filename"],
+                    "encoder": enc_file.stem, "model": model_override,
+                    "path": str(doc["path"])}
+            enc = cfg.encoder_from_file(enc_file)
+            if enc is not None:
+                try:
+                    resolved_pages = resolve_encoder_pages(
+                        cfg, dict(doc), enc, enc_file.stem,
+                        page_count=doc["page_count"],
+                    )
+                except StructureError as e:
+                    item = {"action": "error", "filename": doc["filename"],
+                            "encoder": enc_file.stem, "reason": str(e)}
+                else:
+                    item["pages"] = resolved_pages.pages
+                    if resolved_pages.register_path is not None:
+                        item["structure"] = str(resolved_pages.register_path)
+            out.append(item)
         else:
             out.append(encode_document(cfg, conn, doc["id"], enc_file=enc_file,
                                        reprocess=reprocess, verbose=verbose,

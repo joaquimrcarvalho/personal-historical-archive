@@ -532,6 +532,10 @@ class Encoder:
     # i–xv but occupies PDF pages 1-15). Empty = the whole document. Multiple
     # encoders in one collection run in page order.
     pages: str = ""
+    # structure: explicit per-document register path (empty = default beside
+    # the source: doc.pdf -> doc.structure.json). Only meaningful when pages
+    # uses the @structure token.
+    structure: str = ""
     model_ref: str = ""  # models/<id>.md this encoder uses ("" = legacy inline)
     server: str = ""  # declared model-server identity (see Model.server)
     deadline_s: int | None = None  # wall-clock ceiling per request (see Palaeographer)
@@ -1406,6 +1410,7 @@ def _encoder_from_frontmatter(enc_id: str, text: str, file: Path, models: dict |
         candidate_pattern=str(fm.get("candidate_pattern", "") or "") or None,
         candidate_header=str(fm.get("candidate_header", "") or "") or None,
         pages=str(fm.get("pages", "") or "").strip(),
+        structure=str(fm.get("structure", "") or "").strip(),
         deadline_s=_opt_int(fm.get("deadline_s")),
     )
 
