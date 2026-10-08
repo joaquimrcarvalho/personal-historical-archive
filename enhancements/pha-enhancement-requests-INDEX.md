@@ -25,9 +25,9 @@ effective parameters in `pha editor`/`pha palaeographer`), the **per-page
 edit override** and the **hand-over workflow gaps G1/G3/G5**. Open: **three
 live defects** (archive-pointer resolution, the untranslated-Latin editor's
 remaining asks, and the model-server orphan lock found 2026-10-03 —
-F2 landed, F1/F3/F4/F5 open), **five feature
+F2 landed, F1/F3/F4/F5 open), **six feature
 requests** (post-filter replay, notes search, `extends`, the encoder prescan,
-the encoder structure register)
+the encoder structure register, the "what's new" release notes)
 and **four proposals awaiting a decision**. Landed since 0.35.0: the
 hand-over **transport** (Taildrop over the tailnet — `--send` / `pha handoff
 recv`, no ssh keys), documented in `pha-handoff-transport-enhancement-request.md`.
@@ -51,10 +51,11 @@ stable IDs referenced from the prose, not ranks.
 | — | [`pha-reindex-doc-flag-does-not-accumulate-bug-report.md`](pha-reindex-doc-flag-does-not-accumulate-bug-report.md) | **FIXED (F1/F3, 0.40.2).** `pha reindex --doc 110 --doc 111 --doc 112 --doc 113` used to reindex **only the last** document: `--doc` is scalar, and the repetitions are discarded without a warning (exit 0, one summary line). The wrong command is printed by `hand-off fetch` itself, so following the tool's own advice produces silent partial work - four returned volumes kept zero chunks while the operator believed they were indexed. F1/F3 shipped: `--doc` and `--page` are repeatable, `reindex_all()` resolves all ids and refuses before any work when one is missing, so the command printed by `handoff fetch` runs as written. Tests: `tests/test_cli_reindex.py`, `tests/test_ingest.py`. |
 | 4 | [`pha-post-filter-replay-enhancement-request.md`](pha-post-filter-replay-enhancement-request.md) | Draft — **now unblocked** (#1 is fixed); procedure already proven by hand |
 | 6 | [`pha-notes-search-enhancement-request.md`](pha-notes-search-enhancement-request.md) | Draft — independent, no-op when the notes index is empty |
-| - | [pha-record-search-enhancement-request.md](pha-record-search-enhancement-request.md) | **Phase 1 + Phase 2 committed; Phase 3 (fielded record filters) implemented in working tree** - not committed |
-| - | [pha-markdown-from-records-page-contract-bug-report.md](pha-markdown-from-records-page-contract-bug-report.md) | **FIXED (working tree)** - page_start/page aliases, source backfill, shared-page line_start/header split, explicit page_end and no-anchor warning; tests added |
+| - | [pha-record-search-enhancement-request.md](pha-record-search-enhancement-request.md) | **Phase 1-3 committed and released** - keyword, semantic and fielded record search |
+| - | [pha-markdown-from-records-page-contract-bug-report.md](pha-markdown-from-records-page-contract-bug-report.md) | **FIXED** - page_start/page aliases, source backfill, shared-page line_start/header split, explicit page_end and no-anchor warning; tests added |
 | 10 | `extends`, encoder prescan | Draft — **re-measure before building**; filters shrank both |
-| 11 | [`pha-encoder-structure-register-enhancement-request.md`](pha-encoder-structure-register-enhancement-request.md) | **Implemented in working tree (2026-10-08), not committed** - today the encoder `pages:` line is per-document state: the encoders are collection-level, so this archive's prescan rewrites the shared files before each volume's encode (two measured wrong-range incidents). Proposal: a per-document `<stem>.structure.json` register resolved at encode time (`pages: "@structure:documents"`), with a pass copy kept beside the records. |
+| 11 | [`pha-encoder-structure-register-enhancement-request.md`](pha-encoder-structure-register-enhancement-request.md) | **Implemented and released in 0.42.0** - per-document `<stem>.structure.json` register resolved at encode time via `pages: "@structure:documents"`; a missing/invalid register refuses and points at the collection structure prescan. |
+| 12 | [`pha-whats-new-enhancement-request.md`](pha-whats-new-enhancement-request.md) | Draft - packaged release notes generated at bump time from git commits, with `pha whatsnew [VERSION] [--since VERSION] [--json]` and `pha update` pointing at the new notes. |
 | — | [`pha-serve-page-text-enhancement-request.md`](pha-serve-page-text-enhancement-request.md) | **Stored for later implementation** — the served page viewer (`/doc/<slug>/p<N>`) gains the raw transcription and the effective edited reading beside the image, DB-authoritative and read-only. |
 | 8 | [`SEARCH_WEB_SPEC.md`](../SEARCH_WEB_SPEC.md) | Proposal **for decision** |
 | 9 | [`VLM_BENCHMARK_PLAN.md`](../VLM_BENCHMARK_PLAN.md) + [`VLM_BENCHMARK_INFRA_PLAN.md`](../VLM_BENCHMARK_INFRA_PLAN.md) | Proposal, not implemented (separate repo) |
