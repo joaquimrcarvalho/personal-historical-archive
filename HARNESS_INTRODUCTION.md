@@ -1,6 +1,6 @@
 # Quick guide: how to get your harness
 
-> Updated 18 September 2026
+> Updated 9 October 2026
 
 DeepSeek provides a low-cost LLM with vision capabilities on pre-paid
 credits — no subscription. You can create separate API keys for the archive,
