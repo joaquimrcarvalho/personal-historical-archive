@@ -68,8 +68,9 @@ most common tasks:
   file and line, and render a `vscode://file/<absolute-path>:<line>` link;
   helper `timelink_provenance.py` (`MHK_HOME`).
 
-**Installing them into an agent runtime:** some runtimes (DeepSeek Harness and
-other tools that read the shared agent-skills convention) discover skills from
+**Installing them into an agent runtime:** some runtimes (DeepSeek Harness —
+<https://www.deepseek.com/en/harness/> — and other tools that read the shared
+agent-skills convention) discover skills from
 a user-level directory instead of the archive. Copy the whole skill folder
 there — including any `scripts/`, `examples/`, … files it ships:
 

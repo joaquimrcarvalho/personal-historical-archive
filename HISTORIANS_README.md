@@ -77,7 +77,8 @@ laptop but the heavy work on a bigger computer, see
 
 You do not need to touch the command line yourself, and you never need to
 learn a command — you work through **your favourite AI agent**, for example
-Claude, ChatGPT, DeepSeek (including DeepSeek Harness), Kimi, Cursor, Gemini
+Claude, ChatGPT, DeepSeek (including
+[DeepSeek Harness](https://www.deepseek.com/en/harness/)), Kimi, Cursor, Gemini
 or Copilot. The steps below tell you what to ask, in ordinary language.
 Wherever a technical step is needed there is a block like this one
 

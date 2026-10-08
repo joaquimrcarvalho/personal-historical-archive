@@ -553,7 +553,8 @@ human maintains) and `pha cite` warns.
 
 ### DeepSeek Harness plugin (dsh-pha)
 
-A Harness agent on a machine with pha + a Harness install can expose the archive through the
+A Harness agent on a machine with pha + a Harness install
+(<https://www.deepseek.com/en/harness/>) can expose the archive through the
 repo's bundled `dsh-pha` plugin: it registers the `pha_*` model tools (`pha_status`,
 `pha_documents`, `pha_document`, `pha_page`, `pha_search`, `pha_archive`,
 `pha_job_start`/`pha_job_status`/`pha_job_kill`) and a same-origin `/pha/*` JSON API. See

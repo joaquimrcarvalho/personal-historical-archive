@@ -4,7 +4,7 @@
 > Quick-start and what-you-get: see [`DSH_PLUGIN.md`](../DSH_PLUGIN.md) at the repo root.
 > This file is the full install/development reference.
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) **host plugin** that
+A [DeepSeek Harness](https://www.deepseek.com/en/harness/) **host plugin** that
 exposes the `pha_*` model tools and the archive runner, so any agent session on a machine
 that has `pha` + an archive can drive it from chat.
 
@@ -35,7 +35,8 @@ single-model lock, staleness, and review round-trip semantics are respected.
 ## Requirements
 
 - A DeepSeek Harness install (`dsh` on PATH) and the profile you want to attach this to
-  (the Desktop/`web` profile, or a custom one).
+  (the Desktop/`web` profile, or a custom one). Get it from the official page:
+  <https://www.deepseek.com/en/harness/>.
 - The `personal-historical-archive` package installed and its CLI on PATH (`pha`), with an
   archive configured (`pha set archive-dir <path>` or `PHA_ARCHIVE_DIR`). The plugin
   discovers the archive from `pha info --json` at runtime (falling back to

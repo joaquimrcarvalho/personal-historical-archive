@@ -29,9 +29,10 @@ items.
 
 ## Get DeepSeek Harness
 
-The quickest start is DeepSeek Harness Desktop (DSH Desktop): install from
-[GitHub](https://github.com/anywhere-labs/dsh-desktop) or
-[dshdesktop.cn](https://www.dshdesktop.cn/dsh/en/).
+Download DeepSeek Harness Desktop (DSH Desktop) from the official page —
+<https://www.deepseek.com/en/harness/>. **Download Desktop** there gives the
+installer for your computer; the same page explains what the Harness is and
+what its plugins do.
 
 ## Provide an API key for DeepSeek Harness
 

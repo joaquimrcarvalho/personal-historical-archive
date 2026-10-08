@@ -2,7 +2,7 @@
 
 This repository ships a **DeepSeek Harness plugin** (`dsh-pha/`) that lets a Harness agent
 drive the **personal-historical-archive** tool from chat, on any machine that has both
-`pha` and a Harness install.
+`pha` and a Harness install (download: <https://www.deepseek.com/en/harness/>).
 
 ## What you get
 
@@ -19,6 +19,10 @@ drive the **personal-historical-archive** tool from chat, on any machine that ha
   `dsh-pha/src/client/index.js`. It is registered into `conversation.view` and fetches `/pha/*`.
 
 ## Install on a Harness machine
+
+If you do not have the Harness yet, install DeepSeek Harness Desktop (DSH Desktop) first —
+<https://www.deepseek.com/en/harness/> (**Download Desktop**) — then restart it once after
+this plugin is installed.
 
 See the full step-by-step in [`dsh-pha/README.md`](dsh-pha/README.md). In short:
 
