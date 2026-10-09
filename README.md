@@ -1862,7 +1862,7 @@ target:
 # on the source archive (A):
 pha bundle pfister-letters -o ~/pfister-letters.pha-bundle   # a collection
 pha bundle collections/COLX documents/foo.pdf                # or any mix of paths
-# transfer the bundle directory (rsync / zip / USB)
+# transfer the bundle directory (a shared folder / USB / zip)
 
 # on the target archive (B):
 pha unbundle ~/pfister-letters.pha-bundle
@@ -1922,13 +1922,21 @@ transcription/editing. The work comes back and is merged into the **same
 document**, so there is no duplicate and no new id. Use it when the archive
 machine cannot reach the models but the document must not be duplicated.
 
+**Every command runs on the machine that owns the archive it touches.** The two
+machines never log in to each other: no ssh, no shared keys, no remote paths, no
+open port, no daemon. `pha handoff out` writes a **payload directory** and the
+trip between the machines is a file copy — a shared folder, a USB stick or a zip
+— which is the whole of it. If both machines are on one Tailscale tailnet, pha
+will do that copy for you over Taildrop (`--send` / `pha handoff recv`), which
+is a convenience, not a requirement.
+
 It is the same three-stage pipeline on both sides — nothing is skipped, it is
 just run somewhere else:
 
 ```bash
 # on the archive that OWNS the document (A):
 pha handoff out collections/DI --worker mac-studio -o ~/x/DI.pha-handoff
-# transfer the payload directory (rsync / zip / USB, or `--send` + `recv` below)
+# transfer the payload directory (a shared folder / USB / zip, or `--send` + `recv` below — no ssh)
 
 # on the WORKING machine (B):
 pha handoff in ~/x/DI.pha-handoff      # import it here, left resumable
@@ -2000,8 +2008,10 @@ pha handoff recv && pha handoff fetch <the path it printed>
   devices already authenticated to the same tailnet; pha adds no auth of its own
   and exposes no port. Any device on your tailnet can send to you — restrict
   that with tailnet ACLs if you want it tighter.
-- Without Tailscale, nothing changes: `rsync`/zip/USB plus the plain directory
-  commands (`pha handoff in DIR`, `pha handoff fetch DIR`) still work.
+- Without Tailscale, nothing changes: a shared folder, a USB stick or a zip plus
+  the plain directory commands (`pha handoff in DIR`, `pha handoff fetch DIR`)
+  still work — and that is the only path there is between two machines that
+  cannot see each other at all.
 
 #### Nobody at the keyboard: `pha handoff worker`
 

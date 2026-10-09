@@ -760,8 +760,13 @@ came from (a dropbox `editor` file, a config default, or nowhere).
   receive). The tar is a **transport envelope only** — the payload format is
   unchanged, and `handoff_transport.unpack` refuses an absolute path, `..` or a
   link, because a tar from the network is untrusted even on a tailnet.
-  Directory-moving (rsync/zip/USB) stays the fallback, and is what to use when
-  Tailscale is not on both machines.
+  Directory-moving (a shared folder, a USB stick, a zip) stays the fallback, and
+  is what to use when Tailscale is not on both machines.
+  **No path needs ssh**: every command runs on the machine that owns the archive
+  it touches, and moving the payload is a file copy. Do not propose ssh keys,
+  remote paths or a remote shell for a hand-over; `pha handoff out` prints the
+  copy-and-import next step, and [MULTI_COMPUTER.md](MULTI_COMPUTER.md) explains
+  the four ways to carry the folder, in plain language for an archive owner.
   **`pha handoff worker --send-to <owner>` is the unattended trigger** — the
   receiving side of Taildrop is not a trigger, so on the always-on machine this
   watches the inbox and runs `in` → `work --resume` → `back` → send for each

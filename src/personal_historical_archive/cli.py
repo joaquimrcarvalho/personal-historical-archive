@@ -2016,6 +2016,13 @@ def cmd_review(cfg: Config, args) -> None:
           f"(skipped {res['skipped']} unparsed{extra})")
 
 
+def _handoff_send_hint(cmd: str) -> str:
+    """The 'or let pha carry it' line, naming the command for THIS trip."""
+    return (f"or let pha carry it for you (no ssh, no keys, no open port): "
+            f"`pha handoff {cmd} … --send <peer>` over Tailscale — "
+            f"`pha handoff peers` lists the devices that can receive")
+
+
 def cmd_handoff(cfg: Config, args) -> None:
     """`pha handoff ...` — lend a document to a second machine and take the
     results back. See the hand-off section in README.md."""
@@ -2078,6 +2085,11 @@ def cmd_handoff(cfg: Config, args) -> None:
                 _fail(e)
             print(f"  sent to {sent['to']} ({sent['to_ip']}) — on that machine run: "
                   f"`pha handoff recv`")
+        else:
+            print(f"  carry that directory to the other machine however is easiest — "
+                  f"a shared folder, a USB stick, a zip (no ssh, no remote login) — "
+                  f"and run there: `pha handoff in {res['out']}`")
+            print(f"  {_handoff_send_hint('out')}")
         print(f"  these are now leased: the pipeline skips them until `pha handoff fetch`")
 
     elif sub in ("in", "back", "fetch"):
@@ -2106,7 +2118,8 @@ def cmd_handoff(cfg: Config, args) -> None:
                     print("    the worker will process with ITS versions, so the "
                           "returned pages may be reported stale at `pha handoff fetch`",
                           file=sys.stderr)
-                print("  next: pha scan --path <the document>   # finishes the pending pages")
+                print(f"  next: pha handoff work {target}   # scan → edit → encode "
+                      f"what is pending (or `pha scan --path <the document>` once)")
             elif sub == "back":
                 out = Path(args.out) if args.out else target.parent / f"{target.name}-back"
                 res = _ho.build_result(cfg, target, out, verbose=True, dry_run=dry)
@@ -2123,6 +2136,12 @@ def cmd_handoff(cfg: Config, args) -> None:
                         _fail(e)
                     print(f"  sent to {sent['to']} ({sent['to_ip']}) — on the owner's "
                           f"machine run: `pha handoff recv`")
+                else:
+                    print(f"  carry that directory back to the owner's machine however "
+                          f"is easiest — a shared folder, a USB stick, a zip (no ssh, "
+                          f"no remote login) — and run there: "
+                          f"`pha handoff fetch {res['out']}`")
+                    print(f"  {_handoff_send_hint('back')}")
             else:
                 res = _ho.apply_result(cfg, target, verbose=True, dry_run=dry,
                                        index=getattr(args, "index", False),

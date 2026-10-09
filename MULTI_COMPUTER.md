@@ -116,30 +116,69 @@ The idea is a loan, not a gift. Your archive keeps the document; another machine
 borrows it, does the reading and editing, and returns the work, which is folded
 back into the **same** document — no duplicate, no second copy to reconcile.
 
+**No ssh, no password, no logging in to the other computer.** Every command is
+run *on the computer you are sitting at* (or by the agent running there). The two
+computers never connect to each other while the work is done — the only thing
+that travels is a folder, carried the same way you would carry any other file.
+If a technical helper told you this needs remote access, that is not the case.
+
 ### How it works, in four steps
 
-1. **Your computer hands the document over.** pha writes a folder containing the
-   document and the *settings* to use (which palaeographer, editor and encoders
-   you chose), and marks the document as "out on loan". While it is out, your
-   pha will not touch it, so the two machines cannot both work on it by accident.
-2. **You move that folder** to the other machine — a shared folder, a USB stick,
-   or directly if the two are on the same private network.
-3. **The other machine does the work** — reading, then editing, then the
-   structured records, exactly the normal three stages — and writes a result
-   folder. You can stop and resume; it is not a single long sitting. This is the
-   part that needs no connection to your computer at all.
-4. **You move the result folder back**, and your computer folds the work into the
-   original document. The pages keep their place, their numbers and their
+1. **At your computer:** pha writes one folder holding the document and the
+   *settings* to use (which palaeographer, editor and encoders you chose), and
+   marks the document as "out on loan". While it is out, your pha will not touch
+   it, so the two computers cannot both work on it by accident.
+2. **Carry that folder to the other computer** — whichever way is easiest for
+   you (the list is just below). You are copying a folder, nothing more.
+3. **At the other computer:** one command imports it, then the work runs —
+   reading, then editing, then the structured records, exactly the normal three
+   stages — and writes a result folder. You can stop and resume; it is not a
+   single long sitting. None of this needs your computer to be on, or reachable.
+4. **Carry the result folder back**, and at your computer the work is folded into
+   the original document. The pages keep their place, their numbers and their
    citations.
+
+### Carrying the folder across: pick whichever is easiest
+
+All four work, and the commands are identical in every case — only the carrying
+differs:
+
+1. **Let pha do it** (needs Tailscale on both computers, free, one-time setup):
+   pha sends the folder straight to the other computer and unpacks it there.
+   Nothing is copied by hand, no keys, no passwords, no open ports. Both
+   computers do have to be awake at that moment, since it is a direct transfer.
+2. **A shared folder you both already use** — Dropbox, iCloud Drive, OneDrive, a
+   network drive. Copy the folder in on one side, out on the other. (Move the
+   files yourself; do not point a sync tool at your archive.)
+3. **A USB stick.** The best choice for a big collection, and it needs no network
+   at all — which also means the most private.
+4. **A zip file** sent by email or chat. Perfectly fine for a document of a few
+   hundred pages; too big for thousands.
+
+### If the other computer is always on, let it do the whole job
+
+If the second computer is a machine that stays switched on, you can set it up
+**once** so that it notices arriving work, does it, and returns the result by
+itself — no one has to sit at it:
+
+```
+Set up this computer as my hand-over worker, so it collects handed-out
+documents, reads and edits them, and sends the results back on its own. It
+should start again by itself when the machine restarts. Explain what you are
+installing and where, before doing it.
+```
+
+After that, your side is only ever "hand this document over" and "collect the
+finished work". (This part uses the same Tailscale link as option 1 above, so
+both computers need it.)
 
 ### What you need
 
-- **pha installed on both computers** — the second machine runs the same tool,
-  with its own working copy of the archive; yours is the one that owns the
-  document and the one the result comes home to.
-- **Models on the second machine**, or reachable from it.
-- **Somewhere to put the travelling folder** — a shared folder, a USB stick, or
-  the private-network route described below.
+- **pha installed on both computers**, each one installed *at that computer* —
+  the same way you installed it here. Nobody logs in to the other machine to set
+  it up, and no remote access is involved at any point.
+- **Models on the second computer**, or reachable from it.
+- **Somewhere to put the travelling folder** — see the four options above.
 
 ### How to ask for it
 
@@ -149,6 +188,9 @@ Lend this document to my other computer so it can do the reading:
 On this computer (which owns the archive):
   - hand the document over and tell me where the folder is
   - then show me what is currently on loan
+  - tell me plainly how to get that folder to the other computer — a USB stick,
+    a shared folder, or pha sending it itself if both machines have Tailscale.
+    I do not want to set up ssh or remote access to the other machine.
 
 On the other computer (where the models are):
   - import the folder, do the reading/editing/records work in the background
@@ -180,13 +222,9 @@ model calls are likely to cost.
 
 ### Practical notes
 
-- **Moving the folder** is the only fiddly part. A shared folder, a USB stick or
-  a zip file all work. If the two computers are on the same private Tailscale
-  network (a way of joining your own computers into one private network,
-  wherever they are), pha can send and receive the folder itself, so no shared
-  drive and no passwords are needed.
 - **Nothing needs to stay connected** between the two hand-over moments. The
-  second machine can process for hours while your computer is asleep.
+  second machine can process for hours while your computer is asleep, and the
+  other way round.
 - **The document is on loan meanwhile.** Your pha lists it as out and skips it.
   You can cancel the loan at any time: that releases the document here and
   refuses the result if it arrives later.
@@ -224,6 +262,7 @@ where the models are reached; in the second, the document stays yours.
 | **model server** | the program on the powerful computer that makes its AI models available to the network |
 | **serves the model** | which computer actually runs a given model — pha lets one job use each server at a time |
 | **out on loan** | this computer has handed a document over and will not process it until it comes back |
+| **ssh** | logging in to another computer from this one. You never need it here: each computer runs its own commands, and only the folder travels. |
 | **Tailscale** | a private network between your *own* computers, wherever they are: it makes a machine in another city behave like one on your home network, with nothing opened to the public internet and no passwords to exchange. pha can use it to send and receive a hand-over folder by itself. |
 | **the payload** | the folder that travels: the document going out, or the finished work coming back |
 | **stale** | the work came back, but it was done with different settings than the ones recorded here |

@@ -1,7 +1,7 @@
 """Two-machine hand-over: lend a document, take the results back.
 
-The archive machine can sleep for hours while a second, always-on machine on
-the same LAN does the work. This module implements that round trip:
+The archive machine can sleep for hours while a second, always-on machine does
+the work. This module implements that round trip:
 
     pha handoff out    <targets> -o DIR    # lease + export (archive machine)
     pha handoff in     DIR                 # import + resume    (worker machine)
@@ -10,9 +10,11 @@ the same LAN does the work. This module implements that round trip:
     pha handoff fetch  DIR2                # apply in place      (archive)
     pha handoff status / cancel            # what is out, and releasing it
 
-The payload is a directory; moving it (rsync, a share, a USB stick) is the
-user's business. Both machines are awake at hand-out and at fetch by
-definition, which is what makes a file-based lease sufficient.
+The payload is a directory; moving it (a shared folder, a USB stick, a zip —
+whichever the owner finds easiest) is the user's business, and **no ssh, remote
+login or open port is involved in any part of it**. Both machines are awake at
+hand-out and at fetch by definition, which is what makes a file-based lease
+sufficient.
 
 Design of record: `enhancements/pha-handoff-enhancement-request.md`. Two
 properties drive most of the code:

@@ -911,3 +911,47 @@ def test_a_blank_never_wipes_a_reading_the_owner_already_has(tmp_path, monkeypat
     assert pages[2]["raw_text"] == "PAGE 2 machine text"
     assert applied["counts"][handoff.BLANK] == 0
     assert applied["counts"][handoff.KEPT_LOCAL] == 1
+
+
+# ------------------------------------ the trip is a folder copy (no ssh, ever)
+
+def test_handoff_out_tells_the_owner_how_to_move_the_payload(tmp_path, monkeypatch, capsys):
+    """The one place an owner looks — right after `pha handoff out` — must say
+    how the payload reaches the other machine, and must not leave the old
+    ssh/remote-login workflow standing.
+
+    That workflow (rsync over ssh, key + address + remote path, twice per
+    hand-over) is what `pha handoff` replaces; the printed next step is where a
+    reader decides whether this is for them, so it names the easy ways, the
+    command to run on the OTHER machine, and the optional hands-off route.
+    """
+    from types import SimpleNamespace
+
+    from personal_historical_archive import cli
+
+    monkeypatch.chdir(tmp_path)
+    a = _cfg(tmp_path, "projA")
+    _document(a, pages=2, done=1)
+
+    args = SimpleNamespace(
+        handoff_cmd="out", targets=["collections/DI"], out=str(tmp_path / "ho"),
+        worker="mac-mini", force=False, force_inbox=False, send=None,
+    )
+    cli.cmd_handoff(a, args)
+    out = capsys.readouterr().out
+
+    assert "no ssh" in out, "the owner must be told plainly that ssh is not involved"
+    assert "pha handoff in" in out, "the command to run on the other machine"
+    assert "shared folder" in out and "USB" in out, "the easy ways to carry the folder"
+    assert "pha handoff out … --send" in out, "the optional hands-off route (Taildrop)"
+
+
+def test_the_send_hint_names_the_command_for_that_trip():
+    """`handoff back` sends with `--send` too — the hint must not tell the
+    worker to run `handoff out`."""
+    from personal_historical_archive import cli
+
+    assert "pha handoff out" in cli._handoff_send_hint("out")
+    assert "pha handoff back" in cli._handoff_send_hint("back")
+    for cmd in ("out", "back"):
+        assert "no ssh" in cli._handoff_send_hint(cmd)
