@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from personal_historical_archive import cli
 from personal_historical_archive.config import Config
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _make_cfg(tmp_path, archive_dir="."):
@@ -124,7 +127,8 @@ def test_help_overview_points_to_docs(tmp_path, capsys, monkeypatch):
     cli.cmd_help(cfg, type("A", (), {"topic": None})())
     out = capsys.readouterr().out
     for f in ("README.md", "PIPELINE.md", "MCP_CLIENTS.md",
-              "HISTORIANS_README.md", "AGENTS.md", "MULTI_COMPUTER.md"):
+              "HISTORIANS_README.md", "AGENTS.md", "MULTI_COMPUTER.md",
+              "HARNESS_INTRODUCTION.md"):
         assert f in out
     assert "pha status" in out
     assert "pha set archive-dir" in out
@@ -371,3 +375,107 @@ def test_info_reports_the_env_source(tmp_path, monkeypatch, capsys):
     cfg, _ = _make_cfg(tmp_path, ".")
     cli.cmd_info(cfg, type("A", (), {"json": True})())
     assert _json.loads(capsys.readouterr().out)["archive_source"].startswith("PHA_ARCHIVE_DIR env")
+
+
+# ------------------------------------------- `pha help` finds the file it names
+#
+# A help topic prints a path and says "open this file". In a wheel install there
+# is no checkout, so the path used to be a plausible lie (`<cwd>/MCP_CLIENTS.md`)
+# — and HARNESS_INTRODUCTION.md was not in the distribution at all. The files are
+# force-included under the package and resolved from wherever they exist.
+
+
+def test_every_help_topic_has_a_real_file_in_the_checkout():
+    """Each advertised topic must have something to open — a topic that points
+    at nothing is worse than no topic."""
+    from types import SimpleNamespace
+
+    cfg = SimpleNamespace(root=REPO_ROOT, archive_dir=REPO_ROOT / "no-archive-here")
+    missing = []
+    for key in cli._HELP_TOPICS:
+        name = cli._HELP_DOCS[key][0]
+        path, source = cli._help_doc_path(name, cfg)
+        if not path.is_file():
+            missing.append((key, name))
+    assert not missing, f"help topics point at files that do not exist: {missing}"
+
+
+def test_every_help_doc_is_shipped_in_the_wheel():
+    """A wheel has no repo root, so `pha help <topic>` in a `uv tool install`
+    only works if the build carries each file under the package."""
+    import tomllib
+
+    force = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+    for key in cli._HELP_TOPICS:
+        name = cli._HELP_DOCS[key][0]
+        assert force.get(name) == f"personal_historical_archive/{name}", (
+            f"{name} is a `pha help` topic but the wheel does not ship it")
+
+
+def test_help_doc_prefers_the_archive_copy(tmp_path):
+    """An archive's own README/PIPELINE is the copy matching the pha that made
+    it (and the owner's if edited), so it wins over the checkout."""
+    from types import SimpleNamespace
+
+    arc = tmp_path / "archive"
+    arc.mkdir()
+    (arc / "PIPELINE.md").write_text("# the archive's own copy", encoding="utf-8")
+    cfg = SimpleNamespace(root=REPO_ROOT, archive_dir=arc)
+
+    path, source = cli._help_doc_path("PIPELINE.md", cfg)
+    assert path == arc / "PIPELINE.md"
+    assert source == "your archive"
+
+
+def test_help_doc_falls_back_to_the_installed_package(tmp_path, monkeypatch):
+    """No archive copy and no checkout (`uv tool install`): the packaged copy is
+    what makes `pha help harness` work there."""
+    import importlib.resources as res
+    from types import SimpleNamespace
+
+    packaged = tmp_path / "site-packages" / "personal_historical_archive"
+    packaged.mkdir(parents=True)
+    target = packaged / "HARNESS_INTRODUCTION.md"
+    target.write_text("# how to get the harness", encoding="utf-8")
+
+    class _Traversable:
+        def __init__(self, base: Path):
+            self.base = base
+
+        def joinpath(self, *parts):
+            return _Traversable(self.base.joinpath(*parts))
+
+        def is_file(self):
+            return self.base.is_file()
+
+        def __str__(self):
+            return str(self.base)
+
+    monkeypatch.setattr(res, "files", lambda pkg=None: _Traversable(packaged))
+    cfg = SimpleNamespace(root=tmp_path / "no-checkout", archive_dir=tmp_path / "no-archive")
+
+    path, source = cli._help_doc_path("HARNESS_INTRODUCTION.md", cfg)
+    assert path == target
+    assert source == "the installed pha package"
+
+
+def test_help_harness_topic_prints_a_path(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    cfg, _ = _make_cfg(tmp_path, ".")
+    cli.cmd_help(cfg, type("A", (), {"topic": "harness"})())
+    out = capsys.readouterr().out
+    assert "HARNESS_INTRODUCTION.md" in out
+    assert "DeepSeek Harness" in out
+
+
+def test_help_says_when_a_doc_is_missing(tmp_path, capsys, monkeypatch):
+    """When the file is in none of the three places, say so — do not print a
+    path as if it were there."""
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    cfg, _ = _make_cfg(tmp_path, ".")
+    cli.cmd_help(cfg, type("A", (), {"topic": "mcp"})())
+    captured = capsys.readouterr()
+    assert "MCP_CLIENTS.md" in captured.out
+    assert "not present in this installation" in captured.err

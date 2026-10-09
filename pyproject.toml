@@ -41,6 +41,16 @@ packages = ["src/personal_historical_archive"]
 # on each run). A built install has no repo-root file to read, so the wheel
 # carries a copy under the package for archive_init.pipeline_doc_template.
 "PIPELINE.md" = "personal_historical_archive/PIPELINE.md"
+# Every `pha help <topic>` file. A wheel install has no checkout, so without
+# these `pha help mcp` (and the rest) printed a path that did not exist; the
+# build carries them under the package and cli._help_doc_path reads them with
+# importlib.resources. Same reasoning as PIPELINE.md above.
+"README.md" = "personal_historical_archive/README.md"
+"MCP_CLIENTS.md" = "personal_historical_archive/MCP_CLIENTS.md"
+"HISTORIANS_README.md" = "personal_historical_archive/HISTORIANS_README.md"
+"AGENTS.md" = "personal_historical_archive/AGENTS.md"
+"MULTI_COMPUTER.md" = "personal_historical_archive/MULTI_COMPUTER.md"
+"HARNESS_INTRODUCTION.md" = "personal_historical_archive/HARNESS_INTRODUCTION.md"
 "dsh-pha/package.json" = "personal_historical_archive/_view/package.json"
 "dsh-pha/lib/index.js" = "personal_historical_archive/_view/lib/index.js"
 "dsh-pha/lib/client.js" = "personal_historical_archive/_view/lib/client.js"

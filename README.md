@@ -1234,7 +1234,7 @@ server it will use (`pha scan`/`pha edit`/`pha reindex` take the same ones —
 ## CLI reference
 
 ```
-pha help [topic]              # orientation + pointers to README/PIPELINE/MCP_CLIENTS/HISTORIANS/AGENTS/MULTI_COMPUTER
+pha help [topic]              # orientation + pointers to the docs (readme|pipeline|mcp|historians|agents|multi-computer|harness)
 pha scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--path COLLECTION] [--reprocess]
 pha scan --path DOC --page N [--palaeographer ID] [--model ID] [--dry-run] [--no-pin]
 pha scan --path DOC [--page N] --unpin      # release the pin, keep the text

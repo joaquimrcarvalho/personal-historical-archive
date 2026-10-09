@@ -3932,33 +3932,86 @@ def cmd_version(cfg: Config, args) -> None:
         print(f"  source:   {source}")
 
 
+_HELP_DOCS: dict[str, tuple[str, str]] = {
+    "readme": ("README.md", "main manual: pipeline, commands, configuration, quickstart"),
+    "pipeline": ("PIPELINE.md", "plain-language guide to the scan → edit → encode pipeline"),
+    "mcp": ("MCP_CLIENTS.md", "connecting an AI agent to the archive (MCP `pha_*` tools)"),
+    "historians": ("HISTORIANS_README.md", "step-by-step, non-technical guide for historians"),
+    "agents": ("AGENTS.md", "conventions for AI agents operating this archive"),
+    "multi-computer": ("MULTI_COMPUTER.md", "running pha across two computers: models here, archive there"),
+    "harness": ("HARNESS_INTRODUCTION.md",
+               "getting DeepSeek Harness (the agent runtime) and an API key"),
+}
+# The order `pha help` lists them in.
+_HELP_TOPICS = ("readme", "pipeline", "mcp", "historians", "agents", "multi-computer", "harness")
+
+
+def _help_doc_path(name: str, cfg: Config) -> tuple[Path, str | None]:
+    """Where a help topic's file actually is, and which copy it is.
+
+    Three places hold these documents, in the order an owner wants them:
+
+    1. **the archive** (`<archive_dir>/<name>`) — `README.md`, `AGENTS.md` and
+       `PIPELINE.md` are seeded into every archive and refreshed, so an archive
+       carries the version that matches the pha that made it, and the owner's
+       own copy is the one to read;
+    2. **the project directory** (`<root>/<name>`) — a source checkout, where
+       these files are authored;
+    3. **the installed package** — a wheel has no checkout, so the build
+       force-includes these documents under the package
+       (`importlib.resources`); without this, `pha help mcp` in a
+       `uv tool install` printed a path that did not exist.
+
+    Returns `(path, source)`, where `source` is None when the file is in none of
+    the three — in which case `path` is where it would be expected, so the
+    caller can say so instead of printing a plausible lie.
+    """
+    candidates = [
+        (Path(cfg.archive_dir) / name, "your archive"),
+        (Path(cfg.root) / name, "the pha project directory"),
+    ]
+    for path, source in candidates:
+        try:
+            if path.is_file():
+                return path, source
+        except OSError:
+            pass
+    try:
+        from importlib.resources import files as _resource_files
+
+        resource = _resource_files(__package__).joinpath(name)
+        if resource.is_file():
+            return Path(str(resource)), "the installed pha package"
+    except (ModuleNotFoundError, TypeError, FileNotFoundError, OSError):
+        pass
+    return Path(cfg.root) / name, None
+
+
 def cmd_help(cfg: Config, args) -> None:
     """`pha help [topic]` — orientation and pointers to the instruction files.
 
     Works for both humans and agents; runs even when no archive is configured.
     """
-    root = cfg.root
-    docs = {
-        "readme": ("README.md", "main manual: pipeline, commands, configuration, quickstart"),
-        "pipeline": ("PIPELINE.md", "plain-language guide to the scan → edit → encode pipeline"),
-        "mcp": ("MCP_CLIENTS.md", "connecting an AI agent to the archive (MCP `pha_*` tools)"),
-        "historians": ("HISTORIANS_README.md", "step-by-step, non-technical guide for historians"),
-        "agents": ("AGENTS.md", "conventions for AI agents operating this archive"),
-        "multi-computer": ("MULTI_COMPUTER.md", "running pha across two computers: models here, archive there"),
-    }
+    docs = _HELP_DOCS
     topic = getattr(args, "topic", None)
     if topic:
         topic = topic.strip().lower().replace("-", "")
         match = next((k for k in docs if k.replace("-", "") == topic), None)
         if not match:
             print(f"unknown help topic: {args.topic}", file=sys.stderr)
-            print(f"known topics: {', '.join(sorted(docs))}", file=sys.stderr)
+            print(f"known topics: {', '.join(_HELP_TOPICS)}", file=sys.stderr)
             return
         name, what = docs[match]
-        path = root / name
+        path, source = _help_doc_path(name, cfg)
         print(f"pha — {name} ({what})")
         print(f"  path: {path}")
-        print("  open this file for the full instructions.")
+        if source:
+            print(f"  copy: {source}")
+            print("  open this file for the full instructions.")
+        else:
+            print("  this file is not present in this installation; that path is "
+                  "where pha expects it.", file=sys.stderr)
+            print("  `pha update` restores the documentation an install ships.")
         return
 
     print("pha — Personal Historical Archive (local archive of historical documents)")
@@ -3983,7 +4036,7 @@ def cmd_help(cfg: Config, args) -> None:
     print("  pha update                    update pha and the PHA view plugin")
     print("  pha view install|status       manage the PHA view plugin in DSH profiles")
     print("  pha version [--short|--json]  which pha is this, and where it is installed")
-    print("  pha help <topic>              details on readme|pipeline|mcp|historians|agents|multi-computer")
+    print("  pha help <topic>              details on " + "|".join(_HELP_TOPICS))
     print()
     print("FIRST-TIME SETUP")
     print("  If no archive is configured, pha asks where it is: point at an")
@@ -3991,11 +4044,13 @@ def cmd_help(cfg: Config, args) -> None:
     print("  (Windows: %USERPROFILE%\\pha-home).")
     print()
     print("DOCUMENTATION — read these for full instructions")
-    for key in ("readme", "pipeline", "mcp", "historians", "agents", "multi-computer"):
+    for key in _HELP_TOPICS:
         name, what = docs[key]
-        print(f"  {name:<22} {what}")
+        path, source = _help_doc_path(name, cfg)
+        where = "" if source is None else f"  [{source}]"
+        print(f"  {name:<22} {what}{where}")
     print()
-    print("  The files above live in the pha project directory.")
+    print("  Each file is read from your archive, the pha project directory, or the")
     print("  For agents: an archive created with `pha init-archive` also has its")
     print("  own README.md + AGENTS.md inside it describing that archive.")
 

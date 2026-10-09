@@ -1,10 +1,11 @@
-"""Gate: a built wheel ships pha-sidecar.schema.json and can load it.
+"""Gate: a built wheel ships the files an installed pha reads from its package.
 
-This is the F4 gate from the bug report
-``enhancements/pha-installed-wheel-missing-schema-bug-report.md``. In a source
-checkout the repo-root ``schema/`` sits exactly where the old ``parents[2]``
-arithmetic expected it, so this failure is invisible to the unit tests; the
-only way to catch it is to build a distribution and import from it.
+The F4 gate from ``enhancements/pha-installed-wheel-missing-schema-bug-report.md``
+(pha-sidecar.schema.json), widened to every file a built install must carry:
+the schema, the bundled ``dsh-pha`` payload, and the documentation that
+``pha help <topic>`` points at. In a source checkout these files sit exactly
+where the code looks first, so a missing one is invisible to the unit tests; the
+only way to catch it is to build a distribution and look inside.
 
 Run from the repo root:  python scripts/check_wheel_ships_schema.py
 Needs the project's runtime deps importable (PyYAML at minimum).
@@ -26,6 +27,23 @@ VIEW_MEMBERS = {
     "personal_historical_archive/_view/lib/client.js",
 }
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def doc_members() -> set[str]:
+    """Every documentation file the build PROMISES to ship: the ``.md`` entries
+    of the wheel force-include table, read from pyproject so this gate cannot
+    drift from the build.
+
+    These are the files ``pha help <topic>`` points at. A wheel install has no
+    checkout, so ``cli._help_doc_path`` reads them from the package — before they
+    were force-included, ``pha help mcp`` in a ``uv tool install`` printed a path
+    that did not exist, and HARNESS_INTRODUCTION.md was not distributed at all.
+    """
+    import tomllib
+
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    force = data["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+    return {dest for dest in force.values() if dest.endswith(".md")}
 
 
 def candidate_builders(out):
@@ -91,6 +109,13 @@ def main():
                 raise SystemExit("FAIL: bundled dsh-pha payload absent: "
                                  + ", ".join(missing_view))
             print("ok: wheel contains the bundled dsh-pha payload")
+            missing_docs = sorted(doc_members() - set(names))
+            if missing_docs:
+                raise SystemExit(
+                    "FAIL: documentation absent from the wheel — a `pha help "
+                    "<topic>` path would not exist in an install: "
+                    + ", ".join(missing_docs))
+            print(f"ok: wheel contains all {len(doc_members())} help documents")
             unpacked = tmp_path / "unpacked"
             zf.extractall(unpacked)
 

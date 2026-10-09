@@ -34,7 +34,9 @@ only requires a bump when `dsh-pha/` changes.
    UV_CACHE_DIR=/tmp/uv-cache .venv/bin/python scripts/check_wheel_ships_schema.py
    ```
    The wheel gate also proves that `_view/package.json`, `_view/lib/index.js`
-   and `_view/lib/client.js` are bundled.
+   and `_view/lib/client.js` are bundled, and that every `pha help <topic>`
+   document is inside the wheel (a wheels-only install has no checkout, so a
+   missing one would print a path that does not exist).
 5. Commit and push. Agent commits end with a `Model:` trailer (see
    [AGENTS.md](AGENTS.md)).
 6. Confirm the remote raw version has refreshed:
