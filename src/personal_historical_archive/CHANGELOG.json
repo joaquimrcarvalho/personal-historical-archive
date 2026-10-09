@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "releases": {
+    "0.42.0": {
+      "date": "2026-10-08",
+      "summary": "Per-document encoder structure registers and release-note request",
+      "changes": [
+        {
+          "type": "docs",
+          "scope": "enhancements",
+          "text": "add what's-new release-notes request",
+          "commit": "95badf70a263"
+        },
+        {
+          "type": "feat",
+          "scope": "encode",
+          "text": "per-document structure register for encoder pages",
+          "commit": "a5bed701d41e"
+        }
+      ]
+    }
+  }
+}

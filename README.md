@@ -1235,6 +1235,8 @@ server it will use (`pha scan`/`pha edit`/`pha reindex` take the same ones —
 
 ```
 pha help [topic]              # orientation + pointers to the docs (readme|pipeline|mcp|historians|agents|multi-computer|harness|view)
+pha whatsnew [VERSION] [--since VERSION] [--all] [--json]
+                              # packaged release notes for this or another version
 pha scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--path COLLECTION] [--reprocess]
 pha scan --path DOC --page N [--palaeographer ID] [--model ID] [--dry-run] [--no-pin]
 pha scan --path DOC [--page N] --unpin      # release the pin, keep the text

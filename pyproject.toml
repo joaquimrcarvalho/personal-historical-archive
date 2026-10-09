@@ -57,6 +57,7 @@ packages = ["src/personal_historical_archive"]
 # as well as in the checkout.
 "DSH_PLUGIN.md" = "personal_historical_archive/DSH_PLUGIN.md"
 "dsh-pha/README.md" = "personal_historical_archive/dsh-pha/README.md"
+"src/personal_historical_archive/CHANGELOG.json" = "personal_historical_archive/CHANGELOG.json"
 "dsh-pha/package.json" = "personal_historical_archive/_view/package.json"
 "dsh-pha/lib/index.js" = "personal_historical_archive/_view/lib/index.js"
 "dsh-pha/lib/client.js" = "personal_historical_archive/_view/lib/client.js"

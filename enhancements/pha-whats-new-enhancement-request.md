@@ -1,6 +1,6 @@
 # Enhancement request - "what's new" release notes for each bump
 
-**Status:** draft for discussion - not implemented.
+**Status:** Phase 1-3 implemented in the working tree (2026-10-08); not committed/released yet.
 **Author/date:** archive work session, 2026-10-08.
 **Related:** RELEASING.md (release history), scripts/bump_release.py, `pha update`,
 `pha version`, `pha help`, source-checkout vs uv-tool installs.
@@ -247,3 +247,23 @@ Please decide:
 - whether to ship one short human summary required per release.
 
 No implementation will start until this request is approved.
+
+
+## 10. Implementation status - 2026-10-08
+
+Implemented in the working tree:
+
+- packaged `src/personal_historical_archive/CHANGELOG.json` with a 0.42.0
+  entry and a wheel force-include;
+- `src/personal_historical_archive/release_notes.py` for loading, selecting
+  and rendering release notes;
+- `pha whatsnew [VERSION] [--since VERSION] [--all] [--json]`;
+- `scripts/generate_changelog.py` generating an entry from conventional git
+  commits between `--since` and `HEAD`;
+- `pha update --no-notes` and, after a successful update, a fresh-process
+  `pha whatsnew --since OLD` (with a printed fallback hint);
+- tests: `tests/test_release_notes.py`;
+- README, `pha help`, and the RELEASING checklist updated.
+
+The release boundary is still a git ref passed with `--since`; version tags
+are a later decision. The first packaged entry covers 0.42.0.

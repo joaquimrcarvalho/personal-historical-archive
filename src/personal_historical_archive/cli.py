@@ -3746,6 +3746,27 @@ def cmd_doctor(cfg: Config, args) -> None:
         sys.exit(1)
 
 
+def _whatsnew_after_update(old_version: str) -> str:
+    """Run the NEW code's `pha whatsnew --since OLD` after an update.
+
+    The running process still holds the old package, so spawn the same
+    interpreter in a fresh process; the files on disk are already updated.
+    """
+    import os
+    import subprocess
+
+    env = dict(os.environ)
+    env["PHA_NO_UPDATE_CHECK"] = "1"
+    proc = subprocess.run(
+        [sys.executable, "-m", "personal_historical_archive",
+         "whatsnew", "--since", old_version],
+        capture_output=True, text=True, env=env,
+    )
+    if proc.returncode == 0 and proc.stdout.strip():
+        return proc.stdout
+    return ""
+
+
 def cmd_update(cfg: Config, args) -> None:
     """`pha update` — check GitHub for a newer pha and install it.
 
@@ -3779,6 +3800,7 @@ def cmd_update(cfg: Config, args) -> None:
         if ans not in ("y", "yes"):
             print("not installing.")
             return
+    old_version = current_version()
     try:
         msg = install_update(cfg.update_repo, cfg.update_branch)
     except UpdateError as e:
@@ -3789,6 +3811,16 @@ def cmd_update(cfg: Config, args) -> None:
         print(e.stderr or e.stdout or e, file=sys.stderr)
         sys.exit(2)
     print(msg)
+    if not getattr(args, "no_notes", False):
+        try:
+            notes = _whatsnew_after_update(old_version)
+        except Exception:  # noqa: BLE001 - notes must never fail the update
+            notes = ""
+        if notes:
+            print()
+            print(notes.rstrip())
+        else:
+            print(f"run `pha whatsnew --since {old_version}` to see what changed.")
     archive_dir = None
     if getattr(cfg, "archive_source_kind", "default") != "default" or cfg.db_path.exists():
         archive_dir = str(cfg.archive_dir)
@@ -3878,6 +3910,33 @@ def cmd_view(cfg: Config, args) -> None:
         print(f"warning: {warning}", file=sys.stderr)
     if report.get("restart_required"):
         print("restart the DSH host to load the updated plugin.")
+
+
+def cmd_whatsnew(cfg: Config, args) -> None:
+    """`pha whatsnew` - packaged release notes for this or another version."""
+    from .release_notes import (
+        ReleaseNotesError,
+        as_json,
+        load_changelog,
+        render,
+        select_releases,
+    )
+
+    try:
+        data = load_changelog()
+        versions = select_releases(
+            data,
+            version=getattr(args, "version", None),
+            since=getattr(args, "since", None),
+            all_releases=bool(getattr(args, "all_releases", False)),
+        )
+    except ReleaseNotesError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(2)
+    if getattr(args, "json", False):
+        print(json.dumps(as_json(data, versions), ensure_ascii=False, indent=2))
+        return
+    print(render(data, versions))
 
 
 def cmd_version(cfg: Config, args) -> None:
@@ -4039,6 +4098,7 @@ def cmd_help(cfg: Config, args) -> None:
     print("  pha update                    update pha and the PHA view plugin")
     print("  pha view install|status       manage the PHA view plugin in DSH profiles")
     print("  pha version [--short|--json]  which pha is this, and where it is installed")
+    print("  pha whatsnew [VERSION]        what changed in this release (--since/--json)")
     print("  pha help <topic>              details on " + "|".join(_HELP_TOPICS))
     print()
     print("FIRST-TIME SETUP")
@@ -4365,6 +4425,16 @@ def main(argv: list[str] | None = None) -> None:
     ver.add_argument("--json", action="store_true", help="structured output")
     ver.set_defaults(fn=cmd_version)
 
+    wn = sub.add_parser("whatsnew", help="show packaged release notes")
+    wn.add_argument("version", nargs="?", default=None,
+                    help="one release version; default: the installed version")
+    wn.add_argument("--since", default=None,
+                    help="show every packaged release newer than this version")
+    wn.add_argument("--all", dest="all_releases", action="store_true",
+                    help="show every packaged release, newest last")
+    wn.add_argument("--json", action="store_true", help="structured output")
+    wn.set_defaults(fn=cmd_whatsnew)
+
     ib = sub.add_parser("inbox", help="list documents on hold, or move them into the dropbox")
     ib.add_argument("path", nargs="?", default=None,
                     help="a file or folder inside the inbox (relative); default: the whole inbox")
@@ -4475,6 +4545,8 @@ def main(argv: list[str] | None = None) -> None:
                     help="only compare versions and report; do not install")
     up.add_argument("--yes", "-y", action="store_true",
                     help="install without asking for confirmation")
+    up.add_argument("--no-notes", action="store_true",
+                    help="do not print what changed after updating")
     up.set_defaults(fn=cmd_update)
 
     vw = sub.add_parser("view", help="install/update the PHA view plugin used by DeepSeek Harness")
@@ -4918,8 +4990,8 @@ def main(argv: list[str] | None = None) -> None:
     # directory and before an archive is configured (like `pha help`), and it
     # writes nothing — so it deliberately skips the fresh-install guard,
     # `ensure_dirs()` and the daily self-update notice below.
-    if args.cmd == "version":
-        cmd_version(cfg, args)
+    if args.cmd in ("version", "whatsnew"):
+        args.fn(cfg, args)
         return
 
     # `pha info` is the DISCOVERY command — the one a caller (the PHA View, an

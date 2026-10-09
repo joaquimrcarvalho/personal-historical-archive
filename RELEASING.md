@@ -23,11 +23,18 @@ only requires a bump when `dsh-pha/` changes.
    ```sh
    python scripts/bump_release.py patch    # or minor / major / --set X.Y.Z
    ```
-3. Run the CI guard for plugin-only changes:
+3. Generate/update the packaged release notes:
+   ```sh
+   python scripts/generate_changelog.py --version X.Y.Z --since <previous-ref> \
+       --summary "one plain-language sentence"
+   ```
+   `--since` takes a git ref/commit; the script is deliberately separate from
+   the version bump so the summary can be edited before release.
+4. Run the CI guard for plugin-only changes:
    ```sh
    python scripts/check_release_bump.py origin/main
    ```
-4. Verify:
+5. Verify:
    ```sh
    PYTHONPATH=src .venv/bin/python -m pytest -q
    node dsh-pha/scripts/smoke.mjs
@@ -37,9 +44,9 @@ only requires a bump when `dsh-pha/` changes.
    and `_view/lib/client.js` are bundled, and that every `pha help <topic>`
    document is inside the wheel (a wheels-only install has no checkout, so a
    missing one would print a path that does not exist).
-5. Commit and push. Agent commits end with a `Model:` trailer (see
+6. Commit and push. Agent commits end with a `Model:` trailer (see
    [AGENTS.md](AGENTS.md)).
-6. Confirm the remote raw version has refreshed:
+7. Confirm the remote raw version has refreshed:
    ```sh
    curl -fsSL https://raw.githubusercontent.com/joaquimrcarvalho/personal-historical-archive/main/src/personal_historical_archive/__init__.py
    ```
