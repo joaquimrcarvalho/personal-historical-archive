@@ -407,10 +407,11 @@ otherwise:
 - This applies to every escalation request, including the sandbox / approval
   prompts raised by the agent runtime — not just to commands you type.
 
-Run `pha help` (or `pha help <readme|pipeline|mcp|historians|agents|multi-computer|harness>`)
-for an orientation that points at this file, README.md, PIPELINE.md,
-MCP_CLIENTS.md, HISTORIANS_README.md, MULTI_COMPUTER.md and
-HARNESS_INTRODUCTION.md (getting DeepSeek Harness). It always works, even before
+Run `pha help` (or `pha help
+<readme|pipeline|mcp|historians|agents|multi-computer|harness|view>`) for an
+orientation that points at this file, README.md, PIPELINE.md, MCP_CLIENTS.md,
+HISTORIANS_README.md, MULTI_COMPUTER.md, HARNESS_INTRODUCTION.md (getting
+DeepSeek Harness) and DSH_PLUGIN.md (the PHA view). It always works, even before
 an archive is configured, and it names which copy of each file it found — your
 archive's, the checkout's, or the one the installed package ships.
 

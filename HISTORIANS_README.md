@@ -520,6 +520,41 @@ pha_scan_now, pha_extraction_status.
 After that you can simply ask questions and the agent will query the archive
 itself.
 
+### A window on your archive: the PHA view
+
+If you work in **DeepSeek Harness** (the assistant app introduced in
+[HARNESS_INTRODUCTION.md](HARNESS_INTRODUCTION.md)), your archive can have a
+window of its own inside it: a **PHA** tab, next to the conversation. Instead of
+asking for a page and reading it in the chat, you browse and read directly:
+
+- the **documents** in your archive, with a search box;
+- a **page**, with its transcription — and, where your editor has produced one,
+  the modernised or translated version beside it;
+- the **scan itself**, side by side with the text, so you can check a reading
+  against the original at a glance;
+- a document **parked in the inbox**, which you can move into the archive from
+  there;
+- the document's **bibliographic reference**, and links that open the page they
+  cite.
+
+The view only ever *reads*: it cannot change your archive. Everything that
+writes — reading new pages, editing, encoding — still goes through your agent,
+with the same safeguards as before.
+
+It is part of pha, not a separate program to buy; the only requirement is
+DeepSeek Harness itself, on the computer that holds your archive. Ask your
+agent:
+
+```
+Set up the PHA view for this archive and tell me when I need to restart
+DeepSeek Harness to see it. It installs with pha: `pha view install`.
+If the PHA tab does not appear after the restart, find out why and fix it.
+```
+
+After the restart the **PHA** tab appears beside the conversation. If it does
+not, tell your agent: the usual cause is that it was installed for a different
+Harness profile than the one the app is running.
+
 ### Adding ready-made skills to your agent
 
 Your archive also comes with **skills**: short instruction sheets that teach

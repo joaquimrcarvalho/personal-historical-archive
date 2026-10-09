@@ -3,6 +3,11 @@
 > [!TIP]
 > Quick-start and what-you-get: see [`DSH_PLUGIN.md`](../DSH_PLUGIN.md) at the repo root.
 > This file is the full install/development reference.
+>
+> Both documents ship with pha, so both can be read without this repository:
+> `pha help view` prints the path of the quick start (and which copy it found —
+> the archive's, the checkout's, or the installed package's), and this full
+> reference sits in the `dsh-pha/` folder beside it.
 
 A [DeepSeek Harness](https://www.deepseek.com/en/harness/) **host plugin** that
 exposes the `pha_*` model tools and the archive runner, so any agent session on a machine

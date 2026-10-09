@@ -128,7 +128,7 @@ def test_help_overview_points_to_docs(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     for f in ("README.md", "PIPELINE.md", "MCP_CLIENTS.md",
               "HISTORIANS_README.md", "AGENTS.md", "MULTI_COMPUTER.md",
-              "HARNESS_INTRODUCTION.md"):
+              "HARNESS_INTRODUCTION.md", "DSH_PLUGIN.md"):
         assert f in out
     assert "pha status" in out
     assert "pha set archive-dir" in out
@@ -468,6 +468,17 @@ def test_help_harness_topic_prints_a_path(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "HARNESS_INTRODUCTION.md" in out
     assert "DeepSeek Harness" in out
+
+
+def test_help_view_topic_points_at_the_plugin_doc(tmp_path, capsys, monkeypatch):
+    """The PHA view has its own topic — the GUI is not something a reader of the
+    other topics would discover."""
+    monkeypatch.delenv("PHA_ARCHIVE_DIR", raising=False)
+    cfg, _ = _make_cfg(tmp_path, ".")
+    cli.cmd_help(cfg, type("A", (), {"topic": "view"})())
+    out = capsys.readouterr().out
+    assert "DSH_PLUGIN.md" in out
+    assert "PHA view" in out
 
 
 def test_help_says_when_a_doc_is_missing(tmp_path, capsys, monkeypatch):

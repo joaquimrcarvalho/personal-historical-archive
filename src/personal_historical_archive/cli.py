@@ -3941,9 +3941,12 @@ _HELP_DOCS: dict[str, tuple[str, str]] = {
     "multi-computer": ("MULTI_COMPUTER.md", "running pha across two computers: models here, archive there"),
     "harness": ("HARNESS_INTRODUCTION.md",
                "getting DeepSeek Harness (the agent runtime) and an API key"),
+    "view": ("DSH_PLUGIN.md",
+             "the PHA view in DeepSeek Harness: what it gives you, and how to install it"),
 }
 # The order `pha help` lists them in.
-_HELP_TOPICS = ("readme", "pipeline", "mcp", "historians", "agents", "multi-computer", "harness")
+_HELP_TOPICS = ("readme", "pipeline", "mcp", "historians", "agents", "multi-computer",
+                "harness", "view")
 
 
 def _help_doc_path(name: str, cfg: Config) -> tuple[Path, str | None]:
@@ -4051,6 +4054,8 @@ def cmd_help(cfg: Config, args) -> None:
         print(f"  {name:<22} {what}{where}")
     print()
     print("  Each file is read from your archive, the pha project directory, or the")
+    print("  installed pha package — whichever has it (`pha help <topic>` prints the")
+    print("  exact path and which copy it is).")
     print("  For agents: an archive created with `pha init-archive` also has its")
     print("  own README.md + AGENTS.md inside it describing that archive.")
 

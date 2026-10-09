@@ -22,7 +22,7 @@ _PHA_COMMAND = re.compile(
     r"`?\bpha\s+(status|scan|edit|encode|reindex|review|search|page|bib|cite|"
     r"test|doctor|key|mcp|set|init-archive|bundle|unbundle|prune|inbox|"
     r"palaeographer|editor|prompts|encoder|filters|serve|export|rm|help|info|"
-    r"update|upload|migrate-config)\b"
+    r"update|upload|migrate-config|view)\b"
 )
 
 
