@@ -267,3 +267,209 @@ where the models are reached; in the second, the document stays yours.
 | **the payload** | the folder that travels: the document going out, or the finished work coming back |
 | **stale** | the work came back, but it was done with different settings than the ones recorded here |
 | **embedding model** | the small model that powers searching *by meaning*; without it, keyword search still works |
+
+---
+
+# Operator reference
+
+Everything above is written for the archive owner. This half is the
+operator-level detail an **agent** needs when it is actually driving a two-machine
+setup: the exact command surface, what travels, what is locked, and where the
+tool lives on this machine. Read the part you need; `AGENTS.md` keeps only the
+rules you must not get wrong.
+
+## A. Moving collections between archives without redoing scan/edit (`bundle`)
+
+`pha bundle <collection-or-doc...>` packs documents + finished library
+transcriptions/edits/records + renders + the model definitions used into a
+portable directory.
+
+`pha unbundle <bundle>` (run on the target archive) imports it with NEW ids into
+a populated archive, pins the recorded palaeographer/editor via selection files
+(so `pha scan`/`pha edit` skip the imported docs instead of re-running them), and
+indexes it for search.
+
+`pha bundle --move` additionally DELETES the bundled documents from the source
+archive once the bundle is written (the bundle is the backup).
+
+See the README section "Moving / sharing collections between archives".
+
+## B. Lending a document to a second machine (`handoff`)
+
+`pha handoff` is the other shape from `bundle` — the document stays in its own
+archive (same id, no copy) and a second machine does the slow scan/edit/encode.
+
+### Owner side
+
+`pha handoff out <target> [--worker NAME]` writes a payload and **leases** the
+document, so `pha scan`/`edit`/`encode`/`reindex` skip it (name+age shown,
+`pha status` lists it under "out on hand-over"; `--include-leased` overrides).
+
+A document that has never been scanned can be handed out too: `handoff out`
+**registers** it first (identity, resolved stages, page count — no render, no
+transcription), and that record is what the lease is looked up through.
+
+An `inbox/<rel>` target is moved into the dropbox first (mirroring the layout;
+only entries you name, refusing to overwrite unless `--force-inbox`).
+
+Renders are NOT carried either way (the worker re-renders to extract), so
+`handoff fetch` rebuilds the page images missing here — a document handed out
+before its first scan has none — and `pha render [--path … | --doc N]` does the
+same on demand. Renders are a derived cache, so byte-identity across machines is
+deliberately not required.
+
+### Worker side
+
+`pha handoff in <payload>`, then `pha handoff work --pages 12,337 --resume` (one
+command for the whole job; `--resume` is STATELESS — it plans from the worker's
+DB, so an interrupted page list continues and a finished document is skipped;
+without it a named page is a deliberate re-do), then `pha handoff back`.
+
+The explicit stages — `pha scan/edit/encode --path <doc>` — still work and report
+the same.
+
+### Back on the owner
+
+`pha handoff fetch <result>` merges the work into the SAME document — local human
+corrections are kept and reported as conflicts, and a document processed under a
+different palaeographer/editor is reported `stale`.
+
+Identity across machines is `sha256` + dropbox-relative path (ids are
+per-machine and mean nothing across them); only the finished work travels back,
+never the source bytes.
+
+Leases live in `<archive>/.pha/handoffs/<id>.json` (machine-local, gitignored).
+`pha handoff status [--json]` / MCP `pha_handoff_status()` show what is out;
+`pha handoff cancel <id>` releases it and refuses a later result.
+
+### Moving the payload
+
+**When the two machines share a tailnet, moving the payload is pha's job**:
+`--send <peer>` on `out`/`back` tars the payload and Taildrops it
+(`tailscale file cp`), and `pha handoff recv` on the other machine moves it out of
+the Tailscale inbox, unpacks it into `<archive>/.pha/handoffs/incoming/<id>/` and
+**prints** the `in`/`fetch` command — it never merges on its own (`--wait`;
+`--loop` for a drop box; `--from PATH` for a file you copied yourself;
+`--no-downloads` to ignore the macOS app's `~/Downloads`). No ssh keys, no shared
+folder, no open port, no daemon: security is tailnet membership
+(`pha handoff peers` lists who can receive). The tar is a **transport envelope
+only** — the payload format is unchanged, and `handoff_transport.unpack` refuses
+an absolute path, `..` or a link, because a tar from the network is untrusted even
+on a tailnet.
+
+Directory-moving (a shared folder, a USB stick, a zip) stays the fallback, and is
+what to use when Tailscale is not on both machines.
+
+**No path needs ssh**: every command runs on the machine that owns the archive it
+touches, and moving the payload is a file copy. Do not propose ssh keys, remote
+paths or a remote shell for a hand-over; `pha handoff out` prints the
+copy-and-import next step, and this document explains the four ways to carry the
+folder, in plain language for an archive owner.
+
+### Unattended worker
+
+`pha handoff worker --send-to <owner>` is the unattended trigger — the receiving
+side of Taildrop is not a trigger, so on the always-on machine this watches the
+inbox and runs `in` → `work --resume` → `back` → send for each hand-over. It
+drives those as SUBPROCESSES of the documented CLI (never by importing the
+pipeline), retries only `PeerUnavailable` (the owner's laptop is shut — that is
+the normal case, so it waits; a misspelled/ambiguous peer is NOT retried
+forever), and `--install` writes a user LaunchAgent (`~/Library/LaunchAgents`, no
+admin) using the PATH-proof `<python> -m personal_historical_archive` form, so no
+ssh is needed to trigger work at all. `--once`/`--status`/`--uninstall`/
+`--dry-run`; log at `<archive>/.pha/handoff-worker.log`. It cannot wake a sleeping
+LM Studio, so a missing model fails loudly in the log rather than hanging.
+
+### Two locking/indexing gaps worth knowing
+
+**`handoff fetch` applies without the embedding lock** (gap G3): merging rows,
+rewriting library files and rebuilding renders touch no model, so the default
+apply takes **no lock** (never refused by a running scan) and prints
+`pha reindex --doc N …`; `fetch --index` embeds in the same command and takes the
+lock (with `--wait` if asked). The result carries `indexed` and `index_doc_ids`
+for agents.
+
+**The worker does not embed hand-over material** (gap G1): `import_handoff`
+records the document set here as RECEIVED (`state: "in"` — NOT a lease, so the
+worker still scans/edits/encodes it), and `pha scan`/`pha edit` on the worker skip
+the index for those documents, because the return payload carries text and
+provenance but **no vectors** — the owner's `fetch` is the only place that embeds,
+so embedding on both machines repeats the same hours of work (measured: 2,676
+pages twice). `pha status` shows `index deferred — received for hand-over` instead
+of `NOT INDEXED`, `pha handoff back` reports the documents returned without
+chunks, and the escape hatches are `pha scan --index` / `pha edit --index` (one
+run) or `pha handoff cancel <id>` (permanent).
+
+## C. The DeepSeek Harness plugin (`dsh-pha`)
+
+A Harness agent on a machine with pha + a Harness install
+(<https://www.deepseek.com/en/harness/>) can expose the archive through the repo's
+bundled `dsh-pha` plugin: it registers the `pha_*` model tools (`pha_status`,
+`pha_documents`, `pha_document`, `pha_page`, `pha_search`, `pha_archive`,
+`pha_job_start`/`pha_job_status`/`pha_job_kill`) and a same-origin `/pha/*` JSON
+API. See [`DSH_PLUGIN.md`](DSH_PLUGIN.md) and
+[`dsh-pha/README.md`](dsh-pha/README.md).
+
+Install or update it with `pha view install --profile web` (omit `--profile` to
+update the profiles that already carry the dsh-pha row). `pha update` runs this
+step automatically after updating pha, so normally you only need to restart DSH
+after an update.
+
+Manual fallback: `pnpm add <repo>/dsh-pha` + the
+[`cordis.patch` row](dsh-pha/cordis.patch.example.yml) + restart.
+
+Reads are read-only (`immutable=1` sqlite / the `pha` CLI); **mutations still go
+through the real `pha` CLI**, so the model-server lock, staleness and review
+round-trip rules still apply — never start `pha scan`/`pha edit` while another
+job holds the server they need.
+
+## D. MCP across machines
+
+The MCP server runs on the machine that owns the dropbox and models. A client on
+another machine needs only an MCP connection — no local models or dropbox. Start
+on the archive machine with `pha mcp --transport sse --host <LAN-IP> --port 8000`
+(no auth — use a private LAN/VPN/SSH tunnel). See `MCP_CLIENTS.md` for the full
+wiring.
+
+## E. Where the `pha` tool lives on this machine
+
+**`pha` not on PATH? Look in the archive first, don't guess.** Every pha run
+leaves a machine-local trace of where the tool lives on THIS machine:
+
+- **`<archive>/pha-location.md`** — visible; the archive's `README.md`/`AGENTS.md`
+  point at it;
+- **`<archive>/.pha/location.json`** — the machine-readable twin.
+
+Both record the resolved executable, the version, the source checkout, the MCP
+commands and — the part that always works — the PATH-proof interpreter form
+`<python> -m personal_historical_archive`, which needs no PATH entry and no
+activated venv and so works from any shell, cron job or agent runtime. Run it with
+the archive passed explicitly:
+
+```
+PHA_ARCHIVE_DIR=<archive> <python> -m personal_historical_archive status
+```
+
+`pha info` prints the same tool fields (`pha_command`, `pha_version`,
+`location_file`) from inside pha.
+
+Only if that file is absent (pha has never run in this directory on this machine)
+install it — `uv tool install --editable .` makes plain `pha` work in every shell.
+
+The trace describes ONE machine (`hostname` + `written_at`): after a reinstall or
+a move the recorded path may be stale, so fall back to the interpreter form rather
+than trusting it blindly. It is gitignored — never commit it, and never let a
+copied archive inherit it.
+
+## F. Fresh install with no archive
+
+**`pha` reports "No pha archive is configured or found"** — a fresh install with
+no archive_dir set. Don't guess. Either point it at the real archive
+(`pha set archive-dir <path>`) or create one (`pha init-archive ~/pha-home &&
+pha set archive-dir ~/pha-home`). It stops rather than silently running against an
+empty default DB.
+
+## G. Uploading documents from another machine
+
+`pha_upload(kind, name, content_b64)` (files travel as base64; single files per
+call), then `pha_scan_now()`.
