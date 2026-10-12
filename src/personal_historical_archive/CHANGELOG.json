@@ -18,6 +18,36 @@
           "commit": "56206a405169"
         }
       ]
+    },
+    "0.43.1": {
+      "date": "2026-10-12",
+      "summary": "The library folder name is stored instead of recomputed from the local timezone, so a document stops splitting across two folders, and a split left by the old behaviour can be consolidated by a new bundled skill.",
+      "changes": [
+        {
+          "type": "docs",
+          "scope": "enhancements",
+          "text": "file the shared-page records bug and refresh the index",
+          "commit": "8dd9a3fed2b1"
+        },
+        {
+          "type": "feat",
+          "scope": "skills",
+          "text": "add pha-library-folders to repair split library folders",
+          "commit": "4027480be875"
+        },
+        {
+          "type": "fix",
+          "scope": "ingest",
+          "text": "store the library folder name instead of recomputing it",
+          "commit": "445ed7223e35"
+        },
+        {
+          "type": "docs",
+          "scope": "",
+          "text": "split AGENTS.md into a contract plus on-demand topic docs",
+          "commit": "7dfa7bec5622"
+        }
+      ]
     }
   }
 }
