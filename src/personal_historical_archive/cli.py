@@ -1328,6 +1328,16 @@ def cmd_status(cfg: Config, args) -> None:
         except Exception:
             pending = []
 
+        # A `done` document with NO library folder on disk: complete in the
+        # database, missing the human-readable output the archive exists for.
+        # Nothing re-derives that path for a finished document, so `pha status`
+        # is the only place the loss can surface (pha-library-slug-timezone, F4).
+        try:
+            from .ingest import library_missing_documents
+            lib_missing = {m["id"]: m for m in library_missing_documents(cfg, conn)}
+        except Exception:  # noqa: BLE001 - status must never fail over this
+            lib_missing = {}
+
         if getattr(args, "json", False):
             # The same numbers the text report below shows, from the same computation —
             # so an agent or a view never has to re-derive "what is not scanned yet"
@@ -1379,6 +1389,10 @@ def cmd_status(cfg: Config, args) -> None:
                     for k, v in sorted(holds.items(), key=lambda kv: (kv[0] == "(inbox root)", kv[0]))
                 ],
                 "out_on_handover": out_on_handover,
+                "library_missing": [
+                    {"doc_id": i, "filename": m["filename"], "dir_path": m["dir_path"]}
+                    for i, m in sorted(lib_missing.items())
+                ],
             }, ensure_ascii=False, indent=2))
             return
 
@@ -1437,6 +1451,10 @@ def cmd_status(cfg: Config, args) -> None:
                         # Mixed provenance: N pages were re-read with a chosen
                         # model and pinned, so a bulk pass keeps them.
                         meta.append(f"{pinned[d['id']]} pinned")
+                    if d["id"] in lib_missing:
+                        # `done`, but no library folder on disk at all: the text
+                        # is in the database and the served output is gone.
+                        meta.append("⚠ library folder missing")
                     meta.append(f"updated {_fmt_ts(d['updated_at'])}")
                     age = time.time() - (d["updated_at"] or 0)
                     if d["status"] == "processing" and age >= _STALL_STATUS_S:
@@ -1445,6 +1463,12 @@ def cmd_status(cfg: Config, args) -> None:
                     if kw:
                         line += "   [keyword-only — run pha reindex]"
                     print(_fit(line, width))
+                    if d["id"] in lib_missing:
+                        # Its own line: the command must never be the part a
+                        # narrow terminal truncates away.
+                        print(_fit(f"        ⚠ no library folder on disk for "
+                                   f"#{d['id']} — run `pha export --doc {d['id']}`",
+                                   width))
                 if unscanned.get(key):
                     names = unscanned[key]
                     prefix = f"    ~ {len(names)} new  ("
@@ -3731,12 +3755,27 @@ def cmd_doctor(cfg: Config, args) -> None:
         entry["slots"] = cfg.server_slots(entry["key"])
     unconfigured = _archive_unconfigured(cfg)
     require = set(getattr(args, "engine", None) or [])
+    # Library health (F4): a done document with no library folder is reported
+    # here too. Best-effort — `pha doctor` must still diagnose the engines on a
+    # machine whose archive is unset, empty or unreadable.
+    library_missing: list[dict] = []
+    if not unconfigured:
+        try:
+            from .ingest import library_missing_documents
+            _dconn = db.connect(cfg.db_path, readonly=True)
+            try:
+                library_missing = library_missing_documents(cfg, _dconn)
+            finally:
+                _dconn.close()
+        except Exception:  # noqa: BLE001 - the engine report is the contract
+            library_missing = []
     report = doctor.diagnose(
         declared=declared,
         require=require,
         archive=None if unconfigured else str(cfg.archive_dir),
         servers=[] if unconfigured else [servers[k] for k in sorted(servers)],
         lock_dir=None if unconfigured else str(locks.lock_dir()),
+        library_missing=library_missing,
     )
     if getattr(args, "json", False):
         print(json.dumps(report, ensure_ascii=False, indent=2))

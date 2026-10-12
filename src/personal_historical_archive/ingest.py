@@ -486,14 +486,30 @@ def _prompt_newer_than(
 
 
 def _doc_slug(doc) -> str:
-    """Readable, version-safe library folder name for a document:
-    `<stem>_<YYYY-MM-DD>` (its creation date).
+    """The document's library folder name, `<stem>_<YYYY-MM-DD>`.
 
-    A content-changed document is a NEW row with a NEW created_at (see
-    ingest_file: the old row is deleted), so each version gets its own dated
-    folder and the old one is left untouched on disk. Same-day re-scans of a
-    changed file can share a date, but that is harmless: the previous row is
-    already gone, so its folder just holds the latest output."""
+    The name is **stored** (`documents.library_slug`) and only computed for a row
+    that predates the column. Computing it renders `created_at` in the machine's
+    LOCAL timezone, so the same document got a different folder name after a
+    zone change: it ended up in two folders, and a reader that recomputed the
+    name looked in the wrong one (see
+    `enhancements/pha-library-slug-timezone-bug-report.md`). A stored name
+    travels with the row, so the path is stable across zones and machines.
+
+    A content-changed document is still a NEW row with a NEW `created_at` (see
+    `ingest_file`: the old row is deleted), so each version keeps its own dated
+    folder and the old one is left untouched on disk."""
+    stored = _doc_field(doc, "library_slug")
+    if isinstance(stored, str) and stored.strip():
+        return stored.strip()
+    return _computed_doc_slug(doc)
+
+
+def _computed_doc_slug(doc) -> str:
+    """The legacy timezone-dependent name (`<stem>_<local date of created_at>`).
+
+    Only used for a row with no stored slug, and as the name to freeze when such
+    a row is stamped on its next write."""
     import datetime
     stem = Path(doc["path"]).stem
     try:
@@ -503,13 +519,128 @@ def _doc_slug(doc) -> str:
     return f"{stem}_{date}"
 
 
+def _new_library_slug(path: Path, created_at: float) -> str:
+    """The folder name to FREEZE on a new document row (`documents.library_slug`).
+
+    Computed once, at creation, and stored: from then on the folder name is a
+    property of the row, not of the machine's clock."""
+    return _computed_doc_slug({"path": str(path), "created_at": created_at})
+
+
+def _existing_doc_folders(cfg: Config, doc) -> list[Path]:
+    """Every existing `library/<dir>/<stem>_*` folder for a document, newest first.
+
+    A document normally has one. Two means the folder name was recomputed under
+    a different timezone (or left behind by an older version): the sort is a
+    tie-breaker, never the identity."""
+    try:
+        stem = Path(doc["path"]).stem
+    except (KeyError, TypeError):
+        return []
+    base = cfg.library / Path(_doc_field(doc, "dir_path") or "")
+    if not base.is_dir():
+        return []
+    return sorted(
+        (p for p in base.glob(f"{stem}_*") if p.is_dir()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _holds_transcription(folder: Path) -> bool:
+    """Does this document folder carry the BASE stage (`transcription-*`)?
+
+    The transcription is written first and for every page, so the folder that
+    holds it is the folder the document really lives in — the tie-breaker for a
+    legacy row whose folder name no longer matches what this machine computes."""
+    try:
+        return any(e.is_dir() and e.name.startswith("transcription-")
+                   for e in folder.iterdir())
+    except OSError:
+        return False
+
+
+def _resolve_library_dir(cfg: Config, doc) -> Path:
+    """The ONE folder this document's library output belongs in (F1/F2).
+
+    Precedence:
+
+    1. **a stored `library_slug`** — authoritative. From now on every document
+       gets one at creation, so the folder can never move again and a
+       content-changed version deliberately gets a NEW name;
+    2. for a row that predates the column, the existing folder that already
+       holds this document's transcription (the computed name when it is one of
+       them, else the newest) — so a legacy row JOINS the folder its pages are
+       really in instead of creating a second one under whatever date this
+       machine computes today;
+    3. the computed name, when that folder already exists;
+    4. otherwise the computed name (a first write: the folder is not there yet).
+
+    Callers that must not create anything (read paths) use
+    `_library_doc_dir`, which turns "nothing exists yet" back into None.
+    """
+    rel = Path(_doc_field(doc, "dir_path") or "")
+    stored = _doc_field(doc, "library_slug")
+    if isinstance(stored, str) and stored.strip():
+        return cfg.library / rel / stored.strip()
+    computed = cfg.library / rel / _computed_doc_slug(doc)
+    folders = _existing_doc_folders(cfg, doc)
+    with_transcription = [f for f in folders if _holds_transcription(f)]
+    if with_transcription:
+        # Prefer the name this machine computes (so a healthy archive keeps the
+        # folder it was already using); otherwise the newest.
+        return computed if computed in with_transcription else with_transcription[0]
+    if computed.is_dir():
+        return computed
+    return folders[0] if folders else computed
+
+
+def _doc_folder_candidates(cfg: Config, doc) -> list[Path]:
+    """`_resolve_library_dir` first, then its existing siblings, newest first.
+
+    READING a variant must look at all of them: the transcription and an edited
+    variant can sit in two folders written under different timezones, and the
+    resolved folder alone would report the variant as missing (the filter then
+    wrote 0 files and called the pass a success). Only folders that exist are
+    returned — the resolver may name a folder a writer has yet to create."""
+    resolved = _resolve_library_dir(cfg, doc)
+    out = [resolved] if resolved.is_dir() else []
+    for folder in _existing_doc_folders(cfg, doc):
+        if folder != resolved:
+            out.append(folder)
+    return out
+
+
+def _stamp_library_slug(conn, doc, folder: Path) -> None:
+    """Freeze `folder`'s name on the row (`documents.library_slug`), once.
+
+    A legacy row is stamped the first time pha writes its library, which is what
+    makes the resolved path stick. Provenance only: a row that already carries a
+    slug is never rewritten, and a document whose row cannot be identified is
+    left alone."""
+    if conn is None or doc is None or folder is None:
+        return
+    stored = _doc_field(doc, "library_slug")
+    if isinstance(stored, str) and stored.strip():
+        return
+    doc_id = _doc_field(doc, "id")
+    if doc_id is None:
+        return
+    # A dedicated db helper: `update_document` would bump `updated_at`, and this
+    # runs inside a pass whose staleness rules read that column.
+    db.set_library_slug(conn, int(doc_id), folder.name)
+    if isinstance(doc, dict):
+        doc["library_slug"] = folder.name
+
+
 def remove_library_artifact(cfg: Config, doc) -> None:
     """Delete the document's library folder (all palaeographer transcriptions)."""
     if not doc:
         return
-    slug = _doc_slug(doc)
-    rel = Path(doc["dir_path"] or "")
-    d = cfg.library / rel / slug
+    # The resolved folder, not a freshly computed name: the old computed name
+    # could not delete a folder written under another timezone (see
+    # enhancements/pha-library-slug-timezone-bug-report.md §3).
+    d = _resolve_library_dir(cfg, doc)
     if d.exists():
         shutil.rmtree(d, ignore_errors=True)
 
@@ -839,6 +970,8 @@ def _variant_dirs(base: Path, variant: str) -> list[str]:
     if parsed is None:
         return [variant] if (base / variant).is_dir() else []
     stage, ident = parsed[0], parsed[1]
+    if not base.is_dir():
+        return []
     out: list[str] = []
     for d in sorted(base.iterdir()):
         p = parse_variant(d.name)
@@ -873,8 +1006,9 @@ def library_page_path(
 
     Returns the exact path when the file exists (None otherwise). ``variant``
     is 'raw' (``transcription-<pal>[@model]/``) or 'edited'
-    (``edited-<editor>[@model]/``). The dated document folder is found via the
-    document's slug, falling back to the newest matching ``<stem>_*`` folder."""
+    (``edited-<editor>[@model]/``). The dated document folder is resolved
+    through `_resolve_library_dir`, then its siblings are tried, so a variant
+    written under a different date is still found."""
     if not doc:
         return None
     if not isinstance(doc, dict):  # accept sqlite3.Row too
@@ -882,16 +1016,6 @@ def library_page_path(
             doc = dict(doc)
         except (TypeError, ValueError):
             return None
-    stem = Path(doc["path"]).stem
-    rel = Path(doc["dir_path"] or "")
-    base = cfg.library / rel
-    doc_dir = base / _doc_slug(doc)
-    if not doc_dir.exists():
-        folders = sorted(base.glob(f"{stem}_*"), key=lambda p: p.stat().st_mtime
-                         if p.is_dir() else 0.0)
-        if not folders:
-            return None
-        doc_dir = folders[-1]
     if variant == "edited":
         ed = editor_id or doc.get("editor") or None
         if not ed:
@@ -903,7 +1027,11 @@ def library_page_path(
     # The bare name and its `@<model>` sibling are ONE variant (the bare one only
     # means the model was unknown when it was written): the directory matching
     # the document's recorded model wins, and the older bare alias never does.
-    variant_dir = _pick_pages_dir(doc_dir, variant_name, doc)
+    variant_dir = None
+    for folder in _doc_folder_candidates(cfg, doc):
+        variant_dir = _pick_pages_dir(folder, variant_name, doc)
+        if variant_dir is not None:
+            break
     if variant_dir is None:
         return None
     name = f"{source_name}.md" if source_name else f"page-{page_no:03d}.md"
@@ -1074,6 +1202,7 @@ def ingest_file(
         size_bytes=size, mtime=mtime, kind=kind, now=now, dir_path=rel_dir,
         palaeographer=palaeographer.id, editor=ed_id,
         palaeographer_model=palaeographer.model_ref or None,
+        library_slug=_new_library_slug(path, now),
     )
     if reuse:
         if pages is None:
@@ -1561,7 +1690,7 @@ def _library_dir_for(cfg: Config, conn, doc_id: int) -> Path | None:
     doc = db.get_document(conn, doc_id)
     if not doc:
         return None
-    return cfg.library / Path(doc["dir_path"] or "") / _doc_slug(doc)
+    return _resolve_library_dir(cfg, doc)
 
 
 def _stage_filter_dirs(cfg: Config, conn, doc_id: int) -> tuple[Path | None, Path | None]:
@@ -1773,11 +1902,18 @@ def _pages_dir_for(cfg: Config, doc, variant: str) -> Path | None:
     only used when it *is* the current (model-less) output — it is never
     preferred merely for sorting first, which used to serve an older generation
     of `*waiting*` placeholders (docs 47/50 in the bug report).
+
+    Every folder the document has is searched, not just the resolved one: when
+    the name was recomputed under another timezone the transcription and its
+    edited variant can sit in two folders, and reading only the resolved one
+    reported the variant as missing (the artifact filter then wrote 0 files and
+    called the pass a success — `pha-library-slug-timezone-bug-report.md` §8).
     """
-    base = cfg.library / Path(doc["dir_path"] or "") / _doc_slug(doc)
-    if not base.is_dir():
-        return None
-    return _pick_pages_dir(base, variant, doc)
+    for base in _doc_folder_candidates(cfg, doc):
+        hit = _pick_pages_dir(base, variant, doc)
+        if hit is not None:
+            return hit
+    return None
 
 
 def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
@@ -1792,9 +1928,11 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
         return None
     pal = doc["palaeographer"] or "default"
     pal_model = doc["palaeographer_model"] or None
-    slug = _doc_slug(doc)
-    rel_dir = Path(doc["dir_path"] or "")
-    out_dir = cfg.library / rel_dir / slug / (f"transcription-{pal}" + (f"@{pal_model}" if pal_model else ""))
+    # Resolve the folder that already exists instead of recomputing the name:
+    # a second folder for one document is what the timezone bug produced.
+    doc_dir = _resolve_library_dir(cfg, doc)
+    _stamp_library_slug(conn, doc, doc_dir)
+    out_dir = doc_dir / (f"transcription-{pal}" + (f"@{pal_model}" if pal_model else ""))
     out_dir.mkdir(parents=True, exist_ok=True)
     base = {
         "source": doc["path"],
@@ -1932,9 +2070,9 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str,
     if not doc:
         return None
     ed_model = model or None
-    slug = _doc_slug(doc)
-    rel_dir = Path(doc["dir_path"] or "")
-    out_dir = cfg.library / rel_dir / slug / (f"edited-{editor_id}" + (f"@{ed_model}" if ed_model else ""))
+    doc_dir = _resolve_library_dir(cfg, doc)
+    _stamp_library_slug(conn, doc, doc_dir)
+    out_dir = doc_dir / (f"edited-{editor_id}" + (f"@{ed_model}" if ed_model else ""))
     out_dir.mkdir(parents=True, exist_ok=True)
     base = {
         "source": doc["path"],
@@ -1995,7 +2133,10 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str,
 # --------------------------------------------------------------------------- review round-trip
 
 def _library_doc_dir(cfg: Config, doc) -> Path | None:
-    """The library folder holding a document's versions (`<dir_path>/<stem>_<date>`)."""
+    """The library folder holding a document's versions (`<dir_path>/<stem>_<date>`).
+
+    The resolved folder when it exists, else None — a read-only view that never
+    invents a path (writers use `_resolve_library_dir` directly)."""
     if not doc:
         return None
     if not isinstance(doc, dict):  # accept sqlite3.Row too
@@ -2003,14 +2144,50 @@ def _library_doc_dir(cfg: Config, doc) -> Path | None:
             doc = dict(doc)
         except (TypeError, ValueError):
             return None
-    base = cfg.library / Path(doc["dir_path"] or "")
-    doc_dir = base / _doc_slug(doc)
-    if doc_dir.exists():
-        return doc_dir
-    stem = Path(doc["path"]).stem
-    folders = sorted(base.glob(f"{stem}_*"),
-                     key=lambda p: p.stat().st_mtime if p.is_dir() else 0.0)
-    return folders[-1] if folders else None
+    resolved = _resolve_library_dir(cfg, doc)
+    return resolved if resolved.is_dir() else None
+
+
+def library_missing_documents(cfg: Config, conn) -> list[dict]:
+    """`done` documents with NO library folder at all on disk (F4).
+
+    A document can be complete in the database and have no library: the folder
+    name was recomputed under another timezone, or a cleanup outside pha removed
+    it, and nothing re-derives that path for a finished document — so `pha
+    status` looked clean while the human-readable output was gone (see
+    `enhancements/pha-library-slug-timezone-bug-report.md`, §3 and §8).
+
+    Cheap by construction: one directory listing per collection folder, then a
+    prefix test per document — never a stat or a glob per row. The test is
+    "is there ANY `<stem>_*` folder", so a document whose folder carries a
+    different date than this machine computes is NOT reported (it has a library;
+    that is a path-resolution question, not a missing one).
+
+    Migration-safe: it never names `library_slug` in SQL, because `pha status`
+    opens the database READ-ONLY and therefore runs no migration.
+    """
+    rows = conn.execute(
+        "SELECT id, filename, path, dir_path, status FROM documents "
+        "WHERE status = 'done' ORDER BY id"
+    ).fetchall()
+    if not rows:
+        return []
+    listings: dict[str, set[str]] = {}
+    out: list[dict] = []
+    for r in rows:
+        rel = r["dir_path"] or ""
+        if rel not in listings:
+            try:
+                listings[rel] = {e.name for e in (cfg.library / Path(rel)).iterdir()
+                                 if e.is_dir()}
+            except OSError:
+                listings[rel] = set()
+        stem = Path(r["path"]).stem
+        prefix = f"{stem}_"
+        if not any(n.startswith(prefix) for n in listings[rel]):
+            out.append({"id": int(r["id"]), "filename": r["filename"],
+                        "dir_path": rel})
+    return out
 
 
 def _pending_scan(conn, targets: list[tuple[int, Path]]) -> list[dict]:
@@ -3233,9 +3410,9 @@ def write_concatenated_file(cfg: Config, conn, doc_id: int, texts: list,
     doc = db.get_document(conn, doc_id)
     if not doc:
         return None
-    slug = _doc_slug(doc)
-    rel_dir = Path(doc["dir_path"] or "")
-    out_dir = cfg.library / rel_dir / slug
+    doc_dir = _resolve_library_dir(cfg, doc)
+    _stamp_library_slug(conn, doc, doc_dir)
+    out_dir = doc_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     block = "\n\n".join(f"--- page {pno} ---\n{t}" for pno, t in texts)
     out = out_dir / f"concatenated-{encoder_id}.md"
@@ -3247,9 +3424,9 @@ def write_records_file(cfg: Config, conn, doc_id: int, encoder_id: str) -> Path 
     doc = db.get_document(conn, doc_id)
     if not doc:
         return None
-    slug = _doc_slug(doc)
-    rel_dir = Path(doc["dir_path"] or "")
-    out_dir = cfg.library / rel_dir / slug
+    doc_dir = _resolve_library_dir(cfg, doc)
+    _stamp_library_slug(conn, doc, doc_dir)
+    out_dir = doc_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     rows = [r for r in db.records_for_document(conn, doc_id)
             if r["encoder"] == encoder_id]

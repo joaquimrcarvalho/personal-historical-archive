@@ -371,6 +371,29 @@ writing raw SQL against `archive.db`.
 `library/<dir>/<stem>_<YYYY-MM-DD>/` (creation date; a content change creates a
 new row/date, so old folders stay).
 
+**The folder name is STORED, not recomputed.** `documents.library_slug` freezes
+it when the row is created, and `ingest._doc_slug()` prefers that value (falling
+back to the computed name only for a row that predates the column). Computing it
+means rendering `created_at` in the machine's **local timezone**, so a machine
+that changed zone looked for — and wrote — a folder under a different date than
+the one on disk: one document ended up in two folders, and a reader that
+recomputed the name reported its variants as missing (an artifact filter then
+wrote 0 files and called the pass a success). Full account:
+`enhancements/pha-library-slug-timezone-bug-report.md`.
+
+- **One resolver, `ingest._resolve_library_dir(cfg, doc)`**, answers "where does
+  this document's output go". A stored slug is authoritative; a legacy row (no
+  slug) joins the existing folder that already holds its `transcription-*`, and is
+  **stamped** with that name on the next write (`_stamp_library_slug`), so the
+  choice sticks. Writers never create a second folder for one document.
+- **Readers search the siblings too.** `_pages_dir_for()` /
+  `library_page_path()` try the resolved folder first, then every other
+  `<stem>_*` folder, so a variant written under another date is still found.
+- `_library_doc_dir()` is the read-only view: the resolved folder when it exists,
+  else None (it never invents a path a writer has yet to create).
+- **A `done` document with no library folder at all is reported** by
+  `pha status` (text and `--json`) and `pha doctor`
+  (`ingest.library_missing_documents`); re-export it with `pha export --doc N`.
 - Pages of a directory-of-images document are named after the source scan
   (`502V.md`); PDF pages use `page-NNN.md`.
 - A variant folder may carry a model suffix (`edited-<editor>@<model>`); the bare

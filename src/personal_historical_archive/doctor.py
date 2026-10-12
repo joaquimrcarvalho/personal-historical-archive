@@ -92,6 +92,7 @@ def diagnose(
     archive: str | None = None,
     servers: list[dict[str, Any]] | None = None,
     lock_dir: str | None = None,
+    library_missing: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Check every supported engine and return a JSON-friendly report.
 
@@ -204,6 +205,11 @@ def diagnose(
         # where the locks live. Empty when no config is available.
         "servers": servers or [],
         "lock_dir": lock_dir,
+        # `done` documents whose library folder is not on disk (F4). Reported,
+        # but deliberately NOT part of `ok`: that flag gates the engine checks
+        # scripts rely on, and a missing library is a data condition to fix, not
+        # a broken install.
+        "library_missing": library_missing or [],
     }
 
 
@@ -260,6 +266,23 @@ def render(report: dict[str, Any]) -> str:
     if report.get("lock_dir"):
         lines.append(f"  lock dir: {report['lock_dir']}")
     lines.append("")
+    # Library health: a `done` document with no library folder on disk has its
+    # text in the database and none of the served output the archive exists for.
+    # Nothing re-derives that path for a finished document, so it is reported
+    # here and in `pha status` (pha-library-slug-timezone-bug-report.md, F4).
+    missing = report.get("library_missing") or []
+    if missing:
+        lines.append("library")
+        noun = "document" if len(missing) == 1 else "documents"
+        lines.append(f"  ! {len(missing)} done {noun} with NO library folder on disk")
+        lines.append("    (complete in the database, but the served text is missing —")
+        lines.append("     the folder name was recomputed in another timezone, or it was")
+        lines.append("     removed outside pha). Re-export them:")
+        for m in missing[:10]:
+            lines.append(f"      #{m['doc_id']}  {m['filename']}   →  pha export --doc {m['doc_id']}")
+        if len(missing) > 10:
+            lines.append(f"      … and {len(missing) - 10} more (pha status lists them all)")
+        lines.append("")
     if report["broken"]:
         lines.append("RESULT: FAIL — missing/broken: " + ", ".join(report["broken"]))
     else:

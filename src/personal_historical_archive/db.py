@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS documents (
     prompt_source TEXT,
     dir_path TEXT,
     palaeographer TEXT,
+    library_slug TEXT,
     error TEXT,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
@@ -163,6 +164,15 @@ def migrate(conn: sqlite3.Connection) -> None:
         statements.append("ALTER TABLE documents ADD COLUMN palaeographer_model TEXT")
     if "editor_model" not in cols:
         statements.append("ALTER TABLE documents ADD COLUMN editor_model TEXT")
+    # library_slug: the document's library FOLDER name, stored once instead of
+    # recomputed from `created_at` on every call. `_doc_slug()` used to render
+    # that timestamp in the machine's current timezone, so a machine that
+    # changed zone looked for (and wrote) a folder under a different date than
+    # the one on disk — the same document ended up in two folders and a filter
+    # reading the variant saw none. NULL on rows written before this column:
+    # they fall back to the computed name and are stamped on the next write.
+    if "library_slug" not in cols:
+        statements.append("ALTER TABLE documents ADD COLUMN library_slug TEXT")
     if statements:
         import time
 
@@ -309,13 +319,14 @@ def add_document(
     editor: str | None = None,
     palaeographer_model: str | None = None,
     editor_model: str | None = None,
+    library_slug: str | None = None,
 ) -> int:
     cur = _write(
         conn,
-        """INSERT INTO documents (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, editor, palaeographer_model, editor_model, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO documents (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, editor, palaeographer_model, editor_model, library_slug, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (filename, path, sha256, size_bytes, mtime, kind, dir_path, palaeographer, editor,
-         palaeographer_model, editor_model, now, now),
+         palaeographer_model, editor_model, library_slug, now, now),
     )
     return int(cur.lastrowid)
 
@@ -334,6 +345,25 @@ def backfill_dir_path(conn: sqlite3.Connection, dropbox: Path) -> None:
             rel = ""
         conn.execute("UPDATE documents SET dir_path = ? WHERE id = ?", (rel, r["id"]))
     conn.commit()
+
+
+def set_library_slug(conn: sqlite3.Connection, doc_id: int, slug: str) -> None:
+    """Freeze a document's library folder name, without touching `updated_at`.
+
+    Deliberately NOT `update_document(..., library_slug=...)`: that bumps
+    `updated_at`, and this runs from inside a scan/edit/encode pass. Moving
+    `updated_at` forward would make a prompt/config file edited BEFORE the pass
+    look no longer newer (`_prompt_newer_than`), hiding a pending re-extraction —
+    the same reason `backfill_dir_path` and `move_document_path` leave the
+    timestamp alone. Only fills a missing value: an already-stored name is
+    authoritative and is never rewritten.
+    """
+    _write(
+        conn,
+        "UPDATE documents SET library_slug = ? WHERE id = ? "
+        "AND (library_slug IS NULL OR library_slug = '')",
+        (slug, doc_id),
+    )
 
 
 def update_document(conn: sqlite3.Connection, doc_id: int, **fields) -> None:

@@ -1682,12 +1682,21 @@ a NEW document row (with a new date), so versions never collide and the old
 folder stays on disk. Pages of a directory-of-images document are named after
 their source scan (`502V.md`); PDF pages use `page-NNN.md`.
 
-**That date is rendered in the machine's LOCAL timezone, and the folder name is
-recomputed rather than stored**, so the same document addresses different
-folders on machines (or in zones) whose calendar date differs for its
-`created_at` — a finished document can end up with no library files where pha
-looks, with nothing reported. Repair with `pha export --doc N`; the design fix
-is tracked in `enhancements/pha-library-slug-timezone-bug-report.md`.
+**That name is stored on the document row**, not recomputed: pha writes it
+(`documents.library_slug`) when the document is first created and uses the
+stored name from then on. It used to be rendered from `created_at` in the
+machine's LOCAL timezone on every call, so a machine that changed timezone
+looked for — and wrote — a folder under a different date than the one on disk:
+one document ended up in two folders, and a filter reading its pages saw none,
+wrote no output and still reported success. A document written by an older pha
+has no stored name yet; the first time pha writes its library it joins the
+folder that already holds the transcription and remembers it.
+
+If a `done` document has **no** library folder at all (a cleanup outside pha,
+or a folder written under a date this machine no longer computes), pha now says
+so — in `pha status` (as `⚠ library folder missing`, with the command to fix it)
+and in `pha doctor` — instead of looking finished. Repair with
+`pha export --doc N` (no model is re-run: the text is in the database).
 
 A variant folder may carry a **model suffix** — `edited-<editor>@<model>` — so
 the same stage run with a different model keeps both readings side by side. The
