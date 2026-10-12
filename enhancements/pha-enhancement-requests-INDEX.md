@@ -1,6 +1,6 @@
 # pha enhancement requests - index
 
-Last reviewed: 2026-10-08. Current release: pha 0.42.1.
+Last reviewed: 2026-10-10. Current release: pha 0.42.1.
 
 This file is the map, not the detail: each row links to the full document.
 Open includes anything not fully shipped. A partially implemented item stays
@@ -16,6 +16,8 @@ or otherwise resolved; the document remains for the record.
 | [pha-archive-pointer-loss-bug-report.md](pha-archive-pointer-loss-bug-report.md) | PARTLY FIXED | D1/D2/D4: defaults still seeded before an archive check, silent project-root fallback, no machine-level pointer; dsh-pha should treat configured: false as no archive. |
 | [pha-latin-not-translated-thinking-disabled-bug-report.md](pha-latin-not-translated-thinking-disabled-bug-report.md) | PHA SIDE FIXED | F3 config-declared page-range editors; F5 a language guard that warns when a promised translation did not happen. |
 | [pha-orphaned-model-lock-wedges-every-job-bug-report.md](pha-orphaned-model-lock-wedges-every-job-bug-report.md) | PARTLY FIXED | F1 age rule for a live-looking pid; F3 heartbeat; F4 unlock / orphan reporting; F5 an honest holder message. |
+| [pha-markdown-from-records-drops-shared-page-records-bug-report.md](pha-markdown-from-records-drops-shared-page-records-bug-report.md) | OPEN (found 2026-10-10, 0.42.0) | Records that share a page lose their markdown file (isolated `continue`), and same-page records can overwrite one another; measured 472/6 609 records (7.1 %) on jesuit-archive. Proposed: never drop a record, unique file names, count and report. |
+| [pha-library-slug-timezone-bug-report.md](pha-library-slug-timezone-bug-report.md) | FIXED — F1 + F2 + F4 (§9); duplicates consolidated 2026-10-11/12 | The folder name is stored (`documents.library_slug`), writes/reads resolve before using it, and `pha status`/`pha doctor` report a `done` document with no library folder. F3 (UTC) dropped as unnecessary. The six two-dated folders on jesuit-archive were consolidated (793 files moved into the canonical folder, remainder parked in `bin/`), and `pha prune --library-variants` removed 3 provably redundant bare aliases. Remaining: the `markdown-from-records` 0-file warning (§8, its own report) and the 16 refused folders that hold a real reading. |
 
 ### Enhancements
 
@@ -27,7 +29,6 @@ or otherwise resolved; the document remains for the record.
 | [pha-handoff-enhancement-request.md](pha-handoff-enhancement-request.md) | SHIPPED (0.29.0) - follow-on open | Two-machine hand-over works; the section 12 render gap remains: an unscanned hand-out can come home with no page images. |
 | [pha-stage-extends-enhancement-request.md](pha-stage-extends-enhancement-request.md) | Draft | Compose prompt files with extends (base plus delta). |
 | [pha-serve-page-text-enhancement-request.md](pha-serve-page-text-enhancement-request.md) | Stored for later | The served page viewer gains the raw transcription and the effective edited reading beside the image. |
-| [pha-whats-new-enhancement-request.md](pha-whats-new-enhancement-request.md) | Implemented in working tree, not committed | Packaged CHANGELOG.json, pha whatsnew, generator and update integration; pending commit/release. |
 
 ### Proposals
 
@@ -50,7 +51,6 @@ or otherwise resolved; the document remains for the record.
 | [pha-encoder-truncated-answer-loses-a-window-bug-report.md](pha-encoder-truncated-answer-loses-a-window-bug-report.md) | FIXED in 0.40.0 and 0.40.1 |
 | [pha-filter-signature-mismatch-bug-report.md](pha-filter-signature-mismatch-bug-report.md) | FIXED |
 | [pha-installed-wheel-missing-schema-bug-report.md](pha-installed-wheel-missing-schema-bug-report.md) | FIXED |
-| [pha-library-slug-timezone-bug-report.md](pha-library-slug-timezone-bug-report.md) | FIXED |
 | [pha-markdown-from-records-page-contract-bug-report.md](pha-markdown-from-records-page-contract-bug-report.md) | FIXED |
 | [pha-reindex-doc-flag-does-not-accumulate-bug-report.md](pha-reindex-doc-flag-does-not-accumulate-bug-report.md) | FIXED in 0.40.2 |
 | [pha-reindex-skips-non-done-documents-bug-report.md](pha-reindex-skips-non-done-documents-bug-report.md) | FIXED |
@@ -63,6 +63,7 @@ or otherwise resolved; the document remains for the record.
 |---|---|
 | [pha-record-search-enhancement-request.md](pha-record-search-enhancement-request.md) | Phase 1-3 committed and released (keyword, semantic and fielded record search) |
 | [pha-encoder-structure-register-enhancement-request.md](pha-encoder-structure-register-enhancement-request.md) | Implemented and released in 0.42.0 |
+| [pha-whats-new-enhancement-request.md](pha-whats-new-enhancement-request.md) | SHIPPED in 0.43.0 (packaged CHANGELOG.json, `pha whatsnew`, generator and update integration) |
 | [pha-filters-enhancement-request.md](pha-filters-enhancement-request.md) | SHIPPED: stage filters plus the markdown-from-records artifact filter |
 | [pha-per-server-model-lock-enhancement-request.md](pha-per-server-model-lock-enhancement-request.md) | SHIPPED in 0.28.0 |
 | [pha-stable-page-addresses-enhancement-request.md](pha-stable-page-addresses-enhancement-request.md) | SHIPPED |
