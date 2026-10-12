@@ -301,14 +301,19 @@ they were just not the ones pha read.
 
 ### The existing duplicates were consolidated (2026-10-11/12)
 
-`scripts/consolidate_library_date_dupes.py` (dry-run by default) repaired the six
-documents on `jesuit-archive`. The "duplicate" folders were **not** duplicates:
-the folder the fixed resolver picks holds the pages, while the other held the
-**encoder deliverables** (`records-*.json`, `concatenated-*.md`, `segments-*`,
-`structure.json`, `.structure-*.sha256`, `.filter-stamps/`). Deleting them would
-have destroyed the output §8 is about — so every file absent from (or differing
-from) the canonical folder was **moved into it** (793 files), the `source:`
-front-matter line of the moved `segments-*/*.md` was repointed at the new folder,
+The bundled skill **`pha-library-folders`** — seeded into an archive at
+`skills/pha-library-folders/`, with
+`scripts/consolidate_library_date_dupes.py` (dry-run by default, `--apply` to
+write) — repaired the six documents on `jesuit-archive`. It is a skill rather
+than a repo script because the agent that has to repair another archive may have
+pha installed with no source checkout. The "duplicate" folders were **not**
+duplicates: the folder the fixed resolver picks holds the pages, while the other
+held the **encoder deliverables** (`records-*.json`, `concatenated-*.md`,
+`segments-*`, `structure.json`, `.structure-*.sha256`, `.filter-stamps/`).
+Deleting them would have destroyed the output §8 is about — so every file absent
+from (or differing from) the canonical folder was **moved into it** (793 files),
+the `source:` front-matter line of the moved `segments-*/*.md` was repointed at
+the new folder,
 and the remainder — files already byte-identical to the canonical copy — was
 parked in `bin/20261011-library-date-dupes/` (3 230 files, 16 MB) with a README
 that states a `mv` rollback is only partial.

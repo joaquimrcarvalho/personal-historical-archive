@@ -468,7 +468,7 @@ agent should reach for it), followed by the instructions:
 ## How an agent should use these
 
 **Using the archive:** before the matching task, read
-`skills/<name>/SKILL.md` and follow it. The seven skills seeded here cover the
+`skills/<name>/SKILL.md` and follow it. The eight skills seeded here cover the
 most common tasks:
 
 - `pha-search-context` — a search hit is a *snippet*; recover the full page
@@ -476,6 +476,13 @@ most common tasks:
 - `pha-document-operations` — re-scan / re-edit / re-encode one
   **already-ingested** document or collection (`pha scan --path … --reprocess`,
   `pha edit --path … --page N`, `pha test`).
+- `pha-library-folders` — find and consolidate a document whose library folder
+  was **split in two**: two dated folders (`<stem>_<date>`, what the timezone bug
+  did) or a bare `edited-<editor>` beside its `edited-<editor>@<model>` sibling.
+  Ships `scripts/consolidate_library_date_dupes.py` (dry run by default; moves
+  the encoder deliverables into the canonical folder and parks the remainder
+  under `bin/` with a rollback README) and points at
+  `pha prune --library-variants` for the bare alias.
 - `lmstudio-model-locality` — determine whether an LM Studio model is
   local or remote when LM Link is enabled, before a `pha scan`/`pha edit`;
   helper `scripts/lmstudio_locality.py` joins `lms ls` / `lms ps` / `lms link status`
@@ -2800,11 +2807,377 @@ if __name__ == "__main__":
 # The skills pha ships, as (folder_name, SKILL.md body). Embedded
 # so seeding works with no source checkout; the repo's skills/ folder is the
 # authored copy and a test keeps the two identical.
+_SKILL_LIBRARY_FOLDERS = r'''---
+name: pha-library-folders
+description: Find and consolidate duplicated library folders in a personal-historical-archive (pha) archive — one document split across two dated folders (`<stem>_<date>`, which a timezone change causes), or a bare `edited-<editor>` alias sitting beside its `edited-<editor>@<model>` sibling. Use when the owner reports duplicated pages/readings or says a document "should have" files that are not there; when `pha status` or `pha doctor` flags a done document with no library folder; when an artifact filter wrote 0 files for a document that has records; or before re-processing a document whose library folder looks split.
+---
+
+# pha Library Folders
+
+Consolidating a library folder that has been split in two — safely, reversibly,
+and without re-running a model.
+
+## Talk to a historian first
+
+You are working inside an archive, so the person asking is most likely a
+**historian, not a programmer**. Explain in their terms: "this document's pages
+are in one folder and its generated records in another, so the search and the
+citations were reading half of it; I am going to join them". Report the result
+the same way ("3 of your volumes were split; the records are back beside the
+pages").
+
+Anything that **moves or deletes files** needs their agreement before you start,
+and the machine's permission rules may ask for access outside the archive folder
+— say what you need, what it is for, and what will change, then wait for a clear
+yes.
+
+## The two things that both look like "duplicate folders"
+
+They have different causes and different fixes. Identify which one you have
+before touching anything.
+
+**1. Two DOCUMENT folders for one document.** The folder is
+`library/<collection>/<stem>_<YYYY-MM-DD>/`. pha used to recompute that date
+from the document's creation time **in the machine's current timezone**, so a
+machine (or a laptop that travelled) whose zone changed looked for — and wrote —
+a folder under a *different date* than the one on disk. One document then has
+two folders: typically the pages (transcription + edited) in one and the encoder
+deliverables (`records-*.json`, `concatenated-*.md`, `segments-*`,
+`structure.json`, `.filter-stamps/`) in the other.
+
+    ls -d library/*/*/<stem>_*        # two hits for one stem = this bug
+
+Since pha 0.43.1 the folder name is **stored** on the document row
+(`documents.library_slug`), so this no longer happens to new work — but the
+folders created before the fix are still split, and this skill consolidates
+them.
+
+**2. A bare `edited-<editor>` beside `edited-<editor>@<model>`.** These are ONE
+variant: the bare name only means the model was unknown when that folder was
+written. pha already resolves only the qualified one, so the bare folder is
+inert — but it occupies disk and misleads anyone reading `library/` by hand.
+**Do not fix this by hand**: pha ships a guarded sweep for it (below).
+
+## Do NOT "fix" a split by re-processing
+
+`pha scan`/`pha edit`/`pha encode` are the wrong tool: they call a model (hours,
+and the machine's model-server lock) and they are what *created* the split.
+Re-running `pha encode` in particular can cost a full encoder pass over hundreds
+of pages to regenerate what is already on disk.
+
+The consolidation is a **filesystem move**. It calls no model, writes no
+database row, and is reversible.
+
+## Bug 1 — consolidate the dated folders
+
+The skill ships the script; run it from the skill's own folder:
+
+    # 1. ALWAYS dry-run first. It prints, per document, what it would move.
+    python scripts/consolidate_library_date_dupes.py
+
+    # 2. Read the report with the owner, then apply.
+    python scripts/consolidate_library_date_dupes.py --apply
+
+What it does, and why it is safe:
+
+- It resolves **the canonical folder** the way pha now does: the folder that
+  holds the document's `transcription-*` (its pages). That is where pha will
+  write from now on.
+- The other folder is *not* a duplicate — it holds the encoder deliverables. So
+  every file **absent from, or differing from** the canonical copy is **moved
+  into it**; nothing unique is left behind. The `source:` line in each moved
+  `segments-*/*.md` is repointed at the new location so the provenance stays
+  true.
+- Only files already **byte-identical** to the canonical copy stay in the
+  leftover folder, which is then parked under
+  `bin/<date>-library-date-dupes/` with a `README.md` explaining what happened
+  and how to revert. Nothing is deleted.
+- The database is opened **read-only**: the consolidation writes no row. The
+  folder name is stamped on the document by the next real scan/edit/encode pass.
+
+Verify afterwards:
+
+    pha status        # the ⚠ "library folder missing" marker must be gone
+    pha doctor        # the `library` section must not appear
+    ls -d library/*/*/<stem>_*        # exactly one hit per document now
+
+## Bug 2 — the bare `edited-*` alias
+
+There is a pha command for it; use that, never `rm`:
+
+    pha prune --library-variants --dry-run     # read the report first
+    pha prune --library-variants               # removes only what is provably redundant
+
+Its guard is the point: it removes a bare folder **only when nothing lives in it
+alone** — every page with text is exactly what the database holds (so
+`pha export` regenerates it) or byte-identical to the qualified sibling. A
+folder holding a genuinely different reading (an alternate OCR pass, another
+translation generation) is **reported and kept**, and so is a bare-only variant
+(a document whose only edited output is that folder). A re-run is a no-op.
+
+Two habits worth keeping:
+
+- **Back the folders up before the sweep**, as the archive already does for
+  other retirements: copy each folder it will remove into
+  `bin/<date>-bare-edited-variants/` with a short `README.md` (what it was, the
+  date, and the `cp -a` command to put it back).
+- The folders it keeps are an **archive decision, not a defect**: they hold a
+  real reading. Do not delete them to make the tree tidy; tell the owner what
+  they are and let them decide.
+
+## If the folder is missing entirely
+
+If a document is `done` but has **no** library folder at all (a cleanup outside
+pha, a sync with `--delete`, a folder written under a date this machine no
+longer computes), do not go looking for the split — regenerate it:
+
+    pha export --doc N        # rewrites library/ from the database, no model call
+
+Then re-encode if the records are missing too. `pha status` and `pha doctor`
+report this case by name.
+
+## What an agent must never do here
+
+- Never `rm -rf` (or `mv`) a library folder to "clean up" a duplicate.
+- Never hand-delete a bare `edited-*` folder — run the sweep, which refuses the
+  ones that hold something.
+- Never re-run `pha scan` / `pha edit` / `pha encode` to repair a split.
+- Never edit a `segments-*` file by hand: it is generated output. Regenerate it
+  with `pha export` / the encoder pass if it is wrong.
+- Never merge two folders that hold **two different readings** of the same pages
+  (two models, two translation generations): that is not a duplicate. Compare
+  first — the `palaeographers-compare` skill is the tool for that.
+'''
+
+
+_SKILL_LIBRARY_FOLDERS_CONSOLIDATE = r'''#!/usr/bin/env python3
+"""Consolidate a document's dated library folders after the timezone bug.
+
+Ships with the `pha-library-folders` skill. Run it from the skill's own folder:
+
+    python scripts/consolidate_library_date_dupes.py            # dry run
+    python scripts/consolidate_library_date_dupes.py --apply
+    python scripts/consolidate_library_date_dupes.py --doc 38 --doc 39 --apply
+
+WHY THIS EXISTS. A document's library folder is
+`library/<collection>/<stem>_<YYYY-MM-DD>/`. pha used to recompute that date from
+the document's creation time **in the machine's current timezone**, so a machine
+whose zone changed looked for — and wrote — a folder under a different date than
+the one on disk: one document ended up with two folders. Since pha 0.43.1 the
+name is stored on the document row (`documents.library_slug`), so no NEW split is
+created; this repairs the ones already on disk.
+
+THE OTHER FOLDER IS NOT A DUPLICATE. The folder pha now resolves to holds the
+pages (transcription + edited); the other usually holds the encoder deliverables
+(`records-*.json`, `concatenated-*.md`, `segments-*`, `structure.json`,
+`.structure-*.sha256`, `.filter-stamps/`). Deleting it would destroy the output
+the archive exists for. So this script MOVES every file that is absent from (or
+differs from) the canonical folder into it, repoints the `source:` front-matter
+line of the moved `segments-*/*.md` at the new location, and parks the
+remainder — files already byte-identical to the canonical copy — under
+`bin/<stamp>-library-date-dupes/` with a README explaining how to revert.
+
+No model call and no database write: the connection is READ-ONLY, and the folder
+name is stamped on the document by the next real scan/edit/encode pass.
+
+The dry run is the default on purpose; nothing is written without `--apply`.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import hashlib
+import shutil
+import sys
+from pathlib import Path
+
+
+def _import_pha():
+    """Use the INSTALLED pha; fall back to a checkout found above this file.
+
+    An agent running this from an archive has pha installed and no source
+    checkout — that is the normal case. The fallback is for running the same
+    file from the pha repository itself.
+    """
+    try:
+        from personal_historical_archive import db, ingest
+        from personal_historical_archive.config import Config
+        return db, ingest, Config
+    except ImportError:
+        pass
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "src"
+        if (candidate / "personal_historical_archive").is_dir():
+            sys.path.insert(0, str(candidate))
+            break
+    from personal_historical_archive import db, ingest
+    from personal_historical_archive.config import Config
+    return db, ingest, Config
+
+
+db, ingest, Config = _import_pha()
+
+
+def _digest(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 16), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _tree(root: Path) -> dict[str, str]:
+    return {str(p.relative_to(root)): _digest(p)
+            for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def _rewrite_source(text: str, old_name: str, new_name: str) -> tuple[str, bool]:
+    """Point a moved artifact's `source:` front matter at its new folder."""
+    out, changed = [], False
+    for line in text.split("\n"):
+        if line.startswith("source:") and f"/{old_name}/" in line:
+            line = line.replace(f"/{old_name}/", f"/{new_name}/")
+            changed = True
+        out.append(line)
+    return "\n".join(out), changed
+
+
+def _groups(cfg, conn, wanted: set[int]) -> list[tuple[dict, Path, list[Path]]]:
+    out = []
+    for row in db.list_documents(conn, limit=100000):
+        doc = dict(row)
+        if wanted and int(doc["id"]) not in wanted:
+            continue
+        canon = ingest._resolve_library_dir(cfg, doc)
+        others = [f for f in ingest._existing_doc_folders(cfg, doc) if f != canon]
+        if others:
+            out.append((doc, canon, others))
+    return out
+
+
+def _free_dir(base: Path) -> Path:
+    cand, n = base, 1
+    while cand.exists():
+        n += 1
+        cand = base.with_name(f"{base.name}-{n}")
+    return cand
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Consolidate a document's dated library folders (dry run by default).")
+    parser.add_argument("--apply", action="store_true",
+                        help="perform the moves (default: dry run, nothing is written)")
+    parser.add_argument("--doc", type=int, action="append", default=[],
+                        help="only this document id (repeatable)")
+    args = parser.parse_args()
+
+    cfg = Config.load()
+    # READ-ONLY on purpose: this repair is a filesystem move and must not run a
+    # schema migration or write the database at all.
+    conn = db.connect(cfg.db_path, readonly=True)
+    groups = _groups(cfg, conn, set(args.doc))
+    if not groups:
+        print("nothing to consolidate — every document has exactly one library folder")
+        return 0
+
+    stamp = _dt.datetime.now().strftime("%Y%m%d")
+    bin_root = _free_dir(cfg.bin / f"{stamp}-library-date-dupes")
+    today = _dt.date.today().isoformat()
+
+    moved_total = binned_total = 0
+    report: list[str] = []
+    for doc, canon, leftovers in groups:
+        print(f'\n#{doc["id"]} {doc["filename"]}')
+        print(f"  canonical : {canon.name}")
+        canon_tree = _tree(canon) if canon.is_dir() else {}
+        for leftover in leftovers:
+            left_tree = _tree(leftover)
+            move = [k for k, h in left_tree.items() if canon_tree.get(k) != h]
+            size = sum((leftover / k).stat().st_size for k in move)
+            print(f"  duplicate : {leftover.name}")
+            print(f"      move into the canonical folder : {len(move)} file(s), {size/1e6:.1f} MB")
+            print(f"      already identical there        : {len(left_tree) - len(move)}")
+            if not args.apply:
+                for k in move[:4]:
+                    print(f"          + {k}")
+                if len(move) > 4:
+                    print(f"          … and {len(move) - 4} more")
+                continue
+            for rel in move:
+                src, dst = leftover / rel, canon / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if dst.exists():
+                    dst.unlink()
+                if src.suffix == ".md" and "segments-" in rel:
+                    text = src.read_text(encoding="utf-8")
+                    text, changed = _rewrite_source(text, leftover.name, canon.name)
+                    if changed:
+                        dst.write_text(text, encoding="utf-8")
+                        src.unlink()
+                        continue
+                shutil.move(str(src), str(dst))
+            dest = bin_root / "library" / Path(doc["dir_path"] or "") / leftover.name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(leftover), str(dest))
+            moved_total += len(move)
+            binned_total += 1
+            rel_dest = dest.relative_to(cfg.archive_dir)
+            print(f"      → {rel_dest}")
+            report.append(
+                f'## #{doc["id"]} {doc["filename"]}\n\n'
+                f"- canonical folder (kept): `{canon.name}`\n"
+                f"- folder parked here: `{leftover.name}` — {len(move)} file(s) were "
+                f"MOVED into the canonical folder; the other {len(left_tree) - len(move)} "
+                f"are byte-for-byte identical to the canonical copies.\n\n"
+                f"To revert (this is only a PARTIAL revert — the moved files stay in "
+                f"the canonical folder; move them back too):\n\n"
+                f'    mv "{rel_dest}" \\\n'
+                f'       "{Path("library") / Path(doc["dir_path"] or "") / leftover.name}"\n'
+            )
+
+    if not args.apply:
+        print(f"\nDRY RUN — nothing written. {sum(len(o) for _, _, o in groups)} folder(s) "
+              f"would be consolidated; backup under {bin_root.relative_to(cfg.archive_dir)}")
+        return 0
+
+    bin_root.mkdir(parents=True, exist_ok=True)
+    (bin_root / "README.md").write_text(
+        "# Duplicated library folders (timezone) — consolidated\n\n"
+        f"Moved here on {today} while repairing the bug where a document's library\n"
+        "folder name was recomputed from the machine's timezone (fixed in pha 0.43.1;\n"
+        "see `pha-library-slug-timezone-bug-report.md` in the pha source repository).\n\n"
+        "Each document had the SAME version in two folders with different dates. The\n"
+        "canonical folder is the one holding the transcription; the other held the\n"
+        "records and the generated segments. Before anything was moved, **every** file\n"
+        "that did not exist (or differed) in the canonical folder was MOVED into it —\n"
+        "so what is left here is, file by file, byte-for-byte identical to the\n"
+        "canonical copy. Nothing that existed only here was lost. There is no\n"
+        "`manifest.json`: `pha bin list` deliberately ignores this folder.\n\n"
+        "## What was done, per document\n\n"
+        + "\n".join(report) +
+        "\n## Verify\n\n"
+        "    pha status        # the library-missing marker must be gone\n"
+        "    pha doctor        # the `library` section must not appear\n",
+        encoding="utf-8",
+    )
+    print(f"\nDONE — {moved_total} file(s) moved into the canonical folders, "
+          f"{binned_total} folder(s) parked under {bin_root.relative_to(cfg.archive_dir)}")
+    print("verify with `pha status` (the library-missing marker must be gone)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+
 SKILLS: tuple[tuple[str, str], ...] = (
     ("lmstudio-model-locality", _SKILL_LMSTUDIO_MODEL_LOCALITY),
     ("obsidian-vault", _SKILL_OBSIDIAN_VAULT),
     ("palaeographers-compare", _SKILL_PALEOGRAPHERS_COMPARE),
     ("pha-document-operations", _SKILL_DOCUMENT_OPERATIONS),
+    ("pha-library-folders", _SKILL_LIBRARY_FOLDERS),
     ("pha-search-context", _SKILL_SEARCH_CONTEXT),
     ("pha-zotero-bibliography", _SKILL_ZOTERO_BIBLIOGRAPHY),
     ("timelink-kleio-provenance", _SKILL_TIMELINK_KLEIO_PROVENANCE),
@@ -2836,6 +3209,13 @@ SKILL_FILES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("scripts/make_reference.py", _SKILL_PALEOGRAPHERS_COMPARE_MAKE_REFERENCE),
             ("scripts/normalize_comparison.py", _SKILL_PALEOGRAPHERS_COMPARE_NORMALIZE),
             ("scripts/verify_comparison.py", _SKILL_PALEOGRAPHERS_COMPARE_VERIFY),
+        ),
+    ),
+    (
+        "pha-library-folders",
+        (
+            ("scripts/consolidate_library_date_dupes.py",
+             _SKILL_LIBRARY_FOLDERS_CONSOLIDATE),
         ),
     ),
     (

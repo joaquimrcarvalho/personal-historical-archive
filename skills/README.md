@@ -33,7 +33,7 @@ agent should reach for it), followed by the instructions:
 ## How an agent should use these
 
 **Using the archive:** before the matching task, read
-`skills/<name>/SKILL.md` and follow it. The seven skills seeded here cover the
+`skills/<name>/SKILL.md` and follow it. The eight skills seeded here cover the
 most common tasks:
 
 - `pha-search-context` — a search hit is a *snippet*; recover the full page
@@ -41,6 +41,13 @@ most common tasks:
 - `pha-document-operations` — re-scan / re-edit / re-encode one
   **already-ingested** document or collection (`pha scan --path … --reprocess`,
   `pha edit --path … --page N`, `pha test`).
+- `pha-library-folders` — find and consolidate a document whose library folder
+  was **split in two**: two dated folders (`<stem>_<date>`, what the timezone bug
+  did) or a bare `edited-<editor>` beside its `edited-<editor>@<model>` sibling.
+  Ships `scripts/consolidate_library_date_dupes.py` (dry run by default; moves
+  the encoder deliverables into the canonical folder and parks the remainder
+  under `bin/` with a rollback README) and points at
+  `pha prune --library-variants` for the bare alias.
 - `lmstudio-model-locality` — determine whether an LM Studio model is
   local or remote when LM Link is enabled, before a `pha scan`/`pha edit`;
   helper `scripts/lmstudio_locality.py` joins `lms ls` / `lms ps` / `lms link status`

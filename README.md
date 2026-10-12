@@ -403,6 +403,18 @@ installed by anyone who sets up agents from the repo:
   `pha page`. It branches by capability: CLI+files agents, dsh-pha plugin
   `pha_*` tools, and FastMCP tools (which lack a per-document re-scan).
 
+- **Library folders** — [`skills/pha-library-folders/SKILL.md`](skills/pha-library-folders/SKILL.md):
+  find and consolidate a document whose library folder was split in two — two
+  dated `<stem>_<date>` folders (what a timezone change did to the folder name
+  before 0.43.1), or a bare `edited-<editor>` beside its
+  `edited-<editor>@<model>` sibling. Ships
+  `scripts/consolidate_library_date_dupes.py` (dry run by default; moves the
+  encoder deliverables into the canonical folder, repoints the moved segments'
+  `source:` provenance and parks the remainder under `bin/` with a rollback
+  README) and points at the guarded `pha prune --library-variants` for the bare
+  alias. It exists because the "duplicate" folder usually holds the records and
+  segments — deleting it would destroy the generated output.
+
 - **LM Studio model locality** — [`skills/lmstudio-model-locality/SKILL.md`](skills/lmstudio-model-locality/SKILL.md):
   with LM Studio and LM Link, decide whether the model a `pha scan`/`pha edit`
   will use is local or remote (`lms ls --json`, `lms ps --json`,

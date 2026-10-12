@@ -54,6 +54,10 @@ common agent tasks:
   page/document.
 - `pha-document-operations` — re-run the pipeline on an already-ingested
   document.
+- `pha-library-folders` — find and consolidate a document whose library folder
+  was split in two (two dated `<stem>_<date>` folders after a timezone change, or
+  a bare `edited-<editor>` beside its `@<model>` sibling); ships
+  `scripts/consolidate_library_date_dupes.py` (dry run by default).
 - `lmstudio-model-locality` — check local vs remote LM Studio models under LM
   Link before a scan/edit; helper `scripts/lmstudio_locality.py`.
 - `pha-zotero-bibliography` — import a Zotero PDF with its sidecar; build/refresh

@@ -232,6 +232,11 @@ one before the task, no pha source checkout needed:
 - `skills/pha-document-operations/SKILL.md` — re-scan / re-edit / re-encode one
   **already-ingested** document or collection (`pha scan --path … --reprocess`,
   `pha edit --path … --page N`, `pha test`).
+- `skills/pha-library-folders/SKILL.md` — a document whose library folder was
+  **split in two**: two dated `<stem>_<date>` folders (what a timezone change did
+  to the folder name before 0.43.1), or a bare `edited-<editor>` beside its
+  `edited-<editor>@<model>` sibling. Consolidate it safely — no model re-run —
+  with helper `scripts/consolidate_library_date_dupes.py` (dry run by default).
 - `skills/lmstudio-model-locality/SKILL.md` — before `pha scan`/`pha edit` on a
   machine with LM Studio and LM Link, decide whether a model is local or remote
   (`lms ls/ps/link status --json`; helper `scripts/lmstudio_locality.py`) and
@@ -407,6 +412,11 @@ it:
   **already-ingested** document or collection (rescan / re-edit / re-encode):
   `pha scan --path collections/COLX [--reprocess]`,
   `pha edit --path collections/COLX --page N`, `pha test collections/COLX --pages 3`.
+- `skills/pha-library-folders/SKILL.md` — a document whose library folder is
+  **split in two**: two dated `<stem>_<date>` folders (a timezone change, before
+  0.43.1) or a bare `edited-<editor>` beside its `@<model>` sibling. Consolidate
+  it safely, without re-running a model
+  (`scripts/consolidate_library_date_dupes.py`, dry run by default).
 - `skills/lmstudio-model-locality/SKILL.md` — with LM Studio and LM Link,
   decide whether the model a `pha scan`/`pha edit` will use is local or remote
   (`lms ls --json`, `lms ps --json`, `lms link status --json`); pre-load a
