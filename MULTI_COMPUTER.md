@@ -342,6 +342,35 @@ Leases live in `<archive>/.pha/handoffs/<id>.json` (machine-local, gitignored).
 `pha handoff status [--json]` / MCP `pha_handoff_status()` show what is out;
 `pha handoff cancel <id>` releases it and refuses a later result.
 
+### What the worker keeps — there is no automatic clean-up
+
+A hand-over is a loan with a **working copy**, not a transfer. `handoff back`
+reads the worker's DB and writes the result folder; it **deletes nothing**. After
+the result has gone home the worker still holds the source bytes it copied into
+its own dropbox, the document's pages with their provenance, any edits and
+encoder records, the library folder it wrote, its renders, the hand-out folder
+and the result folder under `.pha/handoffs/incoming/<id>/`, and the incoming
+marker `.pha/handoffs/<id>.json` — `state: "in"`, which `back` never changes;
+only `pha handoff cancel <id>` releases it. Expect a full second copy on the
+worker's disk, the sources and renders being the bulky part.
+
+That marker is also what keeps the worker from embedding those documents
+(`index deferred — received for hand-over`, gap G1), so a worker that is never
+cleared keeps suppressing that index.
+
+To reclaim the space, **once the owner has applied the result**
+(`pha handoff fetch`):
+
+1. `pha handoff cancel <id>` — releases the incoming marker.
+2. `pha rm <document>` — **never** a shell `rm`/`mv`; it moves the dropbox
+   payload and the library folder to `bin/<stamp>/` and clears the index
+   (reversible with `pha bin restore`; `--purge` deletes for good).
+3. Delete the leftover `.pha/handoffs/incoming/<id>/` and `<id>-back/` folders
+   by hand — pha does not clean those either.
+
+Do not clear the worker before the owner confirms the fetch applied: until then
+the result folder may be the only copy of that work in flight.
+
 ### Moving the payload
 
 **When the two machines share a tailnet, moving the payload is pha's job**:
