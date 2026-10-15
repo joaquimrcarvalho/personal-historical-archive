@@ -1,6 +1,6 @@
 # pha enhancement requests - index
 
-Last reviewed: 2026-10-10. Current release: pha 0.42.1.
+Last reviewed: 2026-10-14. Current release: pha 0.42.1.
 
 This file is the map, not the detail: each row links to the full document.
 Open includes anything not fully shipped. A partially implemented item stays
@@ -29,6 +29,7 @@ or otherwise resolved; the document remains for the record.
 | [pha-handoff-enhancement-request.md](pha-handoff-enhancement-request.md) | SHIPPED (0.29.0) - follow-on open | Two-machine hand-over works; the section 12 render gap remains: an unscanned hand-out can come home with no page images. |
 | [pha-stage-extends-enhancement-request.md](pha-stage-extends-enhancement-request.md) | Draft | Compose prompt files with extends (base plus delta). |
 | [pha-serve-page-text-enhancement-request.md](pha-serve-page-text-enhancement-request.md) | Stored for later | The served page viewer gains the raw transcription and the effective edited reading beside the image. |
+| [pha-skills-zotero-backlinks-enhancement-request.md](pha-skills-zotero-backlinks-enhancement-request.md) | Draft — text written, in use in one archive | The bundled `pha-zotero-bibliography` skill gains the two-way backlinks (`record_id` = Zotero item key; `pha-doc`/`pha-slug`/`pha-path` in the item's `extra`; a `linked_url` child for the viewer), the local-API write-authorization flow it never had, and the two traps (document page number, never a `library/` path). §8.1 asks whether an archive-local `zotero-export/` section should ride along. |
 
 ### Proposals
 
