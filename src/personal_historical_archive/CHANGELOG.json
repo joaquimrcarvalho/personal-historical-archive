@@ -66,6 +66,18 @@
           "commit": "e411ad7e4151"
         }
       ]
+    },
+    "0.45.0": {
+      "date": "2026-10-18",
+      "summary": "Bundled skills now update themselves without ever overwriting one the archive owner edited: pha stamps the files it writes, refreshes the untouched ones on update, and flags the edited ones so the choice stays with the owner.",
+      "changes": [
+        {
+          "type": "feat",
+          "scope": "skills",
+          "text": "update bundled skills without overwriting the owner's edits",
+          "commit": "75a2ee499e21"
+        }
+      ]
     }
   }
 }
