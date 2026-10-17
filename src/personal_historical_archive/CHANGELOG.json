@@ -48,6 +48,24 @@
           "commit": "7dfa7bec5622"
         }
       ]
+    },
+    "0.44.0": {
+      "date": "2026-10-18",
+      "summary": "The notes folder is searchable: a query returns the pages, the encoder records and the conclusions already written about the subject, with a note hit marked as memory rather than evidence.",
+      "changes": [
+        {
+          "type": "feat",
+          "scope": "search",
+          "text": "index the notes folder as the archive's memory",
+          "commit": "be12fe54c0aa"
+        },
+        {
+          "type": "docs",
+          "scope": "multi-computer",
+          "text": "a hand-over leaves its working copy on the worker",
+          "commit": "e411ad7e4151"
+        }
+      ]
     }
   }
 }
