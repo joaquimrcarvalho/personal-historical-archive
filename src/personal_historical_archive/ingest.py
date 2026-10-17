@@ -18,6 +18,7 @@ from watchdog.observers import Observer
 
 from . import db
 from . import locks
+from . import notes as notes_memory
 from .config import Config, Editor, Encoder, Palaeographer
 from .embed import pack, prefixed
 from .extract import (
@@ -4364,9 +4365,10 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
         return {"reindexed": 0, "chunks": {}, "failed": [],
                 "reason": "--page needs --doc: exactly one --doc is required "
                           "(refusing to reindex page N of every document)"}
-    if source not in ("pages", "records", "all"):
+    if source not in ("pages", "records", "notes", "all"):
         return {"reindexed": 0, "chunks": {}, "failed": [],
-                "reason": f"unknown reindex source {source}; use pages, records or all"}
+                "reason": f"unknown reindex source {source}; use pages, records, "
+                          f"notes or all"}
     cfg.ensure_dirs()
     keys = _job_keys(cfg, [], embed=True)
     lock = locks.acquire(cfg, keys, label="pha reindex", wait_s=wait_s,
@@ -4438,11 +4440,28 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
             ids = [int(d["id"]) for d in docs]
             db.rebuild_records_index(conn, doc_ids=ids, force=force)
             conn.commit()
+        # The notes are not a document, so they are indexed once for the whole
+        # pass — inside this lock, because embedding them talks to the same
+        # embed server the pass just used.
+        note_report = None
+        if source in ("notes", "all"):
+            note_report = notes_memory.index_notes(
+                cfg, conn, embed_client=client, force=force, verbose=verbose,
+            )
         records_count = sum(record_counts.values())
         out = {"reindexed": len(counts), "chunks": counts, "failed": failed,
                "skipped_not_done": skipped_not_done}
         if records_count:
             out["records"] = records_count
+        # Report the notes only when the pass actually did something to them:
+        # a reindex of an archive with no notes keeps its old result shape.
+        if note_report is not None and (
+            note_report.get("indexed") or note_report.get("removed")
+            or note_report.get("error")
+        ):
+            out["notes"] = note_report.get("indexed", 0)
+            out["notes_embedded"] = note_report.get("embedded", 0)
+            out["notes_error"] = note_report.get("error")
         return out
     finally:
         conn.close()

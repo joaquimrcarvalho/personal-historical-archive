@@ -6,12 +6,20 @@ import numpy as np
 
 from . import db
 from . import locks
+from . import notes as notes_memory
 from .config import Config
 from .embed import cosine, prefixed, unpack
 from .model_client import ModelClient, ModelError
 
 
-SEARCH_SOURCES = ("pages", "records", "all")
+# `pages` are the transcriptions (raw + edited), `records` the encoder output,
+# `notes` the researcher's own conclusions about them — the archive's memory.
+# `all` means all three: a query about Timor must be able to surface both the
+# page that names it and the note that already identified it.
+SEARCH_SOURCES = ("pages", "records", "notes", "all")
+
+# How much a *semantic-only* note hit counts against a keyword-matched one.
+NOTE_ARM_WEIGHT = 0.5
 
 
 def _embed_query(client: ModelClient, model: str, query: str) -> np.ndarray | None:
@@ -100,6 +108,35 @@ def _decorate_record(conn: sqlite3.Connection, row, source: str, score) -> dict 
     }
 
 
+def _decorate_note(row, source: str, score) -> dict | None:
+    """A note hit: the researcher's own conclusion, never mistaken for evidence.
+
+    `text` is the note's whole body (one row per note — the point of a note is
+    its context), capped at `notes.NOTE_TEXT_CHARS` for the payload; `path` is
+    the file to read when the cap bites.
+    """
+    if row is None:
+        return None
+    keys = row.keys()
+    text = row["text"] or ""
+    cap = notes_memory.NOTE_TEXT_CHARS
+    has_snippet = "snippet" in keys and bool(row["snippet"])
+    snippet = (row["snippet"] if has_snippet
+               else notes_memory.body_start(text))
+    return {
+        "kind": "note",
+        "note_id": row["note_id"] if "note_id" in keys else row["id"],
+        "note": row["name"],
+        "title": row["title"] if "title" in keys else None,
+        "path": row["path"] if "path" in keys else None,
+        "text": text[:cap],
+        "text_truncated": len(text) > cap,
+        "snippet": snippet,
+        "score": score if score is not None else (row["bm"] if "bm" in keys else None),
+        "source": source,
+    }
+
+
 def keyword_search(conn: sqlite3.Connection, query: str, limit: int, collection: str | None = None) -> list[dict]:
     rows = db.keyword_search(conn, query, limit, collection=collection)
     out = []
@@ -165,19 +202,31 @@ def record_keyword_search(
 
 
 def _result_key(r: dict) -> tuple:
-    if r.get("kind") == "record":
+    """Identity for fusion: a page, a record and a note may share a number."""
+    kind = r.get("kind")
+    if kind == "record":
         return ("record", r.get("record_id"))
+    if kind == "note":
+        return ("note", r.get("note_id"))
     return ("page", r.get("chunk_id"))
 
 
-def _rrf_merge_many(result_lists: list[list[dict]], limit: int, k: int = 60) -> list[dict]:
-    """RRF over page and/or record lists, keyed by (kind, id)."""
+def _rrf_merge_many(result_lists: list[list[dict]], limit: int, k: int = 60,
+                    weights: list[float] | None = None) -> list[dict]:
+    """RRF over page, record and/or note lists, keyed by (kind, id).
+
+    `weights` (one per list, default 1.0) is how a weaker arm is expressed
+    honestly instead of being silently trusted: a note found by the query's
+    words is a stronger signal than one that merely sits near it in the
+    vector space, so the semantic note arm carries a reduced weight.
+    """
     scores: dict[tuple, float] = {}
     seen: dict[tuple, dict] = {}
-    for lst in result_lists:
+    for i, lst in enumerate(result_lists):
+        weight = 1.0 if not weights else (weights[i] if i < len(weights) else 1.0)
         for rank, r in enumerate(lst):
             key = _result_key(r)
-            scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank + 1)
+            scores[key] = scores.get(key, 0.0) + weight / (k + rank + 1)
             seen.setdefault(key, r)
     order = sorted(scores.items(), key=lambda t: t[1], reverse=True)
     out = []
@@ -306,6 +355,100 @@ def _record_hybrid(
     return merged, note
 
 
+# --------------------------------------------------------------------------- notes (memory)
+
+def note_keyword_search(conn: sqlite3.Connection, query: str, limit: int) -> list[dict]:
+    out = []
+    for row in db.notes_keyword_search(conn, query, limit):
+        hit = _decorate_note(row, "keyword", None)
+        if hit:
+            out.append(hit)
+    return out
+
+
+def note_semantic_search(conn: sqlite3.Connection, client: ModelClient, model: str,
+                         query: str, limit: int) -> list[dict]:
+    rows = db.all_note_embeddings(conn, embed_model=model)
+    if not rows or client is None:
+        return []
+    q = _embed_query(client, model, query)
+    if q is None:
+        return []
+    scored = [(cosine(q, unpack(row["embedding"])), int(row["id"])) for row in rows]
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    out = []
+    for score, note_id in scored[:limit]:
+        hit = _decorate_note(db.get_note(conn, note_id=note_id), "semantic",
+                             round(score, 5))
+        if hit:
+            out.append(hit)
+    return out
+
+
+def _note_index_note(conn: sqlite3.Connection, hits: int) -> str | None:
+    if not db.notes_fts_exists(conn):
+        return ("note index not built yet; run `pha notes index` "
+                "(the next `pha search` also builds it)")
+    if not hits:
+        return "no note hits"
+    return None
+
+
+def _note_arms(conn: sqlite3.Connection, client: ModelClient, cfg: Config,
+               query: str, mode: str, limit: int,
+               allow_embed: bool) -> tuple[list[dict], list[dict], str | None]:
+    """The notes' two arms: (keyword hits, semantic hits, degradation note).
+
+    Kept apart — rather than pre-fused — so the caller can weight them: a note
+    whose text contains the query's terms is evidence the question was already
+    addressed; a long note that merely lands near the query vector is a hint.
+    Measured on the jesuit archive with the shipped nomic q4 embedder, an
+    unrelated 40 kB note and the note that literally names Timor score 0.667
+    vs 0.661, so the semantic arm is worth keeping for recall but must not
+    outrank a lexical match (see `NOTE_ARM_WEIGHT`).
+    """
+    kw: list[dict] = []
+    if mode != "semantic":
+        kw = note_keyword_search(conn, query, limit)
+    note: str | None = None
+    sem: list[dict] = []
+    if mode != "keyword":
+        note = _embed_lock_note(cfg, allow_embed)
+        if note is None:
+            sem = note_semantic_search(conn, client, cfg.embed_model, query, limit)
+    return kw, sem, note
+
+
+def _note_search(
+    conn: sqlite3.Connection,
+    client: ModelClient,
+    cfg: Config,
+    query: str,
+    mode: str,
+    limit: int,
+    allow_embed: bool,
+) -> dict:
+    """Notes only — the archive's memory arm of the search."""
+    kw, sem, note = _note_arms(conn, client, cfg, query, mode, limit, allow_embed)
+    if mode == "keyword":
+        return {"mode": mode, "query": query, "results": kw,
+                "note": _note_index_note(conn, len(kw))}
+    if mode == "semantic":
+        if note is None and not sem:
+            note = ("Note semantic search unavailable: embedding model unreachable "
+                    "or notes not embedded yet (run `pha notes index`).")
+        return {"mode": mode, "query": query, "results": sem, "note": note}
+    if not sem:
+        return {"mode": mode, "query": query, "results": kw,
+                "note": note or _note_index_note(conn, len(kw))}
+    if not kw:
+        return {"mode": mode, "query": query, "results": sem, "note": note}
+    merged = _rrf_merge_many([kw, sem], limit, weights=[1.0, NOTE_ARM_WEIGHT])
+    for r in merged:
+        r["source"] = "hybrid"
+    return {"mode": mode, "query": query, "results": merged, "note": note}
+
+
 def _page_search(
     conn: sqlite3.Connection,
     client: ModelClient,
@@ -382,11 +525,11 @@ def search(
     if mode not in ("hybrid", "keyword", "semantic"):
         raise ValueError(f"Unknown search mode {mode}; use hybrid, keyword or semantic")
     if source not in SEARCH_SOURCES:
-        raise ValueError(f"Unknown search source {source}; use pages, records or all")
-    if fields and source == "pages":
+        raise ValueError(f"Unknown search source {source}; use pages, records, notes or all")
+    if fields and source not in ("records", "all"):
         raise ValueError("--field only applies to record search (--source records or all)")
     if not query_text:
-        if source == "pages" or not fields:
+        if source in ("pages", "notes") or not fields:
             raise ValueError("a query is required unless --field is given with record search")
         recs = record_keyword_search(
             conn, "", limit, collection=collection,
@@ -419,6 +562,9 @@ def search(
         )
         return {"mode": mode, "query": query, "results": recs, "note": note}
 
+    if source == "notes":
+        return _note_search(conn, client, cfg, query, mode, limit, allow_embed)
+
     page_res = _page_search(
         conn, client, cfg, query, mode, limit, collection, allow_embed,
     )
@@ -449,12 +595,31 @@ def search(
             ignore_case=ignore_case,
         )
 
-    page_results = page_res.get("results") or []
-    if not recs:
-        note = page_res.get("note") or record_note
-        return {"mode": mode, "query": query, "results": page_results, "note": note}
+    # `all` also means the notes: what the researcher already concluded about
+    # these sources is part of what the archive "has" on a question. Note hits
+    # stay marked `kind: "note"` through the merge, so a caller can keep a
+    # conclusion distinct from the page it rests on.
+    note_kw: list[dict] = []
+    note_sem: list[dict] = []
+    if source == "all":
+        note_kw, note_sem, _note_note = _note_arms(
+            conn, client, cfg, query, mode, limit, allow_embed)
 
-    merged = _rrf_merge_many([page_results, recs], limit)
+    page_results = page_res.get("results") or []
+    # The two note arms enter the fusion with their own weights, so a
+    # semantically-near note does not outrank a page that names the query.
+    arms = [(lst, weight) for lst, weight in (
+        (page_results, 1.0), (recs, 1.0),
+        (note_kw, 1.0), (note_sem, NOTE_ARM_WEIGHT),
+    ) if lst]
     note_parts = [n for n in (page_res.get("note"), record_note) if n]
-    return {"mode": mode, "query": query, "results": merged,
-            "note": " | ".join(note_parts) if note_parts else None}
+    result_note = " | ".join(note_parts) if note_parts else None
+    if not arms:
+        return {"mode": mode, "query": query, "results": [], "note": result_note}
+    if len(arms) == 1:
+        return {"mode": mode, "query": query, "results": arms[0][0],
+                "note": result_note}
+    return {"mode": mode, "query": query,
+            "results": _rrf_merge_many([lst for lst, _ in arms], limit,
+                                       weights=[w for _, w in arms]),
+            "note": result_note}

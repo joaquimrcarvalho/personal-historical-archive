@@ -136,6 +136,7 @@ pha search "alfange" --mode keyword
 pha search "monastery donation charter" --mode semantic
 pha search "padroado" --force      # embed even while a scan uses the embed server
 pha search --source records --record-kind letter --field from=Xavier   # structured records
+pha search "Timor" --source notes  # only the notes/ folder — what you already concluded
 # every hit prints its library page file + a shortcut to read the full page:
 pha page 12 37              # full raw transcription of doc 12, page 37
 pha page 12 37 --edited     # the edited (modernized/translated) variant
@@ -1252,7 +1253,13 @@ pha whatsnew [VERSION] [--since VERSION] [--all] [--json]
 pha scan [--watch] [--debounce N] [--prompt FILE] [--palaeographer ID] [--path COLLECTION] [--reprocess]
 pha scan --path DOC --page N [--palaeographer ID] [--model ID] [--dry-run] [--no-pin]
 pha scan --path DOC [--page N] --unpin      # release the pin, keep the text
-pha search [QUERY] [--mode hybrid|keyword|semantic] [--source pages|records|all] [--encoder ID] [--record-kind KIND] [--collection COLX] [--field NAME=VALUE] [--ignore-case] [--limit N] [--json]
+pha search [QUERY] [--mode hybrid|keyword|semantic] [--source pages|records|notes|all] [--encoder ID] [--record-kind KIND] [--collection COLX] [--field NAME=VALUE] [--ignore-case] [--limit N] [--json]
+                                #   --source all (default) = pages + records + notes. A note hit is
+                                #   kind:"note" (no document_id/page_no): the note is your own earlier
+                                #   conclusion, marked as memory, never mixed in as evidence
+pha notes [list|index|show NAME] [--force] [--json]
+                                #   the notes/ folder as searchable memory: list what is indexed,
+                                #   (re)index it, print one note. `pha search` also indexes on demand
 pha page DOC PAGE [--edited]    # print the FULL text of one page (doc = id or filename substring)
                                 #   --edited reads the edited/translated variant; when there is
                                 #   none it names the pass that produces it (`pha edit --path …`)
@@ -1282,7 +1289,7 @@ pha export [--doc N] [--path collections/COLX]
                                 #   re-extraction, no model call); --doc/--path scope it to
                                 #   one document or one collection — the repair for a library
                                 #   folder that was deleted or is missing
-pha reindex [--doc N] [--page P] [--path collections/COLX] [--source pages|records|all] [--force]
+pha reindex [--doc N] [--page P] [--path collections/COLX] [--source pages|records|notes|all] [--force]
                           # re-embed; INCREMENTAL by default — only chunks whose text
                           #   changed (or whose vector came from another embed model) are
                           #   embedded, so a one-page correction no longer re-embeds the
@@ -1657,13 +1664,42 @@ archive_dir/
         transcription-qwen-local/   ← one folder per palaeographer
           502V.md                   ← one file per page, named after the source
                                     ←   scan (dir-of-images) or page-NNN.md (PDF)
-  notes/                    ← Obsidian-compatible markdown notes generated from
-                              ←   queries to this archive (see notes/README.md)
+  notes/                    ← your own notes about the sources — the archive's
+                              ←   memory, indexed into archive.db and found by
+                              ←   `pha search` (see notes/README.md)
   renders/<sha>/            ← cached page JPEGs fed to the VLM
   bin/<stamp>/              <- reversible removals (`pha rm`): dropbox/ + library/
                               copies plus a manifest.json for `pha bin restore`
-  archive.db                ← documents / pages / chunks + FTS5 + embeddings
+  archive.db                ← documents / pages / chunks / notes + FTS5 + embeddings
 ```
+
+### Notes are the archive's memory
+
+`notes/` is where a research session's *conclusions* live: an identification
+("Zumbae = Sumba"), a rejected hypothesis, a draft narrative. Unlike everything
+else in the archive, a note is not a reading of a source — it is what you
+worked out *from* the sources, and it is the one artifact whose value grows
+with every session.
+
+So pha indexes the notes beside the pages: `pha search "Timor"` (the default
+`--source all`) returns page hits **and** note hits, and a note hit is marked
+`kind: "note"` with its `title` and file `path` — never a `document_id` or a
+`page_no`, because a note is not a page. `--source notes` searches the notes
+alone ("what have I already concluded about this?"), `--source pages` excludes
+them.
+
+- **Freshness is automatic.** `pha search` checks the notes folder first and
+  indexes what changed (a note you wrote a minute ago is already findable). It
+  writes only when something actually changed; `pha notes index` does the same
+  thing explicitly, and `pha reindex --source notes` (or `all`) adds their
+  embeddings.
+- **They are never documents.** No `documents` row, no synthetic page, no
+  export, no bundle: `pha status` shows them on their own line and
+  `pha list`/`pha export`/`pha scan` never touch them.
+- **A note is a conclusion, not evidence.** Search hands you the note's own
+  text, and the agent skill `pha-search-context` tells an agent to *offer* the
+  notes to you ("the archive also has notes on this — should I read them?")
+  and to keep their claims separate from what the source says.
 
 The PROJECT dir (code, versioned) holds only `src/`, `config.yaml`,
 `prompts/default_prompt.md`, `prompts/encoder-helper.md`,

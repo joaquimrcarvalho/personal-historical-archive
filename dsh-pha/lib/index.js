@@ -494,18 +494,22 @@ function apply(ctx, config) {
       const d = parseJson(r.out)
       return Object.assign({}, d, { ok: true, found: !!d.reference })
     }],
-    ['pha_search', 'Full-text search across the archive (keyword / phrase match). Returns structured hits with document id, page number, variant and snippet text — only pages that actually contain the query terms.', { query: { type: 'string', description: 'search terms' }, limit: { type: 'integer', description: 'max hits (default 5, max 20)' } }, ['query'], async (a) => {
+    ['pha_search', 'Full-text search across the archive (keyword / phrase match). Returns structured hits with document id, page number, variant and snippet text — pages that contain the query terms, plus the archive\'s own notes on the subject (`kind: "note"`), which are earlier conclusions to check the pages against, not evidence themselves.', { query: { type: 'string', description: 'search terms' }, limit: { type: 'integer', description: 'max hits (default 5, max 20)' } }, ['query'], async (a) => {
       const q = String(a.query || '').trim()
       if (!q) throw new Error('query required')
       const limit = Math.min(20, Math.max(1, Number(a.limit) || 5))
       const r = await phaRun(['search', q, '--mode', 'keyword', '--json', '--limit', String(limit)])
       if (r.code !== 0) throw new Error('pha search failed: ' + String(r.err || r.out).slice(0, 400))
       const data = parseJson(r.out)
-      const results = (data.results || []).map((hit) => ({
-        document_id: hit.document_id, filename: hit.filename, collection: hit.collection,
-        page_no: hit.page_no, variant: hit.variant, mode: data.mode || 'keyword',
-        text: String(hit.text || '').slice(0, 900),
-      }))
+      const results = (data.results || []).map((hit) => (
+        hit.kind === 'note'
+          ? { kind: 'note', note: hit.note, title: hit.title, path: hit.path,
+              mode: data.mode || 'keyword',
+              text: String(hit.text || '').slice(0, 900) }
+          : { document_id: hit.document_id, filename: hit.filename, collection: hit.collection,
+              page_no: hit.page_no, variant: hit.variant, mode: data.mode || 'keyword',
+              text: String(hit.text || '').slice(0, 900) }
+      ))
       return { ok: true, query: q, mode: data.mode || 'keyword', results }
     }],
     ['pha_open', 'Open one page of a document in the OS-default application (e.g. a markdown editor) so a human can review/edit the library file on the archive machine. The OS decides which app handles the .md; pha never edits the text (a human edits, then pha review imports).', { doc: { type: 'string', description: 'document id or filename substring' }, page: { type: 'integer', description: 'page number (1-based)' }, edited: { type: 'boolean', description: 'open the edited variant instead of raw' } }, ['doc', 'page'], async (a) => runOpen(a)],
@@ -674,7 +678,10 @@ function apply(ctx, config) {
       const q = String(p.q || '').trim()
       if (!q) throw new Error('query required')
       const limit = Math.min(20, Math.max(1, Number(p.limit) || 5))
-      const r = await phaRun(['search', q, '--mode', 'keyword', '--json', '--limit', String(limit)])
+      // The view lists/highlights documents, so it asks for pages only: a note
+      // hit has no document_id/page_no and would become a phantom document.
+      const r = await phaRun(['search', q, '--mode', 'keyword', '--source', 'pages',
+                              '--json', '--limit', String(limit)])
       if (r.code !== 0) throw new Error('pha search failed: ' + String(r.err || r.out).slice(0, 400))
       const data = parseJson(r.out)
       const results = (data.results || []).map((hit) => ({

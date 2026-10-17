@@ -374,6 +374,24 @@ page's own folder is the document's.
   `notes/README.md` (seeded automatically, never overwritten) documents the format
   for humans and agents. `pha` creates `notes/` + README in any archive that
   lacks it on its next run (`ensure_dirs`).
+- **The notes are the archive's MEMORY, and search indexes them.** A note is a
+  conclusion worked out from the sources (an identification, a rejected
+  hypothesis), so a question asked today must be able to find the answer
+  settled in March. `notes.py` mirrors `notes/` into the `notes` + `notes_fts`
+  tables and `pha search` fuses them with pages and records:
+  `--source notes` searches notes alone, `--source all` (default) includes
+  them, `--source pages|records` excludes them. A note hit is `kind: "note"`
+  with `note`/`title`/`path` and **no** `document_id`/`page_no` — it is never a
+  document (no `documents` row, no synthetic page, no export, no bundle).
+  `pha search` re-indexes changed notes automatically before querying (it
+  writes only when something changed), `pha notes index` does it explicitly,
+  `pha reindex --source notes|all` adds their embeddings, and `pha status`
+  reports `notes: N indexed of M ... (K embedded)`.
+- **Never present a note as evidence.** When search returns note hits, offer
+  them to the owner ("the archive also has notes on this — should I read
+  them?") and, if used, report them as earlier conclusions with their own
+  citations, verified against the page where the answer matters. The bundled
+  `pha-search-context` skill carries the full workflow (step 0).
 - **Agent workflow**: when asked to write a note (e.g. "search the archive for
   'Malaca' and summarize in a note"), search (`pha search`), read each hit's full
   page with `pha page <doc> <page>` (and `--edited` when available) — never
@@ -465,14 +483,19 @@ than one sidecar exists, **JSON wins** (it is the one a human maintains) and
 
 ## 10. Search: from a hit to the full text
 
+- **Search the memory too**: a query about a subject the archive has notes on
+  should surface them — `pha search "…" --source notes` (or the default
+  `all`), then offer the note to the owner before folding it into an answer.
+  See §8.
 - **Search → full page text**: `pha search` hits carry a `page_file` (the library
   `.md`) and the CLI prints that path plus a shortcut under each hit.
   `pha page <doc> <page> [--edited]` prints one page's FULL text (raw, or the
   edited/translated variant with `--edited`); `<doc>` is an id or filename
   substring, and `--json` gives agent-friendly output. Use it to read the context
   around a search snippet.
-- **Search → structured records too**: `--source pages|records|all` (default
-  `all`) searches page text *and* the encoder records. Narrow with
+- **Search → structured records and notes too**: `--source pages|records|notes|all` (default
+  `all`) searches page text, the encoder records *and* `notes/` (the archive's
+  memory — see §8). Narrow with
   `--encoder <id>` / `--record-kind <kind>` (`letter`, `person`, …), and match
   **exact** record fields with `--field NAME=VALUE` (repeatable; alias
   `--where`; `--ignore-case` for ASCII case-insensitive values). With records,

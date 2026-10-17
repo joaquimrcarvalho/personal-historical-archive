@@ -1,6 +1,6 @@
 # pha enhancement requests - index
 
-Last reviewed: 2026-10-10. Current release: pha 0.42.1.
+Last reviewed: 2026-10-13. Current release: pha 0.43.1.
 
 This file is the map, not the detail: each row links to the full document.
 Open includes anything not fully shipped. A partially implemented item stays
@@ -17,6 +17,7 @@ or otherwise resolved; the document remains for the record.
 | [pha-latin-not-translated-thinking-disabled-bug-report.md](pha-latin-not-translated-thinking-disabled-bug-report.md) | PHA SIDE FIXED | F3 config-declared page-range editors; F5 a language guard that warns when a promised translation did not happen. |
 | [pha-orphaned-model-lock-wedges-every-job-bug-report.md](pha-orphaned-model-lock-wedges-every-job-bug-report.md) | PARTLY FIXED | F1 age rule for a live-looking pid; F3 heartbeat; F4 unlock / orphan reporting; F5 an honest holder message. |
 | [pha-markdown-from-records-drops-shared-page-records-bug-report.md](pha-markdown-from-records-drops-shared-page-records-bug-report.md) | OPEN (found 2026-10-10, 0.42.0) | Records that share a page lose their markdown file (isolated `continue`), and same-page records can overwrite one another; measured 472/6 609 records (7.1 %) on jesuit-archive. Proposed: never drop a record, unique file names, count and report. |
+| [pha-same-page-record-dedup-deletes-distinct-entries-bug-report.md](pha-same-page-record-dedup-deletes-distinct-entries-bug-report.md) | OPEN (found 2026-10-13, 0.43.1) | The **store-time** same-page dedup compares every field, so distinct entries that share a page's boilerplate score >= 0.75 and are dropped (`continue`) with a successful exit. Measured on Schütte: 76 of 149 index rows kept (51 %) on pages 337-341 — the model returned 29 records for p. 337 and 13 were stored. Proposed: compare the identifying fields, treat a differing entry number as decisive, put the page in `_record_key`, and count/report same-page drops. Patch ready in `jesuit-archive/local-tools/fix-pha-same-page-dedup.py`. |
 | [pha-library-slug-timezone-bug-report.md](pha-library-slug-timezone-bug-report.md) | FIXED — F1 + F2 + F4 (§9); duplicates consolidated 2026-10-11/12 | The folder name is stored (`documents.library_slug`), writes/reads resolve before using it, and `pha status`/`pha doctor` report a `done` document with no library folder. F3 (UTC) dropped as unnecessary. The six two-dated folders on jesuit-archive were consolidated (793 files moved into the canonical folder, remainder parked in `bin/`), and `pha prune --library-variants` removed 3 provably redundant bare aliases. Remaining: the `markdown-from-records` 0-file warning (§8, its own report) and the 16 refused folders that hold a real reading. |
 
 ### Enhancements
@@ -24,7 +25,7 @@ or otherwise resolved; the document remains for the record.
 | Request | Status | Summary and remaining work |
 |---|---|---|
 | [pha-post-filter-replay-enhancement-request.md](pha-post-filter-replay-enhancement-request.md) | Draft | Replay post filters without re-running the model; procedure proved by hand. |
-| [pha-notes-search-enhancement-request.md](pha-notes-search-enhancement-request.md) | Draft | Search the notes folder with its own index and --source archive/notes/all. |
+| [pha-notes-search-enhancement-request.md](pha-notes-search-enhancement-request.md) | IMPLEMENTED (unreleased) | The notes are indexed (`notes`/`notes_fts`) and searched: `--source pages/records/notes/all`, `pha notes`, `pha_search(source=...)`, and the search skill offers them as memory. See §7 for what shipped vs the draft. |
 | [pha-encoder-tools-enhancement-request.md](pha-encoder-tools-enhancement-request.md) | PARTLY IMPLEMENTED | The markdown-from-records artifact filter shipped; the structure prescan is still open. |
 | [pha-handoff-enhancement-request.md](pha-handoff-enhancement-request.md) | SHIPPED (0.29.0) - follow-on open | Two-machine hand-over works; the section 12 render gap remains: an unscanned hand-out can come home with no page images. |
 | [pha-stage-extends-enhancement-request.md](pha-stage-extends-enhancement-request.md) | Draft | Compose prompt files with extends (base plus delta). |

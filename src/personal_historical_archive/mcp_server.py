@@ -9,6 +9,7 @@ from . import addresses
 from . import db
 from . import doctor
 from . import manage
+from . import notes as notes_memory
 from .config import Config
 from .ingest import make_vision_client, scan_once
 from .model_client import ModelClient
@@ -65,7 +66,7 @@ def make_server(cfg: Config) -> FastMCP:
                    allow_embed: bool = False, source: str = "all",
                    encoder: str | None = None, record_kind: str | None = None,
                    fields: dict | None = None, ignore_case: bool = False) -> dict:
-        """Search extracted manuscript text and structured encoder records.
+        """Search extracted manuscript text, encoder records and the archive's notes.
 
         Args:
             query: free-text search query. May be empty when `fields` is given
@@ -80,7 +81,8 @@ def make_server(cfg: Config) -> FastMCP:
                 fall back to keyword results (with a `note`) instead of loading the
                 embed model and evicting the model that job is using.
             source: pages (page chunks), records (structured encoder records),
-                or all (default).
+                notes (the researcher's own notes — the archive's memory of
+                earlier conclusions), or all (default: pages + records + notes).
             encoder: with source records/all, restrict to one encoder id.
             record_kind: with source records/all, restrict to one record kind
                 (letter, person, ...).
@@ -89,13 +91,37 @@ def make_server(cfg: Config) -> FastMCP:
             ignore_case: match the field values case-insensitively (ASCII).
         Returns:
             The same shape as `pha search --json`: {mode, query, results, note}.
-            `results` are ranked passages with document id/name, collection, page
-            number, snippet, and full chunk text; `note` explains any degradation
-            (null when nothing was degraded).
+            `results` are ranked passages: page hits carry document id/name,
+            collection, page number, variant and the chunk text; record hits
+            carry the structured `data`; note hits have `kind: "note"`, `note`
+            (file stem), `title`, `path`, and the note `text` (capped at 20000
+            chars — read `path` for the rest; a note's `text_truncated` says so).
+            A note hit is the researcher's own conclusion, NOT evidence: verify
+            it against the pages before presenting it as fact. `note` explains
+            any degradation (null when nothing was degraded).
         """
         if mode not in ("hybrid", "keyword", "semantic"):
             mode = "hybrid"
         limit = max(1, min(int(limit), 50))
+        # The notes must be current before the query: a conclusion written this
+        # morning has to be findable now, without the user running an indexer.
+        # `ensure_indexed` probes read-only and writes only when a note changed;
+        # a failure here degrades the query, never fails it.
+        search_note: str | None = None
+        source_name = (source or "all").lower()
+        if source_name in ("notes", "all"):
+            note_client = (None if mode == "keyword" else
+                           ModelClient(cfg.embed_base_url,
+                                       timeout_s=cfg.embed_timeout_s))
+            try:
+                search_note = notes_memory.describe(notes_memory.ensure_indexed(
+                    cfg, embed_client=note_client, allow_embed=allow_embed,
+                ))
+            except Exception as e:  # noqa: BLE001 - a stale index must not fail a query
+                search_note = f"notes index could not be refreshed ({e})"
+            finally:
+                if note_client is not None:
+                    note_client.close()
         conn = db.connect(cfg.db_path, readonly=True)   # query tool: no DDL on connect
         client = ModelClient(cfg.embed_base_url, timeout_s=cfg.embed_timeout_s)
         try:
@@ -106,6 +132,9 @@ def make_server(cfg: Config) -> FastMCP:
         finally:
             client.close()
             conn.close()
+        if search_note and res is not None:
+            parts = [n for n in (search_note, res.get("note")) if n]
+            res["note"] = " | ".join(parts) if parts else None
         return res
 
     @mcp.tool()

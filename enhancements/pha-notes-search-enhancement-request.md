@@ -1,6 +1,7 @@
 # Enhancement request — search the notes folder
 
-**Status:** draft for discussion.
+**Status:** IMPLEMENTED (unreleased at the time of writing) — see §7 for what
+shipped and where it differs from this draft.
 **Author/date:** archive work session (Documenta Indica; Obsidian integration).
 **Relates to:** `pha-stable-page-addresses-enhancement-request.md` (notes cite the
 stable slug and can embed the render URL), `notes/README.md` (the note format and
@@ -179,3 +180,39 @@ labour: **pha search** covers the archive plus the notes written about it;
   `malaca.md`, `coimbra-in-pfister.md`, `afonso-mexia.md`,
   `francisco-estrada.md` and `obsidian-integration.md` — all currently
   unfindable by `pha search`.
+
+---
+
+## 7. What shipped
+
+Implemented in `notes.py` + `db.py` + `search.py`, with the CLI (`pha search
+--source notes`, `pha notes [list|index|show]`), MCP (`pha_search(source="notes")`)
+and the `pha-search-context` skill (step 0: offer the notes before answering).
+
+- **Schema**: `notes` and `notes_fts` added to `SCHEMA`, as proposed — additive,
+  so `connect()` creates them on an existing archive. `notes_fts` is keyed by the
+  note's own id and its row is replaced on every change, so a corrected note
+  stops matching its withdrawn wording.
+- **No `--source archive` rename.** `pages` keeps its name (renaming a shipped
+  flag would break scripts); the choices are now
+  `pages | records | notes | all`.
+- **`all` means all three**, notes included: a default search must surface a
+  conclusion on the subject, which is the whole point of the memory. Note hits
+  stay marked `kind: "note"` through the RRF merge. The `(kind, id)` refactor
+  described here had already landed for records, so only `_result_key` and
+  `_rrf_merge_many` needed the note branch.
+- **Freshness instead of a schedule**: `notes.ensure_indexed()` probes
+  read-only and writes only when a note appeared, changed or vanished, so
+  `pha search` (and `pha_search`) indexes a note written a minute ago without a
+  separate command. `pha notes index` forces it; `pha reindex --source notes`
+  embeds them; embeddings are best-effort and a note stays text-only when the
+  embed model is busy (the same contention rule the query vector follows).
+- **One chunk per note**, as proposed. `text` is capped at 20000 chars per hit
+  (`text_truncated`) rather than returned whole — a few notes are 300 kB, and
+  the `path` is in every hit.
+- **`README.md` and `_`-prefixed files are excluded**, and the walk is top-level
+  only: `notes/` also holds tool state (`copilot/`, `.obsidian/`), which is not
+  research output.
+- **Plugin**: the `pha_search` model tool passes note hits through
+  (`kind: "note"`); the view's `/pha/search` route asks for `--source pages`
+  because it groups hits by `document_id` and a note has none.

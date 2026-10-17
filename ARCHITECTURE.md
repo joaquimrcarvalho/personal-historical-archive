@@ -23,6 +23,12 @@ the review round-trip — the things an agent must know before acting — see
   transform → optional encoder (concatenated whole-document text, page-grounded
   records) → SQLite (FTS5 + embeddings, indexing both raw and edited
   variants) → hybrid search + FastMCP (`pha_*` tools).
+- Beside that pipeline sits the **memory**: `notes/` (the researcher's own
+  conclusions) is indexed into its own `notes` + `notes_fts` tables by
+  `notes.py`, and `pha search` fuses pages, records and notes with RRF keyed on
+  `(kind, id)`. Notes are never `documents` — search is the only surface that
+  sees them, and a note hit is marked `kind: "note"` so a conclusion is never
+  mistaken for evidence.
 
 ### archive_dir is the self-contained data root
 
@@ -359,6 +365,12 @@ really absent — install it rather than retrying.
 - The `pages` table links to a document via **`document_id`** (not `doc_id`) and
   has no `path`/`sha256`; those columns live on **`documents`**.
 - `page_edits` keys on `(page_id, editor)`.
+- **`notes` is not `documents`.** The `notes` + `notes_fts` tables mirror the
+  `notes/` folder for search only (`db.notes_*`, `notes.py`): no `document_id`,
+  no page, no collection. A note hit is `kind: "note"` with `note`/`title`/
+  `path`; it is the researcher's own conclusion (memory), so it is never mixed
+  into `documents`, `chunks`, `pha status` counts, exports or bundles. Fusion
+  keys on `(kind, id)` so a note id cannot collide with a chunk id.
 
 Introspect with `pha_schema()` / `db.schema(conn)` (columns + FK joins) before
 writing raw SQL against `archive.db`.

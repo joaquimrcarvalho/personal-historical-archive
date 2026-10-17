@@ -28,7 +28,7 @@ Model tools (registered globally, so they are available to the agent in **every*
 | `pha_documents` | structured document list (id, filename, dir_path, kind, page_count, status, palaeographer, editor, models) |
 | `pha_document` | one document's pages + per-page editor entries |
 | `pha_page` | one page's text (raw / `--edited`) |
-| `pha_search` | full-text search (hybrid) → structured hits |
+| `pha_search` | full-text search (hybrid) → structured hits, including the archive's notes (`kind: "note"`) |
 | `pha_archive` | archive dir + engine health (`pha doctor`) |
 | `pha_job_start` / `pha_job_status` / `pha_job_kill` | run `pha scan/edit/encode/reindex/review/inbox` as background jobs (`scan` + `page` = single-page rescan, with `palaeographer`/`model`/`dry_run`/`unpin`/`no_pin`) |
 

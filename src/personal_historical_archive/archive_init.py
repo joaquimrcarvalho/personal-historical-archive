@@ -516,6 +516,11 @@ how to install it) and install only what is actually needed.
 
 ## Writing a note in `notes/`
 
+Notes are **indexed for search**, so what you conclude here is found again by a
+later `pha search` (a note hit is marked `kind: "note"`). Keep one note per
+subject with a stable, descriptive file name; `README.md` and `_`-prefixed files
+are not indexed. Search them with `pha search "…" --source notes`.
+
 Cite the source document + page **and the variant**, and link the served page
 viewer so a reader can page forward and back:
 

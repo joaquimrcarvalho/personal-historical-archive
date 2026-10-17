@@ -16,6 +16,33 @@ step after that. It pulls together hits across several documents/pages into one
 human-readable summary with links and provenance, so the next query — or the
 next person — does not have to re-search from scratch.
 
+## Notes are searchable (they are the archive's memory)
+
+A note is not just a document you might open later: pha **indexes this folder**
+so a future search can find it. That is the point — the conclusion you wrote
+after three days in the catalogue comes back when you ask about the subject
+again, instead of being re-derived.
+
+- `pha search "…"` (the default `--source all`) returns your page hits **and**
+  your notes on the subject. A note hit is marked `kind: "note"` and carries
+  the note's name, title and path — never a document/page number, because a
+  note is a conclusion, not a source.
+- `pha search "…" --source notes` searches the notes alone: *"what have I
+  already concluded about this?"*
+- Freshness is automatic: a search indexes whatever notes changed since last
+  time (only the changed ones). `pha notes index` forces the pass,
+  `pha notes show <name>` prints one note, `pha status` reports how much of
+  this folder is searchable.
+- Keep one note per subject with a **stable, descriptive file name**
+  (`zumbae-tchamp-pa-identification.md`, `taprobana.md`): the file stem is the
+  note's identity in search and in the view. `README.md` and files starting
+  with `_` are not indexed (instructions and templates), and neither are
+  subfolders (tool state, not research).
+- **What you conclude is still yours to doubt.** A note records what you
+  thought at the time; agents are told to offer notes to the reader and to
+  verify their claims against the cited page rather than quoting them as
+  evidence.
+
 ## Note format (Obsidian compatible)
 
 - **Filename**: `lowercase-hyphenated.md` (e.g. `malaca.md`). One note per

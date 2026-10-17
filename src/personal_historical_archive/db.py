@@ -73,6 +73,20 @@ CREATE TABLE IF NOT EXISTS record_embeddings (
     embed_model TEXT,
     updated_at  REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    path TEXT NOT NULL,
+    title TEXT,
+    mtime REAL,
+    size_bytes INTEGER,
+    sha256 TEXT,
+    text TEXT NOT NULL,
+    embedding BLOB,
+    embed_model TEXT,
+    updated_at REAL NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(text);
 CREATE TABLE IF NOT EXISTS document_bibliography (
     document_id   INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
     sidecar_path  TEXT,
@@ -497,10 +511,11 @@ def schema(conn: sqlite3.Connection) -> dict:
     REAL column names instead of guessing them (e.g. pages has `document_id`,
     NOT `doc_id`; `path`/`sha256` live on documents, not pages).
     """
-    # skip sqlite internals and the FTS5 shadow tables (chunks_fts*);
-    # list `chunks_fts` itself separately as a note, not a column layout.
+    # skip sqlite internals and the FTS5 shadow tables (chunks_fts_data,
+    # notes_fts_idx, …): they are storage, not a schema an agent should query.
     tables = [r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'chunks_fts_%'"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+        "AND name NOT LIKE '%_fts_%'"
     ).fetchall()]
     out: dict = {"tables": {}, "relations": []}
     for t in tables:
@@ -1496,6 +1511,156 @@ def records_for_document(conn: sqlite3.Connection, doc_id: int) -> list[sqlite3.
     return conn.execute(
         "SELECT * FROM records WHERE document_id = ? ORDER BY id", (doc_id,)
     ).fetchall()
+
+
+# --------------------------------------------------------------------------- notes (memory)
+
+def notes_table_exists(conn: sqlite3.Connection) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='notes'"
+    ).fetchone() is not None
+
+
+def notes_fts_exists(conn: sqlite3.Connection) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='notes_fts'"
+    ).fetchone() is not None
+
+
+def all_notes(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every indexed note, `name`-ordered. [] when the index was never built."""
+    if not notes_table_exists(conn):
+        return []
+    return conn.execute("SELECT * FROM notes ORDER BY name").fetchall()
+
+
+def get_note(conn: sqlite3.Connection, note_id: int | None = None,
+             name: str | None = None) -> sqlite3.Row | None:
+    if not notes_table_exists(conn):
+        return None
+    if note_id is not None:
+        return conn.execute("SELECT * FROM notes WHERE id = ?", (int(note_id),)).fetchone()
+    return conn.execute("SELECT * FROM notes WHERE name = ?", (name,)).fetchone()
+
+
+def delete_note(conn: sqlite3.Connection, note_id: int) -> None:
+    if notes_fts_exists(conn):
+        _write(conn, "DELETE FROM notes_fts WHERE rowid = ?", (int(note_id),))
+    _write(conn, "DELETE FROM notes WHERE id = ?", (int(note_id),))
+
+
+def upsert_note(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    path: str,
+    title: str | None,
+    mtime: float | None,
+    size_bytes: int | None,
+    sha256: str | None,
+    text: str,
+    embedding: bytes | None = None,
+    embed_model: str | None = None,
+    fts_text: str | None = None,
+) -> int:
+    """Insert or update one note, keeping `notes_fts` in step. Returns the id.
+
+    The FTS row is keyed by the note's own id (the table is standalone, not an
+    external-content table), so replacing a note deletes its old FTS row first —
+    otherwise a corrected note would keep matching its withdrawn wording.
+    `fts_text` is what goes into the index when it should differ from the stored
+    file text (`notes.search_text`: title, prose, then front matter — so a hit
+    yields a prose snippet instead of a screen of YAML).
+    """
+    indexed_text = text if fts_text is None else fts_text
+    row = conn.execute("SELECT id FROM notes WHERE name = ?", (name,)).fetchone()
+    now = _now()
+    if row is None:
+        cur = _write(
+            conn,
+            "INSERT INTO notes (name, path, title, mtime, size_bytes, sha256, text, "
+            "embedding, embed_model, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, path, title, mtime, size_bytes, sha256, text, embedding,
+             embed_model, now),
+        )
+        note_id = int(cur.lastrowid)
+    else:
+        note_id = int(row["id"])
+        _write(
+            conn,
+            "UPDATE notes SET path=?, title=?, mtime=?, size_bytes=?, sha256=?, "
+            "text=?, embedding=?, embed_model=?, updated_at=? WHERE id=?",
+            (path, title, mtime, size_bytes, sha256, text, embedding,
+             embed_model, now, note_id),
+        )
+    if notes_fts_exists(conn):
+        _write(conn, "DELETE FROM notes_fts WHERE rowid = ?", (note_id,))
+        if indexed_text:
+            _write(conn, "INSERT INTO notes_fts (rowid, text) VALUES (?, ?)",
+                   (note_id, indexed_text))
+    return note_id
+
+
+def set_note_embedding(conn: sqlite3.Connection, note_id: int, embedding: bytes,
+                       embed_model: str | None) -> None:
+    if notes_table_exists(conn):
+        _write(conn, "UPDATE notes SET embedding = ?, embed_model = ? WHERE id = ?",
+               (embedding, embed_model, int(note_id)))
+
+
+def notes_missing_embeddings(conn: sqlite3.Connection,
+                             embed_model: str | None) -> list[sqlite3.Row]:
+    """Notes whose vector is absent or was produced by a different model."""
+    if not notes_table_exists(conn):
+        return []
+    return conn.execute(
+        "SELECT id, name, text FROM notes "
+        "WHERE embedding IS NULL OR IFNULL(embed_model, '') != ? ORDER BY id",
+        (embed_model or "",),
+    ).fetchall()
+
+
+def all_note_embeddings(conn: sqlite3.Connection,
+                        embed_model: str | None = None) -> list[sqlite3.Row]:
+    if not notes_table_exists(conn):
+        return []
+    if embed_model:
+        return conn.execute(
+            "SELECT id, embedding FROM notes WHERE embedding IS NOT NULL "
+            "AND embed_model = ?", (embed_model,),
+        ).fetchall()
+    return conn.execute(
+        "SELECT id, embedding FROM notes WHERE embedding IS NOT NULL"
+    ).fetchall()
+
+
+def notes_keyword_search(conn: sqlite3.Connection, query: str,
+                         limit: int = 10) -> list[sqlite3.Row]:
+    """FTS5 over notes. [] when the notes index was never built."""
+    if not (notes_table_exists(conn) and notes_fts_exists(conn)):
+        return []
+    return conn.execute(
+        """SELECT n.id AS note_id, n.name, n.title, n.path, n.text, n.mtime,
+                  -bm25(notes_fts) AS bm,
+                  snippet(notes_fts, 0, '…', '…', '…', 28) AS snippet
+           FROM notes_fts
+           JOIN notes n ON n.id = notes_fts.rowid
+           WHERE notes_fts MATCH ?
+           ORDER BY bm25(notes_fts)
+           LIMIT ?""",
+        (build_fts_query(query), limit),
+    ).fetchall()
+
+
+def notes_stats(conn: sqlite3.Connection) -> dict:
+    """Index-side totals: how many notes are stored and how many carry a vector."""
+    if not notes_table_exists(conn):
+        return {"indexed": 0, "embedded": 0}
+    row = conn.execute(
+        "SELECT COUNT(*) n, SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) e "
+        "FROM notes"
+    ).fetchone()
+    return {"indexed": int(row["n"] or 0), "embedded": int(row["e"] or 0)}
 
 
 # --------------------------------------------------------------------------- bibliography

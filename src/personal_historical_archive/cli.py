@@ -251,8 +251,27 @@ def _print_page_rescan(r: dict) -> None:
 
 
 def cmd_search(cfg: Config, args) -> None:
-    conn = db.connect(cfg.db_path, readonly=True)
     client = _client(cfg, cfg.embed_base_url, cfg.embed_timeout_s)
+    source = (getattr(args, "source", "all") or "all").lower()
+    mode = (args.mode or cfg.default_mode or "hybrid").lower()
+    sync_note: str | None = None
+    if source in ("notes", "all"):
+        # The notes are memory, so they must be as current as the question: a
+        # conclusion written this morning has to be findable this afternoon,
+        # without the researcher remembering to run an index command. Cheap
+        # probe first (`ensure_indexed` writes only when a note changed).
+        try:
+            from . import notes as notes_memory
+
+            sync_note = notes_memory.describe(notes_memory.ensure_indexed(
+                cfg,
+                embed_client=None if mode == "keyword" else client,
+                allow_embed=bool(getattr(args, "force", False)),
+                verbose=bool(getattr(args, "verbose", False)),
+            ))
+        except Exception as e:  # noqa: BLE001 - a stale index must not fail a query
+            sync_note = f"notes index could not be refreshed ({e})"
+    conn = db.connect(cfg.db_path, readonly=True)
     try:
         res = None
         fields = None
@@ -268,7 +287,7 @@ def cmd_search(cfg: Config, args) -> None:
         if not str(args.query or "").strip() and not fields:
             print("error: a query is required unless --field is given", file=sys.stderr)
             sys.exit(2)
-        if fields and getattr(args, "source", "all") == "pages":
+        if fields and getattr(args, "source", "all") not in ("records", "all"):
             print("error: --field only applies to --source records or all", file=sys.stderr)
             sys.exit(2)
         try:
@@ -285,13 +304,20 @@ def cmd_search(cfg: Config, args) -> None:
         except ModelError as e:
             print(f"model error: {e}", file=sys.stderr)
             sys.exit(2)
+        if sync_note and res is not None:
+            parts = [n for n in (sync_note, res.get("note")) if n]
+            res["note"] = " | ".join(parts) if parts else None
         # Point each hit at its full page: the library file + the pha page cmd.
+        # A note hit is not a page — it points at the note file instead.
         if res and res.get("results"):
             from .ingest import library_page_path
 
             for r in res["results"]:
-                doc = db.get_document(conn, r["document_id"])
                 r["page_file"] = None
+                if r.get("kind") == "note":
+                    r["note_file"] = r.get("path")
+                    continue
+                doc = db.get_document(conn, r["document_id"])
                 if doc is None:
                     continue
                 if r.get("page_no") is None:
@@ -320,7 +346,10 @@ def cmd_search(cfg: Config, args) -> None:
         print("no results")
         return
     for i, r in enumerate(res["results"], 1):
-        if r.get("kind") == "record":
+        if r.get("kind") == "note":
+            title = f" — {r['title']}" if r.get("title") else ""
+            print(f"{i:2d}. [note] {r['note']}{title}  score={r['score']}")
+        elif r.get("kind") == "record":
             rk = r.get("record_kind") or "record"
             page = r.get("page_no")
             where = f"p.{page}" if page is not None else "not page-grounded"
@@ -328,12 +357,87 @@ def cmd_search(cfg: Config, args) -> None:
         else:
             print(f"{i:2d}. [{r['source']:8s}][{r.get('variant','raw'):6s}] {r['filename']}  [{r['collection']}]  p.{r['page_no']}  score={r['score']}")
         print(f"     {r['snippet']}")
-        if r.get("page_file"):
+        if r.get("kind") == "note":
+            if r.get("note_file"):
+                print(f"     full note: {r['note_file']}")
+            if r.get("text_truncated"):
+                print("     (text truncated — read the note file for the rest)")
+        elif r.get("page_file"):
             edited = r.get("variant") == "edited"
             print(f"     full page: {r['page_file']}")
             if r.get("page_no") is not None:
                 print(f"               pha page {r['document_id']} {r['page_no']}" + (" --edited" if edited else ""))
     print(f"\n{len(res['results'])} result(s) in mode '{res['mode']}'")
+
+
+def cmd_notes(cfg: Config, args) -> None:
+    """`pha notes [list|index|show]` — the notes folder as the archive's memory.
+
+    Notes are the researcher's own conclusions (identifications, rejected
+    hypotheses, drafts). They are never documents: this command only indexes
+    them for search, so a later question can find what was already worked out.
+    """
+    from . import notes as notes_memory
+
+    action = getattr(args, "notes_cmd", None) or "list"
+
+    if action == "index":
+        client = _client(cfg, cfg.embed_base_url, cfg.embed_timeout_s)
+        try:
+            conn = db.connect(cfg.db_path)
+            try:
+                res = notes_memory.index_notes(
+                    cfg, conn, embed_client=client,
+                    force=bool(getattr(args, "force", False)),
+                    verbose=not bool(getattr(args, "json", False)),
+                )
+            finally:
+                conn.close()
+        finally:
+            client.close()
+        if getattr(args, "json", False):
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+            return
+        if res.get("error"):
+            print(f"! {res['error']}", file=sys.stderr)
+        print(f"notes: {res['indexed']} indexed ({res['embedded']} embedded, "
+              f"{res['text_only']} text-only), {res['removed']} removed, "
+              f"{res['unchanged']} unchanged")
+        return
+
+    if action == "show":
+        name = str(getattr(args, "name", "") or "").strip()
+        if not name:
+            print("error: a note name is required", file=sys.stderr)
+            sys.exit(2)
+        path = Path(cfg.notes) / (name if name.endswith(".md") else name + ".md")
+        if not path.is_file():
+            print(f"error: no note named {name!r} in {cfg.notes}", file=sys.stderr)
+            sys.exit(2)
+        print(path.read_text(encoding="utf-8", errors="replace"))
+        return
+
+    conn = db.connect(cfg.db_path, readonly=True)
+    try:
+        rows = db.all_notes(conn)
+    finally:
+        conn.close()
+    if getattr(args, "json", False):
+        print(json.dumps([
+            {"name": r["name"], "title": r["title"], "path": r["path"],
+             "embedded": r["embedding"] is not None}
+            for r in rows
+        ], ensure_ascii=False, indent=2))
+        return
+    if not rows:
+        print("no notes indexed yet; run `pha notes index` "
+              "(or just `pha search`, which indexes them on demand)")
+        return
+    for r in rows:
+        mark = "" if r["embedding"] is not None else "   (text-only)"
+        print(f"  {r['name']:<46s} {r['title'] or ''}{mark}")
+    print(f"\n{len(rows)} note(s) — `pha notes show <name>` to read one, "
+          f"`pha search \"…\" --source notes` to query them")
 
 
 def _resolve_doc_for_page(conn, target: str):
@@ -1328,6 +1432,14 @@ def cmd_status(cfg: Config, args) -> None:
         except Exception:
             pending = []
 
+        # The notes are the archive's memory; report them so a researcher can
+        # see what search will be able to use, and whether any of it is stale.
+        try:
+            from . import notes as notes_memory
+            note_stats = notes_memory.stats(cfg, conn)
+        except Exception:  # noqa: BLE001 - status must never fail over this
+            note_stats = {"files": 0, "indexed": 0, "embedded": 0, "stale": 0}
+
         # A `done` document with NO library folder on disk: complete in the
         # database, missing the human-readable output the archive exists for.
         # Nothing re-derives that path for a finished document, so `pha status`
@@ -1371,6 +1483,7 @@ def cmd_status(cfg: Config, args) -> None:
                 "pages": s["pages_done"],
                 "chunks": s["chunks"],
                 "chunks_embedded": s["chunks_embedded"],
+                "notes": note_stats,
                 "new": total_new,
                 "on_hold": total_hold,
                 "pending_review": len(pending),
@@ -1406,6 +1519,14 @@ def cmd_status(cfg: Config, args) -> None:
             print("  documents: none")
         print(f"  pages:     {s['pages_done']} extracted")
         print(f"  chunks:    {s['chunks']} indexed   ({s['chunks_embedded']} embedded)")
+        if note_stats.get("files"):
+            extra = ""
+            if note_stats.get("stale"):
+                extra = (f"   ({note_stats['stale']} changed since indexing — "
+                         f"`pha notes index`, or just search)")
+            print(f"  notes:     {note_stats['indexed']} indexed of "
+                  f"{note_stats['files']} in notes/   "
+                  f"({note_stats['embedded']} embedded){extra}")
         if total_new:
             print(f"  new:       {total_new} file(s) not yet scanned")
         if total_hold:
@@ -1968,7 +2089,13 @@ def cmd_reindex(cfg: Config, args) -> None:
         mode = "incremental: unchanged chunks reused"
     rec_n = res.get("records") or 0
     rec_note = f", {rec_n} record(s)" if rec_n else ""
-    print(f"reindexed {res['reindexed']} document(s){scope} [{mode}{rec_note}]")
+    note_n = res.get("notes") or 0
+    note_note = f", {note_n} note(s)" if note_n else ""
+    print(f"reindexed {res['reindexed']} document(s){scope} "
+          f"[{mode}{rec_note}{note_note}]")
+    if res.get("notes_error"):
+        print(f"! note embeddings unavailable ({res['notes_error']}); "
+              f"the notes are indexed text-only", file=sys.stderr)
     not_done = res.get("skipped_not_done") or []
     if not_done:
         # A skip is a REASON, not a silent success: `reindexed 0 document(s)`
@@ -4416,14 +4543,15 @@ def main(argv: list[str] | None = None) -> None:
     _add_wait_args(s)
     s.set_defaults(fn=cmd_scan)
 
-    q = sub.add_parser("search", help="search the extracted text")
+    q = sub.add_parser("search", help="search the extracted text and the notes")
     q.add_argument("query", nargs="?", default="")
     q.add_argument("--mode", choices=["hybrid", "keyword", "semantic"], default=None)
     q.add_argument("--limit", type=int, default=None)
     q.add_argument("--collection", default=None,
                    help="restrict to a collection/dir, e.g. 'documents', 'COLX' or 'collections/COLX'")
-    q.add_argument("--source", choices=["pages", "records", "all"], default="all",
-                   help="search page chunks, structured encoder records, or both "
+    q.add_argument("--source", choices=["pages", "records", "notes", "all"], default="all",
+                   help="search page chunks, structured encoder records, the archive's "
+                        "notes (its memory of earlier conclusions), or all of them "
                         "(default: all)")
     q.add_argument("--encoder", default=None,
                    help="with --source records/all, restrict to one encoder id")
@@ -4443,6 +4571,23 @@ def main(argv: list[str] | None = None) -> None:
                         "the running job's model)")
     q.add_argument("--json", action="store_true")
     q.set_defaults(fn=cmd_search)
+
+    nt = sub.add_parser(
+        "notes",
+        help="the notes/ folder as searchable memory of earlier conclusions")
+    nsub = nt.add_subparsers(dest="notes_cmd")
+    nl = nsub.add_parser("list", help="list the indexed notes (the default)")
+    nl.add_argument("--json", action="store_true")
+    nl.set_defaults(fn=cmd_notes)
+    ni = nsub.add_parser("index", help="index notes/ for search (incremental)")
+    ni.add_argument("--force", action="store_true",
+                    help="re-index and re-embed every note")
+    ni.add_argument("--json", action="store_true")
+    ni.set_defaults(fn=cmd_notes)
+    ns = nsub.add_parser("show", help="print one note in full")
+    ns.add_argument("name")
+    ns.set_defaults(fn=cmd_notes)
+    nt.set_defaults(fn=cmd_notes)
 
     st = sub.add_parser("status", help="archive summary")
     st.add_argument("--json", action="store_true",
@@ -4624,9 +4769,9 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--page", action="append", type=int, default=None, metavar="P",
                    help="only reindex page P of --doc N (repeatable); the other pages "
                         "keep their chunks and vectors untouched")
-    r.add_argument("--source", choices=["pages", "records", "all"], default="all",
-                   help="rebuild page chunks, the record keyword index, or both "
-                        "(default: all; no records means all does the same work as pages)")
+    r.add_argument("--source", choices=["pages", "records", "notes", "all"], default="all",
+                   help="rebuild page chunks, the record keyword index, the notes "
+                        "index, or all of them (default: all)")
     r.add_argument("--force", action="store_true",
                    help="re-embed EVERY chunk even when its text is unchanged "
                         "(default: reuse unchanged chunks and embed only what changed)")

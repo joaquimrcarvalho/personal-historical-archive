@@ -37,7 +37,9 @@ agent should reach for it), followed by the instructions:
 most common tasks:
 
 - `pha-search-context` — a search hit is a *snippet*; recover the full page
-  (raw and edited) before quoting or summarizing.
+  (raw and edited) before quoting or summarizing. Also covers the archive's
+  **notes** as memory: search them beside the sources, and offer them to the
+  user as earlier conclusions to check, never as evidence.
 - `pha-document-operations` — re-scan / re-edit / re-encode one
   **already-ingested** document or collection (`pha scan --path … --reprocess`,
   `pha edit --path … --page N`, `pha test`).
