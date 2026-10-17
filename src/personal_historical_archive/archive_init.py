@@ -262,8 +262,11 @@ Each skill is a folder with a `SKILL.md` (YAML front matter whose `name`
 matches the folder) and may ship helper files (`scripts/`, `examples/`, a
 licence). `skills/README.md` documents the format and how to install a skill
 into an agent runtime (`cp -R skills/<name> ~/.agents/skills/`). A bundled
-file missing from the archive is (re)created on the next pha run; an existing
-file is never overwritten — edit or extend the skills freely.
+file missing from the archive is (re)created on the next pha run. Every file
+pha writes ends with a stamp, so `pha update` can refresh a skill pha improved
+without touching one you edited: `pha skills status` shows which are current,
+outdated or edited here, and `pha skills update [--replace]` applies.
+
 
 **More skills: the open pha skill index.** Beyond the skills bundled here,
 <https://github.com/joaquimrcarvalho/pha-skill-index> lists extra published

@@ -1047,10 +1047,12 @@ class Config:
         except Exception:  # noqa: BLE001 - a doc refresh must never break a command
             pass
         # the pha-specific agent skills live IN the archive (an agent operating
-        # an archive may have no access to the pha source): seed the folder and
-        # any missing bundled skill. Seeded once and never overwritten, so a
-        # user's edits/additions survive. Skipped when the archive IS the project
-        # dir — there the repo's own skills/ folder already is the source.
+        # an archive may have no access to the pha source): create what is
+        # missing and stamp what still matches the bundle. This never replaces
+        # outdated text — that is `pha skills update` / `pha update`, which also
+        # flags the files the owner edited instead of overwriting them. Skipped
+        # when the archive IS the project dir — there the repo's own skills/
+        # folder already is the source.
         try:
             from .archive_skills import seed_archive_skills
             if self.archive_dir.resolve() != self.root.resolve():

@@ -40,7 +40,7 @@ Everything the archive owns lives under it:
 | `models/` | model-interface definitions (endpoint, api key, server model name, `api_style`, vision settings, `context_tokens`) |
 | `palaeographers/`, `editors/`, `encoders/` | content rules: prompts only, no model |
 | `notes/` | Obsidian-compatible research notes generated from archive queries |
-| `skills/` | the pha-specific agent skills, seeded by pha and never overwritten |
+| `skills/` | the pha-specific agent skills, seeded and stamped by pha; untouched files are refreshed on update, edited ones are kept and reported |
 | `library/` | the served, versioned page files (human review surface) |
 | `renders/` | rendered page images (a derived cache) |
 | `archive.db` | generated index |

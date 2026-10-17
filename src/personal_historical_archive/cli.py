@@ -370,6 +370,91 @@ def cmd_search(cfg: Config, args) -> None:
     print(f"\n{len(res['results'])} result(s) in mode '{res['mode']}'")
 
 
+def cmd_skills(cfg: Config, args) -> None:
+    """`pha skills [status|update]` — the bundled skills inside the archive.
+
+    pha ships skills *into* the archive, and it keeps improving them. A file the
+    owner has not touched is refreshed; a file they edited is reported and left
+    alone until they say otherwise — `--replace` takes pha's version after
+    backing theirs up.
+    """
+    from . import archive_skills
+
+    archive_dir = cfg.archive_dir
+    action = getattr(args, "skills_cmd", None) or "status"
+    # In the pha checkout the `skills/` folder IS the authored source, not a
+    # seeded copy: stamping or replacing it here would edit pha's own payload.
+    try:
+        if archive_dir.resolve() == cfg.root.resolve():
+            print("this archive is the pha checkout: skills/ here is the source "
+                  "pha ships from, so there is nothing to update.")
+            return
+    except OSError:
+        pass
+
+    if action == "update":
+        report = archive_skills.apply_skill_updates(
+            archive_dir,
+            replace=bool(getattr(args, "replace", False)),
+            only=list(getattr(args, "skill", None) or []),
+        )
+        if getattr(args, "json", False):
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return
+        changed = (len(report["created"]) + len(report["stamped"])
+                   + len(report["updated"]) + len(report["replaced"]))
+        kept = [p for p in report["kept"] if p != "README.md"]
+        if changed:
+            print(f"skills: {len(report['created'])} created, "
+                  f"{len(report['stamped'])} stamped, "
+                  f"{len(report['updated'])} updated, "
+                  f"{len(report['replaced'])} replaced")
+        elif kept:
+            print("skills: nothing to update automatically")
+        else:
+            print("skills: already up to date")
+        if report["backup"]:
+            print(f"  your previous versions are in {report['backup']}")
+        if kept:
+            print(f"  {len(kept)} file(s) kept because they were edited here "
+                  f"(or predate the stamp):")
+            for p in kept:
+                print(f"    skills/{p}")
+            print("  take pha's version with "
+                  "`pha skills update --replace <path>` (yours is backed up first)")
+        return
+
+    states = archive_skills.skill_states(archive_dir)
+    if getattr(args, "json", False):
+        print(json.dumps(states, ensure_ascii=False, indent=2))
+        return
+    labels = {
+        "current": "up to date",
+        "stamp": "up to date (stamp missing)",
+        "update": "update available (unmodified — `pha skills update`)",
+        "modified": "edited here; pha's version differs (`--replace` to take it)",
+        "unverified": "predates pha's stamp; cannot tell whether edited (`--replace` to take pha's)",
+        "missing": "missing from the archive (re-created on the next run)",
+    }
+    counts: dict[str, int] = {}
+    for s in states:
+        counts[s["state"]] = counts.get(s["state"], 0) + 1
+    for s in states:
+        if s["state"] == "current":
+            continue
+        print(f"  {s['state']:<10s} {s['path']}")
+        print(f"             {labels[s['state']]}")
+    if counts.get("current") == len(states):
+        print(f"skills: all {len(states)} bundled files are up to date")
+    else:
+        print()
+        print(f"skills: {counts.get('current', 0)} up to date, "
+              f"{len(states) - counts.get('current', 0)} need attention "
+              f"(of {len(states)} bundled files)")
+        print("  `pha skills update` applies the unmodified updates; "
+              "`--replace` also takes pha's version of the files you edited.")
+
+
 def cmd_notes(cfg: Config, args) -> None:
     """`pha notes [list|index|show]` — the notes folder as the archive's memory.
 
@@ -1439,6 +1524,14 @@ def cmd_status(cfg: Config, args) -> None:
             note_stats = notes_memory.stats(cfg, conn)
         except Exception:  # noqa: BLE001 - status must never fail over this
             note_stats = {"files": 0, "indexed": 0, "embedded": 0, "stale": 0}
+        # Bundled skills: outdated ones are refreshed by `pha skills update`
+        # (or `pha update`); ones edited here wait for an explicit choice.
+        try:
+            from . import archive_skills
+            skill_stats = archive_skills.skill_update_summary(cfg.archive_dir)
+        except Exception:  # noqa: BLE001 - status must never fail over this
+            skill_stats = {"updates": 0, "missing": 0, "modified": 0,
+                           "unverified": 0, "paths": []}
 
         # A `done` document with NO library folder on disk: complete in the
         # database, missing the human-readable output the archive exists for.
@@ -1484,6 +1577,7 @@ def cmd_status(cfg: Config, args) -> None:
                 "chunks": s["chunks"],
                 "chunks_embedded": s["chunks_embedded"],
                 "notes": note_stats,
+                "skills": skill_stats,
                 "new": total_new,
                 "on_hold": total_hold,
                 "pending_review": len(pending),
@@ -1527,6 +1621,13 @@ def cmd_status(cfg: Config, args) -> None:
             print(f"  notes:     {note_stats['indexed']} indexed of "
                   f"{note_stats['files']} in notes/   "
                   f"({note_stats['embedded']} embedded){extra}")
+        local_skills = skill_stats.get("modified", 0) + skill_stats.get("unverified", 0)
+        if local_skills:
+            print(f"  skills:    {local_skills} file(s) differ from pha's bundle "
+                  f"— `pha skills status`")
+        elif skill_stats.get("updates") or skill_stats.get("missing"):
+            print(f"  skills:    {skill_stats.get('updates', 0)} update(s) available "
+                  f"— `pha skills update`")
         if total_new:
             print(f"  new:       {total_new} file(s) not yet scanned")
         if total_hold:
@@ -3933,6 +4034,60 @@ def _whatsnew_after_update(old_version: str) -> str:
     return ""
 
 
+def _skills_after_update(archive_dir: str | None) -> str:
+    """Apply the new code's bundled-skill updates and report what was kept.
+
+    Spawned for the same reason as `_whatsnew_after_update`: this process still
+    holds the old package, but the skills bundled with the NEW version are
+    already on disk. `skills update` refreshes the files the owner never
+    touched and reports the ones they edited — the archive's copy of a skill is
+    never overwritten against their wishes.
+    """
+    import os
+    import subprocess
+
+    if not archive_dir:
+        return ""  # no configured archive: nothing to seed, and no default to edit
+    env = dict(os.environ)
+    env["PHA_NO_UPDATE_CHECK"] = "1"
+    env["PHA_ARCHIVE_DIR"] = archive_dir
+    proc = subprocess.run(
+        [sys.executable, "-m", "personal_historical_archive",
+         "skills", "update", "--json"],
+        capture_output=True, text=True, env=env,
+    )
+    if proc.returncode != 0:
+        return ""
+    try:
+        report = json.loads(proc.stdout or "{}")
+    except ValueError:
+        return ""
+    if not isinstance(report, dict):
+        return ""
+    updated = (len(report.get("created") or []) + len(report.get("stamped") or [])
+               + len(report.get("updated") or []))
+    replaced = len(report.get("replaced") or [])
+    lines = []
+    if updated or replaced:
+        bits = []
+        if updated:
+            bits.append(f"{updated} updated")
+        if replaced:
+            bits.append(f"{replaced} replaced")
+        lines.append("skills in the archive: " + ", ".join(bits))
+    kept = [p for p in (report.get("kept") or []) if p != "README.md"]
+    if kept:
+        lines.append(
+            f"! {len(kept)} bundled skill file(s) were edited in this archive and "
+            f"were kept as they are:")
+        for path in kept:
+            lines.append(f"    skills/{path}")
+        lines.append(
+            "  `pha skills status` to review; `pha skills update --replace` to take "
+            "pha's version (your copy is backed up under .pha/skills-backup/ first).")
+    return "\n".join(lines)
+
+
 def cmd_update(cfg: Config, args) -> None:
     """`pha update` — check GitHub for a newer pha and install it.
 
@@ -3999,6 +4154,16 @@ def cmd_update(cfg: Config, args) -> None:
     else:
         if view_msg:
             print(view_msg)
+    # Bring the archive's bundled skills up to date with the version just
+    # installed, and say plainly which ones the owner edited (those are kept).
+    try:
+        skills_msg = _skills_after_update(archive_dir)
+    except Exception:  # noqa: BLE001 - the tool update already succeeded
+        skills_msg = ""
+    if skills_msg:
+        print()
+        print(skills_msg)
+    print()
     print("restart pha to use the new version.")
     print("On the next pha command the agent docs (AGENTS.md / README.md) in your "
           "archive are refreshed if they are outdated.")
@@ -4588,6 +4753,25 @@ def main(argv: list[str] | None = None) -> None:
     ns.add_argument("name")
     ns.set_defaults(fn=cmd_notes)
     nt.set_defaults(fn=cmd_notes)
+
+    sk = sub.add_parser(
+        "skills",
+        help="the skills pha ships into this archive: what is current, outdated or edited here")
+    ssub = sk.add_subparsers(dest="skills_cmd")
+    skst = ssub.add_parser("status", help="show bundled-skill state (the default)")
+    skst.add_argument("--json", action="store_true")
+    skst.set_defaults(fn=cmd_skills)
+    skup = ssub.add_parser("update", help="update the bundled skills you have not edited")
+    skup.add_argument("--replace", action="store_true",
+                      help="also take pha's version of the files edited here "
+                           "(the local version is backed up under .pha/skills-backup/)")
+    skup.add_argument("skill", nargs="*", metavar="SKILL",
+                      help="with --replace, only these skills or files "
+                           "(e.g. `pha skills update --replace pha-search-context`; "
+                           "default: every edited file)")
+    skup.add_argument("--json", action="store_true")
+    skup.set_defaults(fn=cmd_skills)
+    sk.set_defaults(fn=cmd_skills)
 
     st = sub.add_parser("status", help="archive summary")
     st.add_argument("--json", action="store_true",

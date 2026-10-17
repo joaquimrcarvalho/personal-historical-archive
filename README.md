@@ -487,13 +487,16 @@ the archive holds its own copy:
     (+ its scripts/, examples/, README and LICENSE - every bundled file is seeded)
 ```
 
-`pha init-archive` seeds it, and every pha run seeds it into an existing
-dedicated archive that lacks it (`Config.ensure_dirs`). A bundled file is
-written only when it is missing and is never overwritten, so an archive
-owner's edits and extra skills survive every later run; a missing file (e.g.
-a skill added in a newer pha version) is (re)created, which is how updates
-reach an existing archive. The archive's own `AGENTS.md` and `README.md`
-point agents at `<archive>/skills/` first.
+`pha init-archive` seeds it, and every pha run adds anything missing to an
+existing dedicated archive (`Config.ensure_dirs`). Every bundled file pha
+writes ends with a stamp recording a hash of what it wrote, so an update can
+tell its own text from yours: `pha update` (via `pha skills update`) refreshes
+the files you never touched and **keeps, and tells you about, the ones you
+edited** — `pha skills update --replace [skill]` takes pha's version after
+backing yours up under `.pha/skills-backup/`. `pha skills status` lists what is
+current, outdated or edited here. Your own skills are never touched. The
+archive's own `AGENTS.md` and `README.md` point agents at `<archive>/skills/`
+first.
 
 Every file of a bundled skill is **embedded in the pha package**
 (`archive_skills.py`), not read from the source tree, precisely because the

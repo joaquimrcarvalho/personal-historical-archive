@@ -110,20 +110,40 @@ names:
 
 Then read `skills/<name>/SKILL.md` before the task it covers, and install it
 into your agent runtime as above (`cp -R skills/<name> ~/.agents/skills/`). A
-skill you add by hand is yours: pha seeds only its own, and never overwrites a
-file that is already here.
+skill you add by hand is yours: pha seeds only its own and never touches a
+folder it did not write.
 
 ## Editing and updating
 
 `pha` seeds this folder from the skills bundled with the installed pha
-version: a bundled file is written **only when it is missing**, and an existing
-file is never overwritten — so your edits survive. A skill or file added in a
-newer pha version appears here on the next pha run, which is how an updated
-install reaches an existing archive. (A bundled file you delete is re-seeded
-the same way; to keep a custom version, edit the file in place instead.)
+version, and it keeps improving them — a skill is guidance an agent obeys, so
+a stale copy is worse than none. Every file pha writes carries a **stamp** at
+the end recording a hash of what it wrote:
+
+    <!-- pha-skill-template: sha256:… -->      (in a .md file)
+    # pha-skill-template: sha256:…             (in a script)
+
+That stamp is how pha tells your work from its own:
+
+- **Untouched** (stamp still matches): refreshed on `pha update` or
+  `pha skills update`, silently — that is how an improved skill reaches an
+  existing archive.
+- **Edited by you** (the text no longer matches the stamp, or you appended
+  something after it): **never overwritten**. `pha skills status` lists it and
+  `pha update` tells you it was kept. To take pha's version anyway:
+
+      pha skills update --replace pha-search-context
+
+  Your copy is written to `.pha/skills-backup/<date>/` first, so the choice is
+  reversible. `--replace` with no name takes pha's version of every edited
+  file; `--skill <path>` limits it.
+- **Written before pha stamped skills** (no stamp, and different from the
+  installed pha's copy): pha cannot prove it is untouched, so it treats it as
+  yours and reports it as `unverified` rather than guessing. `--replace` is
+  again the explicit way to take pha's version.
+- A bundled file you delete is re-created; a whole skill added in a newer pha
+  version appears on the next run.
 
 Add your own skills — any folder holding a `SKILL.md` conforming to the format
-above — and edit or extend the bundled ones freely. To pick up a newer authored
-version of a skill, copy it from the `skills/` folder of the pha source
-repository, or from a newly created archive of the same pha version; pha will
-not replace the files you already have.
+above — and edit or extend the bundled ones freely. Only bundled files are
+compared; a folder of your own is never read, reported or replaced.

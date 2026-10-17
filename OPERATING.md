@@ -91,9 +91,13 @@ The archive carries its own `skills/` folder — every bundled skill as
 `<archive>/skills/<name>/SKILL.md` (plus the skill's helper files) and
 `skills/README.md` (the format, and how to install one into a runtime).
 `pha init-archive` seeds it, and every run adds anything missing to an existing
-dedicated archive (`Config.ensure_dirs`): an existing file is never overwritten,
-so the owner's edits survive, and a file or whole skill added in a newer pha
-version appears on the next run. Every bundled file is embedded in the pha
+dedicated archive (`Config.ensure_dirs`). Every bundled file pha writes is
+stamped (a trailing `sha256` comment), which is how an update tells its own
+text from the owner's: `pha skills update` (run by `pha update`) refreshes a
+file whose stamp still matches, and **reports** a file the owner edited instead
+of overwriting it — `pha skills update --replace [skill]` takes pha's version
+after backing the local copy up under `.pha/skills-backup/`. `pha skills status`
+shows which files are current, outdated, edited here or predate the stamp. Every bundled file is embedded in the pha
 package (not read from this checkout), precisely because the agent operating an
 archive may have pha installed with no access to this repository — and the
 archive's own `AGENTS.md`/`README.md` point agents at `<archive>/skills/` first.

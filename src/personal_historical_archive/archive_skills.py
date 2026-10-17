@@ -20,12 +20,13 @@ these skills exist for. The repo's `skills/<name>/` files are the authored
 copies; `tests/test_archive_skills.py` asserts the embedded files match them
 byte for byte, so the two cannot drift.
 
-Seeding writes a bundled file **only when it is missing** — like
-`notes/README.md`, and unlike README.md/AGENTS.md (which are marker-stamped
-and refreshed): an existing skill file is never overwritten, so the archive
-owner's edits survive. A missing bundled file — e.g. a skill added in a newer
-pha version — is (re)created on the next run, which is how updates reach an
-existing archive.
+Seeding creates what is missing and stamps what still matches the bundle,
+**without replacing outdated text** — a plain command never rewrites the
+owner's folder behind their back. Updating is explicit: `pha skills update`
+(or `pha update`, which runs it after installing) refreshes the files whose
+stamp still matches what pha wrote, and REPORTS the ones the owner edited
+instead of touching them. `--replace` is the opt-in that takes pha's version of
+an edited file, after backing the local copy up under `.pha/skills-backup/`.
 
 This module deliberately imports nothing from the package, so both
 `archive_init.init_archive` and `Config.ensure_dirs` can use it without an
@@ -33,6 +34,7 @@ import cycle through `config`.
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 _SKILL_DOCUMENT_OPERATIONS = r'''---
@@ -621,23 +623,43 @@ names:
 
 Then read `skills/<name>/SKILL.md` before the task it covers, and install it
 into your agent runtime as above (`cp -R skills/<name> ~/.agents/skills/`). A
-skill you add by hand is yours: pha seeds only its own, and never overwrites a
-file that is already here.
+skill you add by hand is yours: pha seeds only its own and never touches a
+folder it did not write.
 
 ## Editing and updating
 
 `pha` seeds this folder from the skills bundled with the installed pha
-version: a bundled file is written **only when it is missing**, and an existing
-file is never overwritten — so your edits survive. A skill or file added in a
-newer pha version appears here on the next pha run, which is how an updated
-install reaches an existing archive. (A bundled file you delete is re-seeded
-the same way; to keep a custom version, edit the file in place instead.)
+version, and it keeps improving them — a skill is guidance an agent obeys, so
+a stale copy is worse than none. Every file pha writes carries a **stamp** at
+the end recording a hash of what it wrote:
+
+    <!-- pha-skill-template: sha256:… -->      (in a .md file)
+    # pha-skill-template: sha256:…             (in a script)
+
+That stamp is how pha tells your work from its own:
+
+- **Untouched** (stamp still matches): refreshed on `pha update` or
+  `pha skills update`, silently — that is how an improved skill reaches an
+  existing archive.
+- **Edited by you** (the text no longer matches the stamp, or you appended
+  something after it): **never overwritten**. `pha skills status` lists it and
+  `pha update` tells you it was kept. To take pha's version anyway:
+
+      pha skills update --replace pha-search-context
+
+  Your copy is written to `.pha/skills-backup/<date>/` first, so the choice is
+  reversible. `--replace` with no name takes pha's version of every edited
+  file; `--skill <path>` limits it.
+- **Written before pha stamped skills** (no stamp, and different from the
+  installed pha's copy): pha cannot prove it is untouched, so it treats it as
+  yours and reports it as `unverified` rather than guessing. `--replace` is
+  again the explicit way to take pha's version.
+- A bundled file you delete is re-created; a whole skill added in a newer pha
+  version appears on the next run.
 
 Add your own skills — any folder holding a `SKILL.md` conforming to the format
-above — and edit or extend the bundled ones freely. To pick up a newer authored
-version of a skill, copy it from the `skills/` folder of the pha source
-repository, or from a newly created archive of the same pha version; pha will
-not replace the files you already have.
+above — and edit or extend the bundled ones freely. Only bundled files are
+compared; a folder of your own is never read, reported or replaced.
 '''
 
 _SKILL_ZOTERO_BIBLIOGRAPHY = """---
@@ -3324,29 +3346,268 @@ def bundled_skill_files() -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
     )
 
 
-def seed_archive_skills(archive_dir: str | Path) -> list[str]:
-    """Create `<archive>/skills/` and seed it: the README plus every file of
-    every bundled skill, **only when missing**.
+# --- updating the bundled skills without destroying local work -------------
+#
+# Skills are guidance an agent obeys, so a fixed copy goes stale: pha must be
+# able to improve `pha-search-context` and have the improvement reach the
+# archive. But this folder is also the owner's (they are invited to edit and
+# extend it), so a blind overwrite would throw away their work.
+#
+# The rule, the same one the archive docs use: every bundled file is written
+# with a trailing stamp recording a hash of the body pha wrote. A file that
+# still carries a MATCHING hash is untouched and can be refreshed; a file whose
+# body no longer matches was edited and is never overwritten silently — it is
+# reported, and `pha skills update --replace` is the explicit way to take the
+# bundled version (the old file is backed up first).
+#
+# The stamp goes at the END, not the top: a `SKILL.md` must begin with its YAML
+# front matter, and the helper scripts are Python/JSON, so an HTML comment would
+# be a syntax error there.
 
-    An existing file is never overwritten, so a user's edits survive every
-    later pha run. A bundled file that is missing (including a whole skill
-    added in a newer pha version) is (re)created, which is how an updated
-    install reaches an existing archive. Returns the archive-relative paths it
-    created, e.g. ['README.md', 'pha-search-context/SKILL.md'].
+_SKILL_MARKER_MD = "<!-- pha-skill-template: sha256:"
+_SKILL_MARKER_HASH = "# pha-skill-template: sha256:"
+
+# Which extras are not prose, so the stamp must be a `#` comment.
+_HASH_COMMENT_SUFFIXES = {
+    ".py", ".sh", ".bash", ".zsh", ".js", ".mjs", ".ts", ".json", ".yaml",
+    ".yml", ".toml", ".ini", ".cfg", ".pl", ".rb", ".r", ".sql",
+}
+
+
+def _marker_prefix(relative_path: str) -> tuple[str, str]:
+    suffix = Path(relative_path).suffix.lower()
+    if suffix in _HASH_COMMENT_SUFFIXES:
+        return _SKILL_MARKER_HASH, ""
+    return _SKILL_MARKER_MD, " -->"
+
+
+def _normalise(body: str) -> str:
+    """One trailing newline, so a stamped file round-trips byte for byte."""
+    return body.rstrip("\n") + "\n"
+
+
+def _skill_sha(body: str) -> str:
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def stamp_skill(relative_path: str, body: str) -> str:
+    """The text pha writes to the archive: the body plus its trailing stamp."""
+    normalised = _normalise(body)
+    prefix, suffix = _marker_prefix(relative_path)
+    return (f"{normalised}\n{prefix}{_skill_sha(normalised)}{suffix}\n")
+
+
+def _stamp_info(relative_path: str, text: str) -> tuple[str, str | None, str]:
+    """(body before the stamp, recorded hash, text after the stamp).
+
+    The stamp is only meaningful as the LAST content of the file. Text after it
+    means the owner appended something — common, since the stamp sits at the end
+    — and then the file is edited, not pristine.
+    """
+    prefix, suffix = _marker_prefix(relative_path)
+    index = text.rfind(prefix)
+    if index == -1:
+        return _normalise(text), None, ""
+    end = text.find(suffix, index + len(prefix)) if suffix else text.find("\n", index)
+    if end == -1:
+        return _normalise(text), None, ""
+    recorded = text[index + len(prefix):end].strip()
+    is_hash = len(recorded) == 64 and all(c in "0123456789abcdef" for c in recorded)
+    if not is_hash:
+        return _normalise(text), None, ""
+    trailing_start = text.find("\n", end)
+    trailing = "" if trailing_start == -1 else text[trailing_start + 1:]
+    return _normalise(text[:index]), recorded, trailing
+
+
+def unstamp_skill(relative_path: str, text: str) -> tuple[str, str | None]:
+    """(body, recorded hash) for a file pha wrote; (body, None) when unstamped."""
+    body, recorded, trailing = _stamp_info(relative_path, text)
+    if trailing.strip():
+        # content after the stamp: the file is no longer what pha wrote
+        return _normalise(text), None
+    return body, recorded
+
+
+def _file_state(relative_path: str, text: str, bundled: str) -> str:
+    """current | stamp | update | modified | unverified (see the block above)."""
+    body, recorded, trailing = _stamp_info(relative_path, text)
+    target = _normalise(bundled)
+    if recorded is None:
+        # Written before pha stamped skills (or pha's stamp was removed): pha
+        # cannot prove it is untouched, so it is the owner's unless it still
+        # matches the bundle exactly.
+        return "stamp" if body == target else "unverified"
+    if trailing.strip():
+        return "modified"
+    if _skill_sha(body) != recorded:
+        return "modified"
+    if body == target:
+        return "current"
+    return "update"
+
+
+def bundled_skill_map() -> dict[str, str]:
+    """Every bundled file as {archive-relative path: body}, README first."""
+    out: dict[str, str] = {"README.md": SKILLS_README_MD}
+    for name, files in bundled_skill_files():
+        for relative_path, body in files:
+            out[f"{name}/{relative_path}"] = body
+    return out
+
+
+def skill_states(archive_dir: str | Path) -> list[dict]:
+    """What the archive's `skills/` folder holds against what pha bundles.
+
+    Each entry: {path, state, has_local}. `state` is
+    missing | current | stamp | update | modified | unverified.
+    """
+    root = Path(archive_dir) / "skills"
+    states: list[dict] = []
+    for relative_path, bundled in bundled_skill_map().items():
+        target = root / relative_path
+        if not target.is_file():
+            states.append({"path": relative_path, "state": "missing",
+                           "has_local": False})
+            continue
+        try:
+            text = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            states.append({"path": relative_path, "state": "unverified",
+                           "has_local": True})
+            continue
+        states.append({
+            "path": relative_path,
+            "state": _file_state(relative_path, text, bundled),
+            "has_local": True,
+        })
+    return states
+
+
+def _write_atomic(target: Path, text: str) -> None:
+    """Write via a sibling temp file so a concurrent pha never sees half a file."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".pha-tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(target)
+
+
+def _backup_root(archive_dir: Path) -> Path:
+    import time
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    return archive_dir / ".pha" / "skills-backup" / stamp
+
+
+def seed_archive_skills(archive_dir: str | Path,
+                        refresh: bool = False) -> list[tuple[str, str]]:
+    """Create `<archive>/skills/` and keep pha's own files identifiable.
+
+    Actions per file: `created` (was missing), `stamped` (identical text, pha
+    added its stamp), `updated` (an untouched bundled file refreshed — only
+    with `refresh=True`), `kept` (left exactly as it is: the owner edited it, it
+    predates the stamp, or an update is waiting for `pha skills update`).
+
+    Default `refresh=False` is what `ensure_dirs` runs on every command: it is
+    silent, creates what is missing, and stamps the files that still match the
+    bundle so their provenance is known — but it never replaces outdated text,
+    because that is the owner's decision to make on an update
+    (`apply_skill_updates`, `pha skills update`). A file the owner edited is
+    never overwritten here or there without `replace=True`.
     """
     root = Path(archive_dir) / "skills"
     root.mkdir(parents=True, exist_ok=True)
-    created: list[str] = []
-    readme = root / "README.md"
-    if not readme.exists():
-        readme.write_text(SKILLS_README_MD, encoding="utf-8")
-        created.append("README.md")
-    for name, files in bundled_skill_files():
-        for relative_path, body in files:
-            target = root / name / relative_path
-            if target.exists():
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(body, encoding="utf-8")
-            created.append(f"{name}/{relative_path}")
-    return created
+    results: list[tuple[str, str]] = []
+    for relative_path, bundled in bundled_skill_map().items():
+        target = root / relative_path
+        if not target.is_file():
+            _write_atomic(target, stamp_skill(relative_path, bundled))
+            results.append((relative_path, "created"))
+            continue
+        try:
+            current = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            results.append((relative_path, "kept"))
+            continue
+        state = _file_state(relative_path, current, bundled)
+        if state == "stamp" or (state == "update" and refresh):
+            _write_atomic(target, stamp_skill(relative_path, bundled))
+            results.append((relative_path, "stamped" if state == "stamp" else "updated"))
+        else:  # current | update (waiting) | modified | unverified
+            results.append((relative_path, "kept"))
+    return results
+
+
+def apply_skill_updates(archive_dir: str | Path, replace: bool = False,
+                        only: list[str] | None = None) -> dict:
+    """Apply bundled-skill updates, optionally replacing locally edited files.
+
+    `replace` overwrites the files the owner changed (`modified`) or that predate
+    the stamp (`unverified`), but a copy of each is written to
+    `<archive>/.pha/skills-backup/<stamp>/` first — "replace" must always be
+    undoable by hand. `only` limits replacement to those archive-relative paths
+    (a skill folder name also matches all its files), so one skill can be taken
+    while another is kept.
+    """
+    archive_dir = Path(archive_dir)
+    root = archive_dir / "skills"
+    wanted = [w.strip().strip("/") for w in (only or []) if str(w).strip()]
+
+    def selected(relative_path: str, state: str) -> bool:
+        if state not in ("modified", "unverified"):
+            return False
+        if not wanted:
+            return True
+        return any(relative_path == w or relative_path.startswith(w + "/")
+                   for w in wanted)
+
+    bundled = bundled_skill_map()
+    states = {s["path"]: s["state"] for s in skill_states(archive_dir)}
+    # `current` and `kept` are different answers: "already up to date" is not
+    # "we left your file alone because you edited it". A caller that reports
+    # `kept` as "your edits" (pha update does) must not see the first.
+    report: dict = {"created": [], "stamped": [], "updated": [], "replaced": [],
+                    "current": [], "kept": [], "backup": None}
+    backup_dir = None
+    for relative_path, body in bundled.items():
+        state = states.get(relative_path, "missing")
+        target = root / relative_path
+        if state == "missing":
+            _write_atomic(target, stamp_skill(relative_path, body))
+            report["created"].append(relative_path)
+            continue
+        if state == "current":
+            report["current"].append(relative_path)
+            continue
+        if state in ("stamp", "update"):
+            _write_atomic(target, stamp_skill(relative_path, body))
+            report["stamped" if state == "stamp" else "updated"].append(relative_path)
+            continue
+        if replace and selected(relative_path, state):
+            if backup_dir is None:
+                backup_dir = _backup_root(archive_dir)
+            saved = backup_dir / relative_path
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            saved.write_bytes(target.read_bytes())
+            _write_atomic(target, stamp_skill(relative_path, body))
+            report["replaced"].append(relative_path)
+            continue
+        report["kept"].append(relative_path)
+    report["backup"] = str(backup_dir) if backup_dir else None
+    return report
+
+
+def skill_update_summary(archive_dir: str | Path) -> dict:
+    """One-glance answer for `pha update`/`pha status`: what needs deciding.
+
+    {updates: n, modified: n, unverified: n, paths: [locally-changed paths]}
+    """
+    states = skill_states(archive_dir)
+    pending = [s for s in states if s["state"] in ("modified", "unverified")]
+    return {
+        "updates": sum(1 for s in states if s["state"] == "update"),
+        "missing": sum(1 for s in states if s["state"] == "missing"),
+        "modified": sum(1 for s in states if s["state"] == "modified"),
+        "unverified": sum(1 for s in states if s["state"] == "unverified"),
+        "paths": [s["path"] for s in pending],
+    }
