@@ -412,7 +412,7 @@ function inline(t, o) {
   s = s.split('\\(').join('$')
   s = s.split('\\)').join('$')
   t = s
-  const re = /(\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|`[^`\n]+`|~~[^~\n]+~~|\[\[([^\]]+)\]\]|\[\^(\d+)\]|\[([^\]]+)\]\(([^)]+)\)|\$[\^_]\{[^}]*\}\$)/g
+  const re = /(!\[([^\]]*)\]\(([^)\s]+)\)|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|`[^`\n]+`|~~[^~\n]+~~|\[\[([^\]]+)\]\]|\[\^(\d+)\]|\[([^\]]+)\]\(([^)]+)\)|\$[\^_]\{[^}]*\}\$)/g
   let last = 0
   let m
   while ((m = re.exec(t))) {
@@ -422,7 +422,23 @@ function inline(t, o) {
     else if (tok.startsWith('__') && tok.endsWith('__')) out.push(React.createElement('strong', null, tok.slice(2, -2)))
     else if (tok.startsWith('`') && tok.endsWith('`')) out.push(React.createElement('code', null, tok.slice(1, -1)))
     else if (tok.startsWith('~~') && tok.endsWith('~~')) out.push(React.createElement('del', null, tok.slice(2, -2)))
-    else if (tok.startsWith('[[')) {
+    else if (tok.startsWith('![')) {
+      // A markdown image embed — `![](http://127.0.0.1:8765/doc/<slug>/p437.jpg)`, the
+      // form notes/README.md tells the owner to use for a picture that belongs inline.
+      // Without this branch the `!` stayed as literal text and the rest rendered as a
+      // plain link, so an embedded picture showed up as "!" followed by a link.
+      const im = tok.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/)
+      const local = im && o.imageSrc ? o.imageSrc(classifyLink(im[2])) : null
+      out.push(im
+        ? React.createElement('img', {
+            className: 'pha-md-img',
+            src: local || im[2],
+            alt: im[1] || '',
+            loading: 'lazy',
+            key: 'imd' + m.index,
+          })
+        : tok)
+    } else if (tok.startsWith('[[')) {
       // [[Note]] · [[Note|label]] · [[Note#Heading]] · [[Note.md]] — resolved against
       // the note list when we have it, so a miss renders as a dangling link instead of
       // failing silently on click.
@@ -726,6 +742,9 @@ const CSS = [
   // second, shorter box that letterboxed the page inside it (the dark bands either side).
   // A tall page simply scrolls.
   '.pha-img{display:block;width:100%;height:auto;border:1px solid var(--dsw-alias-border-l1,#333);border-radius:6px;background:var(--dsw-alias-bg-layer-1,transparent)}',
+  // An image EMBEDDED in markdown (a note's `![]()`): it keeps its natural size up to
+  // the text column's width instead of taking the whole pane like the page image.
+  '.pha-md-img{display:block;max-width:100%;height:auto;margin:8px 0;border:1px solid var(--dsw-alias-border-l1,#333);border-radius:6px}',
   '.pha-vsplit{width:6px;flex:0 0 6px;align-self:stretch;cursor:col-resize;background:var(--dsw-alias-border-l1,#333);border-radius:3px;touch-action:none}',
   '.pha-vsplit:hover,.pha-vsplit.drag{background:var(--dsw-alias-brand-primary,#0b5fff)}',
   '.pha-pages{display:flex;flex-direction:column;gap:6px}',
@@ -793,7 +812,7 @@ function PhaView(props) {
   const [draggingMedia, setDraggingMedia] = React.useState(false)
   const [showImg, setShowImg] = React.useState(() => seedUi(viewBoot).showImg)
   const [textOn, setTextOn] = React.useState(() => seedUi(viewBoot).textOn)
-  const [imgData, setImgData] = React.useState(null)
+  const [imgFailed, setImgFailed] = React.useState(false)
   const [rootEl, setRootEl] = React.useState(null)
   const [noteAnchor, setNoteAnchor] = React.useState(null)
   const [bibOpen, setBibOpen] = React.useState(false)
@@ -833,18 +852,20 @@ function PhaView(props) {
     viewMemory.set(sid, snapshotView(state, { textOn: textOn, showImg: showImg, leftPct: leftPct, mediaPct: mediaPct }))
   })
 
-  const pageNo = state.pageReq ? state.pageReq.page : null
   React.useEffect(() => {
     if (!state.selectedNote || !noteAnchor) return
     scrollToAnchor(noteAnchor)
   }, [state.selectedNote, noteAnchor])
 
-  React.useEffect(() => {
-    if (!showImg || !state.pageReq) { setImgData(null); return }
-    let alive = true
-    get('/pha/pageImage?doc=' + encodeURIComponent(state.pageReq.doc) + '&page=' + state.pageReq.page).then((r) => { if (alive) setImgData(r && r.ok ? r.dataUrl : null) }).catch(() => { if (alive) setImgData(null) })
-    return () => { alive = false }
-  }, [showImg, pageNo])
+  // The page image is a plain binary URL, not a fetched data URL: it can be many
+  // megabytes, and the old `/pha/pageImage` JSON transport lost the whole image once
+  // base64 crossed the subprocess stdout cap (the head was dropped, so the data URL
+  // arrived without its `data:` prefix and the <img> silently rendered nothing).
+  // A URL also lets the browser cache the render and show it while it streams.
+  const imgSrc = (showImg && state.pageReq)
+    ? '/pha/render?doc=' + encodeURIComponent(state.pageReq.doc) + '&page=' + encodeURIComponent(state.pageReq.page)
+    : null
+  React.useEffect(() => { setImgFailed(false) }, [imgSrc])
 
   // Pin the root to the visible area so left and right panes scroll independently.
   React.useEffect(() => {
@@ -1114,6 +1135,18 @@ function PhaView(props) {
   function docIdForSlug(slug) {
     for (const d of (state.docs || [])) if (docSlugFor(d) === slug) return d.id
     return null
+  }
+
+  // An embedded picture (`![](http://127.0.0.1:8765/doc/<slug>/p437.jpg)`, the form
+  // notes/README.md documents) is served by THIS plugin's binary route when its slug
+  // resolves in the archive being browsed — so the picture renders without `pha serve`
+  // running, exactly like ⌘-clicking a citation reads the page here. Anything else (an
+  // external URL, a path) keeps the src it was written with.
+  function imageSrcFor(c) {
+    if (!c || c.kind !== 'citation' || c.page === null || c.page === undefined) return null
+    const id = docIdForSlug(c.slug)
+    if (id === null || id === undefined) return null
+    return '/pha/render?doc=' + encodeURIComponent(id) + '&page=' + encodeURIComponent(c.page)
   }
 
   // A citation link (`/doc/<slug>/p<NNN>`) points at the pha serve viewer. Resolve the
@@ -1475,7 +1508,7 @@ function PhaView(props) {
       ),
       s.defMsg ? h('div', { className: 'pha-muted', style: { fontSize: 12 } }, s.defMsg) : null,
       fd.front ? h('pre', { className: 'pha-pre', style: { maxHeight: '30vh' } }, fd.front) : null,
-      h('div', { className: 'pha-md' }, renderMd(fd.body)),
+      h('div', { className: 'pha-md' }, renderMd(fd.body, { imageSrc: imageSrcFor })),
     )
   } else if (s.defMode && !s.selectedDef) {
     right = h('div', { className: 'pha-empty' }, s.defMsg || 'Loading definition…')
@@ -1488,6 +1521,7 @@ function PhaView(props) {
         onCitation: openCitation,
         onAnchor: scrollToAnchor,
         noteNames: noteNames,
+        imageSrc: imageSrcFor,
       }),
     )
   } else if (s.noteMode && !s.selectedNote) {
@@ -1520,7 +1554,16 @@ function PhaView(props) {
             ? { flex: '0 0 ' + mediaPct + '%', maxWidth: mediaPct + '%' }
             : { flex: '1 1 auto', maxWidth: '100%' },
         },
-          imgData ? h('img', { className: 'pha-img', src: imgData, alt: 'page' }) : h('div', { className: 'pha-empty' }, 'No render image'))
+          (imgSrc && !imgFailed)
+            ? h('img', {
+                className: 'pha-img',
+                src: imgSrc,
+                alt: 'page',
+                // A missing render (or a page whose image is gone) must say so instead
+                // of leaving the browser's broken-image glyph in the pane.
+                onError: () => setImgFailed(true),
+              })
+            : h('div', { className: 'pha-empty' }, 'No render image'))
       : null
     const mediaSplit = (showImg && textOn)
       ? h('div', {
@@ -1542,7 +1585,7 @@ function PhaView(props) {
       ) : pv ? h('div', { className: 'pha-text' },
         h('div', { className: 'pha-muted' }, 'page ' + (s.pageReq ? s.pageReq.page : '') + ' · ' + (pv.variant || '') + (pv.reviewed ? ' · reviewed' : '')),
         h('div', { className: 'pha-muted' }, pv.page_file || ''),
-        plain ? h('pre', { className: 'pha-pre' }, pv.text || '(empty)') : h('div', { className: 'pha-md' }, renderMd(pv.text || '')),
+        plain ? h('pre', { className: 'pha-pre' }, pv.text || '(empty)') : h('div', { className: 'pha-md' }, renderMd(pv.text || '', { imageSrc: imageSrcFor })),
       ) : (s.pageLoading ? h('div', { className: 'pha-empty' }, 'Loading page…') : h('div', { className: 'pha-empty' }, 'Select a page to read its text.'))
     }
     const bibLive = (s.bib && s.bib.found) ? s.bib : null

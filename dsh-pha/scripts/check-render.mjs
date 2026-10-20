@@ -81,6 +81,12 @@ const NOTE = [
   '',
   'Citations: [p. 437](http://127.0.0.1:8765/doc/colx-d/p437) and [pic](http://127.0.0.1:8765/doc/colx-d/p051.jpg).',
   '',
+  // The embed form notes/README.md tells the owner to use for a picture that belongs
+  // inline. Before the fix the `!` stayed as text and the rest became a plain link.
+  'Embedded picture: ![](http://127.0.0.1:8765/doc/colx-d/p051.jpg) inline in a line.',
+  '',
+  '![a map](http://127.0.0.1:8765/doc/colx-d/p437.jpg)',
+  '',
   'Other links: [sibling](other-note.md), [top](#Heading-one), [site](https://example.com/x).',
   '',
   'Reference [^1].',
@@ -161,6 +167,36 @@ check(JSON.stringify(clicks[3]) === JSON.stringify(['anchor', 'Heading-one']),
   'clicking an anchor scrolls instead of navigating')
 
 check(byClass('pha-fn-back').length === 1, 'each footnote links back to its reference')
+
+// Markdown image embeds: the notes embed a page with `![]()` (an inline picture and a
+// standalone one). They must become <img> elements — not a literal "!" followed by a
+// link — and they must use the inline-image class, never the full-pane `.pha-img`.
+const imgs = nodes.filter((n) => n.type === 'img')
+check(imgs.length === 2, 'markdown image embeds render as <img> (not "!" + a link)')
+check(imgs.every((n) => String(n.props.className || '').includes('pha-md-img')),
+  'an embedded image uses the inline-image class, not the full-pane page image')
+check(imgs.every((n) => !String(n.props.className || '').includes('pha-img')),
+  'an embedded image does not reuse the page-pane <img> class')
+check(imgs.some((n) => n.props.src === 'http://127.0.0.1:8765/doc/colx-d/p051.jpg'),
+  'an embedded image keeps its src')
+check(imgs.some((n) => n.props.alt === 'a map'), 'an embedded image keeps its alt text')
+check(imgs.every((n) => String(n.props.loading) === 'lazy'), 'an embedded image is lazy-loaded')
+
+// The view passes an `imageSrc` resolver: a picture that points at the pha serve viewer
+// is then served by the plugin's own binary route (the slug is resolved against the
+// archive being browsed), so a note's embed renders without `pha serve` running.
+const localTree = renderNote('![](http://127.0.0.1:8765/doc/colx-d/p437.jpg)', {
+  imageSrc: (c) => (c && c.page !== null && c.page !== undefined)
+    ? '/pha/render?doc=9&page=' + c.page
+    : null,
+})
+const localNodes = []
+walk(localTree, localNodes)
+const localImgs = localNodes.filter((n) => n.type === 'img')
+check(localImgs.length === 1 && localImgs[0].props.src === '/pha/render?doc=9&page=437',
+  'a pha-serve image embed is rewritten to the local render route')
+check(localImgs.every((n) => String(n.props.className).includes('pha-md-img')),
+  'the rewritten embed keeps the inline-image class')
 
 // Definition bodies and edited pages render markdown with no link context at all: that
 // path must not throw either (it is the one that would break on a missing `o`).

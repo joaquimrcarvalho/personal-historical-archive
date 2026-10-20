@@ -8,8 +8,10 @@
 // package (`@deepseek-ai/dsh-tools`) is then looked up from HERE — outside the
 // profile's node_modules — and fails, and a single unloadable row makes the whole
 // harness refuse to start. The first check below is the one that caught that.
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -81,8 +83,9 @@ for (const t of tools) {
 
 // 4. The same-origin routes the view fetches.
 const EXPECTED_ROUTES = ['/pha/status', '/pha/archive', '/pha/documents', '/pha/document', '/pha/page',
-  '/pha/search', '/pha/pageImage', '/pha/open', '/pha/pending', '/pha/config', '/pha/notes', '/pha/note',
-  '/pha/defs', '/pha/def', '/pha/collectionEncoders', '/pha/bib', '/pha/inbox/plan', '/pha/inbox/move']
+  '/pha/search', '/pha/pageImage', '/pha/render', '/pha/open', '/pha/pending', '/pha/config', '/pha/notes',
+  '/pha/note', '/pha/defs', '/pha/def', '/pha/collectionEncoders', '/pha/bib', '/pha/inbox/plan',
+  '/pha/inbox/move']
 for (const path of EXPECTED_ROUTES) check(routes.includes(path), 'route ' + path)
 
 // 4b. A configured projectRoot becomes the child cwd and PHA_HOME, so a
@@ -114,6 +117,85 @@ check(spawns[0].cwd === '/tmp/pha-checkout', 'projectRoot config sets child cwd'
 check(spawns[0].env && spawns[0].env.PHA_HOME === '/tmp/pha-checkout', 'projectRoot config pins child PHA_HOME')
 check(spawns[0].env && spawns[0].env.PHA_ARCHIVE_DIR === '/tmp/pha-archive', 'archiveDir config pins child PHA_ARCHIVE_DIR')
 spawnPlugin.dispose()
+
+// 4c. A page image is served as BINARY on its own route.
+//
+// Why this check exists: the view used to receive the image as a base64 data URL in a
+// JSON body, produced by a Python child whose stdout is capped at 4 MB. Past the cap
+// `readFrom(0)` returns only the retained TAIL (the head, carrying the `data:` prefix,
+// is dropped) and flags `lossy` — which the plugin ignored, so a large rendered page
+// reached the browser as a bare base64 tail and the <img> showed nothing. The render
+// route streams the file instead, so size cannot corrupt it.
+const IMG_SHA = 'a'.repeat(64)
+const imgArchive = mkdtempSync(join(tmpdir(), 'pha-render-'))
+mkdirSync(join(imgArchive, 'renders', IMG_SHA), { recursive: true })
+// Bigger than the 4 MB cap once base64-encoded (3 MB of bytes -> 4 MB of base64).
+const IMG_BYTES = Buffer.alloc(3 * 1024 * 1024 + 7, 7)
+writeFileSync(join(imgArchive, 'renders', IMG_SHA, 'p001.jpg'), IMG_BYTES)
+
+const renderRoutes = []
+const renderCtx = {
+  subprocess: {
+    resolveExecutable: async (cand) => (
+      cand === 'pha' ? '/usr/bin/pha' : (/python/.test(cand) ? '/usr/bin/python3' : null)),
+    spawn: (spec) => {
+      const isInfo = spec.argv.includes('info')
+      // The DB script's last argv is the page number: page 2 has no metadata, which is
+      // how "this page has no render" is exercised.
+      const noMeta = !isInfo && spec.argv[spec.argv.length - 1] === '2'
+      const out = isInfo
+        ? JSON.stringify({ archive_dir: imgArchive, db_path: join(imgArchive, 'archive.db'), configured: true })
+        : (noMeta ? 'null' : JSON.stringify({ sha256: IMG_SHA, source_name: null }))
+      const reader = (text) => ({ readFrom: () => ({ text, nextOffset: text.length, lossy: false }) })
+      return {
+        collected: { stdout: reader(out), stderr: reader('') },
+        done: Promise.resolve({ exitCode: 0, signal: null }),
+      }
+    },
+  },
+  effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : () => {} },
+  tools: { register: () => () => {} },
+  inject: (deps, fn) => {
+    if (deps.includes('webServer')) {
+      fn({
+        webServer: { register: (r) => { renderRoutes.push(r); return () => {} } },
+        get: () => undefined,
+        effect: (f) => f(),
+      })
+    }
+  },
+}
+const renderPlugin = mod.apply(renderCtx, { projectRoot: '/tmp/pha-checkout' })
+const renderRoute = renderRoutes.find((r) => r.path === '/pha/render')
+check(!!renderRoute && typeof renderRoute.handler === 'function',
+  'route /pha/render is registered with a handler')
+
+const fetchRender = async (url) => {
+  const chunks = []
+  const res = new Writable({ write(chunk, enc, cb) { chunks.push(chunk); cb() } })
+  let status = null
+  let headers = null
+  res.writeHead = (code, hdrs) => { status = code; headers = hdrs || {} }
+  const finished = new Promise((resolve) => res.on('finish', resolve))
+  renderRoute.handler({ url }, res)
+  await finished
+  return { status, headers, body: Buffer.concat(chunks) }
+}
+
+if (renderRoute) {
+  const ok = await fetchRender('/pha/render?doc=7&page=1')
+  check(ok.status === 200, 'a page with a render answers 200')
+  check(ok.body.length === IMG_BYTES.length && ok.body.equals(IMG_BYTES),
+    `the whole image arrives (${ok.body.length} of ${IMG_BYTES.length} bytes) — no stdout cap`)
+  check(ok.headers && ok.headers['content-type'] === 'image/jpeg', 'the render is served as image/jpeg')
+  check(ok.headers && ok.headers['content-length'] === String(IMG_BYTES.length),
+    'content-length matches the file on disk')
+
+  const missing = await fetchRender('/pha/render?doc=7&page=2')
+  check(missing.status === 404, 'a page with no render answers 404, not a corrupt image')
+}
+renderPlugin.dispose()
+rmSync(imgArchive, { recursive: true, force: true })
 
 // 5. The client half stays loadable as a harness client module.
 const bundle = readFileSync(join(root, 'lib', 'client.js'), 'utf8')

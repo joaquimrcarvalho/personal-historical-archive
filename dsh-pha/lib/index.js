@@ -7,7 +7,7 @@
 // Tool definitions are therefore built as plain objects, exactly the raw JSON
 // Schema `defineTool` compiles to, and registered on the `tools` service.
 
-import { existsSync, realpathSync } from 'node:fs'
+import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -139,9 +139,16 @@ function apply(ctx, config) {
       } catch (e) { reject(e); return }
       handle.done.then(
         (o) => {
-          const out = handle.collected.stdout ? handle.collected.stdout.readFrom(0).text : ''
-          const err = handle.collected.stderr ? handle.collected.stderr.readFrom(0).text : ''
-          resolve({ code: o.exitCode, signal: o.signal, out, err })
+          // `readFrom(0)` returns only the retained TAIL when the stream exceeded
+          // `maxBytes` (it drops the head), and flags `lossy`. Ignoring that flag is how
+          // a large page image used to reach the browser as a bare base64 tail with no
+          // `data:` prefix — an <img> that silently shows nothing. Callers that care
+          // (the image route) check it; everything else keeps the tail as before.
+          const so = handle.collected.stdout
+          const se = handle.collected.stderr
+          const ro = so ? so.readFrom(0) : { text: '', lossy: false }
+          const re = se ? se.readFrom(0) : { text: '', lossy: false }
+          resolve({ code: o.exitCode, signal: o.signal, out: ro.text, err: re.text, lossy: !!ro.lossy })
         },
         (e) => reject(e),
       )
@@ -572,29 +579,80 @@ function apply(ctx, config) {
     }
   }
 
-  async function pageImage(params) {
+  // Where a page's rendered image lives on disk, or null. Pure Node (no Python
+  // round-trip): the candidate names come from pha's render writer — `p<NNN>.jpg`
+  // for a PDF page, `<source_name>.jpg` for a page of a directory-of-images
+  // document — and `renders/<sha256>/` is the content-keyed cache directory.
+  async function renderFile(params) {
     if (!params.doc || !params.page) throw new Error('doc and page required')
     await discover()
     const meta = await runDb('pagemeta', [String(params.doc), String(params.page)])
-    if (!meta || !meta.sha256) return { ok: false, error: 'no render metadata for this page' }
+    if (!meta || !meta.sha256) return null
     const dir = archiveDir + '/renders/' + meta.sha256
     const cands = []
-    if (meta.source_name) cands.push(meta.source_name + '.jpg', meta.source_name + '.jpeg')
+    if (meta.source_name) {
+      // A row is trusted, not the filesystem: never let a source name with a path
+      // separator (or `..`) walk out of the render directory.
+      const base = String(meta.source_name)
+      if (!/[/\\]/.test(base) && base !== '..' && base !== '.') {
+        cands.push(base + '.jpg', base + '.jpeg')
+      }
+    }
     cands.push('p' + String(params.page).padStart(3, '0') + '.jpg')
+    for (const f of cands) {
+      const p = dir + '/' + f
+      if (existsSync(p)) return p
+    }
+    return null
+  }
+
+  // `/pha/pageImage` — the ORIGINAL JSON data-URL transport. It stays for a client
+  // bundle cached before `/pha/render` existed, but a page image can be several
+  // megabytes and its base64 crosses the subprocess stdout cap: `readFrom` then
+  // returns a head-less tail, so the data URL is corrupt. Report that honestly
+  // instead of handing the browser a broken `src`.
+  async function pageImage(params) {
+    const file = await renderFile(params)
+    if (!file) return { ok: false, exists: false, error: 'render not found for this page' }
     const code = [
-      'import base64,sys,os,json',
-      'dirp=sys.argv[1]; cands=json.loads(sys.argv[2])',
-      'path=None',
-      'for f in cands:',
-      '    p=os.path.join(dirp,f)',
-      '    if os.path.isfile(p): path=p; break',
-      'if path is None:',
-      '    print(""); raise SystemExit(1)',
-      'sys.stdout.buffer.write(b"data:image/jpeg;base64," + base64.b64encode(open(path,"rb").read()))',
+      'import base64,sys',
+      'sys.stdout.buffer.write(b"data:image/jpeg;base64," + base64.b64encode(open(sys.argv[1],"rb").read()))',
     ].join('\n')
-    const r = await pyRun(code, [dir, JSON.stringify(cands)])
-    if (r.code !== 0 || !r.out) return { ok: false, exists: false, error: 'render not found for this page' }
-    return { ok: true, dataUrl: String(r.out).trim(), path: dir }
+    const r = await pyRun(code, [file])
+    if (r.lossy) {
+      return { ok: false, exists: true,
+        error: 'image too large for the JSON transport — this client should use /pha/render' }
+    }
+    if (r.code !== 0 || !r.out) return { ok: false, exists: true, error: 'render could not be read' }
+    return { ok: true, dataUrl: String(r.out).trim(), path: file }
+  }
+
+  // `/pha/render` — the page image as a BINARY response, streamed from disk. No
+  // base64, no stdout cap, no JSON: a 8 MB map page arrives complete, and the
+  // browser can cache it.
+  function renderImage(req, res) {
+    (async () => {
+      try {
+        const params = Object.fromEntries(new URL(req.url, 'http://localhost').searchParams)
+        const file = await renderFile(params)
+        if (!file) {
+          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+          res.end('no render for this page')
+          return
+        }
+        const st = statSync(file)
+        res.writeHead(200, {
+          'content-type': /\.jpe?g$/i.test(file) ? 'image/jpeg' : 'application/octet-stream',
+          'content-length': String(st.size),
+          // The render is a content-addressed cache entry, so it is safe to keep.
+          'cache-control': 'private, max-age=3600',
+        })
+        createReadStream(file).pipe(res)
+      } catch (e) {
+        res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end(String((e && e.message) || e))
+      }
+    })()
   }
 
   const routes = [
@@ -692,6 +750,9 @@ function apply(ctx, config) {
       return { ok: true, query: q, results }
     })],
     ['/pha/pageImage', json(pageImage)],
+    // The page image, binary (the view's <img> uses this). Kept separate from the
+    // JSON routes because it must not pass through a capped stdout pipe.
+    ['/pha/render', renderImage],
     ['/pha/notes', json(async () => {
       await discover()
       const r = await pyRun(LIST_NOTES, [archiveDir + '/notes'])

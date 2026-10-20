@@ -279,10 +279,24 @@ letterboxes the page inside it (dark bands either side) and quietly overrides th
 tall page simply scrolls. Text-only and image-only modes are unchanged; the image is a toggle
 beside the text, never a replacement for it.
 
+**The image is fetched as a binary URL, `/pha/render?doc=<id>&page=<n>`** — not as a base64
+data URL in a JSON body. The old form went through a Python child whose stdout is capped at
+4 MB; past the cap the collector returns only the retained *tail* (the head, carrying the
+`data:` prefix, is dropped) and the `<img>` silently showed nothing. A rendered map page can
+be 8 MB, so `/pha/render` streams the file from `renders/<sha256>/` instead: no cap, no
+base64 overhead, and the browser can cache it. A missing render is a clean 404, which the
+view shows as "No render image" rather than a broken-image glyph.
+
 When both are visible a **vertical divider** between them resizes the image (drag it, 15–85% of
 the pane — it works like the pane splitter, including refusing to move on a hover), and that
 share is part of the remembered reading position, so a tab switch brings back the width you
 chose.
+
+**Embedded pictures in notes** (`![](http://127.0.0.1:8765/doc/<slug>/p437.jpg)`, the form
+`notes/README.md` documents) render as `<img class="pha-md-img">`. When the slug resolves in
+the archive being browsed, the view rewrites the picture to its own `/pha/render` route, so a
+note's embed shows **without `pha serve`** — the same rule as ⌘-clicking a citation. An
+external or local image keeps the `src` it was written with.
 
 ### The reading position survives a tab switch
 
@@ -309,6 +323,7 @@ archive's own conventions produce is routed deliberately:
 | `[[Note#Heading]]`, `[text](#id)` | opens the note (if needed) and scrolls to the heading |
 | `[[missing-note]]` | rendered as an *unresolved* (amber, dotted) link instead of failing silently |
 | `[p. 437](http://127.0.0.1:8765/doc/<slug>/p437)` — a `pha cite` footnote | **follows the URL** (a new tab on the `pha serve` viewer — the same thing Obsidian does with that note); **⌘/Ctrl-click** opens that page *in this view* instead (image + text, no server needed). Middle-click follows the URL natively, and the tooltip states both |
+| `![](http://127.0.0.1:8765/doc/<slug>/p437.jpg)` — an image embed | rendered as an `<img class="pha-md-img">` (not a literal `!` plus a link); when the slug is in this archive the picture comes from the plugin's own `/pha/render` route, so it shows **without `pha serve`** |
 | `[other](other-note.md)` | opens `other` in the notes viewer |
 | any other `http(s)://`, `mailto:` | a new tab, so the harness page (and the conversation) stays put |
 
@@ -325,9 +340,10 @@ checks.
 
 The graphical **PHA view** is preserved in this package as:
 
-- **Host data layer** (`lib/index.js`): same-origin read-only JSON routes under `/pha/*`
-  (`/pha/documents`, `/pha/document`, `/pha/page`, `/pha/search`, `/pha/pageImage`,
-  `/pha/status`, `/pha/archive`) registered on the harness `webServer` service.
+- **Host data layer** (`lib/index.js`): same-origin read-only routes under `/pha/*`
+  (`/pha/documents`, `/pha/document`, `/pha/page`, `/pha/search`, `/pha/status`,
+  `/pha/archive`), plus the page image as **binary** at `/pha/render` (`/pha/pageImage`,
+  the older base64 data-URL form, is kept for a client bundle cached before it).
 - **Client module source** (`src/client/index.js`): the PHA conversation view (document
   list + search, page reader with raw/edited, side-by-side page image, markdown rendering,
   draggable splitter), registered into `conversation.view`, fetching `/pha/*`.
