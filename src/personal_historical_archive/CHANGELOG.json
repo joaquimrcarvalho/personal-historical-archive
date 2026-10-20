@@ -78,6 +78,18 @@
           "commit": "75a2ee499e21"
         }
       ]
+    },
+    "0.45.1": {
+      "date": "2026-10-20",
+      "summary": "The PHA view serves a page image as a binary stream and renders markdown image embeds, so a large rendered page and a note's embedded picture both display.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "dsh-pha",
+          "text": "serve the page image as binary, and render markdown image embeds",
+          "commit": "27ba890b32ad"
+        }
+      ]
     }
   }
 }
