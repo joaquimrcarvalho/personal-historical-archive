@@ -144,7 +144,7 @@ pha page NAME 37 --json     # structured output for agents (adds slug/rel_path/r
 
 # 5. cite a page durably (stable slug + the exact filled variant)
 pha cite 12 37 --edited     # paste-ready; survives a re-scan (no date, no hash)
-pha serve                   # read-only render server: /doc/<slug>/p037.jpg
+pha serve                   # read-only viewer: /doc/<slug>/p037 (image + text)
 
 # 6. MCP server (stdio)
 pha mcp
@@ -1416,14 +1416,16 @@ payloads carry the same fields, so an external tool never has to re-derive the
 render path or the `edited-<editor>[@model]` grammar.
 
 **Paging a document.** A citation links to the HTML **page viewer**, which shows
-the render plus prev/next/first/last, a position (`p. 51 of 618`) and a jump box —
-so a footnote is somewhere you can keep reading, instead of a dead-end image.
-Plain links and a GET form, so it works with JavaScript off; the arrow keys work
-when it is on.
+the render, the stored raw transcription, the effective edited reading when one
+is available, plus prev/next/first/last, a position (`p. 51 of 618`) and a jump
+box — so a footnote is somewhere you can keep reading, instead of a dead-end
+image. The text comes from the same DB rows as `pha page` and the MCP tools;
+waiting/empty edited stubs are never shown as readings. Plain links and a GET
+form, so it works with JavaScript off; the arrow keys work when it is on.
 
 | route | what it returns |
 |---|---|
-| `/doc/<slug>/p<NNN>` | the page **viewer**: render + prev/next/first/last + jump box |
+| `/doc/<slug>/p<NNN>` | the page **viewer**: render + raw transcription + served edited reading + prev/next/first/last + jump box |
 | `/doc/<slug>/` | the document **overview**: page count, variants, page ranges, "start reading" |
 | `/doc/<slug>/go?page=N` | the jump-box target (redirects to the viewer) |
 | `/doc/<slug>/p<NNN>.jpg` | the raw render (unchanged — inline embeds use this) |

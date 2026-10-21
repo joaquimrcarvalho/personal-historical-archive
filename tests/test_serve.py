@@ -256,6 +256,7 @@ def test_viewer_without_a_render_still_navigates(cfg, add_document, write_render
     text = body.decode()
     assert status == 200
     assert "No render for page 2" in text
+    assert "raw text page 2" in text
     assert 'href="/doc/colx-d/p001"' in text
     assert 'href="/doc/colx-d/p003"' in text
 
@@ -322,6 +323,115 @@ def test_meta_reports_the_navigation_urls(cfg, add_document, server):
     assert data["viewer_url"] == "/doc/colx-d/p{page}"
     assert data["overview_url"] == "/doc/colx-d/"
     assert data["render_url"] == "/doc/colx-d/p{page}.jpg"      # unchanged
+
+
+# ---- page text in the viewer ------------------------------------------------
+
+def _set_page_text(cfg, doc_id, page_no, *, raw=None, editor=None, edit=None,
+                   reviewed=False):
+    """Set raw text and/or one page edit directly in the DB for viewer tests."""
+    conn = _db.connect(cfg.db_path)
+    try:
+        row = conn.execute(
+            "SELECT id FROM pages WHERE document_id=? AND page_no=?",
+            (doc_id, page_no)).fetchone()
+        assert row is not None
+        page_id = row["id"]
+        if raw is not None:
+            conn.execute("UPDATE pages SET raw_text=? WHERE id=?", (raw, page_id))
+        if editor and edit is not None:
+            _db.set_page_edit(conn, page_id, editor, text=edit)
+            if reviewed:
+                _db.mark_edit_reviewed(conn, page_id, editor, edit)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_viewer_shows_raw_and_effective_edited_text(cfg, add_document,
+                                                   write_render, server):
+    doc_id = add_document(pages=(1,), editor="french-ocr",
+                          editor_model="deepseek-v4-flash")
+    write_render(doc_id, 1)
+    _set_page_text(cfg, doc_id, 1, raw="RAW TRANSCRIPTION",
+                   editor="french-ocr", edit="EDITED READING")
+
+    status, _, body = server.get("/doc/colx-d/p001")
+    text = body.decode()
+    assert status == 200
+    assert "Transcription" in text
+    assert "RAW TRANSCRIPTION" in text
+    assert "transcription: ocr@liteparse-fra" in text
+    assert "Edited reading" in text
+    assert "EDITED READING" in text
+    assert "edited: french-ocr@deepseek-v4-flash" in text
+
+
+def test_viewer_omits_the_edited_panel_when_no_filled_edit_exists(
+        cfg, add_document, write_render, server):
+    doc_id = add_document(pages=(1,))
+    write_render(doc_id, 1)
+    text = server.get("/doc/colx-d/p001")[2].decode()
+    assert "raw text page 1" in text
+    assert "Edited reading" not in text
+
+
+def test_viewer_shows_a_filled_edit_but_not_a_waiting_stub(
+        cfg, add_document, write_render, server):
+    doc_id = add_document(pages=(1,))
+    write_render(doc_id, 1)
+    conn = _db.connect(cfg.db_path)
+    try:
+        page_id = conn.execute(
+            "SELECT id FROM pages WHERE document_id=? AND page_no=1",
+            (doc_id,)).fetchone()["id"]
+        _db.set_page_edit(conn, page_id, "french-ocr", error="not run yet")
+        conn.commit()
+    finally:
+        conn.close()
+
+    text = server.get("/doc/colx-d/p001")[2].decode()
+    assert "raw text page 1" in text
+    assert "Edited reading" not in text
+    assert "not run yet" not in text
+
+
+def test_viewer_escapes_raw_and_edited_text(cfg, add_document, write_render,
+                                            server):
+    doc_id = add_document(pages=(1,))
+    write_render(doc_id, 1)
+    raw = '<script>alert("raw")</script> & <b>not markup</b>'
+    edit = '<script>alert("edited")</script> & "quoted"'
+    _set_page_text(cfg, doc_id, 1, raw=raw, editor="french-ocr", edit=edit)
+
+    text = server.get("/doc/colx-d/p001")[2].decode()
+    assert "&lt;script&gt;alert(&quot;raw&quot;)&lt;/script&gt; &amp; " in text
+    assert "&lt;b&gt;not markup&lt;/b&gt;" in text
+    assert "&lt;script&gt;alert(&quot;edited&quot;)&lt;/script&gt; &amp; " in text
+    assert '<script>alert("raw")</script>' not in text
+    assert '<script>alert("edited")</script>' not in text
+
+
+def test_viewer_serves_the_reviewed_edit_over_the_document_editor(
+        cfg, add_document, write_render, server):
+    doc_id = add_document(pages=(1,), editor="french-ocr")
+    write_render(doc_id, 1)
+    conn = _db.connect(cfg.db_path)
+    try:
+        page_id = conn.execute(
+            "SELECT id FROM pages WHERE document_id=? AND page_no=1",
+            (doc_id,)).fetchone()["id"]
+        _db.set_page_edit(conn, page_id, "french-ocr", text="DOCUMENT EDIT")
+        _db.set_page_edit(conn, page_id, "human-editor", text="HUMAN CORRECTION")
+        _db.mark_edit_reviewed(conn, page_id, "human-editor", "HUMAN CORRECTION")
+        conn.commit()
+    finally:
+        conn.close()
+
+    text = server.get("/doc/colx-d/p001")[2].decode()
+    assert "HUMAN CORRECTION" in text
+    assert "DOCUMENT EDIT" not in text
+    assert "edited: human-editor" in text
 
 
 # ------------------------------------------------------- bibliographic reference

@@ -119,11 +119,12 @@ sha, the render path and the full variant set. With `pha serve` running
     [p. 437](http://127.0.0.1:8765/doc/<slug>/p437)      ← LINK: the page viewer
     ![](http://127.0.0.1:8765/doc/<slug>/p437.jpg)       ← EMBED: the image only
 
-**Link to the viewer** (`/p437`, no extension): it shows the render and lets the
-reader page forward/back, jump to the first or last page, and see the position
-(`p. 437 of 618`) — so a citation is somewhere to keep reading. **Embed the
-`.jpg`** when the picture itself belongs inline: an embed cannot navigate (a note
-cannot contain the viewer — Obsidian blocks iframes).
+**Link to the viewer** (`/p437`, no extension): it shows the render, the stored
+raw transcription and the served edited reading when one is available, and lets
+the reader page forward/back, jump to the first or last page, and see the
+position (`p. 437 of 618`) — so a citation is somewhere to keep reading.
+**Embed the `.jpg`** when the picture itself belongs inline: an embed cannot
+navigate (a note cannot contain the viewer — Obsidian blocks iframes).
 
 Both resolve the document's current render per request, so a re-scan changes the
 bytes behind the URL without breaking the note.

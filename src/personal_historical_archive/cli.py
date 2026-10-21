@@ -3942,11 +3942,13 @@ def cmd_mcp(cfg: Config, args) -> None:
 
 
 def cmd_serve(cfg: Config, args) -> None:
-    """`pha serve` — a read-only HTTP endpoint with stable page-render URLs.
+    """`pha serve` — a read-only viewer with stable page URLs.
 
-    Loopback by default; `--host 0.0.0.0` is a deliberate opt-in (it exposes the
-    archive to the network) and logs a warning. Nothing here writes: mutations
-    stay behind the scan/edit lock.
+    The HTML page shows the render plus the stored raw transcription and the
+    effective edited reading when available; the bare JPEG remains at
+    `/doc/<slug>/p<NNN>.jpg`. Loopback by default; `--host 0.0.0.0` is a
+    deliberate opt-in (it exposes the archive to the network) and logs a
+    warning. Nothing here writes: mutations stay behind the scan/edit lock.
     """
     from .serve import run_server
 
@@ -4899,7 +4901,7 @@ def main(argv: list[str] | None = None) -> None:
 
     sv = sub.add_parser(
         "serve",
-        help="run the read-only render server (stable /doc/<slug>/p<NNN>.jpg URLs)")
+        help="run the read-only page viewer (stable /doc/<slug>/p<NNN> URLs)")
     sv.add_argument("--host", default=None,
                     help="bind address (default: serve.host from config, else 127.0.0.1; "
                          "0.0.0.0 exposes the archive to the LAN)")

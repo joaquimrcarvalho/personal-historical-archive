@@ -29,7 +29,6 @@ or otherwise resolved; the document remains for the record.
 | [pha-encoder-tools-enhancement-request.md](pha-encoder-tools-enhancement-request.md) | PARTLY IMPLEMENTED | The markdown-from-records artifact filter shipped; the structure prescan is still open. |
 | [pha-handoff-enhancement-request.md](pha-handoff-enhancement-request.md) | SHIPPED (0.29.0) - follow-on open | Two-machine hand-over works; the section 12 render gap remains: an unscanned hand-out can come home with no page images. |
 | [pha-stage-extends-enhancement-request.md](pha-stage-extends-enhancement-request.md) | Draft | Compose prompt files with extends (base plus delta). |
-| [pha-serve-page-text-enhancement-request.md](pha-serve-page-text-enhancement-request.md) | Stored for later | The served page viewer gains the raw transcription and the effective edited reading beside the image. |
 
 ### Proposals
 
@@ -69,6 +68,7 @@ or otherwise resolved; the document remains for the record.
 | [pha-per-server-model-lock-enhancement-request.md](pha-per-server-model-lock-enhancement-request.md) | SHIPPED in 0.28.0 |
 | [pha-stable-page-addresses-enhancement-request.md](pha-stable-page-addresses-enhancement-request.md) | SHIPPED |
 | [pha-page-navigation-enhancement-request.md](pha-page-navigation-enhancement-request.md) | SHIPPED |
+| [pha-serve-page-text-enhancement-request.md](pha-serve-page-text-enhancement-request.md) | IMPLEMENTED (2026-10-21) | The served page viewer shows the render plus raw transcription and the effective edited reading when available; optional page JSON deferred. |
 | [pha-single-page-rescan-enhancement-request.md](pha-single-page-rescan-enhancement-request.md) | IMPLEMENTED (0.33.0+) |
 | [pha-handoff-transport-enhancement-request.md](pha-handoff-transport-enhancement-request.md) | IMPLEMENTED (2026-09-26) |
 | [pha-handover-editing-workflow-enhancement-request.md](pha-handover-editing-workflow-enhancement-request.md) | ALL SIX GAPS FIXED |

@@ -1,6 +1,6 @@
 # Enhancement request — raw and edited text in the `pha serve` page viewer
 
-**Status:** stored for later implementation. Not implemented. (Plan/draft for discussion; no code changes yet.)
+**Status:** implemented (2026-10-21) — the page viewer now shows the raw transcription and the effective edited reading beside the render. The optional page-level JSON route remains deferred.
 **Author/date:** archive work session.
 **Relates to:** `pha-page-navigation-enhancement-request.md` (its §4 deliberately
 settled on a render-only viewer; this request reverses that decision now that
@@ -330,6 +330,26 @@ continue to pass unchanged.
 5. **Docs** — serve docstring, README, archive/notes templates, superseded
    decision note.
 6. **Optional** — page JSON endpoint and "other edited readings" disclosure.
+
+## Implementation note (2026-10-21)
+
+The core viewer feature shipped:
+
+- `serve.py` now loads one page's `raw_text` and its effective `page_edits` row
+  through `_page_reading()`, renders both as escaped plain text, and labels
+  them with their palaeographer/editor provenance.
+- The viewer is now a two-pane reading surface (stacked on narrow screens);
+  `.jpg`, `meta.json`, navigation, CSP and read-only behaviour are unchanged.
+- `db.reviewed_edit_for_page()` gained the missing `reviewed_at` column guard
+  for read-only legacy archives.
+- Tests cover raw/edited display, waiting-stub suppression, escaping,
+  reviewed-over-document-editor priority, text with a missing render, and the
+  legacy-table guard.
+- README, archive/notes templates and the old render-only decision record were
+  updated.
+
+Deferred: the optional `/doc/<slug>/p<NNN>.json` route and the collapsed list
+of additional filled edited readings. The HTML viewer does not depend on them.
 
 ## 8. Non-goals
 

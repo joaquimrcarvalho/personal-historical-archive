@@ -176,3 +176,16 @@ def test_any_embedded_chunk_scopes_to_pages(tmp_path):
     row = conn.execute("SELECT embed_model FROM chunks WHERE page_id=?", (p2,)).fetchone()
     assert row["embed_model"] == "m1"
     conn.close()
+
+
+def test_reviewed_edit_guard_handles_a_legacy_page_edits_table():
+    """Read-only commands run no migration; a legacy table has no reviewed_at."""
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE page_edits (id INTEGER PRIMARY KEY, page_id INTEGER, "
+        "editor TEXT, text TEXT, status TEXT)")
+    assert db.reviewed_edit_for_page(conn, 1) is None
+    conn.close()

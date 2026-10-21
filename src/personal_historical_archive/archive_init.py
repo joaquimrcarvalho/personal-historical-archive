@@ -533,9 +533,10 @@ viewer so a reader can page forward and back:
 
 - `pha cite <doc> <page> [--edited]` prints the citation, the stable slug and
   the exact **filled** variant; it refuses to cite an empty (`*waiting*`) one.
-- Link `/doc/<slug>/p<page>` — the **viewer** has prev/next/first/last, the
-  position (`p. 437 of 618`) and a jump box. Embed `/p<page>.jpg` only when the
-  picture belongs inline (an embed cannot navigate).
+- Link `/doc/<slug>/p<page>` — the **viewer** shows the render, the raw
+  transcription and the served edited reading when one is available, plus
+  prev/next/first/last, the position (`p. 437 of 618`) and a jump box. Embed
+  `/p<page>.jpg` only when the picture belongs inline (an embed cannot navigate).
 - Those links resolve only while `pha serve` is running, so put a short warning
   near the top of the note. Never embed a `library/` path — it carries the
   version date and goes stale on re-processing.

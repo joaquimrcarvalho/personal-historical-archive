@@ -40,8 +40,9 @@ to the raw image.
 New extensionless route beside the existing `/p{N}.jpg`:
 
 - the page image (the same render — no re-encoding), captioned `p. N of M` with
-  the filename and `rel_path`; **the render only** — no transcription text
-  beside it (settled: the PHA view stays the text reader);
+  the filename and `rel_path`; originally **the render only** — no transcription
+  text beside it (that decision was superseded on 2026-10-21 by
+  `pha-serve-page-text-enhancement-request.md`);
 - **navigation**: ◀ prev · next ▶ · ⤒ first · ⤓ last, a `page __ ›` jump form,
   and keyboard ←/→ (plus j/k), Home/End;
 - **plain links + a form, so it works with JavaScript disabled**; JS only adds
@@ -135,7 +136,9 @@ Settled:
 - **Overview = a page-range list** plus the jump box — not a thumbnail grid (a
   grid can be added later if the range list proves too coarse).
 - **The viewer shows the render only**, with no transcription text beside it —
-  the PHA view remains the text reader.
+  the PHA view remains the text reader. **Superseded 2026-10-21** by
+  `pha-serve-page-text-enhancement-request.md`: the viewer now shows the raw
+  transcription and the served edited reading beside the render.
 - **The 109 existing links are migrated** to the viewer route, in all four notes
   — but only **after** the viewer ships, so no note points at a 404 meanwhile.
 
@@ -166,8 +169,9 @@ Low stakes, still open:
   loopback by default.
 - No new dependency, no build step, no external asset (works offline).
 - No change to slugs, to `/p{N}.jpg`, or to the existing `/meta.json` keys.
-- Not a text reader — settled: the viewer shows the render only; the PHA view is
-  the text reader.
+- Not a text reader — **superseded 2026-10-21** by
+  `pha-serve-page-text-enhancement-request.md`; the viewer now carries text as
+  well as navigation.
 
 ## Reference implementation notes
 

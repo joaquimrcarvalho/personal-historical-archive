@@ -823,7 +823,13 @@ def pinned_edit_for_page(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row 
 
 
 def reviewed_edit_for_page(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
-    """The page's human-reviewed edit row (any editor), or None."""
+    """The page's human-reviewed edit row (any editor), or None.
+
+    None on an archive whose DB predates the review column: a read-only query
+    command runs no migration, so the caller must not assume the column exists.
+    """
+    if not has_column(conn, "page_edits", "reviewed_at"):
+        return None
     return conn.execute(
         "SELECT * FROM page_edits WHERE page_id = ? AND reviewed_at IS NOT NULL "
         "ORDER BY reviewed_at DESC LIMIT 1", (page_id,)).fetchone()

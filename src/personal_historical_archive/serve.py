@@ -1,11 +1,14 @@
-"""``pha serve`` — a read-only HTTP endpoint with stable page-render URLs.
+"""``pha serve`` — a read-only HTTP endpoint with stable page addresses.
 
 The URL for a page is permanent::
 
-    http://127.0.0.1:8765/doc/<slug>/p<NNN>.jpg
+    http://127.0.0.1:8765/doc/<slug>/p<NNN>
 
 because it names the *slug* (derived from the dropbox-relative path), not the
 document id, the dated library folder or the content-addressed render directory.
+The HTML viewer shows the page render together with the stored raw
+transcription and, when one is available, the effective edited reading.  The
+bare JPEG stays at ``/doc/<slug>/p<NNN>.jpg`` for inline embeds.
 The server resolves ``slug -> current sha256`` per request (cached on the DB's
 mtime), so a re-scan/re-edit is picked up without a restart and without the
 consumer rewriting its markdown.
@@ -29,6 +32,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import addresses
+from . import db
 from .config import Config
 
 _PAGE_RE = re.compile(r"^(?P<slug>.+)/p(?P<page>\d+)\.(?:jpg|jpeg)$")
@@ -48,6 +52,24 @@ footer{border-bottom:0;border-top:1px solid #ddd;margin-top:auto;font-size:13px}
 .spacer{flex:1}
 main{flex:1;display:flex;align-items:center;justify-content:center;padding:1rem}
 main.plain{display:block}
+main.reader{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(22rem,.8fr);
+  align-items:start;justify-content:stretch;gap:1rem;width:100%;max-width:96rem;
+  margin:0 auto}
+.reader-media{display:flex;justify-content:center;align-items:flex-start;min-width:0}
+.reader-text{min-width:0}
+.reading{background:#fff;border:1px solid #e4e1da;border-radius:10px;
+  padding:.85rem 1rem;margin-bottom:1rem}
+.reading:last-child{margin-bottom:0}
+.reading h2{margin:.1rem 0 .15rem}
+.provenance{margin:.15rem 0 .6rem;color:#777;font-size:13px}
+.badge{display:inline-block;margin-left:.35rem;padding:.02rem .35rem;
+  border:1px solid #d8d2c5;border-radius:999px;font-size:11px;
+  color:#6d6658;vertical-align:.08em}
+pre.transcript{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;
+  font:13.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  max-height:calc(100vh - 12rem);overflow:auto;margin:.4rem 0 0;
+  padding:.65rem .75rem;background:#fbfaf7;border:1px solid #eee;
+  border-radius:7px}
 img.page{max-width:100%;max-height:calc(100vh - 8.5rem);box-shadow:0 1px 8px rgba(0,0,0,.28)}
 a.btn,span.btn{padding:.22rem .55rem;border:1px solid #bbb;border-radius:6px;
   text-decoration:none;color:inherit;white-space:nowrap}
@@ -68,7 +90,17 @@ button{font:inherit;padding:.22rem .55rem}
   span.btn{border-color:#2b2b2b;color:#6a6a6a}
   a{color:#7aa7ff}
   .muted{color:#9a9a9a}
+  .reading{background:#1d1f22;border-color:#333}
+  .provenance{color:#9a9a9a}
+  .badge{border-color:#444;color:#b8b1a4}
+  pre.transcript{background:#17181a;border-color:#333}
   .notice{border-color:#4a4335;background:#2a2620}
+}
+@media (max-width:900px){
+  main.reader{display:block;padding:.75rem}
+  .reader-media{margin-bottom:.9rem}
+  img.page{max-height:70vh}
+  pre.transcript{max-height:none}
 }
 """
 
@@ -119,6 +151,34 @@ def _html_page(title: str, body: str, head_extra: str = "") -> bytes:
 def _out_of_range(page: int, total: int) -> str:
     return f"page {page} out of range" + (f" (1–{total})" if total else "")
 
+
+def _provenance(label: str | None, *, pinned: bool = False,
+                reviewed: bool = False) -> str:
+    """A safe, compact provenance line for one reading."""
+    if not label:
+        return ""
+    badges = ""
+    if reviewed:
+        badges += '<span class="badge">reviewed</span>'
+    if pinned:
+        badges += '<span class="badge">pinned</span>'
+    return f'<p class="provenance">{html.escape(label)}{badges}</p>'
+
+
+def _reading_panel(title: str, text: str | None, provenance: str,
+                   empty_message: str) -> str:
+    """One escaped, plain-text reading panel.
+
+    Transcriptions are displayed verbatim: no Markdown, HTML or front matter is
+    interpreted.  ``empty_message`` is shown instead of a blank code block.
+    """
+    if text and text.strip():
+        body = (f'<pre class="transcript" tabindex="0">'
+                f'{html.escape(text)}</pre>')
+    else:
+        body = f'<p class="muted">{html.escape(empty_message)}</p>'
+    return (f'<section class="reading"><h2>{html.escape(title)}</h2>'
+            f'{provenance}{body}</section>')
 
 
 def _connect_ro(db_path: Path) -> tuple[sqlite3.Connection, bool]:
@@ -402,6 +462,94 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
             except sqlite3.Error:
                 return None
 
+        def _page_reading(self, doc: dict, page: int) -> tuple[dict | None, str | None]:
+            """Load one page's raw transcription and effective edited reading.
+
+            Returns ``(data, error)``.  ``data`` is a plain dict so the
+            connection can be closed before rendering; a text-read failure is
+            recorded as ``text_error`` and must not take the image/navigation
+            down with it.  The DB is the same authority as `pha page`: library
+            files that a human edited but did not yet import are deliberately
+            not consulted here.
+            """
+            try:
+                conn, _ = _connect_ro(cfg.db_path)
+                try:
+                    row = conn.execute(
+                        "SELECT * FROM pages WHERE document_id=? AND page_no=?",
+                        (doc.get("id"), page)).fetchone()
+                    if row is None:
+                        return {
+                            "exists": False,
+                            "source_name": None,
+                            "raw_text": None,
+                            "status": None,
+                            "raw_label": None,
+                            "raw_pinned": False,
+                            "raw_reviewed": False,
+                            "edited": None,
+                            "text_error": None,
+                        }, None
+
+                    raw = db.row_get(row, "raw_text")
+                    pal = (db.row_get(row, "palaeographer")
+                           or doc.get("palaeographer"))
+                    pal_model = (db.row_get(row, "palaeographer_model")
+                                 or doc.get("palaeographer_model"))
+                    raw_label = None
+                    if pal:
+                        variant = f"transcription-{pal}"
+                        if pal_model:
+                            variant += f"@{pal_model}"
+                        raw_label = addresses.variant_label(variant)
+
+                    data = {
+                        "exists": True,
+                        "source_name": db.row_get(row, "source_name"),
+                        "raw_text": raw,
+                        "status": db.row_get(row, "status"),
+                        "page_error": db.row_get(row, "error"),
+                        "raw_label": raw_label,
+                        "raw_pinned": bool(db.row_get(row, "pinned_at")),
+                        "raw_reviewed": bool(db.row_get(row, "reviewed_at")),
+                        "edited": None,
+                        "text_error": None,
+                    }
+
+                    # The effective edit is the same reading `pha page --edited`,
+                    # `pha cite --edited` and the MCP tools expose.  A waiting
+                    # row is not a reading: never present a `*waiting*` stub.
+                    try:
+                        edit = db.effective_edit_for_page(
+                            conn, row["id"], doc.get("editor"))
+                        if edit is not None and db.row_get(edit, "status") == "done":
+                            edit_text = edit["text"] or ""
+                            if edit_text.strip():
+                                editor = edit["editor"]
+                                edit_model = db.row_get(edit, "editor_model")
+                                if not edit_model and editor == doc.get("editor"):
+                                    edit_model = doc.get("editor_model")
+                                variant = f"edited-{editor}"
+                                if edit_model:
+                                    variant += f"@{edit_model}"
+                                data["edited"] = {
+                                    "editor": editor,
+                                    "model": edit_model,
+                                    "text": edit_text,
+                                    "label": addresses.variant_label(variant),
+                                    "pinned": bool(db.row_get(edit, "pinned_at")),
+                                    "reviewed": bool(db.row_get(edit, "reviewed_at")),
+                                }
+                    except sqlite3.Error as exc:
+                        # A legacy or transient page_edits read must not hide
+                        # the raw transcription or break navigation.
+                        data["text_error"] = str(exc)
+                    return data, None
+                finally:
+                    conn.close()
+            except sqlite3.Error as exc:
+                return None, str(exc)
+
         # ---- routes ------------------------------------------------------
         def do_GET(self):  # noqa: N802 - stdlib signature
             self.route()
@@ -501,12 +649,13 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                        {"Cache-Control": "no-cache"})
 
         def _viewer(self, slug: str, page: int) -> None:
-            """The reading surface for one page: image + prev/next/first/last.
+            """The reading surface for one page: image + text + navigation.
 
-            Works with JavaScript disabled (plain links and a GET form); JS only
-            adds the arrow keys, and the two neighbouring images are prefetched so
-            flipping feels instant. Deliberately shows the render ONLY — the PHA
-            view remains the place to read the transcription text.
+            Shows the render, the stored raw transcription and the effective
+            edited reading when one is available.  Works with JavaScript
+            disabled (plain links and a GET form); JS only adds arrow keys and
+            neighbour-image prefetch.  The DB is the authority for the text,
+            exactly as for `pha page` and the MCP tools.
             """
             doc = index.get(slug)
             if doc is None:
@@ -532,18 +681,58 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                 control("last ⤓", _viewer_url(slug, total), bool(total) and has_next),
             ))
 
-            source_name = self._source_name(doc, page)
+            reading, read_error = self._page_reading(doc, page)
+            if read_error and not quiet:
+                sys.stderr.write(
+                    f"pha serve: warning: page text read failed for {slug} "
+                    f"p{page}: {read_error}\n")
+            source_name = reading.get("source_name") if reading else None
             render = addresses.render_path(cfg, doc, page, source_name)
             if render is None or not render.is_file():
                 # Navigation must never dead-end: say what is missing and keep
                 # the controls (contrast /p{N}.jpg, which 404s).
-                main = ('<main><div class="notice">'
-                        f'<p><strong>No render for page {page}.</strong></p>'
-                        '<p class="muted">This page has no image in the archive. '
-                        'The prev/next controls still work.</p></div></main>')
+                media = ('<div class="notice">'
+                         f'<p><strong>No render for page {page}.</strong></p>'
+                         '<p class="muted">This page has no image in the archive. '
+                         'The prev/next controls still work.</p></div>')
             else:
-                main = (f'<main><img class="page" src="{_jpg_url(slug, page)}" '
-                        f'alt="{html.escape(name)} — page {page}"></main>')
+                media = (f'<img class="page" src="{_jpg_url(slug, page)}" '
+                         f'alt="{html.escape(name)} — page {page}">')
+
+            if read_error:
+                text_panels = (
+                    '<section class="reading"><h2>Page text</h2>'
+                    '<p class="muted">Page text is temporarily unavailable.</p>'
+                    '</section>')
+            else:
+                status = reading.get("status") if reading else None
+                if not reading or not reading.get("exists"):
+                    empty = f"No page record is stored for page {page}."
+                elif status and status != "done":
+                    empty = (f"No transcription text is stored for this page "
+                             f"(status: {status}).")
+                else:
+                    empty = "This page is marked done but has no transcription text."
+                panels = [_reading_panel(
+                    "Transcription (raw)", reading.get("raw_text") if reading else None,
+                    _provenance(reading.get("raw_label") if reading else None,
+                                pinned=bool(reading.get("raw_pinned")) if reading else False,
+                                reviewed=bool(reading.get("raw_reviewed")) if reading else False),
+                    empty)]
+                edited = reading.get("edited") if reading else None
+                if edited:
+                    panels.append(_reading_panel(
+                        "Edited reading", edited["text"],
+                        _provenance(edited["label"], pinned=edited["pinned"],
+                                    reviewed=edited["reviewed"]),
+                        ""))
+                if reading and reading.get("text_error"):
+                    panels.append('<p class="muted">The edited reading could not '
+                                  'be loaded.</p>')
+                text_panels = "".join(panels)
+
+            main = (f'<main class="reader"><section class="reader-media">{media}</section>'
+                    f'<section class="reader-text">{text_panels}</section></main>')
 
             of_total = f" of {total}" if total else ""
             max_attr = f' max="{total}"' if total else ''
@@ -576,7 +765,8 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
             js_next = json.dumps(_viewer_url(slug, page + 1)) if has_next else "null"
             pre.append("<script>const P=" + js_prev + ",N=" + js_next + ";"
                        "addEventListener('keydown',e=>{const t=e.target;"
-                       "if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'))return;"
+                       "if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||"
+                       "(t.closest&&t.closest('pre,[data-keys-off]'))))return;"
                        "if(e.key==='ArrowLeft'||e.key==='k'){if(P)location.href=P}"
                        "else if(e.key==='ArrowRight'||e.key==='j'){if(N)location.href=N}"
                        "});</script>")
@@ -667,9 +857,10 @@ def run_server(cfg: Config, host: str = "127.0.0.1", port: int = 8765,
     srv = make_server(cfg, host=host, port=port, quiet=quiet)
     shown = host if host not in ("", "0.0.0.0", "::") else "127.0.0.1"
     base = f"http://{shown}:{srv.server_address[1]}"
-    print(f"pha serve: read-only page renders on {base}")
+    print(f"pha serve: read-only page viewer on {base}")
     print(f"  health:  {base}/health")
-    print(f"  example: {base}/doc/<slug>/p001.jpg   (slug: pha page <doc> <page> --json)")
+    print(f"  example: {base}/doc/<slug>/p001   (image + transcription + edited reading)")
+    print(f"  image:   {base}/doc/<slug>/p001.jpg")
     print("  Ctrl-C to stop")
     try:
         srv.serve_forever()
