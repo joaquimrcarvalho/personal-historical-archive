@@ -6,8 +6,11 @@ drive the **personal-historical-archive** tool from chat, on any machine that ha
 
 ## What you get
 
-- **`pha_*` model tools** (host): `pha_status`, `pha_documents`, `pha_document`, `pha_page`,
-  `pha_search`, `pha_archive`, `pha_job_start`, `pha_job_status`, `pha_job_kill` — plus a
+- **`pha_*` model tools** (host): `pha_status`, `pha_documents`, `pha_document`,
+  `pha_page`, `pha_bib` (one document's bibliographic reference), `pha_search`,
+  `pha_open` (open a page in the OS-default app so a human can correct the
+  library file), `pha_pending` (library corrections not yet imported), `pha_archive`,
+  `pha_job_start`, `pha_job_status`, `pha_job_kill` — plus a
   read-only archive accessor (opens `archive.db` with `immutable=1`, the one mode that opens
   this WAL database without `-wal`/`-shm`) and a background job runner for
   `scan/edit/encode/reindex/review/inbox`.
@@ -47,6 +50,10 @@ in the repo, so after install + restart the harness serves it (via its `dsh.clie
 `./client` module) and the **PHA** tab appears in the conversation header — no `dev:web`
 build needed on the end-user machine. To rebuild it after editing the source, run
 `node dsh-pha/scripts/build-client.mjs` and commit `lib/client.js`.
+
+Both documents ship with pha, so an install can read them without this repository:
+`pha help view` prints the path of this quick start and names which copy it found
+(the archive's, the checkout's, or the installed package's).
 
 ## Caveats
 

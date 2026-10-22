@@ -28,6 +28,9 @@ Model tools (registered globally, so they are available to the agent in **every*
 | `pha_documents` | structured document list (id, filename, dir_path, kind, page_count, status, palaeographer, editor, models) |
 | `pha_document` | one document's pages + per-page editor entries |
 | `pha_page` | one page's text (raw / `--edited`) |
+| `pha_bib` | one document's bibliographic reference — its sidecar parsed into one record (presence-only; never inherited) |
+| `pha_open` | open a page in the OS-default app so a human can correct the library file (pha never edits the text) |
+| `pha_pending` | library page files a human edited but that are not yet imported, and which pass brings them back in sync |
 | `pha_search` | full-text search (hybrid) → structured hits, including the archive's notes (`kind: "note"`) |
 | `pha_archive` | archive dir + engine health (`pha doctor`) |
 | `pha_job_start` / `pha_job_status` / `pha_job_kill` | run `pha scan/edit/encode/reindex/review/inbox` as background jobs (`scan` + `page` = single-page rescan, with `palaeographer`/`model`/`dry_run`/`unpin`/`no_pin`) |
@@ -99,7 +102,7 @@ ln -s /path/to/repo/dsh-pha "$DSH_HOME/profiles/<name>/node_modules/@personal-hi
 > — outside the profile's `node_modules` — and fail. Since one unloadable row makes the whole
 > harness refuse to start, the host half builds its tool definitions itself (the same raw JSON
 > Schema the registry validates) instead of importing `@deepseek-ai/dsh-tools`. `npm run smoke`
-> checks that invariant, the eleven tool definitions and the routes offline.
+> checks that invariant, the twelve tool definitions and the routes offline.
 
 ### 2. Add a composition row to the profile
 
@@ -147,7 +150,7 @@ packaged app does not compose — so inserted rows land at the next profile star
 *client* bundles are different: the running app stat-polls them and reloads the view without
 a restart.
 
-After the profile starts, the eleven `pha_*` tools are registered in the host `tools`
+After the profile starts, the twelve `pha_*` tools are registered in the host `tools`
 registry and appear in every session's tool catalog. Trigger them like any tool, e.g. ask the
 agent: `list the documents`, `show document 1 page 2`, `search for missão`. Mutating actions
 (`pha scan/edit/encode/reindex/review/inbox`) can be started with `pha_job_start` and polled
