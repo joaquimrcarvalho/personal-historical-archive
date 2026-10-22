@@ -3373,9 +3373,18 @@ def _expand_records(parsed: list) -> list[dict]:
 
 
 def _record_key(rec: dict) -> tuple:
-    """Dedupe key: kind + normalized text/from/to/date/place so the same
-    extraction found in two overlapping chunks or passes collapses."""
-    parts = [str(rec.get("kind") or "record")]
+    """Exact-duplicate key: kind + start page + normalized text/from/to/date/place.
+
+    The **page is part of the key** on purpose. Overlapping chunks re-read the
+    same page, so the same entry seen twice still collapses; but the same text on
+    a *different* page is a different entry (a recurring formula — a notarial
+    boilerplate line, "the same house description" — must not merge two rows).
+    Without the page, byte-identical text elsewhere in the volume was silently
+    dropped (enhancements/pha-same-page-record-dedup-deletes-distinct-entries-bug-report.md).
+    """
+    page = db.record_start_page(rec)
+    parts = [str(rec.get("kind") or "record"),
+             "" if page is None else str(page)]
     for k in ("text", "from", "to", "date", "place"):
         v = rec.get(k)
         if isinstance(v, str):
@@ -3384,24 +3393,92 @@ def _record_key(rec: dict) -> tuple:
     return tuple(parts)
 
 
+# What IDENTIFIES the entity a record is about. Comparing the WHOLE record let
+# shared page boilerplate (title, catalogue, community, a templated source_text)
+# dominate the ratio, so two distinct index entries scored >= 0.75 and one was
+# silently dropped.
+_IDENTITY_FIELDS = ("name", "house_name", "number", "entry_number",
+                    "target_number", "target_section", "target_kind", "index_doc")
+# Fields where a DIFFERENCE proves two entries are different (an index row's own
+# number). They are decisive, never averaged away by a shared boilerplate.
+_DISCRIMINATING_FIELDS = ("number", "entry_number", "target_number",
+                          "target_section", "target_kind")
+
+
 def _record_similar(a: dict, b: dict) -> float:
-    """Fuzzy similarity of two records of the SAME kind (LangExtract-style
-    fuzzy alignment): ratio over all string/scalar fields. Different kinds
-    are never similar (a letter and a person never collapse)."""
+    """Fuzzy similarity of two records of the SAME kind, over what identifies them.
+
+    The same-page guard exists for overlapping chunk windows and later extraction
+    passes: the same entry read twice must collapse. It must NOT collapse two
+    different catalogue entries, which is what comparing every scalar field did
+    (measured: `António Francisco` vs `António Fernandes` scored 0.839 and one was
+    dropped). So the ratio runs over the IDENTITY fields, and a differing entry
+    number is decisive — entries 20 and 21 can never be the same entry. A record
+    with no identity field keeps the old whole-record comparison, because nothing
+    better is available.
+
+    See enhancements/pha-same-page-record-dedup-deletes-distinct-entries-bug-report.md.
+    """
     if (a.get("kind") or "record") != (b.get("kind") or "record"):
         return 0.0
     import difflib
 
+    def norm(v) -> str:
+        return re.sub(r"\s+", " ", str(v)).strip().lower()
+
     def flat(rec: dict) -> str:
         vals = []
         for k, v in rec.items():
-            if k in ("kind", "class", "page"):
+            if k in ("kind", "class", "page", "page_start", "page_end",
+                     "start_page", "source_page", "line_start"):
                 continue
             if isinstance(v, (str, int, float)):
-                vals.append(re.sub(r"\s+", " ", str(v)).strip().lower())
+                vals.append(norm(v))
         return " | ".join(vals)
 
+    def ident(rec: dict) -> list[str]:
+        return [norm(rec[k]) for k in _IDENTITY_FIELDS
+                if rec.get(k) is not None and str(rec[k]).strip()]
+
+    for k in _DISCRIMINATING_FIELDS:
+        if a.get(k) is not None and b.get(k) is not None:
+            if norm(a[k]) != norm(b[k]):
+                return 0.0
+
+    ia, ib = ident(a), ident(b)
+    if ia and ib:
+        return difflib.SequenceMatcher(None, " | ".join(ia), " | ".join(ib)).ratio()
     return difflib.SequenceMatcher(None, flat(a), flat(b)).ratio()
+
+
+def _record_label(rec: dict) -> str:
+    """A short human label for a dropped record, for the run's warning."""
+    number = rec.get("number") or rec.get("entry_number") or rec.get("target_number")
+    name = rec.get("name") or rec.get("house_name") or rec.get("text") or ""
+    label = re.sub(r"\s+", " ", str(name)).strip()[:60]
+    if number not in (None, ""):
+        return f"#{number} {label}".strip()
+    return label or "(record)"
+
+
+def _same_page_duplicate(rec: dict, records: list[dict]) -> dict | None:
+    """The earlier record `rec` is the same entry as, on the same page — or None.
+
+    Kept as its own function so the store loop's decision is testable without a
+    model: the same-page guard is the step that used to delete distinct index
+    entries, and a regression here is silent.
+    """
+    page = db.record_start_page(rec)
+    if page is None:
+        return None
+    for prev in records:
+        if db.record_start_page(prev) != page:
+            continue
+        score = _record_similar(prev, rec)
+        if score >= 0.75:
+            return {"page": page, "kept": _record_label(prev),
+                    "dropped": _record_label(rec), "score": round(score, 3)}
+    return None
 
 
 def write_concatenated_file(cfg: Config, conn, doc_id: int, texts: list,
@@ -3748,6 +3825,11 @@ def encode_document(
         seen: set = set()
         windows = 0
         lost_windows: list[dict] = []
+        # Dropped-record accounting. The old code dropped a record with a bare
+        # `continue`: no warning, no counter, and `pha encode` exited 0 while 49%
+        # of a page's entries were gone (see the same-page dedup bug report).
+        duplicates = 0            # exact key hit: the same entry read again
+        same_page_dups: list[dict] = []   # fuzzy same-page drops: the risky path
         passes = max(1, encoder.extraction_passes)
         for pass_num in range(passes):
             if verbose and passes > 1:
@@ -3763,23 +3845,36 @@ def encode_document(
                 for rec in _expand_records(parsed):
                     key = _record_key(rec)
                     if key in seen:
+                        duplicates += 1
                         continue
-                    # first-pass wins on the same page: a later-pass record
-                    # starting on the same page with near-identical metadata
-                    # (e.g. "Santo" vs "São") is the same letter (LangExtract
-                    # drops overlapping extractions from later passes).
-                    page = db.record_start_page(rec)
-                    dup = False
-                    if page is not None:
-                        for prev in records:
-                            if db.record_start_page(prev) == page and _record_similar(prev, rec) >= 0.75:
-                                dup = True
-                                break
-                    if dup:
+                    # First-pass wins on the same page: a later-pass record
+                    # starting on the same page with the same IDENTITY metadata
+                    # (e.g. "Santo" vs "São") is the same entry. `_record_similar`
+                    # compares identity fields and treats a differing entry
+                    # number as decisive, so distinct entries on one page survive.
+                    dupe = _same_page_duplicate(rec, records)
+                    if dupe is not None:
+                        duplicates += 1
+                        same_page_dups.append(dupe)
                         continue
                     seen.add(key)
                     records.append(rec)
                 conn.commit()
+        if verbose and duplicates:
+            detail = f"  kept {len(records)} record(s), dropped {duplicates} duplicate(s)"
+            if same_page_dups:
+                detail += f" ({len(same_page_dups)} same-page)"
+            print(detail, flush=True)
+        if same_page_dups:
+            import sys
+            for d in same_page_dups[:3]:
+                print(f"  ! same-page record dropped as a duplicate: p.{d['page']} "
+                      f"{d['dropped']} ~ {d['kept']} (score {d['score']})",
+                      file=sys.stderr)
+            if len(same_page_dups) > 3:
+                print(f"  ! … and {len(same_page_dups) - 3} more same-page drop(s); "
+                      f"verify them against the source if the count looks high",
+                      file=sys.stderr)
     finally:
         client.close()
 
@@ -3834,7 +3929,12 @@ def encode_document(
                     pass
 
     return {"action": "encoded", "filename": doc["filename"], "encoder": resolved,
-            "records": len(records), "windows": windows, "lost_windows": lost_windows}
+            "records": len(records), "windows": windows, "lost_windows": lost_windows,
+            # Visible accounting for the same-page dedup: a run that drops records
+            # must say so (the bug report's whole complaint was the silence).
+            "duplicates_dropped": duplicates,
+            "same_page_duplicates": len(same_page_dups),
+            "same_page_duplicate_examples": same_page_dups[:5]}
 
 
 def _encoder_specs_for_document(cfg: Config, doc) -> list[tuple[Path, str | None]]:

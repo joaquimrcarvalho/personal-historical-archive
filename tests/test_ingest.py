@@ -12,6 +12,7 @@ from personal_historical_archive.ingest import (
     _record_key,
     _record_similar,
     _regex_candidates,
+    _same_page_duplicate,
     chunk_text,
     discover,
 )
@@ -133,6 +134,64 @@ def test_record_similar_kind_gate():
     c = {"kind": "person", "text": "x"}
     assert _record_similar(a, b) == 1.0
     assert _record_similar(a, c) == 0.0
+
+
+def test_record_key_discriminates_on_the_start_page():
+    """The same text on another page is another entry, not a duplicate.
+
+    Overlapping windows re-read the same page; a recurring formula elsewhere in
+    the volume must not collapse two rows.
+    """
+    a = {"kind": "index_entry", "text": "Fórmula notarial", "page_start": 337}
+    same_page = dict(a)
+    other_page = dict(a, page_start=341)
+    assert _record_key(a) == _record_key(same_page)
+    assert _record_key(a) != _record_key(other_page)
+
+
+def test_record_similar_entry_number_is_decisive():
+    """A differing catalogue number proves two entries are different.
+
+    The shipped comparison scored 0.839 for two distinct index entries on one
+    page (shared title/catalogue/community/source_text) and the second was
+    dropped; the number now decides.
+    """
+    boilerplate = {"kind": "index_entry", "title": "Monumenta historica Japoniae",
+                   "catalogue": "index", "community": "Japão"}
+    a = dict(boilerplate, name="António Francisco", number="20",
+             source_text="António Francisco — 20")
+    b = dict(boilerplate, name="António Fernandes", number="21",
+             source_text="António Fernandes — 21")
+    assert _record_similar(a, b) == 0.0
+    assert _same_page_duplicate(b, [a]) is None
+
+
+def test_record_similar_still_merges_a_reread_of_the_same_entry():
+    """A later pass re-read the same entry: a spelling variant still merges."""
+    a = {"kind": "index_entry", "name": "Santo António", "number": "12",
+         "page_start": 337}
+    b = {"kind": "index_entry", "name": "São António", "number": "12",
+         "page_start": 337}
+    assert _record_similar(a, b) >= 0.75
+    dupe = _same_page_duplicate(b, [a])
+    assert dupe is not None and dupe["page"] == 337
+
+
+def test_record_similar_without_identity_fields_keeps_the_old_comparison():
+    """Records with no identity field fall back to the whole-record ratio."""
+    a = {"kind": "note", "text": "same wording"}
+    b = {"kind": "note", "text": "same wording"}
+    c = {"kind": "note", "text": "something else entirely"}
+    assert _record_similar(a, b) == 1.0
+    assert _record_similar(a, c) < 0.75
+
+
+def test_same_page_duplicate_requires_the_same_page():
+    a = {"kind": "index_entry", "name": "António Lopes", "number": "31",
+         "page_start": 337}
+    b = {"kind": "index_entry", "name": "António Lopes", "number": "31",
+         "page_start": 338}
+    assert _same_page_duplicate(b, [a]) is None
 
 
 def test_page_filter():

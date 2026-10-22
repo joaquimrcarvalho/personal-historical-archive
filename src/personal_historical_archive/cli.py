@@ -3818,20 +3818,35 @@ def cmd_encode(cfg: Config, args) -> None:
     encoded = sum(1 for r in res["results"] if r["action"] == "encoded")
     print(f"encoded {encoded} document(s)")
     total_lost = 0
+    total_same_page = 0
     for r in res["results"]:
         if r["action"] == "encoded":
             lost = list(r.get("lost_windows") or [])
             total_lost += len(lost)
+            dropped = int(r.get("duplicates_dropped") or 0)
+            same_page = int(r.get("same_page_duplicates") or 0)
+            total_same_page += same_page
             detail = f"{r['records']} records"
             if r.get("windows") is not None:
                 detail += f", {r['windows']} windows"
+            if dropped:
+                detail += f", {dropped} duplicate(s) dropped"
+                if same_page:
+                    detail += f" ({same_page} same-page)"
             if lost:
                 detail += f", {len(lost)} WINDOW(S) LOST"
             print(f"  + {r['filename']} [{r['encoder']}] ({detail})")
             for w in lost:
                 print(f"    ! lost {w.get('pages')}: {w.get('reason')}", file=sys.stderr)
+            for d in (r.get("same_page_duplicate_examples") or [])[:3]:
+                print(f"    ! same-page duplicate: p.{d.get('page')} {d.get('dropped')} "
+                      f"~ {d.get('kept')} (score {d.get('score')})", file=sys.stderr)
         elif r.get("reason") not in ("no encoder configured", "records up to date"):
             print(f"  ! {r['filename']}: {r.get('reason', r['action'])}")
+    if total_same_page:
+        print(f"warning: {total_same_page} same-page record(s) were dropped as duplicates; "
+              f"only a re-read of the SAME entry should merge — check them against the "
+              f"source if this count looks high", file=sys.stderr)
     if total_lost:
         print(f"warning: {total_lost} encoder window(s) lost; the records are incomplete "
               f"(re-run the affected document after raising max_tokens or fixing the encoder)",
