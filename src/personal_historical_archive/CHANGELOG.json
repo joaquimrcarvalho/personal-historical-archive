@@ -102,6 +102,18 @@
           "commit": "3bd4a32196bc"
         }
       ]
+    },
+    "0.46.1": {
+      "date": "2026-10-22",
+      "summary": "Refreshed the DeepSeek Harness guide and the PHA view plugin docs: two models with vision on Flash, how to install the PHA view, and the twelve tools the plugin provides.",
+      "changes": [
+        {
+          "type": "docs",
+          "scope": "harness",
+          "text": "refresh the Harness guide, and bring the plugin docs up to date",
+          "commit": "616578f71004"
+        }
+      ]
     }
   }
 }
