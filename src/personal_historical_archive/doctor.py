@@ -147,10 +147,20 @@ def diagnose(
                 problems.append(f"{binary!r} vanished between lookup and run")
             else:
                 version = _version_of(ver_proc)
+                # Locating a binary is not the same as being able to RUN it: a
+                # broken or incomplete install (missing DLL, wrong
+                # architecture) resolves fine and then fails on every page.
+                # `--version` is the cheapest proof it runs, so the OK verdict
+                # depends on that probe succeeding.
+                version_ok = ver_proc.returncode == 0 and bool(version)
                 if key == "tesseract":
-                    ok = True  # the right tool; version is informational
-                    if not version:
-                        problems.append("`tesseract --version` produced no output")
+                    ok = version_ok
+                    if not ok:
+                        problems.append(
+                            "`tesseract --version` did not succeed — the binary was "
+                            f"found at {path!r} but cannot be run (broken or "
+                            "incomplete install)"
+                        )
                 else:  # liteparse — guard against a different `lit`
                     is_liteparse = bool(
                         version and "liteparse" in version.lower()
@@ -163,6 +173,16 @@ def diagnose(
                         else:
                             probe = None
                         is_liteparse = probe is not None and probe.returncode == 0
+                    # A help probe that exits 0 is not proof the tool runs: a
+                    # crashing `lit` answered `parse --help` while `lit
+                    # --version` aborted, and was reported [ok] — a broken
+                    # engine shown as usable. Require the version probe too.
+                    if is_liteparse and not version_ok:
+                        is_liteparse = False
+                        problems.append(
+                            "`lit --version` did not succeed — the binary was found "
+                            f"at {path!r} but does not run correctly"
+                        )
                     if is_liteparse:
                         ok = True
                         if not version:

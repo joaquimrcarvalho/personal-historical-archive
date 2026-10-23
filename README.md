@@ -786,7 +786,9 @@ content-only: copy, rename, pair with a model in `pha.yaml`.
 > **Installing the engines** (on the machine that runs pha). Probe first with
 > `pha doctor` (`--engine liteparse` requires a specific engine; `--json` for
 > machine-readable output; MCP: `pha_doctor()`) — it checks the binaries pha
-> spawns and flags e.g. a wrong `lit`. Why a tool can work in your Terminal
+> spawns and flags e.g. a wrong `lit`; its OK verdict requires the binary's own
+> `--version` probe to succeed, so a binary that resolves but cannot run is
+> reported broken rather than usable. Why a tool can work in your Terminal
 > yet be reported missing: pha is often launched from a GUI / agent / cron
 > context whose PATH is minimal, unlike your interactive shell. pha therefore
 > resolves each engine binary as (1) its own PATH, (2) the dirs in the
@@ -795,6 +797,9 @@ content-only: copy, rename, pair with a model in `pha.yaml`.
 > (4) the interpreter's own bin dir — so any normal install (brew, pyenv,
 > nvm, pipx, `uv tool`, npm `-g`, pip into pha's own venv) is found
 > automatically, and only genuinely unusual locations need `PHA_ENGINE_PATH`.
+> On **Windows** there is no login-shell step, and the remaining dirs are probed
+> for the `PATHEXT` names as well (`tesseract.exe`, not `tesseract`), so
+> `PHA_ENGINE_PATH` and the interpreter's bin dir work there too.
 > Tesseract comes from the package managers (see the table above). For the `lit`
 > CLI, **install the Python package** — `pip install liteparse` (or
 > `pipx install liteparse` / `uv tool install liteparse`): it is the recommended

@@ -334,7 +334,7 @@ def test_liteparse_engine_embedded_feeds_source_pdf_page(monkeypatch, tmp_path):
     assert out == "out"
     assert seen["args"][0] == src_pdf  # the source PDF, not the raster
     assert seen["args"][1] == "lat"
-    assert seen["kwargs"] == {"fmt": "json", "target_page": 3}
+    assert seen["kwargs"] == {"fmt": "json", "target_page": 3, "no_ocr": True}
 
 
 def test_liteparse_engine_embedded_non_pdf_falls_back_to_raster(monkeypatch):
@@ -427,7 +427,7 @@ def test_liteparse_engine_prefer_embedded_uses_good_layer(monkeypatch, tmp_path)
     out = mc2._liteparse_page_engine(pal, Path("/tmp/render/p003.jpg"), ctx)
     assert out == "out"
     assert seen["args"][0] == src_pdf  # source PDF, not the raster
-    assert seen["kwargs"] == {"fmt": "text", "target_page": 3}
+    assert seen["kwargs"] == {"fmt": "text", "target_page": 3, "no_ocr": True}
 
 
 def test_liteparse_engine_prefer_embedded_falls_back_on_soup(monkeypatch, tmp_path):
@@ -540,6 +540,73 @@ def test_find_engine_binary_none_when_nowhere(monkeypatch):
     monkeypatch.setattr(mc, "_fallback_bin_dirs", lambda: [])
     _use_real_resolver(monkeypatch)
     assert mc.find_engine_binary("tesseract") is None
+
+
+# --- Windows: the fallback dirs carry `tesseract.exe`, not `tesseract` --------
+# (PHA-WIN-ENGINE-DISCOVERY: the login-shell fallback is disabled on Windows, and
+# the remaining fallbacks probed an extension-less filename, so the chain could
+# never succeed — including the documented PHA_ENGINE_PATH route.)
+
+def test_engine_binary_names_are_bare_off_windows(monkeypatch):
+    monkeypatch.setattr(mc.os, "name", "posix")
+    assert mc._engine_binary_names("tesseract") == ["tesseract"]
+
+
+def test_engine_binary_names_add_pathext_on_windows(monkeypatch):
+    monkeypatch.setattr(mc.os, "name", "nt")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT")
+    assert mc._engine_binary_names("tesseract") == [
+        "tesseract", "tesseract.COM", "tesseract.EXE", "tesseract.BAT"]
+
+
+def test_engine_binary_names_keep_an_explicit_extension(monkeypatch):
+    monkeypatch.setattr(mc.os, "name", "nt")
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    assert mc._engine_binary_names("tesseract.exe") == ["tesseract.exe"]
+
+
+def test_engine_binary_names_use_the_windows_default_when_pathext_is_unset(monkeypatch):
+    monkeypatch.setattr(mc.os, "name", "nt")
+    monkeypatch.delenv("PATHEXT", raising=False)
+    # The Windows default list is upper-case; Windows matches filenames
+    # case-insensitively, so `.EXE` finds `tesseract.exe`.
+    assert any(n.lower() == "tesseract.exe" for n in mc._engine_binary_names("tesseract"))
+
+
+def test_find_engine_binary_finds_exe_in_a_fallback_dir_on_windows(monkeypatch, tmp_path):
+    """PHA_ENGINE_PATH (or the interpreter bin) with `tesseract.exe` must resolve.
+
+    The old loop probed `Path(dir) / "tesseract"`, which can never match a
+    Windows executable."""
+    exe = tmp_path / "tesseract.exe"
+    exe.write_bytes(b"MZ")
+    monkeypatch.setattr(mc.os, "name", "nt")
+    # `.exe` in lower case so the check is meaningful on THIS (case-sensitive)
+    # filesystem; Windows matches `tesseract.EXE` to `tesseract.exe` anyway.
+    monkeypatch.setenv("PATHEXT", ".COM;.exe")
+    monkeypatch.setattr(mc, "shutil", SimpleNamespace(which=lambda name: None))
+    monkeypatch.setattr(mc, "_fallback_bin_dirs", lambda: [str(tmp_path)])
+    _use_real_resolver(monkeypatch)
+    assert mc.find_engine_binary("tesseract") == str(exe)
+
+
+def test_run_liteparse_no_ocr_flag(monkeypatch):
+    """`--no-ocr` must reach `lit parse` for an embedded-layer read."""
+    calls: list[list[str]] = []
+
+    class Proc:
+        returncode = 0
+        stdout = "text"
+        stderr = ""
+
+    def fake_run(cmd, capture_output, text, timeout):
+        calls.append(cmd)
+        return Proc()
+
+    monkeypatch.setattr(mc.subprocess, "run", fake_run)
+    assert run_liteparse("/tmp/source.pdf", target_page=7, no_ocr=True) == "text"
+    assert calls[0] == ["lit", "parse", "/tmp/source.pdf",
+                        "--target-pages", "7", "--no-ocr"]
 
 
 def test_login_shell_path_parses_markers(monkeypatch):

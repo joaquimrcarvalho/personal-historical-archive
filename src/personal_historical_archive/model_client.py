@@ -147,23 +147,58 @@ def _fallback_bin_dirs() -> list[str]:
     return deduped
 
 
+_WIN_DEFAULT_PATHEXT = (".COM", ".EXE", ".BAT", ".CMD")
+
+
+def _engine_binary_names(name: str) -> list[str]:
+    """The filenames to look for in a FALLBACK dir, Windows-aware.
+
+    On Windows an executable carries an extension (`tesseract.exe`), so probing
+    for a file literally named `tesseract` can never match one: the whole
+    fallback chain was dead there, including the documented `PHA_ENGINE_PATH`
+    route and the interpreter's own bin dir. `shutil.which()` handles this for
+    pha's own PATH (which is why the bug only showed when the engine was not on
+    it); this mirrors that for the fallback dirs.
+
+    `PATHEXT` is semicolon-separated by definition — split on `;`, not
+    `os.pathsep`, so the rule is the same (and testable) off Windows. A name
+    that already carries an extension is used as given. On POSIX this is just
+    `[name]`.
+    """
+    if os.name != "nt" or os.path.splitext(name)[1]:
+        return [name]
+    raw = os.environ.get("PATHEXT") or ";".join(_WIN_DEFAULT_PATHEXT)
+    exts = [e.strip() for e in raw.split(";") if e.strip()]
+    return [name] + [name + e for e in exts]
+
+
 def find_engine_binary(name: str) -> str | None:
     """Resolve the executable pha should spawn for a local engine (e.g.
-    ``"tesseract"`` or ``"lit"``).
+    ``"tesseract"`` or ``"lit"``), or for the Tailscale CLI.
 
     PATH first (so an intentional override on pha's PATH wins), then the
     fallback dirs from ``_fallback_bin_dirs`` — chiefly the PATH the user's
     own login shell would provide — so pha finds engines that work in the
     user's Terminal even when pha itself was launched with a minimal PATH.
     Returns None if the binary is nowhere to be found.
+
+    Each fallback dir is probed for every name ``_engine_binary_names`` yields,
+    so Windows' `tesseract.exe` is found (and `os.access(X_OK)` — a no-op
+    there — is not relied on as the executability test).
     """
     found = shutil.which(name)
     if found:
         return found
+    # Computed once: the PATHEXT list does not change during a lookup.
+    names = _engine_binary_names(name)
+    # `os.path` (not `pathlib`) on purpose: it is the platform's own joiner and
+    # stat, so this loop behaves the same on Windows and stays testable off it
+    # (`Path(...)` would instantiate `WindowsPath` whenever os.name says "nt").
     for d in _fallback_bin_dirs():
-        cand = Path(d) / name
-        if cand.is_file() and os.access(cand, os.X_OK):
-            return str(cand)
+        for fname in names:
+            cand = os.path.join(d, fname)
+            if os.path.isfile(cand) and (os.name == "nt" or os.access(cand, os.X_OK)):
+                return cand
     return None
 
 
@@ -212,6 +247,7 @@ def run_liteparse(
     dpi: int | None = None,
     fmt: str = "text",
     target_page: int | None = None,
+    no_ocr: bool = False,
 ) -> str:
     """Run LiteParse (`lit parse`) on a file and return its output.
 
@@ -235,6 +271,12 @@ def run_liteparse(
       text), ``"markdown"`` (structured markdown) or ``"json"`` (text + per
       item bounding boxes/confidence).
     - ``target_page`` adds ``--target-pages <n>`` (1-based page number).
+    - ``no_ocr`` adds ``--no-ocr``: parse the PDF's own text layer and do NOT
+      fall back to OCR for pages whose layer is empty. Required for
+      ``liteparse_ocr: embedded`` (and for a layer ``prefer-embedded`` has
+      already accepted) — without it, a cover or plate with no text layer was
+      still OCR'd, which on Windows routes it into LiteParse's crashing OCR
+      path instead of returning nothing.
 
     Raises ``ModelError`` if ``lit`` is not installed or fails.
     """
@@ -247,6 +289,8 @@ def run_liteparse(
         cmd += ["--format", fmt]
     if target_page is not None:
         cmd += ["--target-pages", str(target_page)]
+    if no_ocr:
+        cmd += ["--no-ocr"]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=False, timeout=600)
     except FileNotFoundError as e:
@@ -401,7 +445,8 @@ def _liteparse_page_engine(palaeographer, image_path, ctx) -> str:
 
     if src_pdf is not None:
         if mode == "embedded":
-            return run_liteparse(src_pdf, lang, dpi, fmt=fmt, target_page=page_no)
+            return run_liteparse(src_pdf, lang, dpi, fmt=fmt, target_page=page_no,
+                                 no_ocr=True)
         # prefer-embedded: trust the layer only when it reads like real text
         min_chars = getattr(palaeographer, "liteparse_embedded_min_chars", 200)
         min_quality = getattr(palaeographer, "liteparse_embedded_min_quality", 0.60)
@@ -410,7 +455,10 @@ def _liteparse_page_engine(palaeographer, image_path, ctx) -> str:
             200 if min_chars is None else int(min_chars),
             0.60 if min_quality is None else float(min_quality),
         ):
-            return run_liteparse(src_pdf, lang, dpi, fmt=fmt, target_page=page_no)
+            # The layer is the reading we want: `--no-ocr`, or LiteParse would
+            # OCR a page whose layer it considers empty (a plate, a cover).
+            return run_liteparse(src_pdf, lang, dpi, fmt=fmt, target_page=page_no,
+                                 no_ocr=True)
 
     # fresh OCR on the raster: the default, the non-PDF case, and the
     # prefer-embedded fallback when the layer is missing or poor

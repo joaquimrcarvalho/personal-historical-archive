@@ -177,3 +177,38 @@ def test_doctor_renders_without_a_config(monkeypatch):
     out = doctor.render(doctor.diagnose())
     assert "model servers" in out
     assert "no model files loaded" in out
+
+
+def test_tesseract_located_but_cannot_run_is_not_ok(monkeypatch):
+    """Finding the binary is not proof it runs.
+
+    A broken or incomplete install resolves fine and then fails on every page
+    (`[WinError 2]` / a missing DLL), yet the old check set ok=True on `found`
+    alone. The OK verdict now depends on the version probe.
+    """
+    def runner(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="dyld: missing")
+
+    _patch(monkeypatch, paths={"tesseract": "/opt/homebrew/bin/tesseract"}, runner=runner)
+    rep = doctor.diagnose(declared={"tesseract": ["tesseract.md"]})
+    by = {e["engine"]: e for e in rep["engines"]}
+    assert by["tesseract"]["found"] is True
+    assert by["tesseract"]["ok"] is False
+    assert rep["ok"] is False
+    assert any("cannot be run" in p for p in by["tesseract"]["problems"])
+
+
+def test_liteparse_parse_probe_does_not_mask_a_failing_version(monkeypatch):
+    """A crashing `lit` answered `parse --help` while `lit --version` aborted and
+    was reported [ok] — a broken engine shown as usable."""
+    def runner(cmd, **kw):
+        if cmd[1] == "--version":
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="Abort trap: 6")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    _patch(monkeypatch, paths={"lit": "/usr/local/bin/lit"}, runner=runner)
+    rep = doctor.diagnose(declared={"liteparse": ["liteparse.md"]})
+    by = {e["engine"]: e for e in rep["engines"]}
+    assert by["liteparse"]["ok"] is False
+    assert rep["ok"] is False
+    assert any("does not run correctly" in p for p in by["liteparse"]["problems"])

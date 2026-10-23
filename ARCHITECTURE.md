@@ -314,6 +314,12 @@ it passes a quality gate (enough text, mostly letters, word-like tokens —
 word test only, so CJK/Greek/Cyrillic pass), else OCRs the raster; conservative
 by design, sample `models/_sample.liteparse.embedded.md`.
 
+**`embedded` — and a layer `prefer-embedded` has accepted — passes `--no-ocr`.**
+Without it `lit parse` still OCRs a page whose layer is empty (a cover, a plate,
+an image-only scan) instead of returning nothing, which on Windows runs into
+LiteParse's crashing OCR path. The raster (fresh-OCR) path deliberately keeps
+OCR on.
+
 **Install on the ARCHIVE machine.** Probe FIRST with `pha doctor` — it checks the
 binaries pha spawns (and works even before an archive is set). Options:
 `--engine liteparse` treats an engine as required, `--json` prints a
@@ -336,6 +342,15 @@ In practice any install your Terminal can run — brew, pyenv, nvm, pipx,
 genuinely unusual locations need `PHA_ENGINE_PATH`. When pha DOES report a
 missing engine at scan time ("…is not installed or not on PATH"), the tool is
 really absent — install it rather than retrying.
+
+**Windows.** There is no login-shell step there (step 3 returns None on a
+non-POSIX platform), and executables carry an extension, so steps 2 and 4 probe
+each dir for the `PATHEXT` names as well (`tesseract.exe`), not just the bare
+name. Before that fix the whole fallback chain was dead on Windows: the
+`PHA_ENGINE_PATH` route — the remedy the error message itself names — could
+never succeed. `pha doctor` also gates its OK verdict on the binary's own
+`--version` probe, so a binary that resolves but cannot run (missing DLL, wrong
+architecture) is reported broken instead of `[ok]`.
 
 - **Tesseract** (standalone OCR): macOS `brew install tesseract tesseract-lang`
   (the `-lang` formula provides the language data, e.g. `por`, `lat`);
