@@ -3377,7 +3377,7 @@ def _expand_records(parsed: list) -> list[dict]:
 
 
 def _record_key(rec: dict) -> tuple:
-    """Exact-duplicate key: kind + start page + normalized text/from/to/date/place.
+    """Exact-duplicate key: kind + start page + what identifies the entry.
 
     The **page is part of the key** on purpose. Overlapping chunks re-read the
     same page, so the same entry seen twice still collapses; but the same text on
@@ -3385,11 +3385,17 @@ def _record_key(rec: dict) -> tuple:
     boilerplate line, "the same house description" — must not merge two rows).
     Without the page, byte-identical text elsewhere in the volume was silently
     dropped (enhancements/pha-same-page-record-dedup-deletes-distinct-entries-bug-report.md).
+
+    The IDENTITY fields are part of it for the same reason, in the other
+    direction: an index row often has no `text`/`from`/`to`/`date`/`place` at all
+    (the row is a name and a number), so without them every entry on one page
+    produced the SAME key and all but the first was dropped before the fuzzy
+    guard could even look at it.
     """
     page = db.record_start_page(rec)
     parts = [str(rec.get("kind") or "record"),
              "" if page is None else str(page)]
-    for k in ("text", "from", "to", "date", "place"):
+    for k in ("text", "from", "to", "date", "place") + _IDENTITY_FIELDS:
         v = rec.get(k)
         if isinstance(v, str):
             v = re.sub(r"\s+", " ", v.strip().lower())
@@ -3453,6 +3459,41 @@ def _record_similar(a: dict, b: dict) -> float:
     if ia and ib:
         return difflib.SequenceMatcher(None, " | ".join(ia), " | ".join(ib)).ratio()
     return difflib.SequenceMatcher(None, flat(a), flat(b)).ratio()
+
+
+def _dedupe_window(parsed: list, records: list[dict], seen: set) -> tuple[int, list[dict]]:
+    """Store the records ONE extraction window returned: (dropped, same-page drops).
+
+    A record may only merge with one stored by an **earlier** window. The
+    same-page guard exists for the same entry re-read by a later, overlapping
+    window; the records a window returns *together* are distinct entries the
+    model read once, so comparing them with each other merged distinct rows on a
+    dense index page (pp. 339/340 of the Schütte index: `Guaspar Carvalho` ~
+    `Guaspar de Paiva`, 0.773 — see
+    enhancements/pha-same-page-record-dedup-deletes-distinct-entries-bug-report.md).
+    `prior` is the accumulated list as it stood when this window started.
+    """
+    prior = list(records)  # everything stored BEFORE this window
+    dropped = 0
+    drops: list[dict] = []
+    for rec in _expand_records(parsed):
+        key = _record_key(rec)
+        if key in seen:
+            dropped += 1
+            continue
+        # First-pass wins on the same page: a record from a LATER window or pass
+        # starting on the same page with the same IDENTITY metadata (e.g. "Santo"
+        # vs "São") is the same entry. `_record_similar` compares identity fields
+        # and treats a differing entry number as decisive, so distinct entries on
+        # one page survive.
+        dupe = _same_page_duplicate(rec, prior)
+        if dupe is not None:
+            dropped += 1
+            drops.append(dupe)
+            continue
+        seen.add(key)
+        records.append(rec)
+    return dropped, drops
 
 
 def _record_label(rec: dict) -> str:
@@ -3846,23 +3887,11 @@ def encode_document(
                     verbose, mode=mode,
                 )
                 lost_windows.extend(lost)
-                for rec in _expand_records(parsed):
-                    key = _record_key(rec)
-                    if key in seen:
-                        duplicates += 1
-                        continue
-                    # First-pass wins on the same page: a later-pass record
-                    # starting on the same page with the same IDENTITY metadata
-                    # (e.g. "Santo" vs "São") is the same entry. `_record_similar`
-                    # compares identity fields and treats a differing entry
-                    # number as decisive, so distinct entries on one page survive.
-                    dupe = _same_page_duplicate(rec, records)
-                    if dupe is not None:
-                        duplicates += 1
-                        same_page_dups.append(dupe)
-                        continue
-                    seen.add(key)
-                    records.append(rec)
+                # The same-page guard runs against the records stored BEFORE this
+                # window, never against the window's own rows (see _dedupe_window).
+                dropped, drops = _dedupe_window(parsed, records, seen)
+                duplicates += dropped
+                same_page_dups.extend(drops)
                 conn.commit()
         if verbose and duplicates:
             detail = f"  kept {len(records)} record(s), dropped {duplicates} duplicate(s)"

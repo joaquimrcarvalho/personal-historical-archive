@@ -1,6 +1,12 @@
 # Bug report — the same-page record dedup silently deletes distinct entries
 
-**Status:** **FIXED** (working tree, 2026-10-23; see "What landed" below).
+**Status:** **FIXED (round 2, working tree 2026-10-23) — pending the archive
+re-encode.** The round-1 identity fix reduced the loss but did not stop distinct
+rows from being merged **within one extraction window**; round 2 scopes the guard
+per window and puts the identity fields in the exact-duplicate key. The
+acceptance measurement is a re-encode of doc 18 plus the completeness audit (see
+"Round 2 landed" below).
+**Issue:** [#4](https://github.com/joaquimrcarvalho/personal-historical-archive/issues/4).
 **Found:** 2026-10-13 on `jesuit-archive` (Schütte, *Monumenta
 historica Japoniae I*), **pha 0.43.1** (`src/personal_historical_archive/ingest.py`,
 `encode_document`).
@@ -9,6 +15,77 @@ archive the alphabetical indexes kept **76 of 149 rows (51 %)** on five pages;
 `pha encode` reported the pass as successful and the run's own summary counted
 the surviving records only.
 **Written against:** pha 0.43.1.
+
+## Reopened 2026-10-23 — the identity-field fix is not sufficient
+
+**Measured against:** pha **0.46.2** (installed; the checked-out source at
+0.46.4 still has the same store loop). The fix described under "What landed"
+is present (`_IDENTITY_FIELDS` / `_DISCRIMINATING_FIELDS`, page in
+`_record_key`, drop counting), and it does reduce the loss — but it does not
+stop distinct rows from being merged when they come from the **same extraction
+window**.
+
+On the same archive, after `pha encode --doc 18 --reprocess` (2026-10-23):
+
+- index records: **76 → 182** stored;
+- `audit-completeness.py --doc 18 --encoder index_entry` still reports
+  **3 pages SHORT**:
+  - p. 339: **37 source rows → 26 records (11 lost)**
+  - p. 340: **28 → 21 (7 lost)**
+  - p. 341: 25 → 26 (+1)
+  - pp. 337 and 338 are complete (29 and 31 records);
+- the dropped records are distinct people, e.g. `Guaspar Carvalho` ~ `Guaspar
+  de Paiva` (0.773), `Joam de Milam` ~ `Joam de Crasto` (0.769), `Joam
+  Francisco` ~ `Joam de Crasto` (0.750);
+- `person` improved from 28 to **23 pages SHORT**, with 42 records whose
+  evidence is not on the page they claim.
+
+**Remaining root cause:** `_same_page_duplicate(rec, records)` is called with
+the whole accumulated list, which includes records stored **earlier in the
+same window**. In chunked mode a 10-page index window contains many rows of
+the same page, so the guard compares distinct rows with each other. The guard
+exists for the **same entry re-read by a later, overlapping window**, not for
+rows the model returned together in one call.
+
+**Remaining fix (small):** at the top of the per-window loop remember
+`prior = len(records)` and call `_same_page_duplicate(rec, records[:prior])`.
+Optionally record a window id on each record and require a **different** window
+for a merge. Add the regression test: one extraction window returning two
+distinct same-page entries must store both. The fix must be accompanied by a
+re-encode of the affected encoder (the records are not in the database); the
+`person` encoder should be re-run too once the change is in.
+
+### Round 2 landed (working tree, 2026-10-23)
+
+`src/personal_historical_archive/ingest.py`:
+
+- **The window is the scope of the guard.** A new `_dedupe_window()` stores the
+  records ONE extraction window returned and runs `_same_page_duplicate()`
+  against a snapshot of the records stored **before** that window
+  (`prior = list(records)`), never against the window's own rows. A merge is now
+  only possible with an earlier window or pass — which is the overlap the guard
+  exists for. The store loop calls it per window.
+- **The exact-duplicate key carries the identity fields.** Writing the
+  regression test exposed a latent second loss of the same family: `_record_key`
+  held only `text`/`from`/`to`/`date`/`place`, so an index row that is *just a
+  name and a number* (no free text) gave every entry on one page the **same
+  key**, and all but the first was dropped before the fuzzy guard could look at
+  it. `_IDENTITY_FIELDS` are now part of the key beside the page. (On the
+  Schütte index the records do carry `text`, so the measured loss was the
+  window-scope one; this closes the same hole for an encoder that emits no
+  text.)
+- Drops are still counted and reported, as in round 1.
+
+**Tests** (`tests/test_ingest.py`): one window returning two distinct same-page
+entries stores both; a later window still merges a re-read; a literal repeat
+inside one window is still dropped by the exact key; and the key discriminates
+on identity when `text` is empty. All four fail against the round-1 source (the
+first two by construction, the key one because the keys collide).
+
+**Acceptance, still to be measured on jesuit-archive:** `pha encode --doc 18
+--reprocess` for both `index_entry` and `person`, then
+`audit-completeness.py --doc 18`: pp. 339/340 must reach 37 and 28 records. The
+code has to be released first (it is a Python-tool change).
 
 ## Summary
 
@@ -222,6 +299,10 @@ restricted to genuine re-reads, and a new config knob would change defaults;
 the counting above is what makes a future loss visible. Revisit only if a real
 archive still shows a same-page collapse.
 
+**Reopened 2026-10-23:** a real archive did show a collapse. The identity
+comparison is necessary but not sufficient, because the check still runs
+**within** one extraction window — see "Reopened 2026-10-23" at the top.
+
 ### Tests
 
 `tests/test_ingest.py`: `_record_key` page discrimination, the entry-number
@@ -236,3 +317,8 @@ never stored. Re-run the encoder for the affected document
 (`pha encode --doc 18 --reprocess`) after updating pha; the run now prints how
 many duplicates it drops, so the completeness audit should stop reporting pages
 SHORT.
+
+**Measured 2026-10-23 (pha 0.46.2): it did not.** The index encoder stored 182
+records instead of 76, but pp. 339 and 340 are still SHORT (26/37 and 21/28).
+See "Reopened 2026-10-23" at the top for the remaining window-aware fix, and
+"Round 2 landed" for its implementation.

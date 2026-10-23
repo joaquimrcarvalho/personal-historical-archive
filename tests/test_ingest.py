@@ -9,6 +9,7 @@ from personal_historical_archive.ingest import (
     _expand_records,
     _page_filter,
     _parse_json_array,
+    _dedupe_window,
     _record_key,
     _record_similar,
     _regex_candidates,
@@ -149,6 +150,21 @@ def test_record_key_discriminates_on_the_start_page():
     assert _record_key(a) != _record_key(other_page)
 
 
+def test_record_key_discriminates_on_identity_without_text():
+    """An index row can be a name and a number and nothing else.
+
+    The key used to hold only text/from/to/date/place, so every text-less entry
+    on one page produced the same key and all but the first was dropped before
+    the fuzzy guard ran.
+    """
+    a = {"kind": "index_entry", "name": "Joam de Milam", "number": "12",
+         "page_start": 339}
+    b = {"kind": "index_entry", "name": "Joam de Crasto", "number": "13",
+         "page_start": 339}
+    assert _record_key(a) != _record_key(b)
+    assert _record_key(a) == _record_key(dict(a))
+
+
 def test_record_similar_entry_number_is_decisive():
     """A differing catalogue number proves two entries are different.
 
@@ -184,6 +200,50 @@ def test_record_similar_without_identity_fields_keeps_the_old_comparison():
     c = {"kind": "note", "text": "something else entirely"}
     assert _record_similar(a, b) == 1.0
     assert _record_similar(a, c) < 0.75
+
+
+def test_one_window_keeps_two_distinct_same_page_entries():
+    """A window's own rows are never compared with each other.
+
+    The same-page guard is for a later, overlapping window re-reading an entry.
+    Comparing a window's rows merged distinct index people on a dense page
+    (pp. 339/340 of the Schütte index, after the identity fix).
+    """
+    a = {"kind": "index_entry", "name": "Joam de Milam", "index_doc": "Monumenta",
+         "target_kind": "person", "page_start": 339}
+    b = {"kind": "index_entry", "name": "Joam de Crasto", "index_doc": "Monumenta",
+         "target_kind": "person", "page_start": 339}
+    assert _record_similar(a, b) >= 0.75       # the guard WOULD merge them
+    records: list[dict] = []
+    seen: set = set()
+    dropped, drops = _dedupe_window([a, b], records, seen)
+    assert dropped == 0 and drops == []
+    assert [r["name"] for r in records] == ["Joam de Milam", "Joam de Crasto"]
+
+
+def test_a_later_window_still_merges_a_reread_of_the_same_entry():
+    """The overlap case the guard exists for still collapses."""
+    first = {"kind": "index_entry", "name": "Santo António", "number": "12",
+             "page_start": 337}
+    reread = {"kind": "index_entry", "name": "São António", "number": "12",
+              "page_start": 337}
+    records: list[dict] = []
+    seen: set = set()
+    assert _dedupe_window([first], records, seen) == (0, [])
+    dropped, drops = _dedupe_window([reread], records, seen)
+    assert dropped == 1 and len(drops) == 1
+    assert records == [first]
+
+
+def test_an_identical_repeat_inside_one_window_is_still_dropped():
+    """The exact key still collapses a literal repeat the model emits twice."""
+    a = {"kind": "index_entry", "name": "Ambrósio Fernandes", "number": "28",
+         "page_start": 338}
+    records: list[dict] = []
+    seen: set = set()
+    dropped, _ = _dedupe_window([a, dict(a)], records, seen)
+    assert dropped == 1
+    assert records == [a]
 
 
 def test_same_page_duplicate_requires_the_same_page():
