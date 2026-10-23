@@ -569,9 +569,11 @@ most common tasks:
   and prints the pre-load recipe for a deterministic local instance.
 - `pha-zotero-bibliography` — import a PDF from Zotero with its bibliographic
   sidecar, or build/refresh one document's reference from the owner's Zotero
-  library (the local API's MODS, an RDF export, `pha bib <doc> --to-json
-  --write`, and the provenance rules that keep an unverified reference from
-  being cited as fact).
+  library (the local API's MODS **and the attachment file itself**, the RDF
+  export as the fallback, `pha bib <doc> --to-json --write`, and the provenance
+  rules that keep an unverified reference from being cited as fact), and link the
+  two records both ways (`record_id` ↔ the item's `pha-doc`/`pha-slug`/`pha-path`
+  lines plus a viewer link attachment).
 - `palaeographers-compare` — compare two or more palaeographers' (or
   transcription models') readings of the same pages into a uniform comparative
   edition: a `comparison/` folder with one file per page (readings stacked
@@ -664,17 +666,20 @@ compared; a folder of your own is never read, reported or replaced.
 
 _SKILL_ZOTERO_BIBLIOGRAPHY = """---
 name: pha-zotero-bibliography
-description: Import a PDF from Zotero into personal-historical-archive (pha) and give it a bibliographic sidecar, and build or refresh the reference of a document already in the archive from the owner's Zotero library. Use when the user says they "exported from Zotero", hands over a Zotero RDF or MODS export file, asks to "add the bibliographic data / reference / citation" to a document, or wants a sidecar (`<stem>.dc.json`) beside a PDF. Covers the Zotero local API (MODS), the Zotero RDF export package, where the PDF belongs, the sidecar formats, and the provenance rules that stop an unverified reference from being cited as fact.
+description: Import a PDF from Zotero into personal-historical-archive (pha) and give it a bibliographic sidecar, and build or refresh the reference of a document already in the archive from the owner's Zotero library. Use when the user says they "exported from Zotero", hands over a Zotero RDF or MODS export file, asks to "add the bibliographic data / reference / citation" to a document, or wants a sidecar (`<stem>.dc.json`) beside a PDF. Covers the Zotero local API (MODS and the attachment file), the Zotero RDF export package, where the PDF belongs, the sidecar formats, the provenance rules that stop an unverified reference from being cited as fact, and the backlinks that tie a Zotero item to its archive document (`record_id` ↔ the item's `extra` plus a viewer link attachment).
 ---
 
 # pha Zotero Bibliography
 
-Two jobs, one skill:
+Three jobs, one skill:
 
 - **Import** a PDF that lives in Zotero (or in a Zotero export package) into
   the archive, with its reference beside it.
 - **Build or refresh the reference** of a document that is *already* in the
   archive, from the matching Zotero record.
+- **Link the two records** once both exist, so each says where the other is
+  (`record_id` in the sidecar, `pha-doc`/`pha-slug`/`pha-path` in the item's
+  `extra`, plus a clickable viewer link).
 
 ## Before you start: talk to a historian
 
@@ -685,6 +690,15 @@ catalogue to your ANTT collection with its full reference from your Zotero
 library", not "writing a sidecar". If the job needs anything beyond the archive
 (reaching Zotero on the machine, installing something), explain in simple words
 what you need, what it is for and what will change, and wait for a clear yes.
+
+**A new document's reading route is the owner's decision, not yours.** When an
+import creates a new collection (or the first document in one), the palaeographer
+and editor are chosen by the person who owns the archive: read `palaeographers/`
+and `editors/`, offer the two or three candidates that fit (script, language,
+printed vs manuscript, single vs double column) with one line each, and **wait
+for a clear yes before writing a `pha.yaml`** — do not write it and then report
+it. If nothing fits, say so and park it with `editor: null` rather than forcing a
+weak route; the document can wait in `inbox/`, which is never scanned.
 
 **A wrong reference reads exactly like a correct one.** Everything below exists
 to stop a plausible-looking citation from being treated as fact. When in doubt,
@@ -729,7 +743,9 @@ Rules that follow from that:
 
 ## Route A — the Zotero local API (preferred)
 
-Zotero 10+ exposes a read API while it is running:
+Zotero 10+ exposes a local API while it is running — read freely; writing (the
+item's `extra`, a link attachment) needs a confirmation from the user, see
+*Linking the two records*:
 
     curl "http://localhost:23119/api/users/0/items/<KEY>?format=mods"
 
@@ -758,12 +774,40 @@ Zotero 10+ exposes a read API while it is running:
       tree.write(dst, encoding="utf-8", xml_declaration=True)
       PY
 
+### Getting the PDF itself (no export needed)
+
+The same local API also says where the item's file lives, so a PDF already in
+Zotero does **not** need *Export Items*:
+
+    # 1. the item's attachments — key, filename, contentType, linkMode
+    curl "http://localhost:23119/api/users/0/items/<ITEMKEY>/children?itemType=attachment"
+
+    # 2. the file's absolute path, in the redirect (a file:/// Location header)
+    curl -s -D - -o /dev/null "http://localhost:23119/api/users/0/items/<ATTACHMENTKEY>/file"
+
+`/file` answers **302** with `Location: file:///<absolute path>`; copy that file
+into the archive (see *Where the PDF goes*). `curl -L` will **not** follow a
+`file://` URL, so read the header rather than expecting bytes.
+
+**Do not guess the storage root.** Zotero's data directory is configurable and is
+often not `~/Zotero` — an iCloud Drive folder, an external volume, a second
+profile. A `~/Zotero` left over from an earlier install looks right and can be
+years stale, while the redirect is authoritative. `linkMode: imported_file` and
+`imported_url` have a file; `linked_url` (an HTML snapshot, a bookmark) does not;
+`linked_file` points outside the storage tree, still at an absolute path.
+
 ## Route B — a Zotero RDF export package
 
 *Export Items* with **Format: RDF** produces a folder holding `<name>.rdf` plus
 the PDFs under `files/<itemID>/`. This route needs no running Zotero, and it is
 how a Zotero item travels *with* its file. It is **lossy** — often no
 publisher, date, ISBN or volume — so if Zotero is reachable, prefer Route A.
+
+**It is the fallback, not the default.** Use it when Zotero is not running (no
+local API), when the export was made on another machine, or when the item has no
+file attachment at all (an Internet Archive identifier, a `linked_url`-only
+bookmark). Otherwise Route A gives the record *and* the file in one step, with no
+manual export and no staging folder to clean up.
 
 Reading the RDF:
 
@@ -801,6 +845,13 @@ Field mapping (Zotero RDF → sidecar):
 - **`inbox/` is a hold area** — never scanned. `pha inbox` lists it and
   `pha inbox --move` relocates an entry into the dropbox **mirroring its
   relative path** (`inbox/collections/COLX/a.pdf` → `dropbox/collections/COLX/a.pdf`).
+- **Coming from Route A**: **copy** the file, never move it — Zotero still owns
+  its storage copy, and moving it silently empties the item's attachment.
+- **Coming from Route B**: copy the PDFs out of the export's `files/`, leaving
+  the `<name>.rdf` beside them until the sidecar is written. The export folder is
+  **scratch, not provenance**: once the PDFs are parked in `inbox/` or the
+  dropbox, delete it. It is a one-shot carrier that pha neither scans nor tracks,
+  and a staging folder that accumulates is not an archive.
 - A Zotero export of one work can arrive as several PDFs (parts of a book).
   Each file is a separate document, and **each needs its own sidecar** —
   presence-only means no sharing. (Joining the parts into one file first is
@@ -866,6 +917,77 @@ the way.
   field instead — a missing field is visibly missing; a fabricated one is not.
 - **Never overwrite a `human-supplied` record** without saying so.
 
+## Linking the two records (backlinks)
+
+A reference is half the job. The Zotero item should say where the *reading* lives,
+and the sidecar should say which Zotero item it belongs to. One field in each
+direction; nothing invented, nothing duplicated.
+
+### pha → Zotero: `record_id` is the Zotero item key
+
+| field | holds |
+| --- | --- |
+| `record_id: 6URU6HYK` | the Zotero **item key** (8 chars) — how pha finds the item |
+| `record_origin` | where the *reference* came from (see Provenance above) |
+| `url`, `identifiers` | the canonical online source and the ISSN/ISBN/IA id |
+
+`record_id` names the record **in the system that owns it**: the Zotero **item
+key** as soon as the item exists, and — only until then — the source identifier
+of an import that has no Zotero item. Read a sibling before writing: a volume
+imported from the Internet Archive keeps its IA id only because no Zotero item
+was ever made for it, and an id that looks numeric is usually an RDF `itemID`,
+which is legitimate for a Route B import but is not the key. Never a publisher or
+an ISBN — those have `url` and `identifiers`. The usual order of work puts the
+PDF first and the Zotero item later, so **set the key when the item is created**;
+a **pha doc id** in this field is not an identifier of the source at all (an
+earlier round did exactly that — eleven sidecars on one archive — and the only
+fix is to add the key once the item exists).
+
+### Zotero → pha: three lines in the item's `extra`
+
+`extra` is where Zotero already keeps machine-readable lines (`Citation Key:` for
+Better BibTeX); it syncs, survives export, and does not displace `url`:
+
+    pha-doc: 150
+    pha-slug: reference-works-dehergne-1953-la-mission-de-pekin-vers-1700
+    pha-path: collections/reference-works/Dehergne - 1953 - La mission de Pékin vers 1700.pdf
+
+Three, because they fail differently: the **doc id** is what a person types
+(`pha page 150 1 --edited`), the **slug** is what the viewer URL is built from,
+the **path** is the anchor that survives a database rebuild (ids are assigned by
+the DB; the slug derives from the file path, so renaming the file breaks the slug
+but not the path). **Append** them — keep whatever human notes the field already
+carries (`extra` may hold a note someone typed, or a title-variant note you wrote
+earlier); never replace the field wholesale.
+
+### The clickable link is a child attachment, not `url`
+
+Create a "Link to URI" (`linkMode: linked_url`, `contentType: text/html`):
+
+    POST /api/users/0/items
+    [{ "itemType": "attachment", "parentItem": "<itemKey>", "linkMode": "linked_url",
+       "title": "pha archive — doc 150 (article p. 314)",
+       "url": "http://127.0.0.1:8765/doc/<slug>/p001",
+       "accessDate": "<ISO-8601 Z>", "contentType": "text/html", "charset": "" }]
+
+`url` stays the item's canonical online location. A `127.0.0.1:8765` address is
+not a location: it answers only while `pha serve` runs, and means nothing on
+another machine or after a restart — in a link attachment, though, "a link I
+consult" is exactly the meaning.
+
+### Two traps
+
+- The viewer URL takes the **document** page number, not the printed one:
+  `/p001` is the article's first page even where it is printed *314*; `/p314` is
+  a 404. Generate the link with `pha cite <doc> <page>`, which prints the right one
+  (the archive's own rule: never store a `library/…` path — it carries the
+  processing date and goes stale on the next re-read).
+- Both directions are **writes**: the sidecar is a file edit (free), while
+  `extra` and the attachment are local-API writes that need the `Zotero-Server-ID`
+  header (the API hands the value back when it refuses one — a mismatch is a
+  `412`) and a confirmation from the user. Ask for **Always Allow**: with plain
+  "Allow" you get one dialog per write.
+
 ## Fix the source in Zotero, not the sidecar
 
 The sidecar mirrors Zotero; Zotero is the source of truth. When the record is
@@ -897,6 +1019,11 @@ snapshot that `pha serve` and the MCP tools read is refreshed by `pha scan`,
 | --- | --- |
 | Read a record from Zotero (MODS) | `curl "http://localhost:23119/api/users/0/items/<KEY>?format=mods"` |
 | Find a key by title | `curl --get --data-urlencode "q=<title>" --data "qmode=titleCreatorYear" .../items` |
+| Get the item's PDF path | `curl -s -D - -o /dev/null ".../items/<ATTACHMENTKEY>/file"` → `Location: file:///…` |
+| Link Zotero → pha | append `pha-doc:` / `pha-slug:` / `pha-path:` lines to the item's `extra` |
+| Link pha → Zotero | set the sidecar's `record_id` to the Zotero **item key** |
+| Clickable link to the reading | child attachment, `linkMode: linked_url`, `…/doc/<slug>/p001` |
+| Authorize a local-API write | `POST /api/local/authorize` with `Zotero-Server-ID` → user picks **Always Allow** |
 | Register a new PDF | `pha scan --path collections/COLX` |
 | MODS → editable JSON | `pha bib <doc> --to-json --write` |
 | Draft a reference from a scan | `pha bib <doc> --to-bibtex --origin agent-drafted-unverified --write` |
@@ -919,10 +1046,11 @@ snapshot that `pha serve` and the MCP tools read is refreshed by `pha scan`,
 
 - [ ] Asked which Zotero item, and confirmed the record is the *right* one
       (compare the returned title/creator, not the id).
-- [ ] Route chosen: the live API (MODS, preferred) or the RDF export package.
+- [ ] Route chosen: the live API (record **and** file, preferred) or the RDF
+      export package as the fallback (Zotero closed, another machine, no file).
 - [ ] `<note>` elements stripped from any MODS before it is saved.
 - [ ] PDF placed in the right collection, with a stable filename; the sidecar
-      shares the stem.
+      shares the stem. A file taken from Zotero was **copied**, not moved.
 - [ ] Reference written as `.dc.json` (converted with `pha bib --to-json
       --write`, or emitted with `to_dc_json_text`) — not hand-written MODS.
 - [ ] `record_origin` set honestly, and **no** `human-*` marker invented.
@@ -932,6 +1060,13 @@ snapshot that `pha serve` and the MCP tools read is refreshed by `pha scan`,
       patched in the sidecar.
 - [ ] Only **one** sidecar per document; verified with `pha bib <doc>` and
       `pha cite <doc> <page>`.
+- [ ] Backlinks set both ways: `record_id` = the Zotero **item key** once the item
+      exists (an Internet Archive id is only for an import with no Zotero item —
+      never a pha doc id), and the item's `extra` carries `pha-doc` / `pha-slug` /
+      `pha-path` — appended, not overwriting what was there.
+- [ ] Clickable link added as a `linked_url` child attachment built from
+      `pha cite` (document page number — `/p001`, not the printed page), and
+      `url` left as the canonical online source.
 """
 
 _SKILL_PALEOGRAPHERS_COMPARE = r'''---

@@ -1,7 +1,8 @@
 # Enhancement request — `pha-zotero-bibliography`: link the Zotero item and the archive document
 
-**Status:** Draft — the text is written and in use in one archive (§3); not
-upstreamed. **Date:** 2026-10-14. **Found on:** jesuit-archive, document 150
+**Status:** **IMPLEMENTED (2026-10-23)** — the text in §3 is in the bundled skill,
+and the file-import route was corrected in the same change (§8.1).
+**Date:** 2026-10-14. **Found on:** jesuit-archive, document 150
 (Dehergne, «La mission de Pékin vers 1700. Étude de géographie missionnaire»,
 *Archivum Historicum Societatis Iesu* 22 (1953) 314-338).
 
@@ -242,15 +243,39 @@ cited as fact.":
 - Not a fix for the 11 legacy sidecars in jesuit-archive: those belong to that
   archive's backlog, and the skill only needs to state the rule.
 
-## 8. Open question for the owner
+## 8. Resolved — the archive-local divergence (2026-10-23)
 
-**8.1 A second, archive-local divergence.** jesuit-archive's copy of this skill
-also carries a section the repo does not: *"Where an export lands:
-`zotero-export/` is staging, not provenance"*, including "The owner chooses the
-reading route — propose, then wait". It is a local edit (it is in neither the
-authored `skills/` copy nor the embedded text of 0.42.0). It is good material for
-the same skill and could ride along with this change; it is called out separately
-because it is the owner's text, not this request's.
+**8.1 The `zotero-export/` staging section does not ride along as written: it is
+stale.** jesuit-archive's copy of this skill carries an extra section (*"Where an
+export lands: `zotero-export/` is staging, not provenance"*) that makes a manual
+*Export Items (RDF)* → staging folder → `inbox/` sequence the primary route.
+The local API makes that step unnecessary, verified on the reporting machine
+(Zotero 10.0.6, macOS):
+
+- `GET /api/users/0/items/<ITEMKEY>/children?itemType=attachment` returns each
+  attachment's `key`, `filename`, `contentType` and `linkMode`;
+- `GET /api/users/0/items/<ATTACHMENTKEY>/file` answers **302** with
+  `Location: file:///<absolute path>` — the PDF's real path, which the agent can
+  copy straight into `inbox/collections/<col>/` (checked: a 124 KB file starting
+  `%PDF`);
+- the redirect is also the only reliable way to find the file. The data
+  directory is configurable, and on that machine the live one was under iCloud
+  Drive, while a `~/Zotero` from an earlier install looked right and was two
+  years stale.
+
+So the change **replaces that section's premise** instead of copying it:
+
+- **Route A** gains *"Getting the PDF itself (no export needed)"* and remains the
+  preferred route; the file is **copied**, never moved (Zotero owns its copy).
+- **Route B** (RDF export) is kept and explicitly demoted to the **fallback**:
+  Zotero not running, an export made on another machine, or an item with no file
+  attachment (an Internet Archive id, a `linked_url`-only bookmark).
+- The "a staging folder is scratch, not provenance" rule survives, generalised:
+  an export package is a one-shot carrier, copied out and then deleted, with no
+  folder name prescribed.
+- "The owner chooses the reading route — propose, then wait" **was** folded in,
+  under *Before you start*, because it is about the owner's decision and is not
+  stale.
 
 ## 9. Effort
 

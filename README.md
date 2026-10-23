@@ -422,10 +422,12 @@ installed by anyone who sets up agents from the repo:
   `lms link status --json`), and pre-load a local copy under a unique
   identifier when the same model is already loaded on another device.
 - Zotero bibliography — [`skills/pha-zotero-bibliography/SKILL.md`](skills/pha-zotero-bibliography/SKILL.md):
-  import a PDF from Zotero with its bibliographic sidecar, or build/refresh
-  one document's reference from the owner's Zotero library (local-API MODS,
-  an RDF export, `pha bib <doc> --to-json --write`), with the provenance
-  rules that keep an unverified reference from being cited as fact.
+  import a PDF from Zotero with its bibliographic sidecar — the local API gives
+  both the record (MODS) and the attachment's own path, with an RDF export as the
+  fallback — or build/refresh one document's reference from the owner's Zotero
+  library (`pha bib <doc> --to-json --write`), with the provenance rules that keep
+  an unverified reference from being cited as fact, and the two-way backlinks
+  between the Zotero item and the archive document.
 - Palaeographers compare — [`skills/palaeographers-compare/SKILL.md`](skills/palaeographers-compare/SKILL.md):
   compare or collate two or more readings (palaeographers or transcription
   models) of the same pages into a uniform comparative edition (per-page
