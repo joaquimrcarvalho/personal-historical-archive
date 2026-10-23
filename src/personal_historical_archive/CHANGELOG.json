@@ -126,6 +126,30 @@
           "commit": "9eb30f7e510a"
         }
       ]
+    },
+    "0.46.3": {
+      "date": "2026-10-23",
+      "summary": "Windows finds OCR engines installed outside pha's own PATH (.exe/PATHEXT), pha doctor no longer calls an un-runnable engine OK, and embedded-text parsing no longer falls back to OCR.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "engines",
+          "text": "normalise the fallback path before returning it",
+          "commit": "c0004d1f35fe"
+        },
+        {
+          "type": "fix",
+          "scope": "engines",
+          "text": "find .exe engines on Windows, and trust a probe over a file",
+          "commit": "e2e8663f6e9d"
+        },
+        {
+          "type": "test",
+          "scope": "handoff",
+          "text": "isolate the worker loop from the real ~/Downloads",
+          "commit": "a881904dc9be"
+        }
+      ]
     }
   }
 }
