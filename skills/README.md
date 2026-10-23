@@ -56,9 +56,11 @@ most common tasks:
   and prints the pre-load recipe for a deterministic local instance.
 - `pha-zotero-bibliography` — import a PDF from Zotero with its bibliographic
   sidecar, or build/refresh one document's reference from the owner's Zotero
-  library (the local API's MODS, an RDF export, `pha bib <doc> --to-json
-  --write`, and the provenance rules that keep an unverified reference from
-  being cited as fact).
+  library (the local API's MODS **and the attachment file itself**, the RDF
+  export as the fallback, `pha bib <doc> --to-json --write`, and the provenance
+  rules that keep an unverified reference from being cited as fact), and link the
+  two records both ways (`record_id` ↔ the item's `pha-doc`/`pha-slug`/`pha-path`
+  lines plus a viewer link attachment).
 - `palaeographers-compare` — compare two or more palaeographers' (or
   transcription models') readings of the same pages into a uniform comparative
   edition: a `comparison/` folder with one file per page (readings stacked
