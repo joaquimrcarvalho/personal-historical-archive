@@ -290,6 +290,23 @@ def migrate(conn: sqlite3.Connection) -> None:
     if conn.execute("SELECT COUNT(*) AS n FROM pages WHERE status = 'error'").fetchone()["n"]:
         _write(conn, "UPDATE pages SET status = 'waiting' WHERE status = 'error'")
         conn.commit()
+    # dir_path is a POSIX-style collection key: _dir_clause matches it with '/'
+    # patterns (pha search --collection, the MCP/plugin collection filters) and
+    # addresses.py builds stable page slugs from it. A build that ran on Windows
+    # before that was enforced stored native separators ("collections\\COLX"),
+    # which no '/' filter can match; repair such rows in place, once.
+    # Only writes when a row needs it, so ordinary connections stay read-only —
+    # and a database we may not write to (a read-only mount, a file owned by
+    # another user) must still CONNECT: skip the repair there rather than fail
+    # every command, the way the archive-doc refresh does.
+    try:
+        if conn.execute(
+            r"SELECT COUNT(*) AS n FROM documents WHERE instr(dir_path, '\') > 0"
+        ).fetchone()["n"]:
+            _write(conn, r"UPDATE documents SET dir_path = replace(dir_path, '\', '/')")
+            conn.commit()
+    except sqlite3.DatabaseError:
+        pass
 
 
 # --------------------------------------------------------------------------- documents
@@ -354,7 +371,9 @@ def backfill_dir_path(conn: sqlite3.Connection, dropbox: Path) -> None:
     for r in rows:
         p = Path(r["path"])
         try:
-            rel = str(p.parent.relative_to(root)) if str(p.parent) != root else ""
+            # POSIX separators: dir_path is a collection KEY (see _dir_clause and
+            # the migrate() repair), not a filesystem path to hand to the OS.
+            rel = p.parent.relative_to(root).as_posix() if str(p.parent) != root else ""
         except ValueError:
             rel = ""
         conn.execute("UPDATE documents SET dir_path = ? WHERE id = ?", (rel, r["id"]))

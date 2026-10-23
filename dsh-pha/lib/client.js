@@ -1082,7 +1082,10 @@ function PhaView(props) {
     if (!sel) return
     setState((s) => ({ ...s, configMode: true, config: null, configMsg: null }))
     try {
-      const r = await get('/pha/config?doc=' + encodeURIComponent(String(sel)))
+      // `write=1` is explicit: opening the config pane is the user action that may
+      // generate a pha.yaml for a collection still configured only by the legacy
+      // selection files. The route never writes without it.
+      const r = await get('/pha/config?doc=' + encodeURIComponent(String(sel)) + '&write=1')
       setState((s) => ({ ...s, config: (r && r.ok) ? r : null, configMsg: (r && !r.ok) ? ((r && r.error) || 'config failed') : null }))
     } catch (e) { setState((s) => ({ ...s, configMsg: String((e && e.message) || e) })) }
   }

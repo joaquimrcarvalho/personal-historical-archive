@@ -189,3 +189,80 @@ def test_reviewed_edit_guard_handles_a_legacy_page_edits_table():
         "editor TEXT, text TEXT, status TEXT)")
     assert db.reviewed_edit_for_page(conn, 1) is None
     conn.close()
+
+
+def test_migrate_repairs_windows_dir_path(tmp_path):
+    """dir_path is a collection key matched with '/' patterns (_dir_clause, and
+    the stable page addresses built from it), so a row written by a build that
+    ran on Windows — native separators — is repaired on connect; otherwise
+    `pha search --collection` and the MCP/plugin collection filters never match
+    it on that archive."""
+    dbp = tmp_path / "archive.db"
+    conn = db.connect(dbp)
+    now = time.time()
+    doc_id = db.add_document(
+        conn, filename="a.pdf", path=str(tmp_path / "a.pdf"), sha256="a",
+        size_bytes=1, mtime=now, kind="pdf", now=now,
+        dir_path="collections\\COLX",
+    )
+    conn.commit()
+    assert db.list_documents(conn, collection="COLX", limit=10) == []
+    conn.close()
+
+    conn = db.connect(dbp)  # migrate() runs on every connect
+    assert db.get_document(conn, doc_id)["dir_path"] == "collections/COLX"
+    assert [d["filename"] for d in db.list_documents(conn, collection="COLX", limit=10)] == ["a.pdf"]
+    conn.close()
+
+
+def test_migrate_tolerates_a_readonly_database(tmp_path, monkeypatch):
+    """The dir_path repair must never make a READ fail.
+
+    It runs on every connect, so a database we may not write to (a read-only
+    mount, a file owned by another user) must still connect — the repair is
+    skipped there, leaving the rows as they are, instead of failing every
+    command with "attempt to write a readonly database".
+    """
+    import sqlite3
+
+    dbp = tmp_path / "archive.db"
+    conn = db.connect(dbp)
+    now = time.time()
+    doc_id = db.add_document(
+        conn, filename="a.pdf", path=str(tmp_path / "a.pdf"), sha256="a",
+        size_bytes=1, mtime=now, kind="pdf", now=now,
+        dir_path="collections\\COLX",
+    )
+    conn.commit()
+    conn.close()
+
+    real_write = db._write
+
+    def readonly(conn_, sql, params=()):
+        if "replace(dir_path" in sql:
+            raise sqlite3.OperationalError("attempt to write a readonly database")
+        return real_write(conn_, sql, params)
+
+    monkeypatch.setattr(db, "_write", readonly)
+    conn = db.connect(dbp)  # must not raise
+    assert db.get_document(conn, doc_id)["dir_path"] == "collections\\COLX"
+    conn.close()
+
+
+def test_backfill_dir_path_uses_posix(tmp_path):
+    """Rows predating the dir_path column are filled POSIX-style on every
+    platform — the same key contract as the ingest writer."""
+    drop = tmp_path / "dropbox"
+    src = drop / "collections" / "COLX" / "a.pdf"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b"x")
+    conn = db.connect(tmp_path / "archive.db")
+    now = time.time()
+    doc_id = db.add_document(
+        conn, filename="a.pdf", path=str(src), sha256="a",
+        size_bytes=1, mtime=now, kind="pdf", now=now, dir_path=None,
+    )
+    conn.commit()
+    db.backfill_dir_path(conn, drop)
+    assert db.get_document(conn, doc_id)["dir_path"] == "collections/COLX"
+    conn.close()

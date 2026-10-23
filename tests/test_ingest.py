@@ -1882,3 +1882,28 @@ def test_reindex_all_multiple_docs_scopes_to_all_named(monkeypatch, tmp_path):
 
     res = ingest.reindex_all(cfg, None, doc=[first, second], page=[3])
     assert "exactly one --doc" in res["reason"]
+
+
+def test_ingest_stores_posix_dir_path(tmp_path, monkeypatch):
+    """dir_path is a collection KEY, not a filesystem path: it is stored with '/'
+    on every platform. A Windows scan used to store `collections\\COLX`, which no
+    `pha search --collection` / MCP collection filter can match (_dir_clause
+    compares '/' patterns) and which made the stable page addresses built from it
+    platform-bound.
+    """
+    from personal_historical_archive import db as _db
+    from personal_historical_archive import ingest
+
+    cfg = _tiny_ingest_cfg(tmp_path)
+    src = cfg.dropbox / "collections" / "COLX" / "doc.pdf"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"%PDF-1.4")
+    conn = _db.connect(cfg.db_path)
+    pal = _stub_ingest(monkeypatch, ingest, lambda *a, **k: 0)
+
+    res = ingest.ingest_file(cfg, conn, object(), src, pal, verbose=False)
+    assert res.get("action") == "ingested", res
+    rows = _db.list_documents(conn, collection="COLX", limit=10)
+    assert [r["filename"] for r in rows] == ["doc.pdf"]  # the filter is the point
+    assert rows[0]["dir_path"] == "collections/COLX"
+    conn.close()

@@ -18,8 +18,20 @@ const inject = ['subprocess', 'tools']
 const MAX = 4 * 1024 * 1024
 const JOB_MAX = 16 * 1024 * 1024
 
+// pha reports paths with NATIVE separators (`C:\...` from `pha info --json` on
+// Windows), while every path this plugin builds or compares uses '/'. Normalize
+// both sides to one form: absolute, forward slashes, no trailing slash.
+// resolve() also collapses any `..`, which is what makes the definition-file
+// gate below a real containment check instead of a string prefix test.
+function normPath(p) {
+  return resolve(String(p)).replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
 const DB_SCRIPT = [
   "import os, sqlite3, json, sys",
+  // The script owns its own output encoding as well as inheriting UTF-8 mode, so
+  // it is correct even when run outside the plugin (tests, a manual probe).
+  "sys.stdout.reconfigure(encoding='utf-8', errors='replace')",
   'db = sys.argv[1]',
   'op = sys.argv[2]',
   'c = sqlite3.connect("file:" + db + "?immutable=1", uri=True)',
@@ -58,8 +70,8 @@ const DB_SCRIPT = [
   'out({"error": "unknown op: " + op})',
 ].join('\n')
 
-const LIST_NOTES = "import os,sys,json\nd=sys.argv[1]\nout=[]\nfor f in sorted(os.listdir(d)) if os.path.isdir(d) else []:\n    if f.endswith('.md') and f.lower() != 'readme.md':\n        out.append({'name': f[:-3], 'file': f})\nprint(json.dumps(out, ensure_ascii=False))"
-const READ_NOTE = "import sys\nsys.stdout.write(open(sys.argv[1], encoding='utf-8').read())"
+const LIST_NOTES = "import os,sys,json\nsys.stdout.reconfigure(encoding='utf-8', errors='replace')\nd=sys.argv[1]\nout=[]\nfor f in sorted(os.listdir(d)) if os.path.isdir(d) else []:\n    if f.endswith('.md') and f.lower() != 'readme.md':\n        out.append({'name': f[:-3], 'file': f})\nprint(json.dumps(out, ensure_ascii=False))"
+const READ_NOTE = "import sys\nsys.stdout.reconfigure(encoding='utf-8', errors='replace')\nsys.stdout.write(open(sys.argv[1], encoding='utf-8').read())"
 
 function apply(ctx, config) {
   // pha resolves its project root (the directory holding config.yaml) from
@@ -86,6 +98,14 @@ function apply(ctx, config) {
   const childEnv = {}
   if (projectRoot) childEnv.PHA_HOME = projectRoot
   if (configuredArchive) childEnv.PHA_ARCHIVE_DIR = configuredArchive
+  // The harness decodes child output as UTF-8, but a Windows child otherwise
+  // writes the machine's ANSI/OEM code page (cp950 on the machine that reported
+  // this): non-ASCII page text arrives as mojibake, and one character outside
+  // that code page kills the read ("UnicodeEncodeError: 'cp950' codec can't
+  // encode character ..."). PEP 540 UTF-8 mode plus an explicit stdio encoding
+  // make both `pha` and the helper scripts speak UTF-8 regardless of the locale.
+  childEnv.PYTHONUTF8 = '1'
+  childEnv.PYTHONIOENCODING = 'utf-8'
   const spawnEnv = Object.keys(childEnv).length ? childEnv : undefined
   const jobs = new Map()
   let jobSeq = 1
@@ -113,7 +133,10 @@ function apply(ctx, config) {
   }
   async function python() {
     if (pyBin === null) {
-      pyBin = await firstResolvable(['python3', '/usr/bin/python3', '/opt/homebrew/bin/python3'])
+      // `python`/`py` are the Windows names (the `py` launcher is a real .exe; a
+      // Microsoft Store `python3.exe` is a 0-byte app-exec alias that stat() —
+      // and therefore resolveExecutable — cannot resolve, so it is skipped).
+      pyBin = await firstResolvable(['python3', 'python', 'py', '/usr/bin/python3', '/opt/homebrew/bin/python3'])
     }
     if (!pyBin) throw new Error('python3 not found')
     return pyBin
@@ -174,7 +197,7 @@ function apply(ctx, config) {
           const data = parseJson(r.out)
           if (data && data.configured === false) infoSaidUnconfigured = true
           else if (data && data.archive_dir) {
-            archiveDir = String(data.archive_dir).replace(/\/+$/, '')
+            archiveDir = normPath(data.archive_dir)
             dbPath = data.db_path ? String(data.db_path) : archiveDir + '/archive.db'
             return dbPath
           }
@@ -190,7 +213,7 @@ function apply(ctx, config) {
           if (mm) {
             const data = JSON.parse(mm[0])
             if (data && data.archive) {
-              archiveDir = data.archive
+              archiveDir = normPath(data.archive)
               dbPath = archiveDir + '/archive.db'
               return dbPath
             }
@@ -201,7 +224,7 @@ function apply(ctx, config) {
         const m = String(r3.out || '').match(/^archive:\s*(\S+archive\.db)\s*$/m)
         if (!m || !m[1]) throw new Error('cannot discover archive')
         dbPath = m[1]
-        archiveDir = dbPath.replace(/archive\.db$/, '').replace(/\/+$/, '')
+        archiveDir = normPath(dbPath.replace(/archive\.db$/i, ''))
         return dbPath
       })().catch((e) => { discoverPromise = null; throw e })
     }
@@ -364,6 +387,7 @@ function apply(ctx, config) {
   const DEF_KINDS = ['palaeographers', 'editors', 'encoders', 'models']
   const LIST_DEFS = [
     'import os,sys,json',
+    "sys.stdout.reconfigure(encoding='utf-8', errors='replace')",
     'root=sys.argv[1]; kinds=json.loads(sys.argv[2])',
     'out=[]',
     'for k in kinds:',
@@ -375,22 +399,27 @@ function apply(ctx, config) {
     'print(json.dumps(out, ensure_ascii=False))',
   ].join('\n')
   function defPathAllowed(p) {
+    // Normalize BOTH sides: the listings come from Python's os.path.join (native
+    // separators on Windows) while archiveDir is normalized above, and `..` must
+    // be collapsed before the containment tests or a traversal would pass one.
+    const target = normPath(p)
+    const root = normPath(archiveDir)
     // Bibliographic sidecars are the exception to the .md rule: the forms a human edits
     // are the Dublin Core JSON and BibTeX; MODS is interchange only
     // (`pha bib --to-json|--to-bibtex --write` converts it).
-    if ((/\.dc\.json$/i.test(p) || /\.bib$/i.test(p)) && p.startsWith(archiveDir + '/dropbox/')) return true
-    if (!p.endsWith('.md')) return false
-    if (DEF_KINDS.some((k) => p.startsWith(archiveDir + '/' + k + '/'))) return true
+    if ((/\.dc\.json$/i.test(target) || /\.bib$/i.test(target)) && target.startsWith(root + '/dropbox/')) return true
+    if (!target.endsWith('.md')) return false
+    if (DEF_KINDS.some((k) => target.startsWith(root + '/' + k + '/'))) return true
     // collection-local encoders travel with the documents:
     // dropbox/<...>/encoders/<name>.md
-    const m = p.match(/^(.*)\/encoders\/([^/]+)\.md$/)
-    return !!m && m[1].startsWith(archiveDir + '/dropbox')
+    return target.startsWith(root + '/dropbox/') && /\/encoders\/[^/]+\.md$/.test(target)
   }
 
   // Every collection-local encoder (dropbox/.../encoders/*.md), grouped by the
   // collection that owns it, so the view can surface them next to their documents.
   const LIST_COLLECTION_ENCODERS = [
     'import os,sys,json',
+    "sys.stdout.reconfigure(encoding='utf-8', errors='replace')",
     'root=sys.argv[1]',
     'out=[]',
     'for dirpath, dirnames, filenames in os.walk(root):',
@@ -457,8 +486,16 @@ function apply(ctx, config) {
     return parseJson(r.out)
   }
 
-  async function runConfig(doc) {
-    const r = await phaRun(['config', '--doc', String(doc), '--json', '--write'])
+  // `write` (an explicit `?write=1`, which the view's Config pane sends) generates
+  // the pha.yaml from the resolved configuration when the collection has none on
+  // its chain (idempotent: an existing pha.yaml is shown, never rewritten), so the
+  // view can surface a collection still configured only by the legacy
+  // palaeographer/editor selection files. It is never implied: a plain read of
+  // this route must not create files in the archive.
+  async function runConfig(doc, write) {
+    const argv = ['config', '--doc', String(doc), '--json']
+    if (write) argv.push('--write')
+    const r = await phaRun(argv)
     if (r.code !== 0) throw new Error('pha config failed: ' + String(r.err || r.out).slice(0, 400))
     const d = parseJson(r.out)
     return {
@@ -695,13 +732,14 @@ function apply(ctx, config) {
     ['/pha/def', json(async (p) => {
       if (!p.path) throw new Error('path required')
       await discover()
-      const path = String(p.path)
-      // only the archive's own definition folders (never an arbitrary path)
+      // normalize before the gate AND before reading, so a native-separator path
+      // from the Python listing (Windows) is not rejected as "not in this archive"
+      const path = normPath(String(p.path))
       if (!defPathAllowed(path)) throw new Error('not a model/palaeographer/editor .md in this archive')
       const r = await pyRun(READ_NOTE, [path])
       if (r.code !== 0) throw new Error('definition file not found')
-      const name = path.split('/').pop().replace(/\.md$/, '')
-      const kind = DEF_KINDS.find((k) => path.startsWith(archiveDir + '/' + k + '/')) || null
+      const name = path.split('/').pop().replace(/\.(md|bib|json)$/i, '')
+      const kind = DEF_KINDS.find((k) => path.startsWith(normPath(archiveDir) + '/' + k + '/')) || null
       return { ok: true, path, name, kind, content: String(r.out) }
     })],
     ['/pha/pending', json(async (p) => {
@@ -710,7 +748,9 @@ function apply(ctx, config) {
     })],
     ['/pha/config', json(async (p) => {
       if (!p.doc) throw new Error('doc required')
-      return await runConfig(p.doc)
+      // generating a pha.yaml requires an explicit opt-in: this route used to pass
+      // --write unconditionally, so a plain GET created files in the archive.
+      return await runConfig(p.doc, p.write === '1' || p.write === 'true')
     })],
     ['/pha/bib', json(async (p) => {
       if (!p.doc) throw new Error('doc required')

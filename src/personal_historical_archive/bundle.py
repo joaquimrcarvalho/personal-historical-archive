@@ -750,10 +750,14 @@ def _import_document(cfg, conn, bundle_dir: Path, md: dict, embed_client, verbos
     stat = target.stat()
     pal = md.get("palaeographer")
     ed = md.get("editor")
+    # A bundle written on another platform (or by an older Windows build) may carry
+    # a native-separator dir_path; store it POSIX-style like every other writer.
+    md_dir = md.get("dir_path") or ""
     doc_id = db.add_document(
         conn, filename=md["filename"], path=str(target), sha256=sha,
         size_bytes=stat.st_size, mtime=stat.st_mtime, kind=md.get("kind"),
-        now=now, dir_path=md.get("dir_path") or "", palaeographer=pal, editor=ed,
+        now=now, dir_path=Path(md_dir).as_posix() if md_dir else "",
+        palaeographer=pal, editor=ed,
     )
     db.set_document_status(conn, doc_id, "processing",
                            prompt_source=md.get("prompt_source"))
