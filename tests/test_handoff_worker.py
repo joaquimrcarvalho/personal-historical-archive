@@ -37,6 +37,18 @@ def _isolated_launch_agents(tmp_path, monkeypatch):
                         lambda: tmp_path / "LaunchAgents" / f"{W.WORKER_LABEL}.plist")
 
 
+@pytest.fixture(autouse=True)
+def _isolated_downloads(monkeypatch):
+    """Never let `worker_loop` stage a hand-over from the developer's ~/Downloads.
+
+    `T.candidates()` scans Downloads as a second inbox (the macOS Tailscale app
+    can deliver there). A test that drains the loop therefore picked up a real
+    `*.pha-result.tgz` left in ~/Downloads and reported two archives instead of
+    one — a failure that depended on what the developer happened to download.
+    """
+    monkeypatch.setattr(T, "_downloads_dir", lambda: None)
+
+
 def _staged(cfg, tmp_path, hid="DI-20260926") -> Path:
     """A received hand-over archive sitting in the staging directory."""
     staging = T.staging_dir(cfg)
