@@ -150,6 +150,18 @@
           "commit": "a881904dc9be"
         }
       ]
+    },
+    "0.46.4": {
+      "date": "2026-10-23",
+      "summary": "The PHA view reads a Windows archive as UTF-8, accepts Windows paths and interpreters, no longer writes a pha.yaml on a plain GET, and stores collection keys POSIX-style.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "dsh-pha,paths",
+          "text": "UTF-8 child output, POSIX collection keys, explicit config write",
+          "commit": "be6d4af09ddc"
+        }
+      ]
     }
   }
 }
