@@ -162,6 +162,24 @@
           "commit": "be6d4af09ddc"
         }
       ]
+    },
+    "0.46.5": {
+      "date": "2026-10-23",
+      "summary": "The same-page record dedup is scoped to one extraction window (and keys on identity), so distinct index entries stop merging, and the Zotero skill gains the two-way backlinks, the local-API write flow and direct PDF import.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "encode",
+          "text": "scope the same-page dedup to the window, and key on identity",
+          "commit": "7ed4fb4f3406"
+        },
+        {
+          "type": "feat",
+          "scope": "skills",
+          "text": "Zotero backlinks, the local-API write flow, and the file route",
+          "commit": "bec2523b6c20"
+        }
+      ]
     }
   }
 }
