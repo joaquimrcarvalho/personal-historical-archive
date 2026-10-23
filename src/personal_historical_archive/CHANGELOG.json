@@ -114,6 +114,18 @@
           "commit": "616578f71004"
         }
       ]
+    },
+    "0.46.2": {
+      "date": "2026-10-23",
+      "summary": "The same-page record dedup compares what identifies an entry and treats a differing entry number as decisive, so distinct index entries are no longer dropped, and every drop is counted and reported.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "encode",
+          "text": "compare identity, not boilerplate, in the same-page record dedup",
+          "commit": "9eb30f7e510a"
+        }
+      ]
     }
   }
 }
