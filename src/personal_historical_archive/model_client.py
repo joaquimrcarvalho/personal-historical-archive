@@ -196,7 +196,7 @@ def find_engine_binary(name: str) -> str | None:
     # (`Path(...)` would instantiate `WindowsPath` whenever os.name says "nt").
     for d in _fallback_bin_dirs():
         for fname in names:
-            cand = os.path.join(d, fname)
+            cand = os.path.normpath(os.path.join(d, fname))
             if os.path.isfile(cand) and (os.name == "nt" or os.access(cand, os.X_OK)):
                 return cand
     return None
