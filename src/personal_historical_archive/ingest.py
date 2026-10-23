@@ -1187,7 +1187,11 @@ def ingest_file(
         remove_render_if_orphaned(cfg, conn, old_sha)
 
     try:
-        rel_dir = str(path.parent.relative_to(cfg.dropbox))
+        # dir_path is stored POSIX-style: it is a collection KEY that
+        # `pha search --collection`, the MCP/plugin filters (_dir_clause) and the
+        # stable page addresses all match with '/', so it must not carry the
+        # separators of whichever platform did the scan.
+        rel_dir = path.parent.relative_to(cfg.dropbox).as_posix()
     except ValueError:
         rel_dir = ""
     if rel_dir == ".":

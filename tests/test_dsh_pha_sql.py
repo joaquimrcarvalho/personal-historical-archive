@@ -54,9 +54,12 @@ def _db_script() -> str:
 
 
 def _run(db_path: Path, op: str, *extra) -> object:
+    # Decode as UTF-8: that is what the harness does with a child's stdout, and
+    # what the plugin's scripts now force on their own side (see the non-ASCII
+    # test below).
     proc = subprocess.run(
         [sys.executable, "-c", _db_script(), str(db_path), op, *[str(x) for x in extra]],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8",
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
@@ -123,3 +126,34 @@ def test_plugin_pagemeta_and_page_reads_still_run(tmp_path):
     assert meta is not None and "sha256" in meta
     one = _run(db_path, "document", doc_id)
     assert one["pages"][0]["page_no"] == 1
+
+
+def test_plugin_reads_survive_non_ascii_beyond_the_locale_code_page(tmp_path):
+    """A read must not depend on the operating system's code page.
+
+    The plugin's Python child inherits the locale encoding — cp950 (Big5) on the
+    Windows machine that reported this, whose piped stdout has no console Unicode
+    path. A document whose filename carries a character outside that code page
+    ("ç", "Í" — ordinary in a Portuguese archive) killed the whole document list
+    with `UnicodeEncodeError: 'cp950' codec can't encode character '\\xcd'`, and
+    any character the code page *does* have arrived as mojibake (the harness
+    decodes child output as UTF-8). The scripts force UTF-8 on their own stdout;
+    this asserts the round trip, so it fails if that is ever dropped.
+    """
+    src = tmp_path / "dropbox" / "collections" / "COLX" / "Índice ção 中文.pdf"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"%PDF non-ascii")
+    db_path = tmp_path / "archive.db"
+    conn = db.connect(db_path)
+    doc_id = db.add_document(conn, filename=src.name, path=str(src), sha256=sha256_of(src),
+                             size_bytes=1, mtime=1, kind="pdf", now=time.time(),
+                             dir_path="collections/COLX")
+    db.set_document_status(conn, doc_id, "error", error="falha: ção 中文")
+    conn.commit()
+    conn.close()
+
+    rows = _run(db_path, "documents")
+    assert rows[0]["filename"] == src.name
+    assert rows[0]["error"] == "falha: ção 中文"
+    one = _run(db_path, "document", src.name)
+    assert one["doc"]["filename"] == src.name

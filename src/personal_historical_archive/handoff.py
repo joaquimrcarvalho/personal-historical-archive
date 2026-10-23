@@ -323,7 +323,9 @@ def _register_document(cfg: Config, conn, unit: Path, sha: str | None = None) ->
     sha = sha or (sha256_of_dir(unit) if unit.is_dir() else sha256_of(unit))
     stat = unit.stat()
     try:
-        rel_dir = str(unit.parent.relative_to(cfg.dropbox))
+        # dir_path is a POSIX-style collection key (see db._dir_clause and the
+        # migrate() repair): never the separators of this platform.
+        rel_dir = unit.parent.relative_to(cfg.dropbox).as_posix()
     except ValueError:
         rel_dir = ""
     if rel_dir == ".":
@@ -731,7 +733,7 @@ def _import_one(cfg: Config, conn, handoff_dir_path: Path, doc: dict,
             mtime=src.stat().st_mtime,
             kind="dir" if is_dir else ("pdf" if src.suffix.lower() == ".pdf" else "image"),
             now=time.time(),
-            dir_path=str(Path(rel).parent) if str(Path(rel).parent) != "." else "",
+            dir_path=Path(rel).parent.as_posix() if str(Path(rel).parent) != "." else "",
             palaeographer=doc.get("palaeographer"),
             editor=doc.get("editor"),
         )
@@ -1350,7 +1352,7 @@ def apply_result(
                     size_bytes=src.stat().st_size, mtime=src.stat().st_mtime,
                     kind="dir" if src.is_dir() else ("pdf" if src.suffix.lower() == ".pdf" else "image"),
                     now=time.time(),
-                    dir_path=str(Path(rel).parent) if str(Path(rel).parent) != "." else "",
+                    dir_path=Path(rel).parent.as_posix() if str(Path(rel).parent) != "." else "",
                     palaeographer=rd.get("palaeographer"), editor=rd.get("editor"),
                 )
                 local = db.get_document(conn, doc_id)
