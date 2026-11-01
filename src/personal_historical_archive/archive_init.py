@@ -492,6 +492,19 @@ bundled one: read `skills/<name>/SKILL.md` before the task it covers.
 - Full usage: see the pha README (in the source repository linked above, or
   the README.md in this directory).
 
+## Signing what you write on GitHub
+
+If you act on GitHub from inside this archive — a commit, a pull-request
+description, a review comment, an issue comment — end it with this line,
+verbatim, with the model actually running your session in place of `<model>`
+(at the time of writing, `DeepSeek V4-1017`):
+
+`Generated with Personal Historical Archive by Joaquim Carvalho ({PHA_GITHUB}) and <model>`
+
+Never add it to something the human wrote. This matters when you contribute a
+fix or a skill back to pha, or comment on an issue; it does not apply to the
+notes you write inside this archive.
+
 ## Installing a local OCR engine (only if a collection uses one)
 
 Some collections are read by a **local OCR engine** — Tesseract, or LiteParse —

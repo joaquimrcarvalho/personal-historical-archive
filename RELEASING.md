@@ -44,8 +44,9 @@ only requires a bump when `dsh-pha/` changes.
    and `_view/lib/client.js` are bundled, and that every `pha help <topic>`
    document is inside the wheel (a wheels-only install has no checkout, so a
    missing one would print a path that does not exist).
-6. Commit and push. Agent commits end with a `Model:` trailer (see
-   [AGENTS.md](AGENTS.md)).
+6. Commit and push. Agent-made commits, pull requests and GitHub comments end
+   with this signature line (see [AGENTS.md](AGENTS.md)):
+   `Generated with Personal Historical Archive by Joaquim Carvalho … and <model>`
 7. Confirm the remote raw version has refreshed:
    ```sh
    curl -fsSL https://raw.githubusercontent.com/joaquimrcarvalho/personal-historical-archive/main/src/personal_historical_archive/__init__.py

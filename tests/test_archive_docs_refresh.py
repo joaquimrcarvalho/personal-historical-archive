@@ -70,6 +70,28 @@ def test_the_archive_docs_point_at_the_pipeline_explanation():
     assert "explain how" in ai.ARCHIVE_AGENTS_MD.lower()
 
 
+def test_archive_agents_md_tells_agents_to_sign_github_output():
+    """Anything an agent writes on GitHub — commit, PR, review or issue comment
+    — carries the attribution signature naming the model that wrote it."""
+    agents = ai.ARCHIVE_AGENTS_MD
+    assert "Generated with Personal Historical Archive by Joaquim Carvalho" in agents
+    assert f"({ai.PHA_GITHUB})" in agents
+    assert "<model>" in agents and "DeepSeek V4-1017" in agents
+    assert "Never add it to something the human wrote" in agents
+
+
+def test_repo_contract_documents_the_same_signature():
+    """The checkout's always-loaded AGENTS.md carries the same rule as the
+    archive template, and the release runbook points at it."""
+    root = Path(__file__).resolve().parents[1]
+    contract = (root / "AGENTS.md").read_text(encoding="utf-8")
+    releasing = (root / "RELEASING.md").read_text(encoding="utf-8")
+    assert ("Generated with Personal Historical Archive by Joaquim Carvalho "
+            f"({ai.PHA_GITHUB})") in contract
+    assert "DeepSeek V4-1017" in contract
+    assert "signature line" in releasing
+
+
 def test_pyproject_ships_the_pipeline_doc_in_the_wheel():
     """A built install has no repo root to read, so the wheel must carry
     PIPELINE.md under the package — archive_init.pipeline_doc_template reads it

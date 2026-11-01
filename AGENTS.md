@@ -18,15 +18,19 @@ them*.
 | a release or version bump | `RELEASING.md` |
 | filters / bibliography / web UI designs | `FILTERS_PLAN.md`, `BIBLIOGRAPHY_PLAN.md`, `WEB_INTERFACE_PLAN.md` |
 
-## Commits
+## Commits, pull requests and GitHub comments
 
-- **Agent-made commits MUST end their message with a model trailer**, naming
-  the agent's model, e.g.:
-  `Model: deepseek-v4-flash (DeepSeek Harness)`
-  (use the current session's model name; append it as the last line of the
-  commit message).
-- Commits made by the human do NOT carry the trailer — it is manual only
-  (there is no hook).
+- **Everything an agent writes on GitHub carries a signature line**, as its
+  last line: agent-made commits, pull-request descriptions, PR review comments
+  and issue comments. Verbatim, with the model actually running the session in
+  place of `<model>` (at the time of writing: `DeepSeek V4-1017`):
+
+  `Generated with Personal Historical Archive by Joaquim Carvalho (https://github.com/joaquimrcarvalho/personal-historical-archive) and <model>`
+
+  This signature replaces the older bare `Model:` trailer — it names the model
+  *and* attributes the work.
+- Commits, pull requests and comments made by the human do NOT carry the
+  signature — it is manual only (there is no hook).
 - **Version bumps are manual and user-driven, but the release unit is the
   whole repository.** The version lives in three places that must stay in
   sync: `pyproject.toml`, `src/personal_historical_archive/__init__.py`, and
