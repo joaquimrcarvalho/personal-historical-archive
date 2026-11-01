@@ -180,6 +180,18 @@
           "commit": "bec2523b6c20"
         }
       ]
+    },
+    "0.46.6": {
+      "date": "2026-11-01",
+      "summary": "Agents that write on GitHub — commits, pull requests and comments — now sign what they write with the archive and the model that produced it, and every archive's AGENTS.md states the same rule.",
+      "changes": [
+        {
+          "type": "docs",
+          "scope": "agents",
+          "text": "sign GitHub commits, PRs and comments with archive and model",
+          "commit": "9ee3793dafa1"
+        }
+      ]
     }
   }
 }
