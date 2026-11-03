@@ -192,6 +192,18 @@
           "commit": "9ee3793dafa1"
         }
       ]
+    },
+    "0.46.7": {
+      "date": "2026-11-03",
+      "summary": "Citations in notes now carry both the page number (the printed one when the source has one) and a live link to the served page, so the same footnote can be quoted in a publication and clicked to see the source.",
+      "changes": [
+        {
+          "type": "docs",
+          "scope": "notes",
+          "text": "cite with the page number and a live link",
+          "commit": "27e67e997777"
+        }
+      ]
     }
   }
 }
