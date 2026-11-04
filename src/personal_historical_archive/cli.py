@@ -1022,18 +1022,62 @@ def cmd_bib(cfg: Config, args) -> None:
 
 
 def cmd_open(cfg: Config, args) -> None:
-    """Open a page or archive file in the OS-default application.
+    """Open a page, archive file, or a document's SOURCE in the OS-default application.
 
     `pha open <doc> <page> [--edited]` resolves a page exactly like `pha page`
     and opens its library .md; `pha open <path>` opens an existing markdown
     file anywhere under the archive (a library page, a note, ...). The OS
     decides which app handles the file — e.g. your markdown editor. pha never
-    edits the text itself; the human edits and `pha review` imports."""
+    edits the text itself; the human edits and `pha review` imports.
+
+    `pha open --source <doc|path>` opens the original instead: the PDF, the
+    single image, or the directory of page images that was scanned (the OS
+    opens a PDF in its viewer and a folder in the file manager). `--source`
+    accepts an absolute path, a path relative to the current directory, a
+    document id, or a filename substring; the target must still be inside the
+    archive."""
     from .ingest import library_page_path
+
+    source = bool(getattr(args, "source", False))
+    if source and (args.page is not None or getattr(args, "edited", False)
+                   or getattr(args, "editor", None)):
+        print("--source opens the original document, not one page: give just "
+              "<doc|path> with --source", file=sys.stderr)
+        sys.exit(2)
 
     conn = None
     try:
-        if args.page is None:
+        if source:
+            raw = str(args.doc)
+            raw_path = Path(raw).expanduser()
+            path_like = raw_path.is_absolute() or "/" in raw or "\\" in raw
+            path = raw_path if raw_path.is_absolute() else Path.cwd() / raw_path
+            if not path.exists():
+                # A path-shaped argument that is gone is a missing source, not a
+                # document search: say so plainly.
+                if path_like:
+                    print(f"no such file or directory: {path}", file=sys.stderr)
+                    sys.exit(1)
+                # Otherwise accept a document id or filename substring, resolved
+                # by the same rule as `pha page`.
+                conn = db.connect(cfg.db_path)
+                doc, matches = _resolve_doc_for_page(conn, raw)
+                if doc is None:
+                    if matches:
+                        names = ", ".join(f"#{d['id']} {d['filename']}" for d in matches[:8])
+                        print(f"ambiguous document {raw!r} — matches: {names}", file=sys.stderr)
+                    else:
+                        print(f"no document or path matching {raw!r}", file=sys.stderr)
+                    sys.exit(1)
+                stored = doc["path"]
+                if not stored:
+                    print(f"document #{doc['id']} ({doc['filename']}) has no source path",
+                          file=sys.stderr)
+                    sys.exit(1)
+                path = Path(stored)
+                if not path.is_absolute():
+                    path = cfg.dropbox / path
+        elif args.page is None:
             path = Path(args.doc).expanduser()
             if not path.is_absolute():
                 path = Path.cwd() / path
@@ -1071,12 +1115,19 @@ def cmd_open(cfg: Config, args) -> None:
         except ValueError:
             print(f"{target} is not inside the archive ({arc})", file=sys.stderr)
             sys.exit(1)
-        if not target.is_file():
-            print(f"no such file: {target}", file=sys.stderr)
-            sys.exit(1)
-        if target.suffix.lower() not in (".md", ".yaml", ".yml"):
-            print(f"can only open markdown or yaml files in the archive: {target}", file=sys.stderr)
-            sys.exit(1)
+        if source:
+            # A directory of page images is as valid a source as a single file.
+            if not target.exists():
+                print(f"no such file or directory: {target}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            if not target.is_file():
+                print(f"no such file: {target}", file=sys.stderr)
+                sys.exit(1)
+            if target.suffix.lower() not in (".md", ".yaml", ".yml"):
+                print(f"can only open markdown or yaml files in the archive: {target}",
+                      file=sys.stderr)
+                sys.exit(1)
         _open_with_os_default(target)
     finally:
         if conn is not None:
@@ -4881,14 +4932,19 @@ def main(argv: list[str] | None = None) -> None:
 
     op = sub.add_parser(
         "open",
-        help="open an archive page or markdown file in the OS-default app (e.g. your markdown editor)")
-    op.add_argument("doc", help="document id or filename substring, or a path to an archive .md file")
+        help="open an archive page, markdown file, or a document's original PDF/image folder "
+             "in the OS-default app")
+    op.add_argument("doc", help="document id or filename substring, or a path inside the "
+                                "archive (with --source: any file or directory of page images)")
     op.add_argument("page", type=int, nargs="?", default=None,
                     help="page number — omit to treat <doc> as a file path instead")
     op.add_argument("--edited", action="store_true",
                     help="open the edited variant instead of the raw reading")
     op.add_argument("--editor", default=None,
                     help="editor id when --edited (default: the document's editor)")
+    op.add_argument("--source", action="store_true",
+                    help="open the document itself — its PDF, image, or directory of page "
+                         "images — instead of a library page")
     op.set_defaults(fn=cmd_open)
 
     pd = sub.add_parser(

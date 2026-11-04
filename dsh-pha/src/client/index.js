@@ -350,6 +350,10 @@ const CSS = [
   '.pha-btn.on{border-color:transparent;background:var(--dsw-alias-state-warn-primary,#e8890c);color:#fff}',
   '.pha-btn.small{padding:1px 7px;font-size:11px}',
   '.pha-btn[disabled]{opacity:.45;cursor:not-allowed}',
+  // The row-level "open the original" button: small and quiet until the row is hovered,
+  // so the document list keeps its reading rhythm but the action is still right there.
+  '.pha-btn.pha-open-src{flex:0 0 auto;padding:0 6px;font-size:10px;opacity:.55}',
+  '.pha-doc:hover .pha-btn.pha-open-src,.pha-doc.sel .pha-btn.pha-open-src{opacity:1}',
   '.pha-spacer{flex:1 1 auto}',
   '.pha-err{color:var(--dsw-alias-state-error-primary,#e03131);font-size:12px;line-height:1.45}',
   '.pha-input{font:inherit;font-size:12px;padding:3px 8px;border-radius:6px;border:1px solid var(--dsw-alias-border-l2,#666);background:var(--dsw-alias-bg-layer-1,#fff);color:inherit;flex:1;min-width:120px}',
@@ -445,7 +449,7 @@ function PhaView(props) {
   const inputActions = props ? props.inputActions : null
   const inputState = (props && typeof props.useInput === 'function') ? props.useInput((s) => s) : null
   const h = React.createElement
-  const [state, setState] = React.useState(() => seedState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null, status: null, statusErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null }, viewBoot))
+  const [state, setState] = React.useState(() => seedState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null, status: null, statusErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null, srcMsg: null }, viewBoot))
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -570,6 +574,29 @@ function PhaView(props) {
     } catch (e) {
       setState((s) => ({ ...s, editMsg: String((e && e.message) || e) }))
     }
+  }
+
+  // Open a document's ORIGINAL — the PDF, a single image, or the directory of page
+  // images — in the OS-default app (a PDF opens in the PDF viewer, a folder in the
+  // file manager) through `/pha/source` → `pha open --source`. `doc` names an
+  // archived document; `under` + `rel` name an item that has no DB row yet (the
+  // "new in dropbox" and inbox lists, whose relative paths come from `pha status`).
+  // The route and pha both validate the path, and nothing mutates the archive.
+  async function openSource(arg) {
+    const a = arg || {}
+    const query = a.doc
+      ? 'doc=' + encodeURIComponent(String(a.doc))
+      : 'under=' + encodeURIComponent(String(a.under || '')) +
+        '&rel=' + encodeURIComponent(String(a.rel || ''))
+    setState((s) => ({ ...s, srcMsg: 'opening the original…' }))
+    let msg
+    try {
+      const r = await get('/pha/source?' + query)
+      msg = (r && r.ok)
+        ? ('opened ' + (r.path || 'the original'))
+        : ((r && r.error) || 'could not open the original')
+    } catch (e) { msg = String((e && e.message) || e) }
+    setState((s) => ({ ...s, srcMsg: msg }))
   }
 
   async function openDoc(id) {
@@ -932,6 +959,17 @@ function PhaView(props) {
   const inboxGroups = statusInbox(s.status)
   const unscannedGroups = statusUnscanned(s.status)
   const countOf = (gs) => gs.reduce((n, g) => n + g.count, 0)
+  // A row's own onClick selects/opens it; the row's "open" button must not also
+  // trigger that selection, so the click stops here.
+  const stopRow = (ev) => { if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation() }
+  // The source button: opens the document itself (PDF / image / image folder) in
+  // the OS-default app. `arg` is `{ doc }` for an archived document or
+  // `{ under, rel }` for an item that has no DB row yet.
+  const sourceButton = (arg, title) => h('button', {
+    className: 'pha-btn small pha-open-src',
+    title: title || 'open the original document in your default app (its PDF, image, or folder of page images)',
+    onClick: (ev) => { stopRow(ev); openSource(arg) },
+  }, 'open')
   const inboxUnitRow = (u) => h('div', {
     className: 'pha-doc sub' + (inboxSelKey === 'document:' + u.rel_path ? ' sel' : ''),
     key: 'ibu-' + u.rel_path,
@@ -940,6 +978,7 @@ function PhaView(props) {
   },
     h('span', { className: 'pha-chip dim' }, u.kind || 'file'),
     h('span', { className: 'pha-doc-name' }, u.name),
+    sourceButton({ under: 'inbox', rel: u.rel_path }, 'open this parked item in your default app'),
   )
   const unscannedList = unscannedGroups.length ? h('div', { className: 'pha-group' },
     h('div', { className: 'pha-group-h' }, 'new in dropbox — not scanned (' + countOf(unscannedGroups) + ')'),
@@ -952,6 +991,7 @@ function PhaView(props) {
       g.units.map((u) => h('div', { className: 'pha-doc sub static', key: 'unu-' + u.rel_path, title: 'dropbox/' + u.rel_path },
         h('span', { className: 'pha-chip dim' }, u.kind || 'file'),
         h('span', { className: 'pha-doc-name' }, u.name),
+        sourceButton({ under: 'dropbox', rel: u.rel_path }),
       )),
     ]),
     h('div', { className: 'pha-doc static', key: 'un-actions' },
@@ -1048,6 +1088,7 @@ function PhaView(props) {
               }, 'bib')
             : null,
           h('span', { className: 'pha-doc-meta' }, (d.page_count || 0) + 'p' + (d.palaeographer ? ' · ' + d.palaeographer : '')),
+          d.path ? sourceButton({ doc: d.id }) : null,
           )
         }),
       )),
@@ -1059,7 +1100,14 @@ function PhaView(props) {
       modelGroups,
     ) : h('div', { className: 'pha-empty' }, 'Loading documents…'))
   }
-  const left = h('div', { className: 'pha-left', style: { width: leftPct + '%' } }, searchHeader, body)
+  // What the last "open" press did (the OS app is launched on the archive machine,
+  // so the answer — the opened path, or why nothing opened — is worth showing).
+  const sourceNotice = s.srcMsg ? h('div', {
+    className: 'pha-muted',
+    title: s.srcMsg,
+    style: { fontSize: 11, padding: '0 2px 4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  }, s.srcMsg) : null
+  const left = h('div', { className: 'pha-left', style: { width: leftPct + '%' } }, searchHeader, sourceNotice, body)
 
   let right
   if (s.inboxSel) {
@@ -1083,6 +1131,11 @@ function PhaView(props) {
         plan ? h('button', { className: 'pha-btn', disabled: !!s.inboxBusy, onClick: doInboxMove },
           'Confirm move (' + plan.files + ' file' + (plan.files === 1 ? '' : 's') + ')') : null,
         plan ? h('button', { className: 'pha-btn', disabled: !!s.inboxBusy, onClick: () => setState((x) => ({ ...x, inboxPlan: null })) }, 'Cancel') : null,
+        h('button', {
+          className: 'pha-btn small',
+          title: 'open the parked ' + (sel.kind === 'collection' ? 'folder' : 'item') + ' in your default app',
+          onClick: () => openSource({ under: 'inbox', rel: sel.rel_path }),
+        }, 'Open'),
         h('button', { className: 'pha-btn small', onClick: refreshStatus }, '⟳ Refresh'),
       ),
       plan ? h('div', { className: 'pha-muted' },
@@ -1251,6 +1304,11 @@ function PhaView(props) {
         (lease && !d.page_count)
           ? h('span', { className: 'pha-chip' }, 'pages on the worker')
           : h('span', { className: 'pha-chip' }, (d.page_count || 0) + ' pages'),
+        h('button', {
+          className: 'pha-btn small',
+          title: 'open the original document in your default app (its PDF, image, or folder of page images)',
+          onClick: () => openSource({ doc: d.id }),
+        }, 'Open source'),
         h('button', { className: 'pha-btn small', title: "Show this collection's pha.yaml configuration (resolved, generating it only when none is in scope)", onClick: openConfig }, 'Config'),
         h('button', {
           className: 'pha-btn small',

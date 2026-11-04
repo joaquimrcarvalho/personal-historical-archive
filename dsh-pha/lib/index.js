@@ -381,6 +381,46 @@ function apply(ctx, config) {
     return { ok: true, output: out, path: m ? m[1].trim() : null }
   }
 
+  // Open a document's SOURCE — the PDF, a single image, or the directory of page
+  // images that was scanned — in the OS-default app via `pha open --source`. Two
+  // forms:
+  //   doc=<id|filename>          resolved by pha against the archive's own DB;
+  //   under=dropbox|inbox&rel=<path>  an item with no DB row yet ("new in dropbox",
+  //                              parked in the inbox), whose relative path comes from
+  //                              `pha status --json`.
+  // The relative form is resolved here from the discovered archive dir, and pha
+  // repeats the containment check, so neither form can open anything outside the
+  // archive tree the view lists.
+  async function runOpenSource(params) {
+    const argv = ['open', '--source']
+    if (params.doc) {
+      argv.push(String(params.doc))
+    } else {
+      const under = String(params.under || '')
+      if (under !== 'dropbox' && under !== 'inbox') {
+        throw new Error('doc, or under=dropbox|inbox with rel, required')
+      }
+      await discover()
+      const base = normPath(archiveDir + '/' + under)
+      const rel = String(params.rel == null ? '' : params.rel)
+      let target = base
+      if (rel !== '') {
+        target = normPath(base + '/' + rel)
+        if (target !== base && !target.startsWith(base + '/')) {
+          throw new Error('rel escapes ' + under + '/')
+        }
+      }
+      argv.push(target)
+    }
+    const r = await phaRun(argv)
+    if (r.code !== 0) {
+      throw new Error('pha open --source failed: ' + String(r.err || r.out).slice(0, 400))
+    }
+    const out = String(r.out || '').trim()
+    const m = out.match(/^opened:\s*(.+)$/m)
+    return { ok: true, output: out, path: m ? m[1].trim() : null }
+  }
+
   // Definition folders at the archive root, browsable + editable in the view.
   // listed palaeographers -> editors -> models (the reading rules, then the models
   // they pair with); the order is what the view's left pane shows
@@ -592,14 +632,11 @@ function apply(ctx, config) {
   // ---- durable browser data layer (same-origin /pha/* JSON routes) --------
   // Read-only: browsing, page text + render image, search. Mutations go through
   // the pha_* tools / the agent, so do the pha lock + staleness semantics.
-  // Three exceptions, all still funnelled through the `pha` CLI: `/pha/open` launches
-  // the OS-default app on a page file, `/pha/config` may write a collection's pha.yaml,
-  // and `/pha/inbox/move` moves a parked item into the dropbox. `pha` re-validates each
-  // one; the plugin never writes to the archive itself.
-  //
-  // (Formerly two: `/pha/open` launches the OS-default app on a page file
-  // (doc/page resolved + validated by `pha open`), and `/pha/config` may write a
-  // collection's pha.yaml from the resolved configuration (only when it has none).
+  // Four exceptions, all still funnelled through the `pha` CLI: `/pha/open` launches
+  // the OS-default app on a page file, `/pha/source` launches it on a document's
+  // original file (PDF) or image folder, `/pha/config` may write a collection's
+  // pha.yaml, and `/pha/inbox/move` moves a parked item into the dropbox. `pha`
+  // re-validates each one; the plugin never writes to the archive itself.
   function json(handler) {
     return (req, res) => {
       (async () => {
@@ -713,6 +750,7 @@ function apply(ctx, config) {
       if (!p.doc || !p.page) throw new Error('doc and page required (or path)')
       return await runOpen({ doc: p.doc, page: p.page, edited: (p.edited === '1' || p.edited === 'true') })
     })],
+    ['/pha/source', json(async (p) => await runOpenSource(p))],
     ['/pha/defs', json(async () => {
       await discover()
       const r = await pyRun(LIST_DEFS, [archiveDir, JSON.stringify(DEF_KINDS)])

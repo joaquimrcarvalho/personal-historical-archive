@@ -180,3 +180,113 @@ def test_open_path_allows_archive_yaml(tmp_path, monkeypatch):
     calls = _record_open(monkeypatch)
     cli.cmd_open(cfg, SimpleNamespace(doc=str(target), page=None, edited=False, editor=None))
     assert calls == [target.resolve()]
+
+
+# ---- `pha open --source`: the original document, not a library page -------------
+
+def test_open_source_by_doc_id_opens_the_pdf(tmp_path, monkeypatch):
+    """`pha open --source <doc>` opens the scanned PDF, not its transcription."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    src = cfg.dropbox / "collections" / "COLX" / "d.pdf"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"%PDF d")
+    conn = _db.connect(cfg.db_path)
+    _db.add_document(conn, filename="d.pdf", path=str(src), sha256=sha256_of(src),
+                     size_bytes=1, mtime=1, kind="pdf", now=time.time(),
+                     dir_path="collections/COLX")
+    doc_id = _db.get_document_by_path(conn, str(src))["id"]
+    conn.commit()
+    conn.close()
+
+    calls = _record_open(monkeypatch)
+    cli.cmd_open(cfg, SimpleNamespace(doc=str(doc_id), page=None, edited=False,
+                                      editor=None, source=True))
+
+    assert calls == [src.resolve()]
+
+
+def test_open_source_by_filename_substring(tmp_path, monkeypatch):
+    """A filename substring resolves like `pha page` — useful from the CLI."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    src = cfg.dropbox / "d.pdf"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"%PDF d")
+    conn = _db.connect(cfg.db_path)
+    _db.add_document(conn, filename="d.pdf", path=str(src), sha256=sha256_of(src),
+                     size_bytes=1, mtime=1, kind="pdf", now=time.time(), dir_path="")
+    conn.commit()
+    conn.close()
+
+    calls = _record_open(monkeypatch)
+    cli.cmd_open(cfg, SimpleNamespace(doc="d.pd", page=None, edited=False,
+                                      editor=None, source=True))
+    assert calls == [src.resolve()]
+
+
+def test_open_source_opens_a_directory_of_images(tmp_path, monkeypatch):
+    """A directory-of-images document opens as a folder (the file manager)."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    src = cfg.dropbox / "collections" / "COLX" / "ms123"
+    src.mkdir(parents=True)
+    (src / "p01.jpg").write_bytes(b"\xff\xd8img")
+    conn = _db.connect(cfg.db_path)
+    _db.add_document(conn, filename="ms123", path=str(src), sha256="0" * 64,
+                     size_bytes=5, mtime=1, kind="dir", now=time.time(),
+                     dir_path="collections/COLX")
+    doc_id = _db.get_document_by_path(conn, str(src))["id"]
+    conn.commit()
+    conn.close()
+
+    calls = _record_open(monkeypatch)
+    cli.cmd_open(cfg, SimpleNamespace(doc=str(doc_id), page=None, edited=False,
+                                      editor=None, source=True))
+    assert calls == [src.resolve()]
+
+
+def test_open_source_by_absolute_path_allows_non_markdown(tmp_path, monkeypatch):
+    """The path form opens any existing file/dir inside the archive — a PDF too."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    target = cfg.dropbox / "collections" / "COLX" / "scan.pdf"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"%PDF x")
+
+    calls = _record_open(monkeypatch)
+    cli.cmd_open(cfg, SimpleNamespace(doc=str(target), page=None, edited=False,
+                                      editor=None, source=True))
+    assert calls == [target.resolve()]
+
+
+def test_open_source_rejects_outside_archive(tmp_path, capsys):
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    outside = tmp_path / "elsewhere.pdf"
+    outside.write_bytes(b"%PDF x")
+    with pytest.raises(SystemExit):
+        cli.cmd_open(cfg, SimpleNamespace(doc=str(outside), page=None, edited=False,
+                                          editor=None, source=True))
+    assert "not inside the archive" in capsys.readouterr().err
+
+
+def test_open_source_rejects_missing_target(tmp_path, capsys):
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    missing = cfg.dropbox / "collections" / "COLX" / "gone.pdf"
+    with pytest.raises(SystemExit):
+        cli.cmd_open(cfg, SimpleNamespace(doc=str(missing), page=None, edited=False,
+                                          editor=None, source=True))
+    assert "no such file or directory" in capsys.readouterr().err
+
+
+def test_open_source_rejects_a_page_number(tmp_path, capsys):
+    """`--source` is per document; a page makes the request ambiguous."""
+    cfg = _make_cfg(tmp_path)
+    cfg.ensure_dirs()
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_open(cfg, SimpleNamespace(doc="1", page=1, edited=False,
+                                          editor=None, source=True))
+    assert exc.value.code == 2
+    assert "not one page" in capsys.readouterr().err

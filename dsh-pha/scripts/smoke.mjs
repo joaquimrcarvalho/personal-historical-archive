@@ -83,9 +83,9 @@ for (const t of tools) {
 
 // 4. The same-origin routes the view fetches.
 const EXPECTED_ROUTES = ['/pha/status', '/pha/archive', '/pha/documents', '/pha/document', '/pha/page',
-  '/pha/search', '/pha/pageImage', '/pha/render', '/pha/open', '/pha/pending', '/pha/config', '/pha/notes',
-  '/pha/note', '/pha/defs', '/pha/def', '/pha/collectionEncoders', '/pha/bib', '/pha/inbox/plan',
-  '/pha/inbox/move']
+  '/pha/search', '/pha/pageImage', '/pha/render', '/pha/open', '/pha/source', '/pha/pending',
+  '/pha/config', '/pha/notes', '/pha/note', '/pha/defs', '/pha/def', '/pha/collectionEncoders',
+  '/pha/bib', '/pha/inbox/plan', '/pha/inbox/move']
 for (const path of EXPECTED_ROUTES) check(routes.includes(path), 'route ' + path)
 
 // 4b. A configured projectRoot becomes the child cwd and PHA_HOME, so a
@@ -197,6 +197,86 @@ if (renderRoute) {
 renderPlugin.dispose()
 rmSync(imgArchive, { recursive: true, force: true })
 
+// 4d. `/pha/source` opens a document's ORIGINAL (its PDF, image, or folder of page
+// images) through `pha open --source`, and refuses a dropbox/inbox relative path that
+// escapes its tree. The view puts a small "open" button on every document row, so this
+// route is what makes it work for both archived documents and not-yet-scanned items.
+const srcSpawns = []
+const srcRoutes = []
+const srcCtx = {
+  subprocess: {
+    resolveExecutable: async (cand) => (cand === 'pha' ? '/usr/bin/pha' : null),
+    spawn: (spec) => {
+      srcSpawns.push(spec)
+      const out = spec.argv.includes('info')
+        ? JSON.stringify({ archive_dir: '/tmp/pha-src-archive', db_path: '/tmp/pha-src-archive/archive.db', configured: true })
+        : 'opened: ' + spec.argv[spec.argv.length - 1]
+      const reader = (text) => ({ readFrom: () => ({ text, nextOffset: text.length, lossy: false }) })
+      return {
+        collected: { stdout: reader(out), stderr: reader('') },
+        done: Promise.resolve({ exitCode: 0, signal: null }),
+      }
+    },
+  },
+  effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : () => {} },
+  tools: { register: () => () => {} },
+  inject: (deps, fn) => {
+    if (deps.includes('webServer')) {
+      fn({
+        webServer: { register: (r) => { srcRoutes.push(r); return () => {} } },
+        get: () => undefined,
+        effect: (f) => f(),
+      })
+    }
+  },
+}
+const srcPlugin = mod.apply(srcCtx, { projectRoot: '/tmp/pha-checkout' })
+const sourceRoute = srcRoutes.find((r) => r.path === '/pha/source')
+check(!!sourceRoute && typeof sourceRoute.handler === 'function',
+  'route /pha/source is registered with a handler')
+
+const fetchSourceJson = async (url) => {
+  let body = ''
+  const res = new Writable({ write(chunk, enc, cb) { body += chunk; cb() } })
+  let status = null
+  res.writeHead = (code) => { status = code }
+  const finished = new Promise((resolve) => res.on('finish', resolve))
+  sourceRoute.handler({ url }, res)
+  await finished
+  let data = null
+  try { data = JSON.parse(body) } catch (e) { data = null }
+  return { status, body: data }
+}
+
+if (sourceRoute) {
+  const beforeDoc = srcSpawns.length
+  const doc = await fetchSourceJson('/pha/source?doc=18')
+  check(doc.status === 200 && doc.body && doc.body.ok === true, 'the doc form answers ok')
+  const docArgv = srcSpawns.slice(beforeDoc).map((s) => s.argv).find((a) => a.includes('open'))
+  check(!!docArgv && docArgv.includes('--source') && docArgv[docArgv.length - 1] === '18',
+    'the doc form runs `pha open --source <doc>`')
+
+  const beforeRel = srcSpawns.length
+  const rel = await fetchSourceJson('/pha/source?under=dropbox&rel=collections/COLX/d.pdf')
+  check(rel.status === 200 && rel.body && rel.body.ok === true, 'the dropbox-relative form answers ok')
+  const relArgv = srcSpawns.slice(beforeRel).map((s) => s.argv).find((a) => a.includes('open'))
+  check(!!relArgv && relArgv[relArgv.length - 1] === '/tmp/pha-src-archive/dropbox/collections/COLX/d.pdf',
+    'the dropbox-relative form opens the item under dropbox/')
+
+  const beforeEscape = srcSpawns.length
+  const escape = await fetchSourceJson('/pha/source?under=dropbox&rel=../../etc/passwd')
+  check(escape.status === 500 && escape.body && escape.body.ok === false
+    && /escapes/.test(String(escape.body.error || '')),
+    'a rel that escapes dropbox/ is refused')
+  check(srcSpawns.length === beforeEscape, 'the refused rel spawns nothing')
+
+  const beforeUnder = srcSpawns.length
+  const badUnder = await fetchSourceJson('/pha/source?under=library&rel=x')
+  check(badUnder.body && badUnder.body.ok === false, 'an unknown `under` is refused')
+  check(srcSpawns.length === beforeUnder, 'the unknown `under` spawns nothing')
+}
+srcPlugin.dispose()
+
 // 5. The client half stays loadable as a harness client module.
 const bundle = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
 check(bundle.includes('__ModuleLoader__'), 'client bundle uses the harness module loader')
@@ -210,6 +290,8 @@ check(bundle.includes('function restorePlan'), 'client bundle inlines the readin
 check(bundle.includes('function askContext'), 'client bundle inlines the ask-context helper')
 check(bundle.includes('function parseNumberQuery'), 'client bundle inlines the document-number query rule')
 check(bundle.includes('function statusUnscanned'), 'client bundle inlines the status-derived sections')
+check(bundle.includes('/pha/source'), 'client bundle asks the source-open route')
+check(bundle.includes('pha-open-src'), 'client bundle renders the row-level "open" button')
 check(!/from\s*["']\.\/(links|viewmemory|askcontext|query|statusview)\.js["']/.test(bundle), 'client bundle has no leftover inline-module import')
 check(!/^\s*import\s/m.test(bundle), 'client bundle imports nothing')
 

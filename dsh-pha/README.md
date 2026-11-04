@@ -219,6 +219,27 @@ entirely — so a collection that had never been scanned simply did not exist as
 view was concerned, which is exactly what made `tacchi-venturi` and `inacio-loyola` impossible
 to find.
 
+### Opening the original document
+
+A transcription is only useful if the reader can check it against the page. Every row in
+the view's document list therefore carries a small **open** button, and the selected
+document's header has **Open source**:
+
+- for an **archived document** (`/pha/source?doc=N`) pha resolves the stored source path,
+  so a PDF opens in the PDF viewer and a directory-of-images document opens as a folder;
+- for an item that is **only in the dropbox** or **parked in the inbox** — no DB row yet —
+  the button sends its relative path (`under=dropbox|inbox&rel=…`), resolved against the
+  discovered archive dir. The route refuses a `rel` that escapes its tree, and pha checks
+  containment again;
+- the OS-default app is launched **on the archive machine** (the same rule as **Edit** for
+  library pages), and the view shows the opened path — or the CLI's error when nothing
+  could be opened (a source moved or deleted, a headless run with no opener).
+
+The CLI half is `pha open --source DOC|PATH`: `DOC` is a document id or filename substring,
+`PATH` an absolute or relative path inside the archive (a file *or* a directory of page
+images). It never edits anything; like every other `pha open` form, it only hands a
+validated path to the OS.
+
 ### The inbox (parked documents)
 
 The left pane lists the archive's `inbox/` — the sibling of `dropbox/` where documents
@@ -346,10 +367,13 @@ The graphical **PHA view** is preserved in this package as:
 - **Host data layer** (`lib/index.js`): same-origin read-only routes under `/pha/*`
   (`/pha/documents`, `/pha/document`, `/pha/page`, `/pha/search`, `/pha/status`,
   `/pha/archive`), plus the page image as **binary** at `/pha/render` (`/pha/pageImage`,
-  the older base64 data-URL form, is kept for a client bundle cached before it).
+  the older base64 data-URL form, is kept for a client bundle cached before it), and
+  `/pha/source`, which launches a document's **original** (PDF / image / folder of page
+  images) in the OS-default app through `pha open --source`.
 - **Client module source** (`src/client/index.js`): the PHA conversation view (document
   list + search, page reader with raw/edited, side-by-side page image, markdown rendering,
-  draggable splitter), registered into `conversation.view`, fetching `/pha/*`.
+  draggable splitter, an **open the original** button on every document row), registered
+  into `conversation.view`, fetching `/pha/*`.
 
 `package.json` already declares the module (`dsh.client` → `./client`) and the `dsh.client`
 inject list. The view ships **self-contained**: the browser bundle `lib/client.js` is

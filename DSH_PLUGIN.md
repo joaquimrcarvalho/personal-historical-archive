@@ -16,9 +16,12 @@ drive the **personal-historical-archive** tool from chat, on any machine that ha
   `scan/edit/encode/reindex/review/inbox`.
 - **A durable data API** for the GUI: same-origin read-only `/pha/*` JSON routes
   (`/pha/documents`, `/pha/document`, `/pha/page`, `/pha/search`, `/pha/pageImage`,
-  `/pha/status`, `/pha/archive`) registered on the harness `webServer` service.
+  `/pha/status`, `/pha/archive`), plus `/pha/source`, which opens a document's original
+  PDF / image folder through `pha open --source` — all registered on the harness
+  `webServer` service.
 - **A PHA conversation view** (document list + search, page reader raw/edited, side-by-side
-  page image, markdown rendering, draggable splitter) as a client module source at
+  page image, markdown rendering, draggable splitter, an **open** button on every document
+  row that launches the original file) as a client module source at
   `dsh-pha/src/client/index.js`. It is registered into `conversation.view` and fetches `/pha/*`.
 
 ## Install on a Harness machine

@@ -71,6 +71,78 @@ try {
   check(false, 'PhaView() renders the whole view — threw: ' + e.message)
 }
 
+// The view with an archive LOADED: the empty-state render above never reaches the
+// document list, so rows' "open the original" buttons need their own render. Each
+// archived row (and each "new in dropbox" / parked inbox row) must carry the button,
+// and pressing it must ask `/pha/source` for exactly that target without also
+// selecting the row it sits in.
+const DOCS = [
+  { id: 18, filename: 'schutte.pdf', dir_path: 'collections/schutte', kind: 'pdf', page_count: 3, status: 'done', path: '/a/dropbox/collections/schutte/schutte.pdf' },
+  { id: 1, filename: '1576', dir_path: 'collections/cat', kind: 'dir', page_count: 4, status: 'done', path: '/a/dropbox/collections/cat/1576' },
+]
+const STATUS = {
+  unscanned: [{ dir_path: 'collections/cat', count: 1, documents: ['new.pdf'] }],
+  in_inbox: [{ dir_path: 'collections/park', count: 1, documents: ['parked.pdf'] }],
+}
+const fetched = []
+const seeded = {
+  React: {
+    createElement: h,
+    useState: (init) => {
+      const v = typeof init === 'function' ? init() : init
+      // The view-state hook is the one whose initializer returns the seeded state.
+      if (v && typeof v === 'object' && Object.prototype.hasOwnProperty.call(v, 'docs')) {
+        return [Object.assign({}, v, { docs: DOCS, status: STATUS, archive: '/a' }), () => {}]
+      }
+      return [v, () => {}]
+    },
+    useEffect: () => {},
+    useRef: (v) => ({ current: v }),
+  },
+  console,
+  setTimeout,
+  clearTimeout,
+  document: {
+    querySelector: () => null,
+    getElementById: () => null,
+    createElement: () => ({ dataset: {}, style: {} }),
+    head: { appendChild: () => {} },
+  },
+  fetch: (url) => { fetched.push(url); return Promise.resolve({ json: async () => ({ ok: true, path: '/a/x' }) }) },
+}
+seeded.globalThis = seeded
+vm.createContext(seeded)
+vm.runInContext(`${runtime}\n${inlined}\n${src}\n;globalThis.__pha = { PhaView };`,
+  seeded, { filename: sourcePath })
+
+try {
+  const seededView = seeded.__pha.PhaView()
+  const seededNodes = []
+  const walkSeeded = (n) => {
+    if (n === null || n === undefined || typeof n !== 'object') return
+    if (Array.isArray(n)) { n.forEach(walkSeeded); return }
+    if (n.type !== undefined) seededNodes.push(n)
+    walkSeeded(n.children)
+  }
+  walkSeeded(seededView)
+  const openButtons = seededNodes.filter((n) => n.type === 'button'
+    && String(n.props.className || '').includes('pha-open-src'))
+  check(openButtons.length === 4,
+    `every document list row has an "open original" button (2 archived + 1 new in dropbox + 1 parked) — got ${openButtons.length}`)
+  let stopped = 0
+  for (const b of openButtons) b.props.onClick({ stopPropagation() { stopped++ } })
+  await new Promise((r) => setTimeout(r, 10))
+  check(stopped === openButtons.length,
+    'an "open" click does not also select the row it sits in')
+  check(fetched.includes('/pha/source?doc=18'), 'an archived document opens by id')
+  check(fetched.includes('/pha/source?under=dropbox&rel=collections%2Fcat%2Fnew.pdf'),
+    'a "new in dropbox" item opens by its dropbox-relative path')
+  check(fetched.includes('/pha/source?under=inbox&rel=collections%2Fpark%2Fparked.pdf'),
+    'a parked inbox item opens by its inbox-relative path')
+} catch (e) {
+  check(false, 'the loaded view renders and its "open" buttons work — threw: ' + e.message)
+}
+
 const NOTE = [
   '---',
   'title: Test note',

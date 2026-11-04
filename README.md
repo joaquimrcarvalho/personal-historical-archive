@@ -526,6 +526,12 @@ API, and a PHA conversation view (client module).
   Harness `dev:web` client build (`dsh-pha/src/client/index.js` → `lib/client.js`) and a
   restart.
 
+The view's document list also has an **open** button on every row — archived documents, new
+items still only in the dropbox, and parked items in the inbox — which launches that
+document's original file (the PDF, a single image, or a directory of page images) in the
+OS-default application. The selected document's header carries the same action as **Open
+source**; `pha open --source DOC|PATH` is its CLI form.
+
 ## Dropbox layout: documents and collections
 
 The dropbox is scanned recursively, so any subdirectory structure works.
@@ -1282,6 +1288,10 @@ pha serve [--host H] [--port 8765] [--quiet]
                                 #   current render per request (a re-scan never changes the URL)
 pha open DOC PAGE [--edited]    # open that page's library .md in the OS-default editor
 pha open FILE.md                # …or any archive .md/.yaml (notes, definitions, pha.yaml)
+pha open --source DOC|PATH      # …or the document's ORIGINAL: its PDF, single image, or
+                                #   directory of page images — the OS opens a PDF in its
+                                #   viewer and a folder in the file manager. This is the
+                                #   CLI behind the PHA view's "open" buttons
 pha pending [--doc N] [--json]  # library page files edited by a human but not imported yet
 pha config [--doc DOC] [--json] [--write]
                                 # show the pha.yaml in scope for a document (its path, whether it
