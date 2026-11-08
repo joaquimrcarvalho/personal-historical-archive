@@ -204,6 +204,24 @@
           "commit": "27e67e997777"
         }
       ]
+    },
+    "0.47.0": {
+      "date": "2026-11-08",
+      "summary": "Every document row in the PHA view can now open its original PDF or image folder in the OS-default app, and the page image links to the same page in the pha serve viewer for roomier reading.",
+      "changes": [
+        {
+          "type": "feat",
+          "scope": "view",
+          "text": "link the page image to the same page in the pha serve viewer",
+          "commit": "56b30180fa33"
+        },
+        {
+          "type": "feat",
+          "scope": "view",
+          "text": "open a document's original PDF or image folder from the PHA view",
+          "commit": "55e74118198e"
+        }
+      ]
     }
   }
 }
