@@ -292,6 +292,7 @@ check(bundle.includes('function parseNumberQuery'), 'client bundle inlines the d
 check(bundle.includes('function statusUnscanned'), 'client bundle inlines the status-derived sections')
 check(bundle.includes('/pha/source'), 'client bundle asks the source-open route')
 check(bundle.includes('pha-open-src'), 'client bundle renders the row-level "open" button')
+check(bundle.includes('pha-serve-link'), 'client bundle renders the pha serve link under the page image')
 check(!/from\s*["']\.\/(links|viewmemory|askcontext|query|statusview)\.js["']/.test(bundle), 'client bundle has no leftover inline-module import')
 check(!/^\s*import\s/m.test(bundle), 'client bundle imports nothing')
 

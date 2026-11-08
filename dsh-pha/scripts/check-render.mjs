@@ -72,10 +72,13 @@ try {
 }
 
 // The view with an archive LOADED: the empty-state render above never reaches the
-// document list, so rows' "open the original" buttons need their own render. Each
-// archived row (and each "new in dropbox" / parked inbox row) must carry the button,
-// and pressing it must ask `/pha/source` for exactly that target without also
-// selecting the row it sits in.
+// document list or the reading pane, so those need their own render.
+//
+// - Each archived/list row must carry the "open the original" button, and pressing it
+//   must ask `/pha/source` for exactly that target without also selecting the row.
+// - The page image must carry the stable `pha serve` viewer link under it (the URL comes
+//   from `pha page --json`, never rebuilt here), labelled so a reader knows the local
+//   `pha serve` must be running; a page JSON without `page_url` must render no link.
 const DOCS = [
   { id: 18, filename: 'schutte.pdf', dir_path: 'collections/schutte', kind: 'pdf', page_count: 3, status: 'done', path: '/a/dropbox/collections/schutte/schutte.pdf' },
   { id: 1, filename: '1576', dir_path: 'collections/cat', kind: 'dir', page_count: 4, status: 'done', path: '/a/dropbox/collections/cat/1576' },
@@ -84,48 +87,79 @@ const STATUS = {
   unscanned: [{ dir_path: 'collections/cat', count: 1, documents: ['new.pdf'] }],
   in_inbox: [{ dir_path: 'collections/park', count: 1, documents: ['parked.pdf'] }],
 }
-const fetched = []
-const seeded = {
-  React: {
-    createElement: h,
-    useState: (init) => {
-      const v = typeof init === 'function' ? init() : init
-      // The view-state hook is the one whose initializer returns the seeded state.
-      if (v && typeof v === 'object' && Object.prototype.hasOwnProperty.call(v, 'docs')) {
-        return [Object.assign({}, v, { docs: DOCS, status: STATUS, archive: '/a' }), () => {}]
-      }
-      return [v, () => {}]
-    },
-    useEffect: () => {},
-    useRef: (v) => ({ current: v }),
-  },
-  console,
-  setTimeout,
-  clearTimeout,
-  document: {
-    querySelector: () => null,
-    getElementById: () => null,
-    createElement: () => ({ dataset: {}, style: {} }),
-    head: { appendChild: () => {} },
-  },
-  fetch: (url) => { fetched.push(url); return Promise.resolve({ json: async () => ({ ok: true, path: '/a/x' }) }) },
+const PAGE_URL = 'http://127.0.0.1:8765/doc/schutte-schutte-pdf/p002'
+const PAGE = {
+  page_no: 2, variant: 'raw', text: 'page body', reviewed: false,
+  page_file: '/a/library/page-002.md', page_url: PAGE_URL,
+  overview_url: 'http://127.0.0.1:8765/doc/schutte-schutte-pdf/',
 }
-seeded.globalThis = seeded
-vm.createContext(seeded)
-vm.runInContext(`${runtime}\n${inlined}\n${src}\n;globalThis.__pha = { PhaView };`,
-  seeded, { filename: sourcePath })
+
+/** Render the whole view with a state as if the archive had loaded (the hooks are
+ *  stubbed, so nothing fetches or mounts). `stateOverrides` replaces seed fields. */
+function renderLoadedView(stateOverrides) {
+  const fetched = []
+  const seed = Object.assign({
+    docs: DOCS,
+    status: STATUS,
+    archive: '/a',
+    selectedId: 18,
+    detail: {
+      doc: DOCS[0],
+      pages: [{ id: 1, page_no: 1, status: 'done' }, { id: 2, page_no: 2, status: 'done' }],
+      edits: [],
+      matched: false,
+    },
+    pageReq: { doc: 18, page: 2, edited: false },
+    page: PAGE,
+  }, stateOverrides || {})
+  const sandbox = {
+    React: {
+      createElement: h,
+      useState: (init) => {
+        const v = typeof init === 'function' ? init() : init
+        // The view-state hook is the one whose initializer returns the seeded state.
+        if (v && typeof v === 'object' && Object.prototype.hasOwnProperty.call(v, 'docs')) {
+          return [Object.assign({}, v, seed), () => {}]
+        }
+        // The two boolean view toggles are initialized from functions: turn the image
+        // pane on so the reading pane (and the link under the image) is rendered.
+        if (typeof init === 'function' && typeof v === 'boolean') return [true, () => {}]
+        return [v, () => {}]
+      },
+      useEffect: () => {},
+      useRef: (v) => ({ current: v }),
+    },
+    console,
+    setTimeout,
+    clearTimeout,
+    document: {
+      querySelector: () => null,
+      getElementById: () => null,
+      createElement: () => ({ dataset: {}, style: {} }),
+      head: { appendChild: () => {} },
+    },
+    fetch: (url) => { fetched.push(url); return Promise.resolve({ json: async () => ({ ok: true, path: '/a/x' }) }) },
+  }
+  sandbox.globalThis = sandbox
+  vm.createContext(sandbox)
+  vm.runInContext(`${runtime}\n${inlined}\n${src}\n;globalThis.__pha = { PhaView };`,
+    sandbox, { filename: sourcePath })
+  const view = sandbox.__pha.PhaView()
+  const nodes = []
+  const walk = (n) => {
+    if (n === null || n === undefined || typeof n !== 'object') return
+    if (Array.isArray(n)) { n.forEach(walk); return }
+    if (n.type !== undefined) nodes.push(n)
+    walk(n.children)
+  }
+  walk(view)
+  return { nodes, fetched, seed }
+}
 
 try {
-  const seededView = seeded.__pha.PhaView()
-  const seededNodes = []
-  const walkSeeded = (n) => {
-    if (n === null || n === undefined || typeof n !== 'object') return
-    if (Array.isArray(n)) { n.forEach(walkSeeded); return }
-    if (n.type !== undefined) seededNodes.push(n)
-    walkSeeded(n.children)
-  }
-  walkSeeded(seededView)
-  const openButtons = seededNodes.filter((n) => n.type === 'button'
+  const loaded = renderLoadedView()
+  const { nodes, fetched } = loaded
+  const openButtons = nodes.filter((n) => n.type === 'button'
     && String(n.props.className || '').includes('pha-open-src'))
   check(openButtons.length === 4,
     `every document list row has an "open original" button (2 archived + 1 new in dropbox + 1 parked) — got ${openButtons.length}`)
@@ -139,8 +173,31 @@ try {
     'a "new in dropbox" item opens by its dropbox-relative path')
   check(fetched.includes('/pha/source?under=inbox&rel=collections%2Fpark%2Fparked.pdf'),
     'a parked inbox item opens by its inbox-relative path')
+
+  const serves = nodes.filter((n) => n.type === 'a'
+    && String(n.props.className || '').includes('pha-serve-link'))
+  check(serves.length === 1, 'the page image carries one pha serve link')
+  const serve = serves[0]
+  check(!!serve && serve.props.href === PAGE_URL,
+    'the pha serve link points at the page URL from `pha page --json` (never rebuilt here)')
+  check(!!serve && serve.props.target === '_blank' && String(serve.props.rel).includes('noopener'),
+    'the pha serve link opens in a new browser tab')
+  check(!!serve && /pha serve/.test(String(serve.children.join(''))),
+    'the link names the pha serve viewer')
+  const imgAt = nodes.findIndex((n) => n.type === 'img')
+  const linkAt = nodes.findIndex((n) => n === serve)
+  check(imgAt >= 0 && linkAt > imgAt, 'the pha serve link sits under the image')
+  const hints = nodes.filter((n) => String(n.props.className || '') === 'pha-serve-hint')
+  check(hints.length === 1 && /must be running/.test(String(hints[0].children.join(''))),
+    'the view states that pha serve must be running')
+
+  // A page JSON without `page_url` (an older pha) must not render a dead link.
+  const noUrl = renderLoadedView({ page: Object.assign({}, PAGE, { page_url: null }) })
+  check(noUrl.nodes.filter((n) => n.type === 'a'
+    && String(n.props.className || '').includes('pha-serve-link')).length === 0,
+    'no pha serve link when the page JSON has no page_url')
 } catch (e) {
-  check(false, 'the loaded view renders and its "open" buttons work — threw: ' + e.message)
+  check(false, 'the loaded view renders and its "open"/serve actions work — threw: ' + e.message)
 }
 
 const NOTE = [

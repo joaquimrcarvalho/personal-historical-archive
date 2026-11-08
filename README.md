@@ -532,6 +532,10 @@ document's original file (the PDF, a single image, or a directory of page images
 OS-default application. The selected document's header carries the same action as **Open
 source**; `pha open --source DOC|PATH` is its CLI form.
 
+While reading a page, the image also links to that same page in the `pha serve` viewer — a
+roomier browser tab (`pha serve` must be running on the machine for it to answer). The link
+uses the page's stable served address, so it is the same URL `pha cite` prints.
+
 ## Dropbox layout: documents and collections
 
 The dropbox is scanned recursively, so any subdirectory structure works.

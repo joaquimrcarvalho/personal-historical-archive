@@ -311,6 +311,14 @@ be 8 MB, so `/pha/render` streams the file from `renders/<sha256>/` instead: no 
 base64 overhead, and the browser can cache it. A missing render is a clean 404, which the
 view shows as "No render image" rather than a broken-image glyph.
 
+**The page image also carries the `pha serve` link.** Under it the view shows *Open in pha
+serve ↗* plus the condition *pha serve must be running*: a new browser tab at the exact
+stable viewer URL for this page. That URL is `page_url` from `pha page --json` (slug +
+printed page number, computed by pha's own address rules), never rebuilt here. It is a
+convenience for reading a page at a roomier width; the view itself never needs `pha serve`,
+so when it is not running the tab simply fails to load and the hint says why. A page JSON
+without `page_url` (a pha older than the served-viewer addresses) renders no link.
+
 When both are visible a **vertical divider** between them resizes the image (drag it, 15–85% of
 the pane — it works like the pane splitter, including refusing to move on a hover), and that
 share is part of the remembered reading position, so a tab switch brings back the width you

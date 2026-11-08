@@ -20,9 +20,10 @@ drive the **personal-historical-archive** tool from chat, on any machine that ha
   PDF / image folder through `pha open --source` — all registered on the harness
   `webServer` service.
 - **A PHA conversation view** (document list + search, page reader raw/edited, side-by-side
-  page image, markdown rendering, draggable splitter, an **open** button on every document
-  row that launches the original file) as a client module source at
-  `dsh-pha/src/client/index.js`. It is registered into `conversation.view` and fetches `/pha/*`.
+  page image with a link to the same page in the `pha serve` viewer, markdown rendering,
+  draggable splitter, an **open** button on every document row that launches the original
+  file) as a client module source at `dsh-pha/src/client/index.js`. It is registered into
+  `conversation.view` and fetches `/pha/*`.
 
 ## Install on a Harness machine
 

@@ -746,6 +746,11 @@ const CSS = [
   // second, shorter box that letterboxed the page inside it (the dark bands either side).
   // A tall page simply scrolls.
   '.pha-img{display:block;width:100%;height:auto;border:1px solid var(--dsw-alias-border-l1,#333);border-radius:6px;background:var(--dsw-alias-bg-layer-1,transparent)}',
+  // The `pha serve` link under the page image: a quiet line so the page stays the
+  // subject; the hint states the one condition (`pha serve` must be running).
+  '.pha-serve{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;margin-top:6px;font-size:11px}',
+  '.pha-serve-link{color:var(--dsw-alias-brand-primary,#0b5fff);text-decoration:underline;white-space:nowrap}',
+  '.pha-serve-hint{opacity:.6}',
   // An image EMBEDDED in markdown (a note's `![]()`): it keeps its natural size up to
   // the text column's width instead of taking the whole pane like the page image.
   '.pha-md-img{display:block;max-width:100%;height:auto;margin:8px 0;border:1px solid var(--dsw-alias-border-l1,#333);border-radius:6px}',
@@ -1599,6 +1604,23 @@ function PhaView(props) {
     const hasEdited = editors.length > 0
     const pendingSet = new Set((s.pendingPages || []).map((x) => x.page_no))
     const pendingCount = (s.pendingPages || []).length
+    // `pha page --json` already carries the stable `pha serve` address for this exact
+    // page (slug + printed page number, resolved per request by the server), so the
+    // view renders a link to the browser viewer instead of rebuilding the URL. It is
+    // a convenience only: `pha serve` must be running on this machine for it to answer.
+    const serveLink = (pv && pv.page_url)
+      ? h('div', { className: 'pha-serve' },
+          h('a', {
+            className: 'pha-serve-link',
+            href: pv.page_url,
+            target: '_blank',
+            rel: 'noopener',
+            title: 'Open this page in the pha serve viewer — roomier to read in a browser tab. '
+              + 'It needs `pha serve` running on this machine.',
+          }, 'Open in pha serve ↗'),
+          h('span', { className: 'pha-serve-hint' }, 'pha serve must be running'),
+        )
+      : null
     // image-only mode: let the render fill the pane instead of sharing half with text
     // The image always takes the width it is given: the whole pane when the text is off,
     // and the divider's share when both are shown (the <img> itself is width:100%, so it
@@ -1619,7 +1641,8 @@ function PhaView(props) {
                 // of leaving the browser's broken-image glyph in the pane.
                 onError: () => setImgFailed(true),
               })
-            : h('div', { className: 'pha-empty' }, 'No render image'))
+            : h('div', { className: 'pha-empty' }, 'No render image'),
+          serveLink)
       : null
     const mediaSplit = (showImg && textOn)
       ? h('div', {
