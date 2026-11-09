@@ -222,6 +222,18 @@
           "commit": "55e74118198e"
         }
       ]
+    },
+    "0.47.1": {
+      "date": "2026-11-09",
+      "summary": "On Windows, the end of `pha update` no longer prints a UnicodeDecodeError traceback: subprocess text is decoded as UTF-8, and pha's own printing survives a code page that cannot encode one of its glyphs.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "subproc",
+          "text": "decode child output as UTF-8 on Windows",
+          "commit": "e805c0419956"
+        }
+      ]
     }
   }
 }
