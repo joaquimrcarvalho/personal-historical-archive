@@ -33,6 +33,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from .config import source_checkout_root
+from .subproc import run_text
 
 DEFAULT_REPO = "joaquimrcarvalho/personal-historical-archive"
 DEFAULT_BRANCH = "main"
@@ -266,13 +267,12 @@ def _is_git_checkout(root: Path) -> bool:
 def _git_update(root: Path, branch: str) -> str:
     if not shutil.which("git"):
         raise UpdateError("git is not installed; cannot update the pha checkout")
-    subprocess.run(
+    run_text(
         ["git", "-C", str(root), "fetch", "origin", branch],
-        check=True, capture_output=True, text=True,
+        check=True,
     )
-    r = subprocess.run(
+    r = run_text(
         ["git", "-C", str(root), "pull", "--ff-only", "origin", branch],
-        capture_output=True, text=True,
     )
     if r.returncode != 0:
         raise UpdateError(

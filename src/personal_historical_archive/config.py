@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yaml
 
+from .subproc import run_text
+
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 _DOTENV: dict[str, str] | None = None
 
@@ -98,15 +100,15 @@ def _secret_get(name: str) -> str:
     Linux libsecret (secret-tool), or Windows DPAPI (encrypted blob)."""
     try:
         if sys.platform == "darwin":
-            r = subprocess.run(
+            r = run_text(
                 ["security", "find-generic-password", "-a", "pha", "-s", name, "-w"],
-                capture_output=True, text=True, timeout=5,
+                timeout=5,
             )
             return r.stdout.strip() if r.returncode == 0 else ""
         if sys.platform.startswith("linux"):
-            r = subprocess.run(
+            r = run_text(
                 ["secret-tool", "lookup", "service", "pha", "key", name],
-                capture_output=True, text=True, timeout=5,
+                timeout=5,
             )
             return r.stdout.strip() if r.returncode == 0 else ""
         if sys.platform == "win32":
@@ -122,15 +124,15 @@ def _secret_set(name: str, value: str) -> bool:
     store is unavailable (caller falls back to a gitignored .env file)."""
     try:
         if sys.platform == "darwin":
-            r = subprocess.run(
+            r = run_text(
                 ["security", "add-generic-password", "-a", "pha", "-s", name, "-w", value, "-U"],
-                capture_output=True, text=True, timeout=10,
+                timeout=10,
             )
             return r.returncode == 0
         if sys.platform.startswith("linux"):
-            r = subprocess.run(
+            r = run_text(
                 ["secret-tool", "store", "--label=pha", "service", "pha", "key", name],
-                input=value + "\n", capture_output=True, text=True, timeout=10,
+                input=value + "\n", timeout=10,
             )
             return r.returncode == 0
         if sys.platform == "win32":

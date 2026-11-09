@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from .config import source_checkout_root
+from .subproc import run_text, run_utf8, utf8_child_env
 
 
 PLUGIN_PACKAGE = "@personal-historical-archive/dsh-pha"
@@ -138,10 +139,8 @@ def detect_running_profile(home: Path | None = None) -> str | None:
     if not names:
         return None
     try:
-        proc = subprocess.run(
+        proc = run_text(
             ["ps", "-Ao", "args="],
-            capture_output=True,
-            text=True,
             timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
@@ -250,11 +249,9 @@ def ensure_plugin_link(profile: Path, payload: Path) -> Path:
     dest = profile_plugin_link(profile)
     pnpm = shutil.which("pnpm")
     if pnpm and (profile / "pnpm-workspace.yaml").is_file():
-        proc = subprocess.run(
+        proc = run_utf8(
             [pnpm, "add", str(payload)],
             cwd=str(profile),
-            capture_output=True,
-            text=True,
             timeout=180,
         )
         if proc.returncode == 0:
@@ -564,9 +561,8 @@ def install_after_tool_update(archive_dir: str | None = None,
         argv += ["--project-root", str(project_root)]
     if archive_dir:
         argv += ["--archive-dir", str(archive_dir)]
-    env = dict(os.environ)
-    env["PHA_NO_UPDATE_CHECK"] = "1"
-    proc = subprocess.run(argv, capture_output=True, text=True, env=env, timeout=300, **kwargs)
+    env = utf8_child_env({"PHA_NO_UPDATE_CHECK": "1"})
+    proc = run_utf8(argv, env=env, timeout=300, **kwargs)
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()
         raise ViewError(detail or "pha view install failed")

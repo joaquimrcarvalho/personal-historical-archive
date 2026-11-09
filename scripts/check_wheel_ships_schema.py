@@ -65,7 +65,8 @@ def build_wheel(out):
             if probe.returncode != 0:
                 continue
         print("$", " ".join(cmd), flush=True)
-        proc = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True)
+        proc = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True,
+                              encoding="utf-8", errors="replace")
         if proc.returncode == 0:
             return name
         last = proc.stdout + proc.stderr
@@ -82,7 +83,8 @@ def probe_load(unpacked, tmp_path):
         "print('title=' + _schema()['title'])"
     )
     return subprocess.run([sys.executable, "-c", code], cwd=tmp_path,
-                          env=env, text=True, capture_output=True)
+                          env=env, text=True, capture_output=True,
+                          encoding="utf-8", errors="replace")
 
 
 def main():

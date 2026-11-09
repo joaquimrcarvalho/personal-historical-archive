@@ -12,6 +12,8 @@ from typing import Any, Sequence
 
 import httpx
 
+from .subproc import run_text
+
 
 class ModelError(RuntimeError):
     pass
@@ -83,9 +85,9 @@ def _login_shell_path(timeout_s: float = 8.0) -> str | None:
         'printf "\\n__PHA_PATH_START__\\n%s\\n__PHA_PATH_END__\\n" "$PATH"'
     )
     try:
-        proc = subprocess.run(
+        proc = run_text(
             [shell, "-l", "-i", "-c", probe],
-            capture_output=True, text=True, timeout=timeout_s,
+            timeout=timeout_s,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None

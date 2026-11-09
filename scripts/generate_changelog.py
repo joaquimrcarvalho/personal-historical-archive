@@ -56,7 +56,8 @@ def _git_log(since: str) -> str:
     proc = subprocess.run(
         ["git", "log", "--no-merges", "--pretty=format:%H%x1f%s%x1f%b%x1e",
          f"{since}..HEAD"],
-        cwd=ROOT, capture_output=True, text=True,
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+        errors="replace",
     )
     if proc.returncode:
         raise SystemExit(proc.stderr.strip() or "git log failed")

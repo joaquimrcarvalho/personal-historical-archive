@@ -119,7 +119,16 @@ def build_location(cfg: "Config") -> dict:
     # project whose config.yaml defines the engines/models. Together they make a
     # recorded command independent of the shell's cwd and of any machine-wide
     # pha configuration — which is the whole point for an agent in a bare shell.
-    env = {"PHA_HOME": str(cfg.root), "PHA_ARCHIVE_DIR": archive_dir}
+    # The two UTF-8 keys do the same for the child's stdio: a client that spawns
+    # pha (MCP stdio, the DSH plugin, a recorded hand-off command) decodes
+    # UTF-8, so a Windows ANSI code page must not encode accented page text
+    # (see subproc.py).
+    env = {
+        "PHA_HOME": str(cfg.root),
+        "PHA_ARCHIVE_DIR": archive_dir,
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+    }
     base = [command] if command else [python, "-m", "personal_historical_archive"]
 
     def entry(*args: str) -> dict:

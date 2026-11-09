@@ -27,6 +27,8 @@ def changed_files(base: str, head: str) -> set[str]:
         ["git", "diff", "--name-only", f"{base}...{head}"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if proc.returncode != 0:
         raise SystemExit(proc.stderr.strip() or "git diff failed")

@@ -61,6 +61,10 @@ def test_location_records_a_path_proof_fallback(tmp_path):
     # so a recorded command does not depend on cwd or a machine-wide config
     assert pha["env"]["PHA_ARCHIVE_DIR"] == str(cfg.archive_dir)
     assert pha["env"]["PHA_HOME"] == str(cfg.root)
+    # Windows ANSI code pages must not encode the child's stdio: every client
+    # that spawns the recorded command decodes UTF-8.
+    assert pha["env"]["PYTHONUTF8"] == "1"
+    assert pha["env"]["PYTHONIOENCODING"] == "utf-8"
     assert rec["archive_dir"] == str(cfg.archive_dir)
     assert rec["hostname"]
 
@@ -134,7 +138,7 @@ def test_the_recorded_command_runs_in_a_bare_shell(tmp_path):
 
     proc = subprocess.run(
         [*rec["pha"]["module"], "info", "--json"],
-        capture_output=True, text=True, cwd="/",
+        capture_output=True, text=True, encoding="utf-8", cwd="/",
         env={**rec["pha"]["env"], "PHA_NO_UPDATE_CHECK": "1"},  # note: no PATH
     )
     assert proc.returncode == 0, proc.stderr

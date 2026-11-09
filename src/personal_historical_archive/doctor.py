@@ -25,6 +25,7 @@ import subprocess
 from typing import Any
 
 from .model_client import find_engine_binary
+from .subproc import run_text
 
 # engine key (the `engine:` value in models/<id>.md, also the PAGE_ENGINES
 # key) -> what pha needs to run it. `install`/`verify` are shown when the
@@ -70,7 +71,7 @@ def _run(cmd: list[str], timeout_s: int = _TIMEOUT_S) -> subprocess.CompletedPro
     """Run a probe command. Returns None when the binary is missing;
     otherwise the CompletedProcess (timeouts are folded into it)."""
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+        return run_text(cmd, timeout=timeout_s)
     except FileNotFoundError:
         return None
     except subprocess.TimeoutExpired:

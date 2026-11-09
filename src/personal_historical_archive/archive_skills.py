@@ -2775,10 +2775,15 @@ import re
 import subprocess
 import sys
 
+# `lms` is Node and writes UTF-8; a Windows ANSI code page would mangle model
+# ids and crash on a redirected stdout.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 
 def run_json(argv: list[str]) -> object:
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True)
+        proc = subprocess.run(argv, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace")
     except FileNotFoundError:
         raise SystemExit("lms not found on PATH (LM Studio CLI is not installed)")
     text = (proc.stdout or "").strip()

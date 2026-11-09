@@ -60,6 +60,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .subproc import run_text
+
 WILDCARD = "*"
 
 # Age threshold for a lock with no pid recorded yet. The intended companion
@@ -355,9 +357,9 @@ def _pid_cmdline(pid: int) -> str | None:
         if parts:
             return " ".join(parts)
     try:
-        proc = subprocess.run(
+        proc = run_text(
             ["ps", "-o", "command=", "-p", str(pid)],
-            capture_output=True, text=True, timeout=2,
+            timeout=2,
         )
     except (OSError, subprocess.SubprocessError):
         return None

@@ -39,6 +39,7 @@ from . import location
 from . import handoff_transport as T
 from .config import Config
 from .handoff import HandoffError
+from .subproc import run_text, utf8_child_env
 
 WORKER_LABEL = "com.personal-historical-archive.handoff-worker"
 
@@ -81,7 +82,7 @@ def run_step(cfg: Config, args: list[str], base: list[str] | None = None,
     env = env if env is not None else pha_base(cfg)[1]
     argv = [*base, *args]
     _log(f"$ pha {' '.join(args)}")
-    full = {**os.environ, **env}
+    full = utf8_child_env(env)
     try:
         return subprocess.call(argv, env=full)
     except KeyboardInterrupt:
@@ -301,9 +302,7 @@ def worker_status(cfg: Config) -> dict:
     running = False
     detail = ""
     if installed and sys.platform == "darwin":
-        proc = subprocess.run(
-            ["launchctl", "print", f"{_gui_target()}/{WORKER_LABEL}"],
-            capture_output=True, text=True)
+        proc = run_text(["launchctl", "print", f"{_gui_target()}/{WORKER_LABEL}"])
         running = proc.returncode == 0
         if not running:
             lines = (proc.stderr or "").strip().splitlines()
@@ -315,12 +314,10 @@ def worker_status(cfg: Config) -> dict:
 
 def _bootstrap_load(path: Path) -> bool:
     """`launchctl bootstrap` (macOS 10.11+) with the legacy `load -w` fallback."""
-    new = subprocess.run(["launchctl", "bootstrap", _gui_target(), str(path)],
-                         capture_output=True, text=True)
+    new = run_text(["launchctl", "bootstrap", _gui_target(), str(path)])
     if new.returncode == 0:
         return True
-    legacy = subprocess.run(["launchctl", "load", "-w", str(path)],
-                            capture_output=True, text=True)
+    legacy = run_text(["launchctl", "load", "-w", str(path)])
     if legacy.returncode != 0:
         raise HandoffError(
             f"could not start the worker: {legacy.stderr.strip() or legacy.stdout.strip()}"
@@ -330,10 +327,8 @@ def _bootstrap_load(path: Path) -> bool:
 
 def _bootstrap_remove(path: Path) -> bool:
     service = f"{_gui_target()}/{WORKER_LABEL}"
-    new = subprocess.run(["launchctl", "bootout", service],
-                         capture_output=True, text=True)
+    new = run_text(["launchctl", "bootout", service])
     if new.returncode == 0:
         return True
-    legacy = subprocess.run(["launchctl", "unload", "-w", str(path)],
-                            capture_output=True, text=True)
+    legacy = run_text(["launchctl", "unload", "-w", str(path)])
     return legacy.returncode == 0

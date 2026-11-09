@@ -33,6 +33,8 @@ from pathlib import Path
 
 import yaml
 
+from .subproc import run_utf8, utf8_child_env
+
 # --------------------------------------------------------------------------- contract
 
 #: hooks a filter can be attached to, and the envelope `kind` each carries
@@ -327,9 +329,9 @@ def _invoke_subprocess(f: Filter, value, ctx: dict, *, expected_kind: str,
             argv = [sys.executable, "-m", "personal_historical_archive.filter_api",
                     "--input", str(in_file), "--output", str(out_file)]
         try:
-            proc = subprocess.run(
-                argv, capture_output=True, text=True, timeout=f.timeout_s,
-                cwd=str(f.path), env=dict(os.environ),
+            proc = run_utf8(
+                argv, timeout=f.timeout_s,
+                cwd=str(f.path), env=utf8_child_env(),
             )
         except subprocess.TimeoutExpired as e:
             raise FilterError(f"filter {f.name!r} timed out after {f.timeout_s:g}s") from e

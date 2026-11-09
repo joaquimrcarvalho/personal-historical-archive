@@ -155,7 +155,7 @@ def test_run_tesseract_builds_command_and_returns_stdout(monkeypatch):
         stdout = "SIGILLVM\n"
         stderr = ""
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, **kwargs):
         calls.append(cmd)
         return Proc()
 
@@ -175,7 +175,7 @@ def test_run_tesseract_defaults_to_no_lang_and_no_psm(monkeypatch):
         stdout = "text"
         stderr = ""
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, **kwargs):
         calls.append(cmd)
         return Proc()
 
@@ -185,7 +185,7 @@ def test_run_tesseract_defaults_to_no_lang_and_no_psm(monkeypatch):
 
 
 def test_run_tesseract_raises_when_not_installed(monkeypatch):
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, **kwargs):
         raise FileNotFoundError("no tesseract")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -215,7 +215,7 @@ def test_run_liteparse_builds_command_and_returns_stdout(monkeypatch):
         stdout = "parsed text\n"
         stderr = ""
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, **kwargs):
         calls.append(cmd)
         return Proc()
 
@@ -233,7 +233,7 @@ def test_run_liteparse_defaults_to_no_lang_and_no_dpi(monkeypatch):
         stdout = "text"
         stderr = ""
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, **kwargs):
         calls.append(cmd)
         return Proc()
 
@@ -243,7 +243,7 @@ def test_run_liteparse_defaults_to_no_lang_and_no_dpi(monkeypatch):
 
 
 def test_run_liteparse_raises_when_not_installed(monkeypatch):
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, **kwargs):
         raise FileNotFoundError("no lit")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -275,7 +275,7 @@ def test_run_liteparse_format_and_target_page(monkeypatch):
         stdout = '{"total_pages": 1}'
         stderr = ""
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, **kwargs):
         calls.append(cmd)
         return Proc()
 
@@ -599,7 +599,7 @@ def test_run_liteparse_no_ocr_flag(monkeypatch):
         stdout = "text"
         stderr = ""
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, **kwargs):
         calls.append(cmd)
         return Proc()
 
@@ -613,7 +613,7 @@ def test_login_shell_path_parses_markers(monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/zsh")
     monkeypatch.delenv("PHA_NO_LOGIN_PATH", raising=False)
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, **kwargs):
         assert cmd[0] == "/bin/zsh"
         assert "-l" in cmd and "-i" in cmd
         return subprocess.CompletedProcess(
@@ -630,7 +630,7 @@ def test_login_shell_path_ignores_rc_noise(monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/zsh")
     monkeypatch.delenv("PHA_NO_LOGIN_PATH", raising=False)
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, **kwargs):
         return subprocess.CompletedProcess(
             cmd, 0,
             stdout="noise\n__PHA_PATH_START__\n/one\n__PHA_PATH_END__\nmore\n",
@@ -654,8 +654,8 @@ def test_login_shell_path_timeout_returns_none(monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/zsh")
     monkeypatch.delenv("PHA_NO_LOGIN_PATH", raising=False)
 
-    def boom(cmd, capture_output, text, timeout):
-        raise subprocess.TimeoutExpired(cmd, timeout)
+    def boom(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
 
     monkeypatch.setattr(mc.subprocess, "run", boom)
     assert mc._login_shell_path() is None

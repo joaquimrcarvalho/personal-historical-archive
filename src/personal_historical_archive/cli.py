@@ -35,6 +35,7 @@ from .ingest import (
 from .model_client import ModelClient, ModelError
 from .filters import FilterError
 from .sidecar import resolve_sidecar
+from .subproc import harden_stdio, run_text, run_utf8, utf8_child_env
 from .doctor import ENGINES as DOCTOR_ENGINES
 
 
@@ -1146,7 +1147,7 @@ def _open_with_os_default(path: Path) -> None:
         return
     opener = "open" if sys.platform == "darwin" else "xdg-open"
     try:
-        r = subprocess.run([opener, str(path)], capture_output=True, text=True, timeout=30)
+        r = run_text([opener, str(path)], timeout=30)
     except FileNotFoundError:
         print(f"no '{opener}' opener on this system — open {path} yourself", file=sys.stderr)
         sys.exit(1)
@@ -4087,15 +4088,11 @@ def _whatsnew_after_update(old_version: str) -> str:
     The running process still holds the old package, so spawn the same
     interpreter in a fresh process; the files on disk are already updated.
     """
-    import os
-    import subprocess
-
-    env = dict(os.environ)
-    env["PHA_NO_UPDATE_CHECK"] = "1"
-    proc = subprocess.run(
+    env = utf8_child_env({"PHA_NO_UPDATE_CHECK": "1"})
+    proc = run_utf8(
         [sys.executable, "-m", "personal_historical_archive",
          "whatsnew", "--since", old_version],
-        capture_output=True, text=True, env=env,
+        env=env,
     )
     if proc.returncode == 0 and proc.stdout.strip():
         return proc.stdout
@@ -4111,18 +4108,13 @@ def _skills_after_update(archive_dir: str | None) -> str:
     touched and reports the ones they edited — the archive's copy of a skill is
     never overwritten against their wishes.
     """
-    import os
-    import subprocess
-
     if not archive_dir:
         return ""  # no configured archive: nothing to seed, and no default to edit
-    env = dict(os.environ)
-    env["PHA_NO_UPDATE_CHECK"] = "1"
-    env["PHA_ARCHIVE_DIR"] = archive_dir
-    proc = subprocess.run(
+    env = utf8_child_env({"PHA_NO_UPDATE_CHECK": "1", "PHA_ARCHIVE_DIR": archive_dir})
+    proc = run_utf8(
         [sys.executable, "-m", "personal_historical_archive",
          "skills", "update", "--json"],
-        capture_output=True, text=True, env=env,
+        env=env,
     )
     if proc.returncode != 0:
         return ""
@@ -4715,6 +4707,7 @@ def _prompt_archive_setup(cfg: Config) -> bool:
 # --------------------------------------------------------------------------- main
 
 def main(argv: list[str] | None = None) -> None:
+    harden_stdio()
     cfg = Config.load()
 
     raw_argv = list(sys.argv[1:] if argv is None else argv)

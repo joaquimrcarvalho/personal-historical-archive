@@ -44,6 +44,7 @@ from .config import Config
 from .handoff import (HANDOFF_FORMAT, MANIFEST_NAME, RESULT_NAME, HandoffError,
                       handoff_dir)
 from .model_client import find_engine_binary
+from .subproc import run_text
 
 PAYLOAD_SUFFIX = ".pha-handoff.tgz"
 RESULT_SUFFIX = ".pha-result.tgz"
@@ -100,7 +101,7 @@ def require_tailscale() -> str:
 
 def _run(cmd: list[str], timeout: float | None = None) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return run_text(cmd, timeout=timeout)
     except FileNotFoundError as e:  # racy uninstall between resolve and run
         raise TransportError(f"could not run {Path(cmd[0]).name}: {e}") from e
     except subprocess.TimeoutExpired as e:
