@@ -17,6 +17,7 @@ them*.
 | explaining pha to the archive owner | `PIPELINE.md` |
 | a release or version bump | `RELEASING.md` |
 | filters / bibliography / web UI designs | `FILTERS_PLAN.md`, `BIBLIOGRAPHY_PLAN.md`, `WEB_INTERFACE_PLAN.md` |
+| proving which LM Studio model is local vs remote, or that a moved model store still works | `OPERATING.md` §4 (checkout tool `scripts/lmstudio_smoke.py`) |
 
 ## Commits, pull requests and GitHub comments
 

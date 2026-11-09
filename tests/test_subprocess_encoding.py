@@ -17,6 +17,7 @@ explicit encoding.
 from __future__ import annotations
 
 import ast
+import importlib.util
 import io
 import locale
 import os
@@ -32,6 +33,7 @@ from personal_historical_archive import subproc, view
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src" / "personal_historical_archive"
 SKILLS = REPO_ROOT / "skills"
+SCRIPTS = REPO_ROOT / "scripts"
 
 # The child writes U+2014 EM DASH as raw UTF-8 bytes: 0xe2 is the byte whose
 # cp950 decode failure appeared in the reported traceback.
@@ -287,6 +289,52 @@ def test_cli_update_helpers_spawn_utf8_children(monkeypatch):
     assert captured[1][1]["env"]["PHA_ARCHIVE_DIR"] == "/tmp/pha-archive"
 
 
+def _load_repo_script(name: str):
+    """Import a source-checkout script under ``scripts/`` as a module."""
+    path = SCRIPTS / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"pha_script_{name}", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="the fake lms stand-in is a POSIX shell script"
+)
+def test_lmstudio_smoke_reads_lms_json_as_utf8(tmp_path, monkeypatch):
+    """The LM Studio dev tool drives Node's `lms` CLI; its JSON is UTF-8.
+
+    Before the encoding fix it used plain text mode, so on a cp950 Windows box
+    ``lms_json`` died exactly like the ``pha update``/pnpm failure.  This pins
+    the dev tool's own child call, not just the pha package.
+    """
+    module = _load_repo_script("lmstudio_smoke")
+
+    payload = tmp_path / "fake_lms.py"
+    payload.write_text(
+        "import json, sys\n"
+        "sys.stdout.buffer.write(json.dumps("
+        "{'models': [{'modelKey': 'qwen \u2014 local'}]}, ensure_ascii=False"
+        ").encode())\n",
+        encoding="utf-8",
+    )
+    exe = tmp_path / "lms"
+    exe.write_text(
+        "#!/bin/sh\n"
+        f"exec {shlex.quote(sys.executable)} {shlex.quote(str(payload))}\n",
+        encoding="utf-8",
+    )
+    exe.chmod(0o755)
+
+    monkeypatch.setattr(locale, "getencoding", lambda: "cp950")
+    monkeypatch.setattr(module, "lms_executable", lambda: str(exe))
+
+    assert module.lms_json(["ls", "--json"]) == {
+        "models": [{"modelKey": "qwen \u2014 local"}]
+    }
+
+
 # ---------------------------------------------------------------------------
 # 8. Static guard: no text-mode subprocess call without an explicit encoding
 
@@ -347,15 +395,17 @@ def _embedded_python_scripts(path: Path) -> list[tuple[str, int, str]]:
 
 
 def test_no_text_mode_subprocess_call_without_encoding():
-    """No text-mode subprocess call anywhere in the shipped code lacks encoding.
+    """No text-mode subprocess call anywhere in the repo code lacks encoding.
 
     Covers ``src/personal_historical_archive``, the standalone scripts under
-    ``skills/`` and the Python programs embedded in ``archive_skills.py``.  The
-    reported crash was a ``pnpm`` call here; this guard stops the next one.
+    ``skills/`` and ``scripts/``, and the Python programs embedded in
+    ``archive_skills.py``.  The reported crash was a ``pnpm`` call; the
+    LM Studio dev tool hit the same defect through Node's ``lms`` CLI, so
+    ``scripts/`` is included too.
     """
     problems: list[str] = []
     scanned = 0
-    for root in (SRC, SKILLS):
+    for root in (SRC, SKILLS, SCRIPTS):
         for path in sorted(root.rglob("*.py")):
             scanned += 1
             source = path.read_text(encoding="utf-8")

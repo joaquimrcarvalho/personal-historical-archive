@@ -297,6 +297,13 @@ Model notes for a new machine:
   and run `python3 skills/lmstudio-model-locality/scripts/lmstudio_locality.py --model <id>`;
   if the local copy exists but is not loaded, pre-load it under a unique
   identifier so the request cannot be routed to another machine.
+  For the full picture, the source checkout also ships
+  [`scripts/lmstudio_smoke.py`](scripts/lmstudio_smoke.py): `--list` prints
+  every model as `this device` or `remote/unknown` together with its loaded
+  state; a run with `--model-store /Volumes/SSD/models --archive-dir <archive>`
+  proves the moved weights are on the mounted disk and that a local copy still
+  does real embedding/vision work; `--pin-local` forces the local copy. It is a
+  checkout-only dev tool (the wheel does not include `scripts/`).
 - **Picking a palaeographer per collection**: put a `palaeographer` file (the
   model id) next to a document/collection;
   `dropbox/collections/COLX/palaeographer -> minimax-vl` for MiniMax, or
@@ -420,7 +427,9 @@ installed by anyone who sets up agents from the repo:
   with LM Studio and LM Link, decide whether the model a `pha scan`/`pha edit`
   will use is local or remote (`lms ls --json`, `lms ps --json`,
   `lms link status --json`), and pre-load a local copy under a unique
-  identifier when the same model is already loaded on another device.
+  identifier when the same model is already loaded on another device. The
+  checkout also ships `scripts/lmstudio_smoke.py`, a fuller local-vs-remote and
+  model-store check (see the LM Studio notes under *New machine setup*).
 - Zotero bibliography — [`skills/pha-zotero-bibliography/SKILL.md`](skills/pha-zotero-bibliography/SKILL.md):
   import a PDF from Zotero with its bibliographic sidecar — the local API gives
   both the record (MODS) and the attachment's own path, with an RDF export as the

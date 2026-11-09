@@ -215,6 +215,14 @@ what to do about them.
   `pha doctor` (which lists the keys and the lock dir) before starting a pass.
 - **Quit LM Studio when not ingesting** — its model page-out is what eats disk
   space. Do not leave a vision + editor model loaded at the same time.
+- **Prove local vs remote before a long pass.** LM Link can serve a request
+  from another computer without the API saying so. The `lmstudio-model-locality`
+  skill gives the quick per-model answer; for the full check, the source
+  checkout ships `scripts/lmstudio_smoke.py`: `--list` prints every model as
+  `this device` or `remote/unknown` with its loaded state, and a full run
+  (`--model-store <dir> --archive-dir <archive>`) proves the external model
+  store is mounted and that a local copy really does embedding/vision work;
+  `--pin-local` forces the local copy. The wheel does not ship `scripts/`.
 - **A stalled model request is bounded by `deadline_s`, and is not a page
   failure.** `timeout_s` (in a palaeographer/editor/encoder file) is
   per-OPERATION, and a provider that trickles keep-alive bytes resets it, so a

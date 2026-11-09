@@ -94,7 +94,10 @@ Explain each step in plain language before doing it.
   loaded on another *as if it were local*), the address alone cannot tell pha
   where the model really runs. Say so explicitly in the model file, or pha may
   think two models are on different machines when they are not. The bundled
-  `lmstudio-model-locality` skill covers exactly this case.
+  `lmstudio-model-locality` skill covers exactly this case, and the checkout's
+  `python3 scripts/lmstudio_smoke.py --list` shows per model whether it is on
+  this device or reachable only through LM Link (a full run with
+  `--model-store`/`--archive-dir` then proves the local copy does the work).
 
 ### Why this is a good arrangement
 
