@@ -234,6 +234,24 @@
           "commit": "e805c0419956"
         }
       ]
+    },
+    "0.47.2": {
+      "date": "2026-11-12",
+      "summary": "The PHA view explains a version mismatch instead of dumping argparse usage when the installed pha is older than the view, and ships an LM Studio model-store smoke test.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "dsh-pha",
+          "text": "name the cure when the installed pha is older than the view",
+          "commit": "0be5e9d0bcb0"
+        },
+        {
+          "type": "feat",
+          "scope": "scripts",
+          "text": "add the LM Studio model-store smoke test",
+          "commit": "8dac8bcfee71"
+        }
+      ]
     }
   }
 }
