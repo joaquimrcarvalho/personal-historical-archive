@@ -114,6 +114,11 @@ function apply(ctx, config) {
   let archiveDir = null
   let dbPath = null
   let discoverPromise = null
+  // Whether the INSTALLED pha supports `open --source` (0.47.0+). The view ships
+  // with the CLI in one release, but a profile can link a newer view beside an
+  // older installed pha — then argparse answers "unrecognized arguments: --source"
+  // and the reader gets a wall of usage text. Probe once, lazily.
+  let sourceSupported = null
 
   async function firstResolvable(cands) {
     for (const cand of cands) {
@@ -391,7 +396,28 @@ function apply(ctx, config) {
   // The relative form is resolved here from the discovered archive dir, and pha
   // repeats the containment check, so neither form can open anything outside the
   // archive tree the view lists.
+  function unsupportedSourceMessage() {
+    return "this pha cannot open a document's source: `pha open --source` needs pha " +
+      '0.47.0 or newer, and the installed `pha` is older. Run `pha update`, then restart ' +
+      'the harness — or `pha view install` to link the view that matches this CLI.'
+  }
+
+  // Does the installed pha know `open --source`? Probed once from its own help,
+  // which is cheap and does not touch the archive.
+  async function openSourceSupported() {
+    if (sourceSupported !== null) return sourceSupported
+    try {
+      const r = await phaRun(['open', '--help'])
+      sourceSupported = r.code === 0 &&
+        /--source\b/.test(String(r.out || '') + String(r.err || ''))
+    } catch (e) {
+      sourceSupported = false
+    }
+    return sourceSupported
+  }
+
   async function runOpenSource(params) {
+    if (!(await openSourceSupported())) throw new Error(unsupportedSourceMessage())
     const argv = ['open', '--source']
     if (params.doc) {
       argv.push(String(params.doc))
@@ -414,7 +440,11 @@ function apply(ctx, config) {
     }
     const r = await phaRun(argv)
     if (r.code !== 0) {
-      throw new Error('pha open --source failed: ' + String(r.err || r.out).slice(0, 400))
+      const said = String(r.err || r.out)
+      // A CLI older than the probe believes (or a renamed flag): name the cure,
+      // never hand back the argparse usage wall.
+      if (/unrecognized arguments:.*--source/.test(said)) throw new Error(unsupportedSourceMessage())
+      throw new Error('pha open --source failed: ' + said.slice(0, 400))
     }
     const out = String(r.out || '').trim()
     const m = out.match(/^opened:\s*(.+)$/m)

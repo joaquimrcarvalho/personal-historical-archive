@@ -208,9 +208,12 @@ const srcCtx = {
     resolveExecutable: async (cand) => (cand === 'pha' ? '/usr/bin/pha' : null),
     spawn: (spec) => {
       srcSpawns.push(spec)
+      const isHelp = spec.argv[1] === 'open' && spec.argv[2] === '--help'
       const out = spec.argv.includes('info')
         ? JSON.stringify({ archive_dir: '/tmp/pha-src-archive', db_path: '/tmp/pha-src-archive/archive.db', configured: true })
-        : 'opened: ' + spec.argv[spec.argv.length - 1]
+        : isHelp
+          ? 'usage: pha open [-h] [--edited] [--editor EDITOR] [--source] doc [page]'
+          : 'opened: ' + spec.argv[spec.argv.length - 1]
       const reader = (text) => ({ readFrom: () => ({ text, nextOffset: text.length, lossy: false }) })
       return {
         collected: { stdout: reader(out), stderr: reader('') },
@@ -235,31 +238,32 @@ const sourceRoute = srcRoutes.find((r) => r.path === '/pha/source')
 check(!!sourceRoute && typeof sourceRoute.handler === 'function',
   'route /pha/source is registered with a handler')
 
-const fetchSourceJson = async (url) => {
+const fetchJsonRoute = async (route, url) => {
   let body = ''
   const res = new Writable({ write(chunk, enc, cb) { body += chunk; cb() } })
   let status = null
   res.writeHead = (code) => { status = code }
   const finished = new Promise((resolve) => res.on('finish', resolve))
-  sourceRoute.handler({ url }, res)
+  route.handler({ url }, res)
   await finished
   let data = null
   try { data = JSON.parse(body) } catch (e) { data = null }
   return { status, body: data }
 }
+const fetchSourceJson = (url) => fetchJsonRoute(sourceRoute, url)
 
 if (sourceRoute) {
   const beforeDoc = srcSpawns.length
   const doc = await fetchSourceJson('/pha/source?doc=18')
   check(doc.status === 200 && doc.body && doc.body.ok === true, 'the doc form answers ok')
-  const docArgv = srcSpawns.slice(beforeDoc).map((s) => s.argv).find((a) => a.includes('open'))
-  check(!!docArgv && docArgv.includes('--source') && docArgv[docArgv.length - 1] === '18',
+  const docArgv = srcSpawns.slice(beforeDoc).map((s) => s.argv).find((a) => a[1] === 'open' && a[2] === '--source')
+  check(!!docArgv && docArgv[docArgv.length - 1] === '18',
     'the doc form runs `pha open --source <doc>`')
 
   const beforeRel = srcSpawns.length
   const rel = await fetchSourceJson('/pha/source?under=dropbox&rel=collections/COLX/d.pdf')
   check(rel.status === 200 && rel.body && rel.body.ok === true, 'the dropbox-relative form answers ok')
-  const relArgv = srcSpawns.slice(beforeRel).map((s) => s.argv).find((a) => a.includes('open'))
+  const relArgv = srcSpawns.slice(beforeRel).map((s) => s.argv).find((a) => a[1] === 'open' && a[2] === '--source')
   check(!!relArgv && relArgv[relArgv.length - 1] === '/tmp/pha-src-archive/dropbox/collections/COLX/d.pdf',
     'the dropbox-relative form opens the item under dropbox/')
 
@@ -276,6 +280,54 @@ if (sourceRoute) {
   check(srcSpawns.length === beforeUnder, 'the unknown `under` spawns nothing')
 }
 srcPlugin.dispose()
+
+// 4e. A view NEWER than the installed CLI: `pha open --source` does not exist in
+// 0.46.x, so argparse answers "unrecognized arguments: --source" and prints the
+// whole usage. That was the reported "nothing happens" in the PHA view — the route
+// must name the cure (`pha update`), not hand back the usage wall.
+const oldSpawns = []
+const oldRoutes = []
+const oldCtx = {
+  subprocess: {
+    resolveExecutable: async (cand) => (cand === 'pha' ? '/usr/bin/pha' : null),
+    spawn: (spec) => {
+      oldSpawns.push(spec)
+      const isHelp = spec.argv[1] === 'open' && spec.argv[2] === '--help'
+      const out = isHelp
+        ? 'usage: pha open [-h] [--edited] [--editor EDITOR] doc [page]'
+        : 'usage: pha [-h] [--version] {scan,...} ...\npha: error: unrecognized arguments: --source'
+      const reader = (text) => ({ readFrom: () => ({ text, nextOffset: text.length, lossy: false }) })
+      return {
+        collected: { stdout: reader(out), stderr: reader(isHelp ? '' : out) },
+        done: Promise.resolve({ exitCode: isHelp ? 0 : 2, signal: null }),
+      }
+    },
+  },
+  effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : () => {} },
+  tools: { register: () => () => {} },
+  inject: (deps, fn) => {
+    if (deps.includes('webServer')) {
+      fn({
+        webServer: { register: (r) => { oldRoutes.push(r); return () => {} } },
+        get: () => undefined,
+        effect: (f) => f(),
+      })
+    }
+  },
+}
+const oldPlugin = mod.apply(oldCtx, { projectRoot: '/tmp/pha-checkout' })
+const oldSourceRoute = oldRoutes.find((r) => r.path === '/pha/source')
+check(!!oldSourceRoute, 'route /pha/source is registered for the old-CLI case too')
+if (oldSourceRoute) {
+  const oldRes = await fetchJsonRoute(oldSourceRoute, '/pha/source?doc=173')
+  check(oldRes.status === 500 && oldRes.body && oldRes.body.ok === false,
+    'an old CLI refuses instead of opening something else')
+  check(/pha update/.test(String(oldRes.body && oldRes.body.error)),
+    'an old CLI gets an actionable "run pha update" message, not the argparse usage')
+  check(!oldSpawns.some((s) => s.argv[1] === 'open' && s.argv[2] === '--source'),
+    'an old CLI is never asked to run `open --source`')
+}
+oldPlugin.dispose()
 
 // 5. The client half stays loadable as a harness client module.
 const bundle = readFileSync(join(root, 'lib', 'client.js'), 'utf8')

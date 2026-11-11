@@ -240,6 +240,13 @@ The CLI half is `pha open --source DOC|PATH`: `DOC` is a document id or filename
 images). It never edits anything; like every other `pha open` form, it only hands a
 validated path to the OS.
 
+`--source` needs **pha 0.47.0 or newer**, and a profile can link a newer view beside an
+older installed CLI (the view is linked separately from the tool). When that happens the
+route does not hand back argparse's usage wall: it probes `pha open --help` once and
+answers *"`pha open --source` needs pha 0.47.0 or newer … run `pha update`"*. The cure is
+`pha update` (or `pha view install`, to link the view that matches the installed CLI), then
+a harness restart.
+
 ### The inbox (parked documents)
 
 The left pane lists the archive's `inbox/` — the sibling of `dropbox/` where documents
