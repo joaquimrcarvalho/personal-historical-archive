@@ -282,6 +282,18 @@
           "commit": "97c09f795ace"
         }
       ]
+    },
+    "0.49.2": {
+      "date": "2026-11-13",
+      "summary": "Keep the page reader visible: the document pane switches between Reading and its own Records as peer tabs",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "dsh-pha",
+          "text": "keep the page reader visible behind a Reading/Records tab",
+          "commit": "02389128844b"
+        }
+      ]
     }
   }
 }
