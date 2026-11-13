@@ -294,6 +294,18 @@
           "commit": "02389128844b"
         }
       ]
+    },
+    "0.49.3": {
+      "date": "2026-11-13",
+      "summary": "Records replace the page list, not the page reader: browse a document by page or by its encoder rows while the page context stays visible",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "dsh-pha",
+          "text": "records replace the page list, not the page reader",
+          "commit": "2e5b6434dbee"
+        }
+      ]
     }
   }
 }
