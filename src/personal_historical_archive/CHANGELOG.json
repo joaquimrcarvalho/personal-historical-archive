@@ -306,6 +306,18 @@
           "commit": "2e5b6434dbee"
         }
       ]
+    },
+    "0.49.4": {
+      "date": "2026-11-13",
+      "summary": "Records list gets a real, height-resizable panel above the reading pane; draggable splitter between browsing and reading",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "dsh-pha",
+          "text": "give the records list a real, resizable panel",
+          "commit": "cb9fb006dbe9"
+        }
+      ]
     }
   }
 }
