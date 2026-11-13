@@ -228,6 +228,20 @@ def test_records_degrades_on_db_without_records_table(tmp_path, capsys):
         ro.close()
 
 
+def test_records_cli_page_filter(tmp_path, capsys):
+    """`pha records --page N` is the page reader's lookup: records that START there."""
+    cfg = _make_cfg(tmp_path)
+    _seed(cfg)
+
+    cli.cmd_records(cfg, _args(page=69, json=True))
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 1
+    assert out["records"][0]["page_no"] == 69
+
+    cli.cmd_records(cfg, _args(page=999, json=True))
+    assert json.loads(capsys.readouterr().out)["total"] == 0
+
+
 def test_record_listing_page_filter_and_public_projection(tmp_path):
     """The page filter selects records that START there, and `record_public`
     is the single projection shared by CLI/serve/view."""

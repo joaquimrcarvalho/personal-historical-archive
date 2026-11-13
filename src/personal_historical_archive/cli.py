@@ -713,6 +713,7 @@ def cmd_records(cfg: Config, args) -> None:
                 record_kind=getattr(args, "record_kind", None),
                 fields=fields or None,
                 ignore_case=bool(getattr(args, "ignore_case", False)),
+                page=getattr(args, "page", None),
             )
         except ValueError as exc:
             # An invalid --field name is a usage error, not a crash.
@@ -5069,6 +5070,8 @@ def main(argv: list[str] | None = None) -> None:
                     help="max records to show (default 20; capped at 1000)")
     rr.add_argument("--offset", type=int, default=0,
                     help="skip the first N matching records (pagination)")
+    rr.add_argument("--page", type=int, default=None, metavar="P",
+                    help="only records that START on page P (for the page reader)")
     rr.add_argument("--json", action="store_true",
                     help="structured output for agents and the view")
     rr.set_defaults(fn=cmd_records)

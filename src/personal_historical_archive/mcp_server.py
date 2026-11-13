@@ -312,7 +312,7 @@ def make_server(cfg: Config) -> FastMCP:
     def pha_records(document_id: int | None = None, encoder: str | None = None,
                     kind: str | None = None, collection: str | None = None,
                     field: str | None = None, ignore_case: bool = False,
-                    limit: int = 25, offset: int = 0) -> dict:
+                    limit: int = 25, offset: int = 0, page: int | None = None) -> dict:
         """List encoder records — browse encoder output without a text query.
 
         The MCP counterpart of `pha records`: reads the records table directly,
@@ -329,6 +329,7 @@ def make_server(cfg: Config) -> FastMCP:
             ignore_case: match the field value case-insensitively (ASCII).
             limit: maximum records to return (1-500; default 25).
             offset: skip this many matching records (pagination).
+            page: only records that START on this page (for the page reader).
 
         Returns:
             {total, limit, offset, records:[{id, document_id, filename,
@@ -352,7 +353,7 @@ def make_server(cfg: Config) -> FastMCP:
                     conn, limit=limit, offset=offset,
                     document_id=document_id, collection=collection,
                     encoder=encoder, record_kind=kind, fields=fields,
-                    ignore_case=ignore_case,
+                    ignore_case=ignore_case, page=page,
                 )
             except ValueError as exc:
                 return {"error": str(exc)}

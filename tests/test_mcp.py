@@ -436,6 +436,9 @@ def test_pha_records_browses_and_filters(tmp_path):
     assert fns["pha_records"](field="place=malaca")["total"] == 0
     assert fns["pha_records"](field="place=malaca", ignore_case=True)["total"] == 1
     assert fns["pha_records"](document_id=seed["doc2"])["total"] == 1
+    assert fns["pha_records"](page=1)["total"] == 1
+    assert fns["pha_records"](page=2)["total"] == 1
+    assert fns["pha_records"](page=999)["total"] == 0
 
     page = fns["pha_records"](limit=1, offset=2)
     assert page["total"] == 3 and page["limit"] == 1 and len(page["records"]) == 1

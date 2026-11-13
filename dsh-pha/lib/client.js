@@ -818,6 +818,11 @@ const CSS = [
   '.pha-tab-count{opacity:.7;font-size:11px;margin-left:3px}',
   '.pha-rec-more{display:flex;gap:6px;align-items:center;margin-top:6px}',
   '.pha-rec-browser{border-top:1px solid var(--dsw-alias-border-l1,#333);padding-top:4px}',
+  '.pha-rec.sel{background:var(--dsw-alias-bg-layer-2,#e8e8e8);border-color:var(--dsw-alias-border-l2,#999)}',
+  '.pha-record{border:1px solid var(--dsw-alias-border-l1,#333);border-radius:8px;padding:8px 10px;margin-top:8px;background:var(--dsw-alias-bg-layer-1,#fff)}',
+  '.pha-record.sel{border-color:var(--dsw-alias-brand-primary,#0b5fff)}',
+  '.pha-record-h{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px}',
+  '.pha-record .pha-pre{max-height:none;margin:4px 0}',
   // The search-source selector (pages / records / all) sits in the search line but
   // must not grow like the text input does.
   '.pha-select{flex:0 0 auto;min-width:76px;max-width:100px}',
@@ -922,7 +927,7 @@ function PhaView(props) {
   const inputActions = props ? props.inputActions : null
   const inputState = (props && typeof props.useInput === 'function') ? props.useInput((s) => s) : null
   const h = React.createElement
-  const [state, setState] = React.useState(() => seedState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageLoading: false, noteMsg: null, status: null, statusErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null, srcMsg: null, recordMode: false, records: null, recordsTotal: 0, recordsOffset: 0, recordsLimit: 25, recordsErr: null, recordLoading: false, recordFilters: { encoder: '', kind: '', field: '', ignoreCase: false }, recordOpen: null, recordCounts: null, searchSource: 'pages', listMode: 'pages' }, viewBoot))
+  const [state, setState] = React.useState(() => seedState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageLoading: false, noteMsg: null, status: null, statusErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null, srcMsg: null, recordMode: false, records: null, recordsTotal: 0, recordsOffset: 0, recordsLimit: 25, recordsErr: null, recordLoading: false, recordFilters: { encoder: '', kind: '', field: '', ignoreCase: false }, recordCounts: null, searchSource: 'pages', listMode: 'pages', textMode: 'raw', selectedRecordId: null, pageRecords: null, pageRecordsLoading: false, pageRecordsErr: null }, viewBoot))
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -942,6 +947,9 @@ function PhaView(props) {
   // Requests for the archive-wide records list can overlap (type in a filter, click
   // next page): only the newest one may write its answer into state.
   const recordReq = React.useRef(0)
+  // The page pane's records request changes with every page/selection; only the newest
+  // answer may render (a quick page flip otherwise lands on the previous page's rows).
+  const pageRecReq = React.useRef(0)
 
   React.useEffect(() => {
     // The document list first — it is what the user waits for. Notes and the
@@ -1059,7 +1067,7 @@ function PhaView(props) {
     // request is in flight must invalidate that answer, or a late archive page would
     // overwrite this document's rows (the pane would show the wrong record set).
     const token = ++recordReq.current
-    setState((s) => ({ ...s, records: null, recordsTotal: 0, recordsOffset: 0, recordOpen: null, recordsErr: null, recordLoading: true }))
+    setState((s) => ({ ...s, records: null, recordsTotal: 0, recordsOffset: 0, recordsErr: null, recordLoading: true }))
     if (id === null || id === undefined || id === '') {
       setState((s) => ({ ...s, records: [], recordsTotal: 0, recordLoading: false }))
       return
@@ -1112,7 +1120,7 @@ function PhaView(props) {
     const lim = Number(limit) > 0 ? Number(limit) : (Number(state.recordsLimit) || 25)
     const off = Number(offset) > 0 ? Number(offset) : 0
     const token = ++recordReq.current
-    setState((s) => ({ ...s, recordFilters: f, recordsLimit: lim, recordsOffset: off, records: null, recordsTotal: 0, recordLoading: true, recordsErr: null, recordOpen: null }))
+    setState((s) => ({ ...s, recordFilters: f, recordsLimit: lim, recordsOffset: off, records: null, recordsTotal: 0, recordLoading: true, recordsErr: null }))
     try {
       const r = await get(recordsQuery({ encoder: f.encoder, kind: f.kind, field: f.field, ignoreCase: f.ignoreCase }, lim, off))
       // A newer filter/page request landed while this one was in flight: drop the stale
@@ -1149,21 +1157,64 @@ function PhaView(props) {
   // list (and re-reads the selected document's own records).
   function toggleRecords() {
     if (state.recordMode) {
-      setState((s) => ({ ...s, recordMode: false, records: null, recordsTotal: 0, recordsOffset: 0, recordsErr: null, recordOpen: null }))
+      setState((s) => ({ ...s, recordMode: false, records: null, recordsTotal: 0, recordsOffset: 0, recordsErr: null }))
       if (state.selectedId !== null && state.selectedId !== undefined) loadRecords(state.selectedId)
       return
     }
     const filters = Object.assign({ encoder: '', kind: '', field: '', ignoreCase: false }, state.recordFilters || {})
-    setState((s) => ({ ...s, recordMode: true, searchMode: false, hits: null, records: null, recordsTotal: 0, recordsOffset: 0, recordsErr: null, recordOpen: null, recordFilters: filters }))
+    setState((s) => ({ ...s, recordMode: true, searchMode: false, hits: null, records: null, recordsTotal: 0, recordsOffset: 0, recordsErr: null, recordFilters: filters }))
     loadArchiveRecords(filters, 0, state.recordsLimit)
   }
-  // Clicking a row in the archive-wide list selects its document and, when the record
-  // is page-grounded, lands on that page in the reading pane.
+  // The records that START on one page: the reading pane's Record view shows ALL of
+  // them (a page can carry an apparatus section and a document, or several entries),
+  // not just the one clicked in the index.
+  async function loadPageRecords(docId, pageNo) {
+    const token = ++pageRecReq.current
+    if (!docId || !pageNo) {
+      setState((s) => ({ ...s, pageRecords: [], pageRecordsLoading: false, pageRecordsErr: null }))
+      return
+    }
+    setState((s) => ({ ...s, pageRecordsLoading: true, pageRecordsErr: null }))
+    try {
+      const r = await get('/pha/records?doc=' + encodeURIComponent(String(docId)) +
+        '&page=' + encodeURIComponent(String(pageNo)) + '&limit=100')
+      if (token !== pageRecReq.current) return
+      setState((s) => (r && r.ok)
+        ? { ...s, pageRecords: r.records || [], pageRecordsLoading: false, pageRecordsErr: null }
+        : { ...s, pageRecords: [], pageRecordsLoading: false, pageRecordsErr: (r && r.error) || 'could not read the page records' })
+    } catch (e) {
+      if (token !== pageRecReq.current) return
+      setState((s) => ({ ...s, pageRecords: [], pageRecordsLoading: false, pageRecordsErr: String((e && e.message) || e) }))
+    }
+  }
+
+  // Selecting a record is the whole action (like clicking a page number): land on its
+  // start page and show the record(s) for that page in the reading pane. A record with
+  // no page cannot move the reader, but its data can still be shown in place.
+  async function selectRecord(rec) {
+    if (!rec) return
+    const docId = rec.document_id
+    const pageNo = (rec.page_no === null || rec.page_no === undefined) ? null : rec.page_no
+    if (pageNo !== null) {
+      const same = state.pageReq && Number(state.pageReq.doc) === Number(docId) && Number(state.pageReq.page) === Number(pageNo)
+      if (!same) await openPage(pageNo, false, docId)
+      setState((s) => ({ ...s, textMode: 'record', selectedRecordId: rec.id, pageRecords: null, pageRecordsErr: null }))
+      loadPageRecords(docId, pageNo)
+    } else {
+      setState((s) => ({ ...s, textMode: 'record', selectedRecordId: rec.id, pageRecords: [rec], pageRecordsLoading: false, pageRecordsErr: null }))
+    }
+  }
+
+  // A row of the archive-wide Records list: open its document, then behave exactly like
+  // selecting a record in the document's own list.
   async function openRecordTarget(row) {
     if (!row || row.document_id === null || row.document_id === undefined) return
     const id = row.document_id
+    const pageNo = (row.page_no === null || row.page_no === undefined) ? null : row.page_no
     await openDoc(id)
-    if (row.page_no !== null && row.page_no !== undefined) openPage(row.page_no, false, id)
+    if (pageNo !== null) await openPage(pageNo, false, id)
+    setState((s) => ({ ...s, textMode: 'record', selectedRecordId: row.id, pageRecords: null, pageRecordsErr: null }))
+    loadPageRecords(id, pageNo)
   }
 
   async function editSidecar(path) {
@@ -1214,11 +1265,12 @@ function PhaView(props) {
       records: keepRecords ? s.records : null,
       recordsTotal: keepRecords ? s.recordsTotal : 0,
       recordsOffset: keepRecords ? s.recordsOffset : 0,
-      recordOpen: keepRecords ? s.recordOpen : null,
       recordsErr: keepRecords ? s.recordsErr : null,
       recordLoading: keepRecords ? s.recordLoading : false,
-      // Every document opens showing its page list; the records list is one click away.
-      listMode: 'pages',
+      // Every document opens showing its page list and its raw page text; the records
+      // list and record view are one click away.
+      listMode: 'pages', textMode: 'raw', selectedRecordId: null,
+      pageRecords: null, pageRecordsErr: null, pageRecordsLoading: false,
     }))
     const r = await get('/pha/document?doc=' + encodeURIComponent(id))
     setState((s) => ({ ...s, detail: r && r.ok ? { doc: r.doc, pages: r.pages || [], edits: r.edits || [], matched: false } : null }))
@@ -1235,7 +1287,7 @@ function PhaView(props) {
     const vmap = {}
     matched.forEach((hit) => { vmap[hit.page_no] = hit.variant })
     const pages = r && r.ok && r.pages ? r.pages.filter((p) => vmap[p.page_no] !== undefined) : []
-    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null, records: null, recordsTotal: 0, recordsOffset: 0, recordOpen: null, recordsErr: null, recordLoading: false, listMode: 'pages' }))
+    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null, records: null, recordsTotal: 0, recordsOffset: 0, recordsErr: null, recordLoading: false, listMode: 'pages', textMode: 'raw', selectedRecordId: null, pageRecords: null, pageRecordsErr: null, pageRecordsLoading: false }))
     loadPending(id)
     // A search-opened document shows its encoder records too (the pane's block is not
     // specific to the document-list path).
@@ -1472,7 +1524,10 @@ function PhaView(props) {
     // Re-arm the per-variant default: the raw transcription shows as plain text, the
     // edited variant as markdown. An explicit txt/md choice applies to the page on
     // screen only and is dropped when another page is opened.
-    setState((s) => ({ ...s, pageReq: { doc, page: pageNo, edited: !!edited }, plainOverride: null, pageLoading: true, pageErr: null }))
+    setState((s) => ({ ...s, pageReq: { doc, page: pageNo, edited: !!edited }, plainOverride: null, pageLoading: true, pageErr: null,
+      // Opening a page returns to its text (raw or edited); the Records view is
+      // selected explicitly by clicking a record or the Record button.
+      textMode: edited ? 'edited' : 'raw', selectedRecordId: null, pageRecords: null, pageRecordsErr: null }))
     try {
       const r = await get('/pha/page?doc=' + encodeURIComponent(doc) + '&page=' + pageNo + (edited ? '&edited=1' : ''))
       // A failed page request used to blank the pane silently (e.g. --edited with no
@@ -1723,17 +1778,19 @@ function PhaView(props) {
     ))
   })()
 
-  // One row of the per-document Records block: clicking it swaps a one-line excerpt for
-  // the encoder's whole JSON object. The "open page" action only exists for a
-  // page-grounded record — a record with no page must never render a dead link.
-  function recordDocRow(r, docId) {
+  // One row of the per-document Records list. Selecting it is the whole action — like
+  // clicking a page number: land on its start page and show the record(s) for that page
+  // in the reading pane. There is no separate "open page" button and no inline JSON.
+  function recordDocRow(r) {
     const pageNo = (r && r.page_no !== null && r.page_no !== undefined) ? r.page_no : null
-    const open = s.recordOpen !== null && s.recordOpen !== undefined && s.recordOpen === (r && r.id)
+    const selected = s.selectedRecordId !== null && s.selectedRecordId !== undefined && s.selectedRecordId === (r && r.id)
     return h('div', {
-      className: 'pha-rec' + (open ? ' open' : ''),
+      className: 'pha-rec' + (selected ? ' sel' : ''),
       key: 'drec-' + (r && r.id),
-      title: open ? 'click to collapse this record' : 'click to see the whole record as JSON',
-      onClick: () => setState((x) => ({ ...x, recordOpen: x.recordOpen === (r && r.id) ? null : (r && r.id) })),
+      title: pageNo === null
+        ? 'show this record in the reading pane (it is not page-grounded)'
+        : 'open page ' + pageNo + ' and show its record(s) in the reading pane',
+      onClick: () => selectRecord(r),
     },
       h('div', { className: 'pha-rec-row' },
         h('span', { className: 'pha-rec-id' }, '#' + (r && r.id)),
@@ -1742,13 +1799,7 @@ function PhaView(props) {
           ? h('span', { className: 'pha-rec-pg off' }, 'not page-grounded')
           : h('span', { className: 'pha-rec-pg' }, 'p.' + pageNo),
         h('span', { className: 'pha-rec-text' }, recordSnippet(r)),
-        pageNo === null ? null : h('button', {
-          className: 'pha-btn small',
-          title: 'open page ' + pageNo + ' in the reading pane',
-          onClick: (ev) => { stopRow(ev); openPage(pageNo, false, docId) },
-        }, 'open page'),
       ),
-      open ? h('pre', { className: 'pha-pre' }, JSON.stringify((r && r.data) || null, null, 2)) : null,
     )
   }
   // One row of the archive-wide Records list: the whole row opens its document, and its
@@ -2083,9 +2134,49 @@ function PhaView(props) {
           onLostPointerCapture: endMediaDrag,
         })
       : null
+    // The reading pane's third view: the record(s) that start on the selected page.
+    // A page can carry more than one (e.g. apparatus section + document), and the
+    // record selected in the index is highlighted among them.
+    const pageRecCards = (s.pageRecords || []).slice()
+    if (s.selectedRecordId !== null && s.selectedRecordId !== undefined
+        && !pageRecCards.some((r) => r && r.id === s.selectedRecordId)) {
+      const sel = (s.records || []).find((r) => r && r.id === s.selectedRecordId)
+      if (sel) pageRecCards.unshift(sel)
+    }
+    const recordPane = h('div', { className: 'pha-text' },
+      h('div', { className: 'pha-muted' },
+        'page ' + (s.pageReq ? s.pageReq.page : '') + ' · ' +
+        (s.pageRecordsLoading
+          ? 'loading records…'
+          : pageRecCards.length + ' record' + (pageRecCards.length === 1 ? '' : 's') + ' for this page')),
+      s.pageRecordsErr ? h('div', { className: 'pha-err' }, s.pageRecordsErr) : null,
+      pageRecCards.map((rec) => {
+        const data = (rec && rec.data) || {}
+        const selected = rec && rec.id === s.selectedRecordId
+        const fields = Object.keys(data).filter((k) => k !== 'text'
+          && data[k] !== null && data[k] !== undefined && data[k] !== '')
+        return h('div', { className: 'pha-record' + (selected ? ' sel' : ''), key: 'pane-record-' + rec.id },
+          h('div', { className: 'pha-record-h' },
+            h('span', { className: 'pha-rec-id' }, '#' + rec.id),
+            h('span', { className: 'pha-chip dim' }, (rec.encoder || '?') + '/' + (rec.kind || '?')),
+            (rec.page_no !== null && rec.page_no !== undefined)
+              ? h('span', { className: 'pha-muted' }, 'p.' + rec.page_no) : null),
+          data.text ? h('pre', { className: 'pha-pre' }, String(data.text)) : null,
+          fields.length ? h('table', { className: 'pha-bib-table' },
+            h('tbody', null, fields.map((k) => h('tr', { key: k },
+              h('td', { className: 'pha-bib-k' }, k),
+              h('td', null, typeof data[k] === 'object'
+                ? JSON.stringify(data[k], null, 2) : String(data[k])))))) : null,
+        )
+      }),
+      (!s.pageRecordsLoading && !s.pageRecordsErr && !pageRecCards.length)
+        ? h('div', { className: 'pha-muted' },
+            'No encoder records START on this page (records spanning it from an earlier page are not listed yet).')
+        : null,
+    )
     let textBlock = null
     if (textOn) {
-      textBlock = s.pageErr ? h('div', { className: 'pha-text' },
+      textBlock = s.textMode === 'record' ? recordPane : (s.pageErr ? h('div', { className: 'pha-text' },
         h('div', { className: 'pha-err' }, s.pageErr),
         (s.pageReq && s.pageReq.edited && !hasEdited) ? h('div', { className: 'pha-muted' },
           'this document has no edited text in the archive yet — run that pass, then Refresh.') : null,
@@ -2093,7 +2184,7 @@ function PhaView(props) {
         h('div', { className: 'pha-muted' }, 'page ' + (s.pageReq ? s.pageReq.page : '') + ' · ' + (pv.variant || '') + (pv.reviewed ? ' · reviewed' : '')),
         h('div', { className: 'pha-muted' }, pv.page_file || ''),
         plain ? h('pre', { className: 'pha-pre' }, pv.text || '(empty)') : h('div', { className: 'pha-md' }, renderMd(pv.text || '', { imageSrc: imageSrcFor })),
-      ) : (s.pageLoading ? h('div', { className: 'pha-empty' }, 'Loading page…') : h('div', { className: 'pha-empty' }, 'Select a page to read its text.'))
+      ) : (s.pageLoading ? h('div', { className: 'pha-empty' }, 'Loading page…') : h('div', { className: 'pha-empty' }, 'Select a page to read its text.')))
     }
     const bibLive = (s.bib && s.bib.found) ? s.bib : null
     const refText = (bibLive && bibLive.reference) || d.reference || null
@@ -2230,9 +2321,10 @@ function PhaView(props) {
           h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
             h('button', { className: 'pha-btn small' + (showImg ? ' on' : ''), title: 'show/hide the page image', onClick: () => setShowImg(!showImg) }, 'Image'),
         h('button', { className: 'pha-btn small' + (textOn ? ' on' : ''), title: 'show/hide the text pane', onClick: () => setTextOn(!textOn) }, 'Text'),
-        textOn ? h('button', { className: 'pha-btn small' + (selIsEdited ? '' : ' primary'), title: 'the raw transcription of this page', onClick: () => { if (s.pageReq) openPage(s.pageReq.page, false) } }, 'Raw') : null,
-        textOn ? h('button', { className: 'pha-btn small' + (selIsEdited ? ' primary' : ''), disabled: !hasEdited, title: hasEdited ? ('the edited text of this page (editor: ' + editors.join(', ') + ')') : 'this document has no edited text yet — run: pha edit', onClick: () => { if (s.pageReq) openPage(s.pageReq.page, true) } }, hasEdited ? ('Edited (' + editors.join(', ') + ')') : 'Edited') : null,
-        textOn ? h('button', { className: 'pha-btn small' + (plain ? ' on' : ''), title: plain ? 'shown as plain text — click to render it as markdown' : 'shown as rendered markdown — click for plain text', onClick: () => setState((x) => ({ ...x, plainOverride: !plain })) }, plain ? 'MD' : 'TXT') : null,
+        textOn ? h('button', { className: 'pha-btn small' + (s.textMode === 'raw' ? ' primary' : ''), title: 'the raw transcription of this page', onClick: () => { if (s.pageReq) openPage(s.pageReq.page, false) } }, 'Raw') : null,
+        textOn ? h('button', { className: 'pha-btn small' + (s.textMode === 'edited' ? ' primary' : ''), disabled: !hasEdited, title: hasEdited ? ('the edited text of this page (editor: ' + editors.join(', ') + ')') : 'this document has no edited text yet — run: pha edit', onClick: () => { if (s.pageReq) openPage(s.pageReq.page, true) } }, hasEdited ? ('Edited (' + editors.join(', ') + ')') : 'Edited') : null,
+        textOn ? h('button', { className: 'pha-btn small' + (s.textMode === 'record' ? ' primary' : ''), disabled: !s.pageReq, title: 'the encoder records that START on this page (all of them)', onClick: () => { if (!s.pageReq) return; setState((x) => ({ ...x, textMode: 'record', selectedRecordId: null })); loadPageRecords(s.pageReq.doc, s.pageReq.page) } }, 'Record') : null,
+        (textOn && s.textMode !== 'record') ? h('button', { className: 'pha-btn small' + (plain ? ' on' : ''), title: plain ? 'shown as plain text — click to render it as markdown' : 'shown as rendered markdown — click for plain text', onClick: () => setState((x) => ({ ...x, plainOverride: !plain })) }, plain ? 'MD' : 'TXT') : null,
         h('span', { className: 'pha-spacer' }),
         h('button', { className: 'pha-btn small', title: 'Open this page in your default markdown editor (the OS picks the app)', onClick: editOpen }, 'Edit'),
       ),

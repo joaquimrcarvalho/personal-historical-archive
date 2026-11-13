@@ -23,9 +23,9 @@ drive the **personal-historical-archive** tool from chat, on any machine that ha
   PDF / image folder through `pha open --source` — all registered on the harness
   `webServer` service.
 - **A PHA conversation view** (document list + search, a per-document **Pages / Records** switch in a height-resizable page-list panel
-  (browse the document by page or by its encoder rows; the panel has its own
-  allocated, draggable space and the selected page's image and readings stay
-  visible) and an archive-wide Records mode with filters and
+  (browse by page or by encoder rows; selecting a record opens its page and shows
+  the record(s) for that page as a third reading view beside raw and edited, with
+  every record that starts on the page shown) and an archive-wide Records mode with filters and
   paging, page reader raw/edited, side-by-side
   page image with a link to the same page in the `pha serve` viewer, markdown rendering,
   draggable splitter, an **open** button on every document row that launches the original

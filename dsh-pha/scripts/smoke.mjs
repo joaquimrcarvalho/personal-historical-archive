@@ -414,12 +414,12 @@ check(!!recordCountsRoute && typeof recordCountsRoute.handler === 'function',
 if (recordsRoute) {
   const before = recSpawns.length
   const res = await fetchJsonRoute(recordsRoute,
-    '/pha/records?doc=7&encoder=letters&kind=letter&field=place%3DMalaca&ignore_case=1&limit=500&offset=3')
+    '/pha/records?doc=7&encoder=letters&kind=letter&page=2&field=place%3DMalaca&ignore_case=1&limit=500&offset=3')
   check(res.status === 200 && res.body && res.body.ok === true, '/pha/records answers ok')
   const argv = recSpawns.slice(before).map((s) => s.argv).find((a) => a[1] === 'records')
   check(!!argv && JSON.stringify(argv) === JSON.stringify([
     '/usr/bin/pha', 'records', '--json', '--limit', '100', '--offset', '3',
-    '--doc', '7', '--encoder', 'letters', '--kind', 'letter',
+    '--doc', '7', '--encoder', 'letters', '--kind', 'letter', '--page', '2',
     '--field', 'place=Malaca', '--ignore-case',
   ]), '/pha/records passes the CLI filters in order, with limit clamped to 100')
   check(res.body && res.body.total === 42 && res.body.limit === 100 && res.body.offset === 3

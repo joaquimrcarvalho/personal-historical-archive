@@ -407,15 +407,38 @@ try {
     'records are grouped by encoder')
   check(pane.nodes.some((n) => hasClass(n, 'pha-rec-tag') && textOf(n) === '[table/entry]'),
     'a record row shows its encoder/kind')
-  const recordJson = pane.nodes.filter((n) => n.type === 'pre' && hasClass(n, 'pha-pre') && textOf(n).includes('Angola 1553'))
-  check(recordJson.length === 1, 'the expanded record renders its whole data as JSON in a .pha-pre')
-  const openPageButtons = pane.nodes.filter((n) => n.type === 'button' && textOf(n) === 'open page')
-  check(openPageButtons.length === 1,
-    'only the page-grounded record has an "open page" action (a null page gets no dead link)')
-  await openPageButtons[0].props.onClick({ stopPropagation() {} })
+  check(pane.nodes.filter((n) => n.type === 'pre' && hasClass(n, 'pha-pre') && textOf(n).includes('Angola 1553')).length === 0,
+    'the index list does not expand record JSON (selection shows it in the page pane)')
+  check(pane.nodes.filter((n) => n.type === 'button' && textOf(n) === 'open page').length === 0,
+    'record rows have no separate "open page" button (selecting is enough)')
+  // Selecting a page-grounded record reads the page's records for the page pane.
+  const firstRow = pane.nodes.filter((n) => hasClass(n, 'pha-rec'))[0]
+  await firstRow.props.onClick()
   await tick()
-  check(pane.fetched.includes('/pha/page?doc=18&page=2'), "a record's \"open page\" opens that page of its document")
+  check(pane.fetched.includes('/pha/records?doc=18&page=2&limit=100'),
+    'selecting a record loads the records for its page into the page pane')
 } catch (e) { check(false, 'the per-document view tabs between page reader and records — threw: ' + e.message) }
+
+try {
+  // The page pane's third view: records that start on the selected page. Two records on
+  // one page must BOTH render, with the selected one highlighted; the index list is
+  // separate and keeps no records JSON.
+  const REC_PAGE = [
+    { id: 101, document_id: 18, filename: 'schutte.pdf', page_no: 2, encoder: 'apparatus', kind: 'section', data: { text: 'DOCUMENTAÇÃO', section_kind: 'title' } },
+    { id: 102, document_id: 18, filename: 'schutte.pdf', page_no: 2, encoder: 'documents', kind: 'document', data: { text: 'CARTA DO IRMÃO', from: 'Aleixo Dias', place: 'Cochim' } },
+  ]
+  const rp = renderLoadedView({ textMode: 'record', selectedRecordId: 101, pageRecords: REC_PAGE, pageRecordsLoading: false })
+  const cards = rp.nodes.filter((n) => hasClass(n, 'pha-record'))
+  check(cards.length === 2, 'the page pane shows BOTH records starting on the page')
+  check(cards.some((n) => hasClass(n, 'sel') && textOf(n).includes('DOCUMENTAÇÃO')),
+    'the record selected in the index is highlighted in the page pane')
+  check(textOf(rp.nodes.find((n) => hasClass(n, 'pha-text'))) .includes('2 records for this page'),
+    'the record pane states how many records start on the page')
+  const recButton = rp.nodes.find((n) => n.type === 'button' && textOf(n) === 'Record')
+  check(!!recButton && hasClass(recButton, 'primary'), 'the Record view is a third page-pane button (Raw / Edited / Record)')
+  check(rp.nodes.filter((n) => n.type === 'pre' && hasClass(n, 'pha-pre') && textOf(n).includes('Angola')).length === 0,
+    'the index list keeps no inline JSON while the page pane shows records')
+} catch (e) { check(false, 'the page pane renders the page records — threw: ' + e.message) }
 
 try {
   const counted = renderLoadedView({ recordCounts: { 18: 3 } })

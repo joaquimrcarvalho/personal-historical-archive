@@ -629,6 +629,9 @@ function apply(ctx, config) {
     if (Number.isInteger(doc) && doc > 0) argv.push('--doc', String(doc))
     if (a.encoder) argv.push('--encoder', String(a.encoder))
     if (a.kind) argv.push('--kind', String(a.kind))
+    // Only records that START on this page (the page reader's record view).
+    const page = Number(a.page)
+    if (Number.isInteger(page) && page > 0) argv.push('--page', String(page))
     if (a.collection) argv.push('--collection', String(a.collection))
     for (const f of fields || []) if (f) argv.push('--field', String(f))
     if (flagOn(a.ignore_case)) argv.push('--ignore-case')
@@ -680,6 +683,7 @@ function apply(ctx, config) {
       ignore_case: { type: 'boolean', description: 'match the field value case-insensitively (ASCII/SQLite NOCASE)' },
       limit: { type: 'integer', description: 'max records to return (default 25, clamped to 1..100)' },
       offset: { type: 'integer', description: 'skip the first N matching records (pagination)' },
+      page: { type: 'integer', description: 'only records that START on this page' },
     }, [], async (a) => {
       // Only one NAME=VALUE field: the schema is scalar, so a multi-field caller
       // issues several calls (or the route, which repeats --field).
@@ -858,7 +862,7 @@ function apply(ctx, config) {
       const fields = new URL(req.url, 'http://x').searchParams.getAll('field')
       const records = await runRecords({
         doc: p.doc, encoder: p.encoder, kind: p.kind, collection: p.collection,
-        ignore_case: p.ignore_case, limit: p.limit, offset: p.offset,
+        ignore_case: p.ignore_case, limit: p.limit, offset: p.offset, page: p.page,
       }, fields)
       // Exactly the CLI's payload: the view and an agent must see the same record
       // shape, so nothing is re-mapped or filtered here.
