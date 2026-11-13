@@ -520,6 +520,10 @@ def summary(conn: sqlite3.Connection, chunk_stats: dict | None = None) -> dict:
         "pages_done": pages,
         "chunks": chunks,
         "chunks_embedded": embedded,
+        # Encoder output: how much exists and how much is semantically indexed.
+        # `pha status` and `pha_extraction_status` surface this, so "was this
+        # archive encoded, and is it searchable?" no longer needs SQL.
+        "records": record_stats(conn),
     }
 
 
@@ -1403,6 +1407,38 @@ def record_field_clause(fields: dict | None, alias: str = "r",
     return " AND " + " AND ".join(clauses), params
 
 
+def _record_filter_where(
+    document_id: int | None = None,
+    collection: str | None = None,
+    encoder: str | None = None,
+    record_kind: str | None = None,
+    fields: dict | None = None,
+    ignore_case: bool = False,
+) -> tuple[str, list]:
+    """Shared WHERE fragment for record listings (`r` = records, `d` = documents)."""
+    where: list[str] = []
+    params: list = []
+    if document_id is not None:
+        where.append("r.document_id = ?")
+        params.append(int(document_id))
+    clause, dir_params = _dir_clause(collection, alias="d")
+    if clause:
+        where.append(clause.lstrip(" AND "))
+        params.extend(dir_params)
+    if encoder:
+        where.append("r.encoder = ?")
+        params.append(encoder)
+    if record_kind:
+        where.append("r.kind = ?")
+        params.append(record_kind)
+    field_sql, field_params = record_field_clause(
+        fields, alias="r", ignore_case=ignore_case)
+    if field_sql:
+        where.append(field_sql.lstrip(" AND "))
+        params.extend(field_params)
+    return (" WHERE " + " AND ".join(where)) if where else "", params
+
+
 def record_field_search(
     conn: sqlite3.Connection,
     limit: int = 10,
@@ -1411,33 +1447,133 @@ def record_field_search(
     record_kind: str | None = None,
     fields: dict | None = None,
     ignore_case: bool = False,
+    document_id: int | None = None,
+    offset: int = 0,
 ) -> list[sqlite3.Row]:
-    """List records matching exact JSON field filters, without a text query."""
-    clause, params = _dir_clause(collection)
-    where: list[str] = []
-    if clause:
-        where.append(clause.lstrip(" AND "))
-    if encoder:
-        where.append("r.encoder = ?")
-        params.append(encoder)
-    if record_kind:
-        where.append("r.kind = ?")
-        params.append(record_kind)
-    field_sql, field_params = record_field_clause(fields, ignore_case=ignore_case)
-    if field_sql:
-        where.append(field_sql.lstrip(" AND "))
-        params.extend(field_params)
+    """List records matching exact JSON field filters, without a text query.
+
+    `document_id` scopes the listing to one document and `offset` paginates a
+    large set; the order (document, record source page, record id) is stable,
+    so consecutive pages neither overlap nor skip. Returns [] on an archive
+    whose DB predates the `records` table, like the rest of the read helpers.
+    """
+    # Build the filter first: an invalid --field name is a usage error on every
+    # archive, including one whose DB has no records table yet.
+    where, params = _record_filter_where(
+        document_id=document_id, collection=collection, encoder=encoder,
+        record_kind=record_kind, fields=fields, ignore_case=ignore_case,
+    )
+    if not _table_exists(conn, "records"):
+        return []
     sql = (
         "SELECT r.id AS record_id, r.document_id, r.encoder, "
-        "r.kind AS record_kind, r.source, r.data, d.filename, d.dir_path, "
+        "r.kind AS record_kind, r.source, r.data, r.created_at, "
+        "d.filename, d.dir_path, d.path, "
         "0.0 AS bm, '' AS snippet "
         "FROM records r JOIN documents d ON d.id = r.document_id"
     )
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY r.document_id, CAST(r.source AS INTEGER), r.id LIMIT ?"
-    params.append(limit)
+    sql += where
+    sql += (" ORDER BY r.document_id, CAST(r.source AS INTEGER), r.id "
+            "LIMIT ? OFFSET ?")
+    params += [int(limit), int(offset)]
     return conn.execute(sql, params).fetchall()
+
+
+def count_records(
+    conn: sqlite3.Connection,
+    *,
+    document_id: int | None = None,
+    collection: str | None = None,
+    encoder: str | None = None,
+    record_kind: str | None = None,
+    fields: dict | None = None,
+    ignore_case: bool = False,
+) -> int:
+    """Number of records matching the same filters as `record_field_search`."""
+    where, params = _record_filter_where(
+        document_id=document_id, collection=collection, encoder=encoder,
+        record_kind=record_kind, fields=fields, ignore_case=ignore_case,
+    )
+    if not _table_exists(conn, "records"):
+        return 0
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM records r "
+        "JOIN documents d ON d.id = r.document_id" + where,
+        params,
+    ).fetchone()["n"]
+
+
+def record_listing(
+    conn: sqlite3.Connection,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    document_id: int | None = None,
+    collection: str | None = None,
+    encoder: str | None = None,
+    record_kind: str | None = None,
+    fields: dict | None = None,
+    ignore_case: bool = False,
+) -> dict:
+    """One page of records plus the total matching the filters.
+
+    The read side of `pha records`: no text query and no FTS, so it works on
+    an archive whose record index was never built, and it never calls a model.
+    """
+    limit = max(1, int(limit))
+    offset = max(0, int(offset))
+    total = count_records(
+        conn, document_id=document_id, collection=collection,
+        encoder=encoder, record_kind=record_kind, fields=fields,
+        ignore_case=ignore_case,
+    )
+    records = record_field_search(
+        conn, limit=limit, collection=collection, encoder=encoder,
+        record_kind=record_kind, fields=fields, ignore_case=ignore_case,
+        document_id=document_id, offset=offset,
+    )
+    return {"total": total, "limit": limit, "offset": offset, "records": records}
+
+
+def record_stats(conn: sqlite3.Connection) -> dict:
+    """Archive-wide record totals for `pha status` / `pha_extraction_status`.
+
+    Returns zeros (never an error) on an archive whose DB predates encoder
+    records, so status keeps working there.
+    """
+    if not _table_exists(conn, "records"):
+        return {"total": 0, "documents": 0, "embedded": 0, "by_encoder": {}}
+    row = conn.execute(
+        "SELECT COUNT(*) AS total, COUNT(DISTINCT document_id) AS documents "
+        "FROM records"
+    ).fetchone()
+    embedded = 0
+    if record_embeddings_exist(conn):
+        embedded = conn.execute(
+            "SELECT COUNT(*) AS n FROM record_embeddings").fetchone()["n"]
+    by_encoder = {
+        r["encoder"]: r["n"] for r in conn.execute(
+            "SELECT encoder, COUNT(*) AS n FROM records "
+            "GROUP BY encoder ORDER BY n DESC, encoder")
+    }
+    return {"total": row["total"], "documents": row["documents"],
+            "embedded": embedded, "by_encoder": by_encoder}
+
+
+def record_counts_by_document(conn: sqlite3.Connection) -> dict[int, int]:
+    """{document_id: record count} for the per-document `pha status` lines."""
+    if not _table_exists(conn, "records"):
+        return {}
+    return {
+        r["document_id"]: r["n"] for r in conn.execute(
+            "SELECT document_id, COUNT(*) AS n FROM records GROUP BY document_id")
+    }
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone() is not None
 
 
 def record_keyword_search(

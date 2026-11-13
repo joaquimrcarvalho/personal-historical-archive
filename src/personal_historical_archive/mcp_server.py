@@ -387,7 +387,11 @@ def make_server(cfg: Config) -> FastMCP:
 
     @mcp.tool()
     def pha_extraction_status() -> dict:
-        """Summary of the archive: documents by status, pages extracted, chunks indexed."""
+        """Summary of the archive: documents by status, pages extracted, chunks
+        indexed, and the encoder records (total, how many documents carry them,
+        how many are embedded). `records.by_encoder` says what each encoder
+        produced, and `pha_list_documents` / `pha_collection_status` say which
+        documents were encoded."""
         conn = db.connect(cfg.db_path, readonly=True)   # query tool: no DDL on connect
         try:
             return db.summary(conn)

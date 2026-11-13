@@ -667,6 +667,109 @@ def cmd_page(cfg: Config, args) -> None:
         conn.close()
 
 
+def cmd_records(cfg: Config, args) -> None:
+    """List the structured records the encoders produced (`pha records`).
+
+    The browse counterpart of `pha search --source records`: no text query and
+    no model call, so it also works on an archive whose record index was never
+    rebuilt. Filters combine (document, collection, encoder, kind, exact JSON
+    field); --limit/--offset page through a large encoder output, and --json is
+    the stable shape for agents and the view.
+    """
+    raw_fields = getattr(args, "field_filters", None) or []
+    fields: dict[str, str] = {}
+    for raw in raw_fields:
+        name, sep, value = str(raw).partition("=")
+        if not sep or not name:
+            print(f"error: --field expects NAME=VALUE (got {raw})", file=sys.stderr)
+            sys.exit(2)
+        fields[name] = value
+    limit = getattr(args, "limit", None)
+    limit = 20 if limit is None else max(1, min(int(limit), 1000))
+    offset = max(0, int(getattr(args, "offset", 0) or 0))
+    doc = None
+    conn = db.connect(cfg.db_path, readonly=True)
+    try:
+        if getattr(args, "doc", None) is not None:
+            doc = db.get_document(conn, args.doc)
+            if doc is None:
+                print(f"no document #{args.doc}", file=sys.stderr)
+                sys.exit(2)
+        try:
+            listing = db.record_listing(
+                conn, limit=limit, offset=offset,
+                document_id=doc["id"] if doc is not None else None,
+                collection=getattr(args, "collection", None),
+                encoder=getattr(args, "encoder", None),
+                record_kind=getattr(args, "record_kind", None),
+                fields=fields or None,
+                ignore_case=bool(getattr(args, "ignore_case", False)),
+            )
+        except ValueError as exc:
+            # An invalid --field name is a usage error, not a crash.
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(2)
+        records = []
+        for row in listing["records"]:
+            data = db._as_record_dict(row["data"])
+            records.append({
+                "id": row["record_id"],
+                "document_id": row["document_id"],
+                "filename": row["filename"],
+                "collection": row["dir_path"] or "(root)",
+                "path": row["path"],
+                "page_no": db.record_start_page(data),
+                "encoder": row["encoder"],
+                "kind": row["record_kind"],
+                "created_at": row["created_at"],
+                "data": data,
+            })
+        total = listing["total"]
+    finally:
+        conn.close()
+
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "records": records,
+        }, ensure_ascii=False, indent=2))
+        return
+
+    if not total:
+        filtered = bool(fields or getattr(args, "doc", None) is not None
+                        or getattr(args, "encoder", None)
+                        or getattr(args, "record_kind", None)
+                        or getattr(args, "collection", None))
+        if filtered:
+            print("no records match the filters")
+        else:
+            print("no encoder records yet — add an encoder and run `pha encode`")
+        return
+
+    width = _term_width()
+    shown_from = offset + 1
+    shown_to = offset + len(records)
+    if not records:
+        # An offset past the end: say so instead of printing an empty page or
+        # a nonsensical "showing 100-99" range.
+        print(f"no records at offset {offset} (total {total})")
+        return
+    print(f"records: {total}   (showing {shown_from}-{shown_to})")
+    for rec in records:
+        where = (f"p.{rec['page_no']}" if rec["page_no"] is not None
+                 else "not page-grounded")
+        print(_fit(
+            f"  #{rec['id']:>5d}  [{rec['encoder']}/{rec['kind'] or 'record'}]  "
+            f"{rec['filename']}  [{rec['collection']}]  {where}", width))
+        text = str(rec["data"].get("text") or "").strip().replace("\n", " ")
+        if text:
+            print(_fit(f"           {text}", width))
+    if shown_to < total:
+        print(f"  … next page: --offset {shown_to}")
+
+
 def cmd_cite(cfg: Config, args) -> None:
     """Print a durable citation for one page: `pha cite <doc> <page> [--edited]`.
 
@@ -1507,6 +1610,7 @@ def cmd_status(cfg: Config, args) -> None:
         # overview totals (the chunks table carries the embeddings, so every
         # extra pass over it is expensive).
         stats = db.chunk_stats(conn)
+        record_counts = db.record_counts_by_document(conn)
         pinned = db.pinned_counts(conn)
         pinned_edits = db.pinned_edit_counts(conn)
         # Documents received here for a hand-over (the worker side). Their
@@ -1521,6 +1625,7 @@ def cmd_status(cfg: Config, args) -> None:
         except Exception:  # noqa: BLE001 - status must never fail on this
             incoming = {}
         s = db.summary(conn, chunk_stats=stats)
+        rec_stats = s.get("records") or {}
         docs_status = s["documents"] or {}
         total_docs = sum(docs_status.values())
 
@@ -1628,6 +1733,7 @@ def cmd_status(cfg: Config, args) -> None:
                 "pages": s["pages_done"],
                 "chunks": s["chunks"],
                 "chunks_embedded": s["chunks_embedded"],
+                "records": rec_stats,
                 "notes": note_stats,
                 "skills": skill_stats,
                 "new": total_new,
@@ -1665,6 +1771,13 @@ def cmd_status(cfg: Config, args) -> None:
             print("  documents: none")
         print(f"  pages:     {s['pages_done']} extracted")
         print(f"  chunks:    {s['chunks']} indexed   ({s['chunks_embedded']} embedded)")
+        rec_total = rec_stats.get("total", 0)
+        if rec_total:
+            rec_docs = rec_stats.get("documents", 0)
+            print(f"  records:   {rec_total} in {rec_docs}/{total_docs} "
+                  f"document(s)   ({rec_stats.get('embedded', 0)} embedded)")
+        else:
+            print("  records:   none yet — add an encoder and run `pha encode`")
         if note_stats.get("files"):
             extra = ""
             if note_stats.get("stale"):
@@ -1719,6 +1832,10 @@ def cmd_status(cfg: Config, args) -> None:
                             # `done` with no chunks at all: the document was reported
                             # complete while its index was never written (or was lost).
                             meta.append("0 chunks — NOT INDEXED")
+                    rec_n = record_counts.get(d["id"], 0)
+                    if rec_n:
+                        meta.append(f"{rec_n} record"
+                                    + ("s" if rec_n != 1 else ""))
                     if d["status"] == "error" and d["error"]:
                         meta.append(f"error: {d['error'][:40]}")
                     if pinned.get(d["id"]):
@@ -4882,6 +4999,32 @@ def main(argv: list[str] | None = None) -> None:
     pg.add_argument("--editor", default=None, help="editor id when --edited (default: the document's editor)")
     pg.add_argument("--json", action="store_true", help="structured output for agents")
     pg.set_defaults(fn=cmd_page)
+
+    rr = sub.add_parser(
+        "records",
+        help="list the structured records produced by encoders (no search, no model)")
+    rr.add_argument("--doc", type=int, default=None, metavar="N",
+                    help="only records of document #N (see `pha status`)")
+    rr.add_argument("--encoder", default=None,
+                    help="only records produced by this encoder id")
+    rr.add_argument("--kind", "--record-kind", dest="record_kind", default=None,
+                    metavar="KIND",
+                    help="only records of this kind (e.g. letter, person)")
+    rr.add_argument("--collection", default=None,
+                    help="restrict to a collection/dir, e.g. 'COLX' or 'collections/COLX'")
+    rr.add_argument("--field", "--where", dest="field_filters", action="append",
+                    default=None, metavar="NAME=VALUE",
+                    help="require an exact record field value (repeatable, e.g. --field year=1557)")
+    rr.add_argument("--ignore-case", "--case-insensitive", dest="ignore_case",
+                    action="store_true",
+                    help="match --field values case-insensitively (ASCII, SQLite NOCASE)")
+    rr.add_argument("--limit", type=int, default=20,
+                    help="max records to show (default 20; capped at 1000)")
+    rr.add_argument("--offset", type=int, default=0,
+                    help="skip the first N matching records (pagination)")
+    rr.add_argument("--json", action="store_true",
+                    help="structured output for agents and the view")
+    rr.set_defaults(fn=cmd_records)
 
     ct = sub.add_parser(
         "cite",

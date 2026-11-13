@@ -136,6 +136,7 @@ pha search "alfange" --mode keyword
 pha search "monastery donation charter" --mode semantic
 pha search "padroado" --force      # embed even while a scan uses the embed server
 pha search --source records --record-kind letter --field from=Xavier   # structured records
+pha records --encoder letters --kind letter    # browse encoder output (no query, no model)
 pha search "Timor" --source notes  # only the notes/ folder — what you already concluded
 # every hit prints its library page file + a shortcut to read the full page:
 pha page 12 37              # full raw transcription of doc 12, page 37
@@ -1101,7 +1102,10 @@ printed i–xv but occupies PDF pages 1-15).
   `--ignore-case` to match `--field` values without case (ASCII `NOCASE`, so
   `coimbra` matches `Coimbra`). A record's starting page is resolved from
   `page_start` first, then `page`/`start_page`/`source_page`, and exposed as
-  `page_no` in search hits.
+  `page_no` in search hits. To browse records without a text query, use
+  `pha records [--doc N] [--encoder ID] [--kind K] [--field NAME=VALUE]
+  [--limit/--offset] [--json]`; `pha status` reports the record totals and each
+  document's record count.
 - `pages:` may be a literal range, or a per-document structure register:
   put `<stem>.structure.json` beside the source with a `pages` object, and
   set the encoder to `pages: "@structure:documents"` (or another named
@@ -1292,6 +1296,11 @@ pha notes [list|index|show NAME] [--force] [--json]
 pha page DOC PAGE [--edited]    # print the FULL text of one page (doc = id or filename substring)
                                 #   --edited reads the edited/translated variant; when there is
                                 #   none it names the pass that produces it (`pha edit --path …`)
+pha records [--doc N] [--encoder ID] [--kind K] [--collection COLX] [--field NAME=VALUE] [--ignore-case] [--limit N] [--offset N] [--json]
+                                #   browse encoder output without a search query: filter by
+                                #   document, encoder, record kind or an exact JSON field;
+                                #   --offset pages through a large set. No model call and no
+                                #   search index needed — reads the records table directly
 pha cite DOC PAGE [--edited] [--editor ID|--palaeographer ID] [--json]
                                 # print a durable citation: the stable slug + the exact FILLED
                                 #   variant (never an empty/waiting stub). Exits non-zero when
