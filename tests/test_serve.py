@@ -359,12 +359,21 @@ def test_viewer_shows_raw_and_effective_edited_text(cfg, add_document,
     status, _, body = server.get("/doc/colx-d/p001")
     text = body.decode()
     assert status == 200
-    assert "Transcription" in text
+    # The image stays left; the right side is tabbed. Raw is the default view.
+    assert "<nav class=\"tabs\">" in text
+    assert ">Raw</a>" in text and ">Edited</a>" in text and ">Records (" in text
+    assert "Transcription (raw)" in text
     assert "RAW TRANSCRIPTION" in text
     assert "transcription: ocr@liteparse-fra" in text
+    assert "EDITED READING" not in text          # edited lives on its own tab
+
+    status, _, body = server.get("/doc/colx-d/p001?view=edited")
+    text = body.decode()
+    assert status == 200
     assert "Edited reading" in text
     assert "EDITED READING" in text
     assert "edited: french-ocr@deepseek-v4-flash" in text
+    assert "RAW TRANSCRIPTION" not in text
 
 
 def test_viewer_omits_the_edited_panel_when_no_filled_edit_exists(
@@ -407,8 +416,10 @@ def test_viewer_escapes_raw_and_edited_text(cfg, add_document, write_render,
     text = server.get("/doc/colx-d/p001")[2].decode()
     assert "&lt;script&gt;alert(&quot;raw&quot;)&lt;/script&gt; &amp; " in text
     assert "&lt;b&gt;not markup&lt;/b&gt;" in text
-    assert "&lt;script&gt;alert(&quot;edited&quot;)&lt;/script&gt; &amp; " in text
     assert '<script>alert("raw")</script>' not in text
+
+    text = server.get("/doc/colx-d/p001?view=edited")[2].decode()
+    assert "&lt;script&gt;alert(&quot;edited&quot;)&lt;/script&gt; &amp; " in text
     assert '<script>alert("edited")</script>' not in text
 
 
@@ -428,10 +439,53 @@ def test_viewer_serves_the_reviewed_edit_over_the_document_editor(
     finally:
         conn.close()
 
-    text = server.get("/doc/colx-d/p001")[2].decode()
+    text = server.get("/doc/colx-d/p001?view=edited")[2].decode()
     assert "HUMAN CORRECTION" in text
     assert "DOCUMENT EDIT" not in text
     assert "edited: human-editor" in text
+
+
+# ------------------------------------------------ records on the page (tabs)
+
+def test_viewer_records_tab_shows_every_record_starting_on_the_page(
+        cfg, add_document, write_render, server):
+    doc_id = add_document(pages=(1, 2))
+    write_render(doc_id, 1)
+    _add_record(cfg, doc_id, encoder="apparatus", kind="section",
+                data={"kind": "section", "text": "SIGLAS",
+                      "section_kind": "addenda", "page_start": 1})
+    _add_record(cfg, doc_id, encoder="documents", kind="document",
+                data={"kind": "document", "text": "CARTA DO IRMÃO",
+                      "from": "Aleixo Dias", "page_start": 1})
+    _add_record(cfg, doc_id, encoder="documents", kind="document",
+                data={"kind": "document", "text": "SECOND PAGE RECORD",
+                      "page_start": 2})
+
+    text = server.get("/doc/colx-d/p001?view=records")[2].decode()
+    assert "Records (2)" in text
+    assert "SIGLAS" in text and "CARTA DO IRMÃO" in text
+    assert "SECOND PAGE RECORD" not in text          # starts on page 2
+    assert "apparatus/section" in text
+    assert "documents/document" in text
+    assert "Aleixo Dias" in text                     # other fields are shown too
+    assert "RAW TRANSCRIPTION" not in text           # not the raw tab
+
+
+def test_viewer_records_tab_is_empty_without_records(cfg, add_document,
+                                                      write_render, server):
+    doc_id = add_document(pages=(1,))
+    write_render(doc_id, 1)
+    text = server.get("/doc/colx-d/p001?view=records")[2].decode()
+    assert "Records (0)" in text
+    assert "No encoder records START on this page." in text
+
+
+def test_viewer_unknown_view_falls_back_to_raw(cfg, add_document,
+                                               write_render, server):
+    doc_id = add_document(pages=(1,))
+    write_render(doc_id, 1)
+    text = server.get("/doc/colx-d/p001?view=nonsense")[2].decode()
+    assert "Transcription (raw)" in text and "raw text page 1" in text
 
 
 # ------------------------------------------------------- bibliographic reference

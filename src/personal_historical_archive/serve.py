@@ -69,6 +69,15 @@ main.reader{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(22rem,.8fr
 .reading:last-child{margin-bottom:0}
 .reading h2{margin:.1rem 0 .15rem}
 .provenance{margin:.15rem 0 .6rem;color:#777;font-size:13px}
+.tabs{display:flex;gap:.35rem;flex-wrap:wrap;margin:0 0 .8rem}
+.tab{padding:.22rem .6rem;border:1px solid #bbb;border-radius:6px;
+  text-decoration:none;color:inherit;white-space:nowrap}
+.tab.on{border-color:transparent;background:#e8890c;color:#fff}
+.record{background:#fff;border:1px solid #e4e1da;border-radius:10px;
+  padding:.6rem .8rem;margin:.6rem 0}
+.record h3{margin:.1rem 0 .3rem;font-size:.95rem}
+.record table.fields{border-collapse:collapse;margin:.3rem 0;font-size:13px}
+.record table.fields td{vertical-align:top;padding:1px 8px 1px 0;line-height:1.45}
 .badge{display:inline-block;margin-left:.35rem;padding:.02rem .35rem;
   border:1px solid #d8d2c5;border-radius:999px;font-size:11px;
   color:#6d6658;vertical-align:.08em}
@@ -98,6 +107,8 @@ button{font:inherit;padding:.22rem .55rem}
   a{color:#7aa7ff}
   .muted{color:#9a9a9a}
   .reading{background:#1d1f22;border-color:#333}
+  .tab{border-color:#444}
+  .record{background:#1d1f22;border-color:#333}
   .provenance{color:#9a9a9a}
   .badge{border-color:#444;color:#b8b1a4}
   pre.transcript{background:#17181a;border-color:#333}
@@ -703,6 +714,19 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                 })
             self._json(HTTPStatus.OK, payload, {"Cache-Control": "no-cache"})
 
+        def _page_records(self, doc: dict, page: int) -> tuple[list[dict], str | None]:
+            """Records that START on this page (same reader as `pha page --json`)."""
+            try:
+                conn, _ = _connect_ro(cfg.db_path)
+            except sqlite3.Error as exc:
+                return [], str(exc)
+            try:
+                return db.page_records(conn, doc.get("id"), page), None
+            except sqlite3.Error as exc:
+                return [], str(exc)
+            finally:
+                conn.close()
+
         # ---- routes ------------------------------------------------------
         def do_GET(self):  # noqa: N802 - stdlib signature
             self.route()
@@ -747,7 +771,7 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                 return
             m = _VIEW_RE.match(rest)
             if m:
-                self._viewer(m.group("slug"), int(m.group("page")))
+                self._viewer(m.group("slug"), int(m.group("page")), query)
                 return
             if rest.endswith("/go"):
                 self._go(rest[: -len("/go")], urlparse(self.path).query)
@@ -815,14 +839,14 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
             self._send(HTTPStatus.OK, blob, "image/jpeg",
                        {"Cache-Control": "no-cache"})
 
-        def _viewer(self, slug: str, page: int) -> None:
-            """The reading surface for one page: image + text + navigation.
+        def _viewer(self, slug: str, page: int, query: str = "") -> None:
+            """The reading surface for one page: image + tabbed text + navigation.
 
-            Shows the render, the stored raw transcription and the effective
-            edited reading when one is available.  Works with JavaScript
-            disabled (plain links and a GET form); JS only adds arrow keys and
-            neighbour-image prefetch.  The DB is the authority for the text,
-            exactly as for `pha page` and the MCP tools.
+            The image stays on the left; the right side is a no-JS tab strip
+            (Raw / Edited / Records) selected with ``?view=``.  Works with
+            JavaScript disabled (plain links and a GET form); JS only adds arrow
+            keys and neighbour-image prefetch.  The DB is the authority for the
+            text and the records, exactly as for `pha page` and the MCP tools.
             """
             doc = index.get(slug)
             if doc is None:
@@ -866,11 +890,25 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                 media = (f'<img class="page" src="{_jpg_url(slug, page)}" '
                          f'alt="{html.escape(name)} — page {page}">')
 
+            records, records_error = self._page_records(doc, page)
+            values = parse_qs(query)
+            view = (values.get("view") or ["raw"])[0]
+            if view not in ("raw", "edited", "records"):
+                view = "raw"
+
+            def tab(label: str, key: str) -> str:
+                cls = "tab on" if view == key else "tab"
+                return (f'<a class="{cls}" href="{_viewer_url(slug, page)}?view={key}">'
+                        f'{html.escape(label)}</a>')
+
+            tabs = ('<nav class="tabs">' + tab("Raw", "raw") + tab("Edited", "edited")
+                    + tab(f"Records ({len(records)})", "records") + "</nav>")
+
             if read_error:
-                text_panels = (
-                    '<section class="reading"><h2>Page text</h2>'
-                    '<p class="muted">Page text is temporarily unavailable.</p>'
-                    '</section>')
+                raw_panel = ('<section class="reading"><h2>Page text</h2>'
+                             '<p class="muted">Page text is temporarily unavailable.</p>'
+                             '</section>')
+                edited_panel = raw_panel
             else:
                 status = reading.get("status") if reading else None
                 if not reading or not reading.get("exists"):
@@ -880,23 +918,66 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                              f"(status: {status}).")
                 else:
                     empty = "This page is marked done but has no transcription text."
-                panels = [_reading_panel(
+                raw_panel = _reading_panel(
                     "Transcription (raw)", reading.get("raw_text") if reading else None,
                     _provenance(reading.get("raw_label") if reading else None,
                                 pinned=bool(reading.get("raw_pinned")) if reading else False,
                                 reviewed=bool(reading.get("raw_reviewed")) if reading else False),
-                    empty)]
+                    empty)
                 edited = reading.get("edited") if reading else None
                 if edited:
-                    panels.append(_reading_panel(
+                    edited_panel = _reading_panel(
                         "Edited reading", edited["text"],
                         _provenance(edited["label"], pinned=edited["pinned"],
                                     reviewed=edited["reviewed"]),
-                        ""))
-                if reading and reading.get("text_error"):
-                    panels.append('<p class="muted">The edited reading could not '
-                                  'be loaded.</p>')
-                text_panels = "".join(panels)
+                        "")
+                elif reading and reading.get("text_error"):
+                    edited_panel = ('<p class="muted">The edited reading could not '
+                                    'be loaded.</p>')
+                else:
+                    edited_panel = ('<section class="reading"><h2>Edited reading</h2>'
+                                    '<p class="muted">No filled edited reading for this '
+                                    'page yet.</p></section>')
+
+            if records_error:
+                records_panel = ('<section class="reading"><h2>Encoder records</h2>'
+                                 f'<p class="muted">Records are temporarily unavailable: '
+                                 f'{html.escape(records_error)}</p></section>')
+            elif not records:
+                records_panel = ('<section class="reading"><h2>Encoder records</h2>'
+                                 '<p class="muted">No encoder records START on this page.'
+                                 '</p></section>')
+            else:
+                cards = []
+                for rec in records:
+                    data = rec.get("data") or {}
+                    fields = []
+                    for key, value in data.items():
+                        if key == "text" or value is None or value == "":
+                            continue
+                        if isinstance(value, (dict, list)):
+                            value = json.dumps(value, ensure_ascii=False)
+                        fields.append(f'<tr><td class="muted">{html.escape(str(key))}</td>'
+                                      f'<td>{html.escape(str(value))}</td></tr>')
+                    page_no = rec.get("page_no")
+                    where = f' · p.{page_no}' if page_no is not None else ''
+                    cards.append(
+                        '<div class="record">'
+                        f'<h3>#{rec.get("id")} · '
+                        f'{html.escape(str(rec.get("encoder") or "?"))}/'
+                        f'{html.escape(str(rec.get("kind") or "?"))}{where}</h3>'
+                        + (f'<pre class="transcript">{html.escape(data["text"])}</pre>'
+                           if isinstance(data.get("text"), str) and data["text"].strip()
+                           else "")
+                        + (f'<table class="fields"><tbody>{"".join(fields)}</tbody></table>'
+                           if fields else "")
+                        + '</div>')
+                records_panel = ('<section class="reading"><h2>Encoder records</h2>'
+                                 + "".join(cards) + '</section>')
+
+            text_panels = tabs + {
+                "raw": raw_panel, "edited": edited_panel, "records": records_panel,
+            }[view]
 
             main = (f'<main class="reader"><section class="reader-media">{media}</section>'
                     f'<section class="reader-text">{text_panels}</section></main>')

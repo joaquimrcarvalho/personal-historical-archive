@@ -352,6 +352,7 @@ const CSS = [
   '.pha-chip.busy{border-color:transparent;background:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#e8890c) 18%,transparent);color:var(--dsw-alias-state-warn-primary,#e8890c)}',
   '.pha-chip.bad{border-color:transparent;background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#e03131) 18%,transparent);color:var(--dsw-alias-state-error-primary,#e03131)}',
   '.pha-chip.dim{opacity:.6}',
+  '.pha-chip.rec{border-color:transparent;margin-left:3px;background:color-mix(in srgb,var(--dsw-alias-brand-primary,#0b5fff) 16%,transparent);color:var(--dsw-alias-brand-primary,#0b5fff);font-size:10px;padding:1px 6px}',
   '.pha-btn{font:inherit;font-size:12px;padding:3px 9px;border-radius:6px;border:1px solid var(--dsw-alias-border-l2,#666);background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,inherit);cursor:pointer}',
   '.pha-btn:hover{filter:brightness(1.08)}',
   '.pha-btn.primary{border-color:transparent;background:var(--dsw-alias-brand-primary,#0b5fff);color:#fff}',
@@ -1558,7 +1559,13 @@ function PhaView(props) {
                 title: d.reference || ('bibliographic sidecar: ' + (d.bib_sidecar_name || '')),
               }, 'bib')
             : null,
-          h('span', { className: 'pha-doc-meta' }, (d.page_count || 0) + 'p' + (d.palaeographer ? ' · ' + d.palaeographer : '') + ((s.recordCounts && s.recordCounts[d.id]) ? ' · ' + s.recordCounts[d.id] + 'r' : '')),
+          h('span', { className: 'pha-doc-meta' }, (d.page_count || 0) + 'p' + (d.palaeographer ? ' · ' + d.palaeographer : '')),
+          (s.recordCounts && s.recordCounts[d.id])
+            ? h('span', {
+                className: 'pha-chip rec',
+                title: s.recordCounts[d.id] + ' encoder record' + (s.recordCounts[d.id] === 1 ? '' : 's'),
+              }, s.recordCounts[d.id] + 'r')
+            : null,
           d.path ? sourceButton({ doc: d.id }) : null,
           )
         }),

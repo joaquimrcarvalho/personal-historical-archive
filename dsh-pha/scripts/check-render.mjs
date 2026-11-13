@@ -443,7 +443,9 @@ try {
 try {
   const counted = renderLoadedView({ recordCounts: { 18: 3 } })
   const metas = counted.nodes.filter((n) => hasClass(n, 'pha-doc-meta')).map(textOf)
-  check(metas.includes('3p · 3r'), 'a document row appends its record count as "Nr" (like pha status)')
+  const recChips = counted.nodes.filter((n) => hasClass(n, 'pha-chip') && hasClass(n, 'rec')).map(textOf)
+  check(metas.includes('3p'), 'a document row keeps its page meta')
+  check(recChips.includes('3r'), 'a document row shows a colored "Nr" record-count chip')
   check(metas.includes('4p'), 'a document without records keeps its plain meta')
 } catch (e) { check(false, 'the document row shows its record count — threw: ' + e.message) }
 

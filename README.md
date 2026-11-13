@@ -1465,19 +1465,20 @@ and without changing any URL a consumer embedded. The JSON/`--json` and MCP
 payloads carry the same fields, so an external tool never has to re-derive the
 render path or the `edited-<editor>[@model]` grammar.
 
-**Paging a document.** A citation links to the HTML **page viewer**, which shows
-the render, the stored raw transcription, the effective edited reading when one
-is available, plus prev/next/first/last, a position (`p. 51 of 618`) and a jump
-box — so a footnote is somewhere you can keep reading, instead of a dead-end
+**Paging a document.** A citation links to the HTML **page viewer**: the render
+stays on the left, and the right side is tabbed — **Raw**, **Edited** and
+**Records** (the record cards for every record that STARTS on the page) — plus
+prev/next/first/last, a position (`p. 51 of 618`) and a jump box — so a footnote is somewhere you can keep reading, instead of a dead-end
 image. The text comes from the same DB rows as `pha page` and the MCP tools;
 waiting/empty edited stubs are never shown as readings. Plain links and a GET
 form, so it works with JavaScript off; the arrow keys work when it is on.
 
 | route | what it returns |
 |---|---|
-| `/doc/<slug>/p<NNN>` | the page **viewer**: render + raw transcription + served edited reading + prev/next/first/last + jump box |
+| `/doc/<slug>/p<NNN>` | the page **viewer**: image on the left; **Raw / Edited / Records** tabs on the right (the tab is `?view=raw|edited|records`), plus prev/next/first/last and a jump box |
 | `/doc/<slug>/` | the document **overview**: page count, variants, page ranges, "start reading" |
 | `/doc/<slug>/go?page=N` | the jump-box target (redirects to the viewer) |
+| `/doc/<slug>/p<NNN>?view=N` | the same viewer on a chosen tab: `raw` (default), `edited`, or `records` (all records that START on the page) |
 | `/doc/<slug>/p<NNN>.jpg` | the raw render (unchanged — inline embeds use this) |
 | `/doc/<slug>/meta.json` | metadata + `viewer_url` / `overview_url` / `records_url` / `page_records_url` / `pages` |
 | `/records.json` | every encoder record in the archive as JSON (`?encoder=`/`?kind=`/`?collection=`/`?field=`/`?ignore_case=`/`?limit=`/`?offset=`/`?page=`) |
