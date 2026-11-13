@@ -318,6 +318,18 @@
           "commit": "cb9fb006dbe9"
         }
       ]
+    },
+    "0.49.5": {
+      "date": "2026-11-13",
+      "summary": "Selecting a record opens its page and shows all records starting on that page in the reading pane (Raw / Edited / Record)",
+      "changes": [
+        {
+          "type": "feat",
+          "scope": "dsh-pha",
+          "text": "show the selected record in the page pane",
+          "commit": "537002489136"
+        }
+      ]
     }
   }
 }
