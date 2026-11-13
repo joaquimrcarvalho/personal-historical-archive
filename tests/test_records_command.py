@@ -222,8 +222,32 @@ def test_records_degrades_on_db_without_records_table(tmp_path, capsys):
     try:
         assert _db.record_listing(ro)["total"] == 0
         assert _db.count_records(ro) == 0
+        assert _db.page_records(ro, 1, 1) == []
+        assert _db.record_encoders_for_document(ro, 1) == []
     finally:
         ro.close()
+
+
+def test_record_listing_page_filter_and_public_projection(tmp_path):
+    """The page filter selects records that START there, and `record_public`
+    is the single projection shared by CLI/serve/view."""
+    cfg = _make_cfg(tmp_path)
+    d1, d2 = _seed(cfg)
+    conn = _db.connect(cfg.db_path, readonly=True)
+    try:
+        listing = _db.record_listing(conn, page=69)
+        assert listing["total"] == 1
+        public = _db.record_public(listing["records"][0])
+        assert public["page_no"] == 69
+        assert public["encoder"] == "letters"
+        assert public["data"]["place"] == "Malaca"
+        assert _db.record_listing(conn, page=999)["total"] == 0
+        assert _db.page_records(conn, d1, 20)[0]["data"]["place"] == "Goa"
+        assert _db.page_records(conn, d1, 999) == []
+        assert _db.record_encoders_for_document(conn, d1) == ["letters"]
+        assert _db.record_encoders_for_document(conn, d2) == ["person"]
+    finally:
+        conn.close()
 
 
 # ------------------------------------------------------------------ status

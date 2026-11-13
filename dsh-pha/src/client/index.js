@@ -410,6 +410,33 @@ const CSS = [
   '.pha-page.pending{border-color:var(--dsw-alias-state-warn-primary,#e8890c);color:var(--dsw-alias-state-warn-primary,#e8890c);font-weight:600}',
   '.pha-page.pending.sel{background:var(--dsw-alias-state-warn-primary,#e8890c);color:#fff;border-color:transparent}',
   '.pha-empty{padding:20px;text-align:center;opacity:.5}',
+  // Encoded records — three places share these rules: the per-document block in the
+  // reading pane, the archive-wide Records mode in the left pane, and the record hits
+  // of a search. Compact, because a record row is a list item, not a card.
+  '.pha-rec-block{display:flex;flex-direction:column;gap:3px}',
+  '.pha-rec-group{display:flex;flex-direction:column;gap:2px}',
+  '.pha-rec-encoder{font-weight:600;font-size:11px;margin-top:4px}',
+  '.pha-rec-kind{font-size:10px;opacity:.6;padding:1px 2px}',
+  '.pha-rec-list{display:flex;flex-direction:column;gap:1px;padding:0 0 2px 6px;margin:0 0 2px 4px;border-left:2px solid var(--dsw-alias-border-l1,#333)}',
+  '.pha-rec{display:flex;flex-direction:column;gap:2px;padding:2px 4px;border-radius:5px;border:1px solid transparent}',
+  '.pha-rec:hover{background:var(--dsw-alias-bg-layer-1,#f2f2f2)}',
+  '.pha-rec.open{background:var(--dsw-alias-bg-layer-2,#e8e8e8);border-color:var(--dsw-alias-border-l1,#333)}',
+  '.pha-rec-row{display:flex;align-items:baseline;gap:6px;min-width:0}',
+  '.pha-rec-id{flex:0 0 auto;font-size:11px;opacity:.55;font-variant-numeric:tabular-nums}',
+  '.pha-rec-doc{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}',
+  '.pha-rec-tag{flex:0 0 auto;font-size:10px;opacity:.7;white-space:nowrap}',
+  '.pha-rec-pg{flex:0 0 auto;font-size:10px;opacity:.8;white-space:nowrap}',
+  '.pha-rec-pg.off{opacity:.45;font-style:italic}',
+  '.pha-rec-text{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;opacity:.85}',
+  '.pha-rec .pha-pre{margin-top:4px;max-height:40vh}',
+  '.pha-rec-filters{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:0 0 6px}',
+  '.pha-rec-filters .pha-input{flex:0 1 92px;min-width:52px}',
+  '.pha-rec-filters select.pha-input{flex:0 0 auto;min-width:84px}',
+  '.pha-rec-ignore{display:flex;gap:3px;align-items:center;font-size:11px;opacity:.8;white-space:nowrap}',
+  '.pha-rec-pager{display:flex;gap:6px;align-items:center;margin:2px 0 6px}',
+  // The search-source selector (pages / records / all) sits in the search line but
+  // must not grow like the text input does.
+  '.pha-select{flex:0 0 auto;min-width:76px;max-width:100px}',
 ].join('')
 
 function statusClass(s) {
@@ -439,6 +466,63 @@ function relPath(doc) {
   return doc ? (doc.dir_path ? doc.dir_path + '/' + doc.filename : doc.filename) : ''
 }
 
+// ---- encoded records (`/pha/records`): the encoder's page-grounded rows
+//
+// One record's `data` is the encoder's own JSON object. Its `text` is the field the
+// view prefers for a one-line excerpt; with no text it falls back to the first scalar
+// field so a row still says something. Never the whole JSON — expanding a row does that.
+function recordSnippet(rec, max) {
+  const d = (rec && rec.data) || null
+  const limit = max || 140
+  const oneLine = (v) => String(v).replace(/\s+/g, ' ').trim()
+  if (d && typeof d === 'object' && typeof d.text === 'string' && d.text.trim()) {
+    return oneLine(d.text).slice(0, limit)
+  }
+  if (d && typeof d === 'object') {
+    for (const k of Object.keys(d)) {
+      const v = d[k]
+      if (typeof v === 'string' && v.trim()) return oneLine(v).slice(0, limit)
+      if (typeof v === 'number' || typeof v === 'boolean') return String(v)
+    }
+  }
+  if (typeof d === 'string') return oneLine(d).slice(0, limit)
+  return ''
+}
+
+// Group records by encoder, then by kind, so the per-document block reads as
+// "encoder x kind" rather than one flat list. Sorted, so the same archive renders the
+// same order every time.
+function groupRecords(rows) {
+  const byEncoder = {}
+  const encoders = []
+  for (const r of (rows || [])) {
+    const enc = String((r && r.encoder) || '(no encoder)')
+    if (!byEncoder[enc]) { byEncoder[enc] = { encoder: enc, byKind: {}, kinds: [] }; encoders.push(byEncoder[enc]) }
+    const kind = String((r && r.kind) || 'record')
+    const g = byEncoder[enc]
+    if (!g.byKind[kind]) { g.byKind[kind] = { kind, rows: [] }; g.kinds.push(g.byKind[kind]) }
+    g.byKind[kind].rows.push(r)
+  }
+  encoders.sort((a, b) => a.encoder.localeCompare(b.encoder))
+  for (const g of encoders) g.kinds.sort((a, b) => a.kind.localeCompare(b.kind))
+  return encoders.map((g) => ({ encoder: g.encoder, kinds: g.kinds.map((k) => ({ kind: k.kind, rows: k.rows })) }))
+}
+
+// The `/pha/records` query string. `doc` scopes it to one document (the pane's block);
+// without it the route filters the whole archive (Records mode).
+function recordsQuery(o, limit, offset) {
+  const q = o || {}
+  const parts = []
+  if (q.doc !== null && q.doc !== undefined && q.doc !== '') parts.push('doc=' + encodeURIComponent(String(q.doc)))
+  if (q.encoder) parts.push('encoder=' + encodeURIComponent(String(q.encoder)))
+  if (q.kind) parts.push('kind=' + encodeURIComponent(String(q.kind)))
+  if (q.field) parts.push('field=' + encodeURIComponent(String(q.field)))
+  if (q.ignoreCase) parts.push('ignore_case=1')
+  parts.push('limit=' + encodeURIComponent(String(limit)))
+  parts.push('offset=' + encodeURIComponent(String(offset)))
+  return '/pha/records?' + parts.join('&')
+}
+
 // The conversation view is unmounted when the reader switches to the Chat tab, so its
 // React state is destroyed and the document/page they were reading was forgotten. One
 // snapshot per session lives here for the life of the page (a reload starts fresh); the
@@ -454,7 +538,7 @@ function PhaView(props) {
   const inputActions = props ? props.inputActions : null
   const inputState = (props && typeof props.useInput === 'function') ? props.useInput((s) => s) : null
   const h = React.createElement
-  const [state, setState] = React.useState(() => seedState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageErr: null, pageLoading: false, noteMsg: null, status: null, statusErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null, srcMsg: null }, viewBoot))
+  const [state, setState] = React.useState(() => seedState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageLoading: false, noteMsg: null, status: null, statusErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null, srcMsg: null, recordMode: false, records: null, recordsTotal: 0, recordsOffset: 0, recordsLimit: 25, recordsErr: null, recordLoading: false, recordFilters: { encoder: '', kind: '', field: '', ignoreCase: false }, recordOpen: null, recordCounts: null, searchSource: 'pages' }, viewBoot))
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -468,6 +552,9 @@ function PhaView(props) {
   const [rootEl, setRootEl] = React.useState(null)
   const [noteAnchor, setNoteAnchor] = React.useState(null)
   const [bibOpen, setBibOpen] = React.useState(false)
+  // Requests for the archive-wide records list can overlap (type in a filter, click
+  // next page): only the newest one may write its answer into state.
+  const recordReq = React.useRef(0)
 
   React.useEffect(() => {
     // The document list first — it is what the user waits for. Notes and the
@@ -482,7 +569,13 @@ function PhaView(props) {
         get('/pha/defs').then((r) => setState((s) => ({ ...s, defs: r && r.ok ? r.defs : [] }))).catch(() => {})
         get('/pha/collectionEncoders').then((r) => setState((s) => ({ ...s, collEncoders: r && r.ok ? r.encoders : [] }))).catch(() => {})
         refreshStatus()
+        // Per-document record counts for the document list's "Nr" badge: never blocks
+        // the list, and an old archive without the route simply shows no counts.
+        refreshRecordCounts()
       })
+    // Restored Records mode: the rows are never cached, so re-fetch the list (its mode
+    // and filters came back synchronously through seedState).
+    if (viewBoot && viewBoot.recordsMode) loadArchiveRecords((viewBoot.recordsMode && viewBoot.recordsMode.filters) || {}, 0)
     // Back from another tab: the selection is already seeded, so this only loads the
     // content behind it (a document's detail + page, a note, a definition, an inbox item).
     const plan = restorePlan(viewBoot)
@@ -571,6 +664,93 @@ function PhaView(props) {
     }
   }
 
+  // The encoded records (encoder rows) of the document being read. Re-fetched per
+  // selection like the bib sidecar rather than cached in the snapshot: encoding is a
+  // pipeline pass, so a restored view must not show yesterday's rows.
+  async function loadRecords(id) {
+    // Same request token as the archive-wide list: leaving Records mode while its
+    // request is in flight must invalidate that answer, or a late archive page would
+    // overwrite this document's rows (the pane would show the wrong record set).
+    const token = ++recordReq.current
+    setState((s) => ({ ...s, records: null, recordsTotal: 0, recordsOffset: 0, recordOpen: null, recordsErr: null, recordLoading: true }))
+    if (id === null || id === undefined || id === '') {
+      setState((s) => ({ ...s, records: [], recordsTotal: 0, recordLoading: false }))
+      return
+    }
+    try {
+      const r = await get(recordsQuery({ doc: id }, 100, 0))
+      if (token !== recordReq.current) return
+      setState((s) => (r && r.ok)
+        ? { ...s, records: r.records || [], recordsTotal: Number(r.total) || 0, recordsOffset: Number(r.offset) || 0, recordLoading: false, recordsErr: null }
+        : { ...s, records: [], recordsTotal: 0, recordLoading: false, recordsErr: (r && r.error) || 'could not read the encoded records' })
+    } catch (e) {
+      if (token !== recordReq.current) return
+      setState((s) => ({ ...s, records: [], recordsTotal: 0, recordLoading: false, recordsErr: String((e && e.message) || e) }))
+    }
+  }
+
+  // The archive-wide Records list (filters + pagination). `filters`, `limit` and
+  // `offset` are passed explicitly so a click handler can compute the NEXT query from
+  // what it is about to set — the closing-over `state` is still the previous render.
+  async function loadArchiveRecords(filters, offset, limit) {
+    const f = Object.assign({ encoder: '', kind: '', field: '', ignoreCase: false }, state.recordFilters || {}, filters || {})
+    const lim = Number(limit) > 0 ? Number(limit) : (Number(state.recordsLimit) || 25)
+    const off = Number(offset) > 0 ? Number(offset) : 0
+    const token = ++recordReq.current
+    setState((s) => ({ ...s, recordFilters: f, recordsLimit: lim, recordsOffset: off, records: null, recordsTotal: 0, recordLoading: true, recordsErr: null, recordOpen: null }))
+    try {
+      const r = await get(recordsQuery({ encoder: f.encoder, kind: f.kind, field: f.field, ignoreCase: f.ignoreCase }, lim, off))
+      // A newer filter/page request landed while this one was in flight: drop the stale
+      // answer instead of overwriting what the reader is looking at.
+      if (token !== recordReq.current) return
+      setState((s) => (r && r.ok)
+        ? { ...s, records: r.records || [], recordsTotal: Number(r.total) || 0, recordsOffset: Number(r.offset) || off, recordsLimit: Number(r.limit) || lim, recordLoading: false, recordsErr: null }
+        : { ...s, records: [], recordsTotal: 0, recordLoading: false, recordsErr: (r && r.error) || 'could not read the encoded records' })
+    } catch (e) {
+      if (token !== recordReq.current) return
+      setState((s) => ({ ...s, records: [], recordsTotal: 0, recordLoading: false, recordsErr: String((e && e.message) || e) }))
+    }
+  }
+  // Update the filter fields in state (so the inputs stay controlled) and reset the
+  // page to the first one. `applyRecordFilters` also fetches the new first page.
+  function patchRecordFilters(patch) {
+    const f = Object.assign({ encoder: '', kind: '', field: '', ignoreCase: false }, state.recordFilters || {}, patch || {})
+    setState((s) => ({ ...s, recordFilters: f, recordsOffset: 0 }))
+    return f
+  }
+  function applyRecordFilters(patch) {
+    const f = patchRecordFilters(patch)
+    loadArchiveRecords(f, 0, state.recordsLimit)
+  }
+  async function refreshRecordCounts() {
+    try {
+      const r = await get('/pha/recordcounts')
+      setState((s) => ({ ...s, recordCounts: (r && r.ok && r.counts) ? r.counts : {} }))
+    } catch (e) {
+      setState((s) => ({ ...s, recordCounts: {} }))
+    }
+  }
+  // Records mode is a left-pane browse view; toggling it off returns to the document
+  // list (and re-reads the selected document's own records).
+  function toggleRecords() {
+    if (state.recordMode) {
+      setState((s) => ({ ...s, recordMode: false, records: null, recordsTotal: 0, recordsOffset: 0, recordsErr: null, recordOpen: null }))
+      if (state.selectedId !== null && state.selectedId !== undefined) loadRecords(state.selectedId)
+      return
+    }
+    const filters = Object.assign({ encoder: '', kind: '', field: '', ignoreCase: false }, state.recordFilters || {})
+    setState((s) => ({ ...s, recordMode: true, searchMode: false, hits: null, records: null, recordsTotal: 0, recordsOffset: 0, recordsErr: null, recordOpen: null, recordFilters: filters }))
+    loadArchiveRecords(filters, 0, state.recordsLimit)
+  }
+  // Clicking a row in the archive-wide list selects its document and, when the record
+  // is page-grounded, lands on that page in the reading pane.
+  async function openRecordTarget(row) {
+    if (!row || row.document_id === null || row.document_id === undefined) return
+    const id = row.document_id
+    await openDoc(id)
+    if (row.page_no !== null && row.page_no !== undefined) openPage(row.page_no, false, id)
+  }
+
   async function editSidecar(path) {
     if (!path) return
     try {
@@ -605,20 +785,44 @@ function PhaView(props) {
   }
 
   async function openDoc(id) {
-    setState((s) => ({ ...s, selectedId: id, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null, bib: null, bibErr: null }))
+    // Records mode is a master–detail browse view: its archive-wide list stays in the
+    // left pane, so opening a document from it must not replace that list with the
+    // document's own rows (the reading pane's Records block is hidden there instead).
+    const keepRecords = !!state.recordMode
+    // A document read invalidates an in-flight archive-wide request immediately (not
+    // only when loadRecords() runs after the /pha/document fetch).
+    if (!keepRecords) recordReq.current += 1
+    setState((s) => ({
+      ...s, selectedId: id, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null,
+      pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null,
+      bib: null, bibErr: null,
+      records: keepRecords ? s.records : null,
+      recordsTotal: keepRecords ? s.recordsTotal : 0,
+      recordsOffset: keepRecords ? s.recordsOffset : 0,
+      recordOpen: keepRecords ? s.recordOpen : null,
+      recordsErr: keepRecords ? s.recordsErr : null,
+      recordLoading: keepRecords ? s.recordLoading : false,
+    }))
     const r = await get('/pha/document?doc=' + encodeURIComponent(id))
     setState((s) => ({ ...s, detail: r && r.ok ? { doc: r.doc, pages: r.pages || [], edits: r.edits || [], matched: false } : null }))
     loadPending(id)
     loadBib(id)
+    if (!keepRecords) loadRecords(id)
   }
   async function openSearchDoc(id) {
+    recordReq.current += 1                 // a search-opened document invalidates archive rows
     const r = await get('/pha/document?doc=' + encodeURIComponent(id))
-    const matched = (state.hits || []).filter((hit) => hit.document_id === id)
+    // Record hits share the document with page hits but carry no page variant, so they
+    // must not create phantom "matched pages" entries.
+    const matched = (state.hits || []).filter((hit) => hit.document_id === id && hit.kind !== 'record')
     const vmap = {}
     matched.forEach((hit) => { vmap[hit.page_no] = hit.variant })
     const pages = r && r.ok && r.pages ? r.pages.filter((p) => vmap[p.page_no] !== undefined) : []
-    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null }))
+    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null, records: null, recordsTotal: 0, recordsOffset: 0, recordOpen: null, recordsErr: null, recordLoading: false }))
     loadPending(id)
+    // A search-opened document shows its encoder records too (the pane's block is not
+    // specific to the document-list path).
+    loadRecords(id)
   }
   async function openDef(d) {
     setState((s) => ({ ...s, defMode: true, selectedDef: null, defMsg: null, noteMode: false, selectedNote: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null }))
@@ -873,8 +1077,9 @@ function PhaView(props) {
       setState((s) => ({ ...s, docsErr: 'no document #' + wanted + ' in this archive' + (state.docs ? '' : ' (the document list has not loaded yet)') }))
       return
     }
-    setState((s) => ({ ...s, searchMode: true, hits: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, noteMode: false, selectedNote: null, inboxSel: null }))
-    const r = await get('/pha/search?q=' + encodeURIComponent(q) + '&limit=20')
+    setState((s) => ({ ...s, searchMode: true, recordMode: false, hits: null, selectedId: null, detail: null, page: null, pageReq: null, pageErr: null, noteMode: false, selectedNote: null, inboxSel: null }))
+    const source = state.searchSource || 'pages'
+    const r = await get('/pha/search?q=' + encodeURIComponent(q) + '&limit=20&source=' + encodeURIComponent(source))
     setState((s) => ({ ...s, hits: r && r.ok ? r.results : null }))
   }
   function clearSearch() { setSearchText(''); setState((s) => ({ ...s, searchMode: false, hits: null, selectedId: null, detail: null, page: null, pageReq: null, inboxSel: null, inboxMsg: null })) }
@@ -895,12 +1100,27 @@ function PhaView(props) {
 
   const s = state
   const searchMode = !!s.searchMode
+  // `pha status` reports the archive's encoded-record totals and per-encoder breakdown
+  // when it can (old archives: no `records` key, so the selector falls back to a text
+  // filter and the button shows no count).
+  const statusRecords = (s.status && s.status.records) || null
+  const recordTotalHint = (statusRecords && Number(statusRecords.total)) || 0
+  const recordEncoderKeys = (() => {
+    const by = statusRecords && statusRecords.by_encoder
+    if (!by) return []
+    const keys = Array.isArray(by) ? by.map((e) => (e && (e.encoder || e.name || e.id)) || '') : Object.keys(by)
+    return keys.map((k) => String(k)).filter(Boolean)
+  })()
+  // Search results: page hits keep the document-grouped page-row shape; record hits are
+  // their own rows (a record is not a page — it may have no page at all).
+  const searchPageHits = (searchMode && s.hits) ? s.hits.filter((hit) => hit.kind !== 'record') : []
+  const searchRecordHits = (searchMode && s.hits) ? s.hits.filter((hit) => hit.kind === 'record') : []
   const noteNames = (s.notes || []).map((n) => n.name)
   const editors = []
   let groups = []
   if (searchMode && s.hits) {
     const byColl = {}
-    for (const hit of s.hits) {
+    for (const hit of searchPageHits) {
       const key = hit.collection || '(search)'
       ;(byColl[key] = byColl[key] || {})[hit.document_id] = { id: hit.document_id, filename: hit.filename, count: ((byColl[key][hit.document_id] && byColl[key][hit.document_id].count) || 0) + 1 }
     }
@@ -949,12 +1169,24 @@ function PhaView(props) {
     h('span', { className: 'pha-title' }, 'pha archive'),
     h('span', { className: 'pha-muted' }, s.archive || '…'),
     h('span', { className: 'pha-spacer' }),
-    h('button', { className: 'pha-btn', onClick: () => { if (s.searchMode) clearSearch(); get('/pha/documents').then((r) => setState((x) => ({ ...x, docs: r && r.ok ? r.documents : null }))); get('/pha/notes').then((r) => setState((x) => ({ ...x, notes: r && r.ok ? r.notes : [] }))); get('/pha/defs').then((r) => setState((x) => ({ ...x, defs: r && r.ok ? r.defs : [] }))); get('/pha/collectionEncoders').then((r) => setState((x) => ({ ...x, collEncoders: r && r.ok ? r.encoders : [] }))); refreshStatus() } }, '⟳ Refresh'),
+    h('button', { className: 'pha-btn', onClick: () => { if (s.searchMode) clearSearch(); get('/pha/documents').then((r) => setState((x) => ({ ...x, docs: r && r.ok ? r.documents : null }))); get('/pha/notes').then((r) => setState((x) => ({ ...x, notes: r && r.ok ? r.notes : [] }))); get('/pha/defs').then((r) => setState((x) => ({ ...x, defs: r && r.ok ? r.defs : [] }))); get('/pha/collectionEncoders').then((r) => setState((x) => ({ ...x, collEncoders: r && r.ok ? r.encoders : [] }))); refreshStatus(); refreshRecordCounts(); if (s.recordMode) loadArchiveRecords(s.recordFilters, s.recordsOffset, s.recordsLimit); else if (s.selectedId !== null && s.selectedId !== undefined) loadRecords(s.selectedId) } }, '⟳ Refresh'),
   )
 
   const searchHeader = h('div', { className: 'pha-search' },
     h('input', { className: 'pha-input', placeholder: 'search the archive…  (#18 = document number)', value: searchText, onChange: (e) => setSearchText(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') doSearch() } }),
+    h('select', {
+      className: 'pha-input pha-select',
+      value: s.searchSource || 'pages',
+      title: 'where a search looks: page transcriptions, encoded records, or both',
+      onChange: (e) => setState((x) => ({ ...x, searchSource: e.target.value })),
+    },
+      ['pages', 'records', 'all'].map((v) => h('option', { key: 'src-' + v, value: v }, v))),
     h('button', { className: 'pha-btn primary', onClick: doSearch }, 'Search'),
+    h('button', {
+      className: 'pha-btn' + (s.recordMode ? ' on' : ''),
+      title: s.recordMode ? 'back to the document list' : 'browse the encoded records of the whole archive',
+      onClick: toggleRecords,
+    }, 'Records' + (recordTotalHint ? ' (' + recordTotalHint + ')' : '')),
     searchMode ? h('button', { className: 'pha-btn small', title: 'clear search', onClick: clearSearch }, '✕') : null,
   )
 
@@ -1062,16 +1294,140 @@ function PhaView(props) {
     ))
   })()
 
+  // One row of the per-document Records block: clicking it swaps a one-line excerpt for
+  // the encoder's whole JSON object. The "open page" action only exists for a
+  // page-grounded record — a record with no page must never render a dead link.
+  function recordDocRow(r, docId) {
+    const pageNo = (r && r.page_no !== null && r.page_no !== undefined) ? r.page_no : null
+    const open = s.recordOpen !== null && s.recordOpen !== undefined && s.recordOpen === (r && r.id)
+    return h('div', {
+      className: 'pha-rec' + (open ? ' open' : ''),
+      key: 'drec-' + (r && r.id),
+      title: open ? 'click to collapse this record' : 'click to see the whole record as JSON',
+      onClick: () => setState((x) => ({ ...x, recordOpen: x.recordOpen === (r && r.id) ? null : (r && r.id) })),
+    },
+      h('div', { className: 'pha-rec-row' },
+        h('span', { className: 'pha-rec-id' }, '#' + (r && r.id)),
+        h('span', { className: 'pha-rec-tag' }, '[' + ((r && r.encoder) || '?') + '/' + ((r && r.kind) || '?') + ']'),
+        pageNo === null
+          ? h('span', { className: 'pha-rec-pg off' }, 'not page-grounded')
+          : h('span', { className: 'pha-rec-pg' }, 'p.' + pageNo),
+        h('span', { className: 'pha-rec-text' }, recordSnippet(r)),
+        pageNo === null ? null : h('button', {
+          className: 'pha-btn small',
+          title: 'open page ' + pageNo + ' in the reading pane',
+          onClick: (ev) => { stopRow(ev); openPage(pageNo, false, docId) },
+        }, 'open page'),
+      ),
+      open ? h('pre', { className: 'pha-pre' }, JSON.stringify((r && r.data) || null, null, 2)) : null,
+    )
+  }
+  // One row of the archive-wide Records list: the whole row opens its document, and its
+  // page too when the record is page-grounded.
+  function recordArchiveRow(r) {
+    const pageNo = (r && r.page_no !== null && r.page_no !== undefined) ? r.page_no : null
+    const docLabel = (r && r.filename) || ('doc #' + (r && r.document_id))
+    return h('div', {
+      className: 'pha-rec',
+      key: 'arec-' + (r && r.id),
+      title: 'open ' + docLabel + (pageNo === null ? '' : ' at page ' + pageNo),
+      onClick: () => openRecordTarget(r),
+    },
+      h('div', { className: 'pha-rec-row' },
+        h('span', { className: 'pha-rec-id' }, '#' + (r && r.id)),
+        h('span', { className: 'pha-rec-doc' }, docLabel),
+        h('span', { className: 'pha-rec-tag' }, '[' + ((r && r.encoder) || '?') + '/' + ((r && r.kind) || '?') + ']'),
+        pageNo === null
+          ? h('span', { className: 'pha-rec-pg off' }, 'not page-grounded')
+          : h('span', { className: 'pha-rec-pg' }, 'p.' + pageNo),
+        h('span', { className: 'pha-rec-text' }, recordSnippet(r)),
+      ),
+    )
+  }
+
   let body
   if (searchMode) {
-    body = (s.hits && s.hits.length) ? groups.map((g) => h('div', { className: 'pha-group', key: g.key },
-      h('div', { className: 'pha-group-h' }, g.key + '  (' + g.docs.length + ')'),
-      g.docs.map((d) => h('div', { className: 'pha-doc' + (s.selectedId === d.id ? ' sel' : ''), key: d.id, title: 'doc #' + d.id, onClick: () => openSearchDoc(d.id) },
-        h('span', { className: 'pha-doc-id' }, docNumberLabel(d.id)),
-        h('span', { className: 'pha-chip busy' }, d.count + ' hit' + (d.count > 1 ? 's' : '')),
-        h('span', { className: 'pha-doc-name', title: d.filename }, d.filename),
+    const recordHitRows = searchRecordHits.map((hit) => h('div', {
+      className: 'pha-doc',
+      key: 'srec-' + (hit.record_id !== undefined && hit.record_id !== null ? hit.record_id : (hit.document_id + '-' + hit.page_no + '-' + String(hit.text || '').slice(0, 20))),
+      title: 'encoded record — open ' + (hit.filename || ('document #' + hit.document_id)),
+      onClick: () => openRecordTarget({ document_id: hit.document_id, page_no: hit.page_no }),
+    },
+      h('span', { className: 'pha-chip' }, 'record'),
+      h('span', { className: 'pha-rec-tag' }, '[' + (hit.encoder || '?') + '/' + (hit.record_kind || '?') + ']'),
+      hit.page_no === null || hit.page_no === undefined
+        ? h('span', { className: 'pha-rec-pg off' }, 'not page-grounded')
+        : h('span', { className: 'pha-rec-pg' }, 'p.' + hit.page_no),
+      h('span', { className: 'pha-doc-name', title: hit.filename || '' }, hit.filename || ('doc #' + hit.document_id)),
+      h('span', { className: 'pha-rec-text' }, String(hit.text || '').slice(0, 140)),
+    ))
+    body = (s.hits && s.hits.length) ? h('div', null,
+      recordHitRows.length ? h('div', { className: 'pha-group', key: 'search-records' },
+        h('div', { className: 'pha-group-h' }, 'records  (' + recordHitRows.length + ')'),
+        recordHitRows,
+      ) : null,
+      groups.map((g) => h('div', { className: 'pha-group', key: g.key },
+        h('div', { className: 'pha-group-h' }, g.key + '  (' + g.docs.length + ')'),
+        g.docs.map((d) => h('div', { className: 'pha-doc' + (s.selectedId === d.id ? ' sel' : ''), key: d.id, title: 'doc #' + d.id, onClick: () => openSearchDoc(d.id) },
+          h('span', { className: 'pha-doc-id' }, docNumberLabel(d.id)),
+          h('span', { className: 'pha-chip busy' }, d.count + ' hit' + (d.count > 1 ? 's' : '')),
+          h('span', { className: 'pha-doc-name', title: d.filename }, d.filename),
+        )),
       )),
-    )) : h('div', { className: 'pha-empty' }, 'No matches')
+    ) : h('div', { className: 'pha-empty' }, 'No matches')
+  } else if (s.recordMode) {
+    const rf = s.recordFilters || {}
+    const recLimit = Number(s.recordsLimit) || 25
+    const recOffset = Number(s.recordsOffset) || 0
+    const recTotal = Number(s.recordsTotal) || 0
+    const recFrom = recTotal === 0 ? 0 : recOffset + 1
+    const recTo = Math.min(recOffset + recLimit, recTotal)
+    body = h('div', null,
+      h('div', { className: 'pha-group-h' }, 'encoded records' + (recTotal ? '  (' + recTotal + ')' : '')),
+      h('div', { className: 'pha-rec-filters' },
+        recordEncoderKeys.length
+          ? h('select', {
+              className: 'pha-input',
+              value: rf.encoder || '',
+              title: 'only records produced by this encoder',
+              onChange: (e) => applyRecordFilters({ encoder: e.target.value }),
+            },
+              h('option', { value: '' }, 'all encoders'),
+              recordEncoderKeys.map((k) => h('option', { key: 'renc-' + k, value: k }, k)))
+          : h('input', {
+              className: 'pha-input', placeholder: 'encoder', value: rf.encoder || '',
+              onChange: (e) => patchRecordFilters({ encoder: e.target.value }),
+              onKeyDown: (e) => { if (e.key === 'Enter') applyRecordFilters({ encoder: e.target.value }) },
+            }),
+        h('input', {
+          className: 'pha-input', placeholder: 'kind', value: rf.kind || '',
+          onChange: (e) => patchRecordFilters({ kind: e.target.value }),
+          onKeyDown: (e) => { if (e.key === 'Enter') applyRecordFilters({ kind: e.target.value }) },
+        }),
+        h('input', {
+          className: 'pha-input', placeholder: 'field NAME=VALUE', value: rf.field || '',
+          title: 'match one encoder field: NAME=VALUE',
+          onChange: (e) => patchRecordFilters({ field: e.target.value }),
+          onKeyDown: (e) => { if (e.key === 'Enter') applyRecordFilters({ field: e.target.value }) },
+        }),
+        h('label', { className: 'pha-rec-ignore', title: 'ignore upper/lower case in the field filter' },
+          h('input', { type: 'checkbox', checked: !!rf.ignoreCase, onChange: (e) => applyRecordFilters({ ignoreCase: !!e.target.checked }) }),
+          'ignore case'),
+        h('select', {
+          className: 'pha-input', value: String(recLimit), title: 'records per page',
+          onChange: (e) => { const lim = Number(e.target.value) || 25; setState((x) => ({ ...x, recordsLimit: lim })); loadArchiveRecords(rf, 0, lim) },
+        }, [10, 25, 50, 100].map((n) => h('option', { key: 'rlim-' + n, value: String(n) }, n + ' / page'))),
+      ),
+      h('div', { className: 'pha-rec-pager' },
+        h('button', { className: 'pha-btn small', disabled: recOffset <= 0, title: 'previous page of records', onClick: () => loadArchiveRecords(rf, Math.max(0, recOffset - recLimit), recLimit) }, '‹ prev'),
+        h('span', { className: 'pha-muted' }, (recTotal ? recFrom + '–' + recTo : '0') + ' / ' + recTotal),
+        h('button', { className: 'pha-btn small', disabled: recOffset + recLimit >= recTotal, title: 'next page of records', onClick: () => loadArchiveRecords(rf, recOffset + recLimit, recLimit) }, 'next ›'),
+      ),
+      (s.records && s.records.length)
+        ? h('div', { className: 'pha-group' }, s.records.map((r) => recordArchiveRow(r)))
+        : h('div', { className: 'pha-empty' }, s.recordLoading ? 'Loading records…' : 'No records'),
+      s.recordsErr ? h('div', { className: 'pha-muted' }, s.recordsErr) : null,
+    )
   } else {
     body = s.docsErr ? h('div', { className: 'pha-err' }, s.docsErr) : (s.docs ? h('div', null,
       groups.map((g) => h('div', { className: 'pha-group', key: g.key },
@@ -1092,7 +1448,7 @@ function PhaView(props) {
                 title: d.reference || ('bibliographic sidecar: ' + (d.bib_sidecar_name || '')),
               }, 'bib')
             : null,
-          h('span', { className: 'pha-doc-meta' }, (d.page_count || 0) + 'p' + (d.palaeographer ? ' · ' + d.palaeographer : '')),
+          h('span', { className: 'pha-doc-meta' }, (d.page_count || 0) + 'p' + (d.palaeographer ? ' · ' + d.palaeographer : '') + ((s.recordCounts && s.recordCounts[d.id]) ? ' · ' + s.recordCounts[d.id] + 'r' : '')),
           d.path ? sourceButton({ doc: d.id }) : null,
           )
         }),
@@ -1313,6 +1669,26 @@ function PhaView(props) {
     const bibLive = (s.bib && s.bib.found) ? s.bib : null
     const refText = (bibLive && bibLive.reference) || d.reference || null
     const modsOnly = !!((bibLive && bibLive.sidecar) && /\.mods\.xml$/i.test(bibLive.sidecar))
+    // The per-document encoded records sit between the reference and the page list:
+    // "what did the encoders make of this document", before the raw material. In Records
+    // mode `records` holds the archive-wide list, so the pane's block is not rendered.
+    const docRecordRows = (!s.recordMode && s.records) ? s.records : null
+    const recordsBlock = (!s.recordMode && ((docRecordRows && docRecordRows.length) || s.recordLoading || s.recordsErr))
+      ? h('div', { className: 'pha-rec-block' },
+          (docRecordRows && docRecordRows.length)
+            ? h('div', { className: 'pha-group-h' }, 'Encoded records (' + (Number(s.recordsTotal) || docRecordRows.length) + ')')
+            : null,
+          s.recordLoading ? h('div', { className: 'pha-muted' }, 'loading encoded records…') : null,
+          s.recordsErr ? h('div', { className: 'pha-err' }, s.recordsErr) : null,
+          (docRecordRows && docRecordRows.length) ? groupRecords(docRecordRows).map((g) => h('div', { className: 'pha-rec-group', key: 'rg-' + g.encoder },
+            h('div', { className: 'pha-rec-encoder' }, g.encoder),
+            g.kinds.map((k) => h('div', { key: 'rk-' + g.encoder + '-' + k.kind },
+              h('div', { className: 'pha-rec-kind' }, k.kind + ' (' + k.rows.length + ')'),
+              h('div', { className: 'pha-rec-list' }, k.rows.map((r) => recordDocRow(r, d.id))),
+            )),
+          )) : null,
+        )
+      : null
     right = h('div', { className: 'pha-right' },
       h('div', null,
         h('strong', null, '#' + d.id + ' ' + d.filename),
@@ -1359,6 +1735,7 @@ function PhaView(props) {
           ),
         ) : h('div', { className: 'pha-muted' }, 'no bibliographic reference for this document (presence-only — a reference is never inherited)'),
       ) : null,
+      recordsBlock,
       h('div', { className: 'pha-pages' },
         h('div', { className: 'pha-jump' },
           h('span', { className: 'pha-muted' }, (searchMode ? listPages.length + ' matched / ' : '') + totalPages + ' pages'),

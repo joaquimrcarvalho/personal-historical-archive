@@ -7,6 +7,7 @@ touching (and overwriting) un-imported human corrections elsewhere. See
 """
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -56,6 +57,13 @@ def _add_doc(cfg: Config, conn, name: str, *, pages: int = 2,
 
 def _export(cfg: Config, *, doc=None, path=None):
     return cli.cmd_export(cfg, SimpleNamespace(doc=doc, path=path))
+
+
+def _add_record(conn, doc_id: int, *, encoder="letters", kind="letter",
+                data=None, source=None):
+    _db.add_record(conn, doc_id, encoder, kind,
+                   json.dumps(data or {"kind": kind, "text": "record text",
+                                       "page_start": 1}), source)
 
 
 def test_export_doc_writes_only_that_document(tmp_path):
@@ -153,3 +161,96 @@ def test_export_path_with_no_ingested_documents_exits_2(tmp_path, capsys):
         _export(cfg, path="collections/EMPTY")
     assert exc.value.code == 2
     assert "no ingested document under" in capsys.readouterr().err
+
+
+# ---- records-*.json regeneration ---------------------------------------------
+
+def _doc_dir(cfg: Config):
+    return next((cfg.library / "collections/COLX").iterdir())
+
+
+def test_export_regenerates_records_files_from_the_db(tmp_path, capsys):
+    """The records files are derived from the `records` rows, so `pha export`
+    restores them together with the page files — grouped by kind, as encode
+    wrote them."""
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    try:
+        a = _add_doc(cfg, conn, "a.pdf", pages=2)
+        _add_record(conn, a, kind="letter", data={"kind": "letter",
+                                                  "text": "carta", "page_start": 1})
+        _add_record(conn, a, kind="report", data={"kind": "report",
+                                                  "text": "relatorio",
+                                                  "page_start": 2})
+        conn.commit()
+    finally:
+        conn.close()
+
+    _export(cfg, doc=a)
+
+    rf = _doc_dir(cfg) / "records-letters.json"
+    assert rf.is_file()
+    payload = json.loads(rf.read_text(encoding="utf-8"))
+    assert payload["encoder"] == "letters"
+    assert payload["document"].endswith("a.pdf")
+    assert list(payload["records"]) == ["letter", "report"]
+    assert payload["records"]["letter"][0]["text"] == "carta"
+    assert payload["records"]["report"][0]["text"] == "relatorio"
+
+
+def test_export_restores_a_deleted_records_file(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    try:
+        a = _add_doc(cfg, conn, "a.pdf")
+        _add_record(conn, a)
+        conn.commit()
+    finally:
+        conn.close()
+
+    _export(cfg, doc=a)
+    rf = _doc_dir(cfg) / "records-letters.json"
+    assert rf.is_file()
+    rf.unlink()
+    assert not rf.exists()
+
+    _export(cfg, doc=a)
+    assert rf.is_file()
+
+
+def test_export_writes_one_records_file_per_encoder(tmp_path, capsys):
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    try:
+        a = _add_doc(cfg, conn, "a.pdf")
+        _add_record(conn, a, encoder="letters", kind="letter",
+                    data={"kind": "letter", "text": "carta"})
+        _add_record(conn, a, encoder="apparatus", kind="apparatus",
+                    data={"kind": "apparatus", "text": "app"})
+        conn.commit()
+    finally:
+        conn.close()
+
+    _export(cfg, doc=a)
+    names = sorted(p.name for p in _doc_dir(cfg).glob("records-*.json"))
+    assert names == ["records-apparatus.json", "records-letters.json"]
+    assert "2 records file(s)" in capsys.readouterr().out
+
+
+def test_export_does_not_delete_orphan_records_files(tmp_path):
+    """Overwrite-only: a records file with no matching DB rows is left alone
+    (an encoder temporarily removed from the collection must not lose output)."""
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    try:
+        a = _add_doc(cfg, conn, "a.pdf")
+        conn.commit()
+    finally:
+        conn.close()
+    _export(cfg, doc=a)
+    orphan = _doc_dir(cfg) / "records-removed-encoder.json"
+    orphan.write_text("{}", encoding="utf-8")
+
+    _export(cfg, doc=a)
+    assert orphan.is_file()
+    assert not list(_doc_dir(cfg).glob("records-letters.json"))

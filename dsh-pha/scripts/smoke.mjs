@@ -63,7 +63,8 @@ check(plugin && typeof plugin.dispose === 'function', 'apply() returns a dispose
 
 // 3. Tool definitions are the raw JSON Schema the registry validates, not a spec.
 const EXPECTED_TOOLS = ['pha_status', 'pha_documents', 'pha_document', 'pha_page', 'pha_search',
-  'pha_open', 'pha_pending', 'pha_bib', 'pha_archive', 'pha_job_start', 'pha_job_status', 'pha_job_kill']
+  'pha_open', 'pha_pending', 'pha_bib', 'pha_records', 'pha_archive', 'pha_job_start',
+  'pha_job_status', 'pha_job_kill']
 check(tools.length === EXPECTED_TOOLS.length, `registers ${EXPECTED_TOOLS.length} tools (got ${tools.length})`)
 for (const name of EXPECTED_TOOLS) check(tools.some((t) => t.name === name), 'tool ' + name)
 for (const t of tools) {
@@ -83,9 +84,9 @@ for (const t of tools) {
 
 // 4. The same-origin routes the view fetches.
 const EXPECTED_ROUTES = ['/pha/status', '/pha/archive', '/pha/documents', '/pha/document', '/pha/page',
-  '/pha/search', '/pha/pageImage', '/pha/render', '/pha/open', '/pha/source', '/pha/pending',
-  '/pha/config', '/pha/notes', '/pha/note', '/pha/defs', '/pha/def', '/pha/collectionEncoders',
-  '/pha/bib', '/pha/inbox/plan', '/pha/inbox/move']
+  '/pha/records', '/pha/recordcounts', '/pha/search', '/pha/pageImage', '/pha/render', '/pha/open',
+  '/pha/source', '/pha/pending', '/pha/config', '/pha/notes', '/pha/note', '/pha/defs', '/pha/def',
+  '/pha/collectionEncoders', '/pha/bib', '/pha/inbox/plan', '/pha/inbox/move']
 for (const path of EXPECTED_ROUTES) check(routes.includes(path), 'route ' + path)
 
 // 4b. A configured projectRoot becomes the child cwd and PHA_HOME, so a
@@ -328,6 +329,176 @@ if (oldSourceRoute) {
     'an old CLI is never asked to run `open --source`')
 }
 oldPlugin.dispose()
+
+// 4f. Record browsing: `/pha/records` is the browse counterpart of a record search
+// (no query, no model call), so the view can list encoder output one page at a time.
+// The handler must pass exactly the CLI's filter flags — limit clamped to the
+// view's 100, repeated `field` values kept in order — and echo the `pha records
+// --json` payload unchanged (a record is already the shape the client renders).
+// `/pha/recordcounts` serves the per-document counts a table badges rows with, and
+// `/pha/search?source=…` must forward the whitelisted source and keep a record hit
+// record-shaped (record_id/encoder/record_kind), not turn it into a page row.
+const RECORD = {
+  id: 12, document_id: 7, filename: 'doc7.pdf', collection: 'collections/COLX',
+  path: '/tmp/pha-rec-archive/dropbox/collections/COLX/doc7.pdf', page_no: 3,
+  encoder: 'letters', kind: 'letter', created_at: '2026-01-02T03:04:05',
+  data: { place: 'Malaca', text: 'carta de Malaca' },
+}
+const RECORD_PAYLOAD = { total: 42, limit: 100, offset: 3, records: [RECORD] }
+const recSpawns = []
+const recTools = []
+const recRoutes = []
+const recCtx = {
+  subprocess: {
+    resolveExecutable: async (cand) => (
+      cand === 'pha' ? '/usr/bin/pha' : (/python/.test(cand) ? '/usr/bin/python3' : null)),
+    spawn: (spec) => {
+      recSpawns.push(spec)
+      const isPy = /python/.test(String(spec.argv[0] || ''))
+      const isInfo = spec.argv[1] === 'info'
+      // The DB helper runs as [python3, '-c', DB_SCRIPT, dbPath, op]: the op is argv[4].
+      const dbOp = isPy ? spec.argv[4] : null
+      let out = ''
+      let lossy = false
+      if (isInfo) {
+        out = JSON.stringify({ archive_dir: '/tmp/pha-rec-archive', db_path: '/tmp/pha-rec-archive/archive.db', configured: true })
+      } else if (isPy && dbOp === 'recordcounts') {
+        out = JSON.stringify({ 7: 2, 9: 5 })
+      } else if (spec.argv[1] === 'records') {
+        out = JSON.stringify(RECORD_PAYLOAD)
+        // One document id stands for "output past the stdout cap": the tail is not
+        // JSON, so the route must say "lower --limit" instead of returning garbage.
+        const di = spec.argv.indexOf('--doc')
+        lossy = di >= 0 && spec.argv[di + 1] === '999999'
+      } else if (spec.argv[1] === 'search') {
+        out = JSON.stringify({ mode: 'keyword', results: [
+          { kind: 'record', record_id: 12, document_id: 7, filename: 'doc7.pdf',
+            collection: 'collections/COLX', page_no: 3, encoder: 'letters',
+            record_kind: 'letter', text: 'carta de Malaca' },
+          { kind: 'page', document_id: 8, filename: 'doc8.pdf', collection: '(root)',
+            page_no: 1, variant: 'raw', text: 'carta' },
+          { kind: 'note', note: 'malaca', title: 'Malaca',
+            path: '/tmp/pha-rec-archive/notes/malaca.md', text: 'note body' },
+        ] })
+      } else {
+        out = '{}'
+      }
+      const reader = (text, isLossy) => ({ readFrom: () => ({ text, nextOffset: text.length, lossy: !!isLossy }) })
+      return {
+        collected: { stdout: reader(out, lossy), stderr: reader('') },
+        done: Promise.resolve({ exitCode: 0, signal: null }),
+      }
+    },
+  },
+  effect: (fn) => { const d = fn(); return typeof d === 'function' ? d : () => {} },
+  tools: { register: (def) => { recTools.push(def); return () => {} } },
+  inject: (deps, fn) => {
+    if (deps.includes('webServer')) {
+      fn({
+        webServer: { register: (r) => { recRoutes.push(r); return () => {} } },
+        get: () => undefined,
+        effect: (f) => f(),
+      })
+    }
+  },
+}
+const recPlugin = mod.apply(recCtx, { projectRoot: '/tmp/pha-checkout' })
+const recordsRoute = recRoutes.find((r) => r.path === '/pha/records')
+const recordCountsRoute = recRoutes.find((r) => r.path === '/pha/recordcounts')
+const searchRoute = recRoutes.find((r) => r.path === '/pha/search')
+check(!!recordsRoute && typeof recordsRoute.handler === 'function',
+  'route /pha/records is registered with a handler')
+check(!!recordCountsRoute && typeof recordCountsRoute.handler === 'function',
+  'route /pha/recordcounts is registered with a handler')
+
+if (recordsRoute) {
+  const before = recSpawns.length
+  const res = await fetchJsonRoute(recordsRoute,
+    '/pha/records?doc=7&encoder=letters&kind=letter&field=place%3DMalaca&ignore_case=1&limit=500&offset=3')
+  check(res.status === 200 && res.body && res.body.ok === true, '/pha/records answers ok')
+  const argv = recSpawns.slice(before).map((s) => s.argv).find((a) => a[1] === 'records')
+  check(!!argv && JSON.stringify(argv) === JSON.stringify([
+    '/usr/bin/pha', 'records', '--json', '--limit', '100', '--offset', '3',
+    '--doc', '7', '--encoder', 'letters', '--kind', 'letter',
+    '--field', 'place=Malaca', '--ignore-case',
+  ]), '/pha/records passes the CLI filters in order, with limit clamped to 100')
+  check(res.body && res.body.total === 42 && res.body.limit === 100 && res.body.offset === 3
+    && JSON.stringify(res.body.records) === JSON.stringify(RECORD_PAYLOAD.records),
+    '/pha/records echoes the `pha records --json` payload unchanged')
+
+  const beforeDefaults = recSpawns.length
+  const def = await fetchJsonRoute(recordsRoute, '/pha/records')
+  check(def.status === 200 && def.body && def.body.ok === true, '/pha/records answers ok with no filters')
+  const defArgv = recSpawns.slice(beforeDefaults).map((s) => s.argv).find((a) => a[1] === 'records')
+  check(!!defArgv && JSON.stringify(defArgv.slice(1)) === JSON.stringify([
+    'records', '--json', '--limit', '25', '--offset', '0',
+  ]), '/pha/records defaults to limit 25, offset 0, no filters')
+
+  const beforeFields = recSpawns.length
+  await fetchJsonRoute(recordsRoute, '/pha/records?field=a%3D1&field=b%3D2&ignore_case=0')
+  const fieldsArgv = recSpawns.slice(beforeFields).map((s) => s.argv).find((a) => a[1] === 'records')
+  check(!!fieldsArgv && JSON.stringify(fieldsArgv.slice(1)) === JSON.stringify([
+    'records', '--json', '--limit', '25', '--offset', '0', '--field', 'a=1', '--field', 'b=2',
+  ]), '/pha/records keeps every repeated `field` and treats ignore_case=0 as off')
+
+  const lossy = await fetchJsonRoute(recordsRoute, '/pha/records?doc=999999')
+  check(lossy.status === 500 && lossy.body && lossy.body.ok === false
+    && /--limit/.test(String(lossy.body.error || '')),
+    '/pha/records names `--limit` when the CLI output was truncated (lossy)')
+}
+if (recordCountsRoute) {
+  const before = recSpawns.length
+  const counts = await fetchJsonRoute(recordCountsRoute, '/pha/recordcounts')
+  check(counts.status === 200 && counts.body && counts.body.ok === true, '/pha/recordcounts answers ok')
+  check(counts.body && JSON.stringify(counts.body.counts) === JSON.stringify({ 7: 2, 9: 5 }),
+    '/pha/recordcounts serves {document_id: count} from the database')
+  const dbArgv = recSpawns.slice(before).map((s) => s.argv)
+    .find((a) => /python/.test(String(a[0] || '')) && a[4] === 'recordcounts')
+  check(!!dbArgv, 'the counts come from the `recordcounts` DB op')
+}
+if (searchRoute) {
+  const before = recSpawns.length
+  const res = await fetchJsonRoute(searchRoute, '/pha/search?q=x&source=records')
+  const argv = recSpawns.slice(before).map((s) => s.argv).find((a) => a[1] === 'search')
+  check(!!argv && argv.indexOf('--source') >= 0 && argv[argv.indexOf('--source') + 1] === 'records',
+    '/pha/search passes an explicit `--source records`')
+  const hits = (res.body && res.body.results) || []
+  const rec = hits.find((r) => r.kind === 'record')
+  check(!!rec && rec.record_id === 12 && rec.encoder === 'letters' && rec.record_kind === 'letter'
+    && rec.document_id === 7 && rec.page_no === 3,
+    '/pha/search keeps a record hit record-shaped (record_id/encoder/record_kind)')
+  const page = hits.find((r) => r.kind === 'page')
+  check(!!page && page.document_id === 8 && page.page_no === 1, '/pha/search keeps a page hit page-shaped')
+  check(hits.every((r) => r.kind !== 'note'), '/pha/search keeps note hits out of the document rows')
+
+  const beforeDefault = recSpawns.length
+  await fetchJsonRoute(searchRoute, '/pha/search?q=x')
+  const defArgv = recSpawns.slice(beforeDefault).map((s) => s.argv).find((a) => a[1] === 'search')
+  check(!!defArgv && defArgv[defArgv.indexOf('--source') + 1] === 'pages',
+    '/pha/search defaults to --source pages')
+  const beforeUnknown = recSpawns.length
+  await fetchJsonRoute(searchRoute, '/pha/search?q=x&source=bogus')
+  const unknownArgv = recSpawns.slice(beforeUnknown).map((s) => s.argv).find((a) => a[1] === 'search')
+  check(!!unknownArgv && unknownArgv[unknownArgv.indexOf('--source') + 1] === 'pages',
+    '/pha/search falls back to pages for an unknown source')
+}
+
+// The agent tool must agree with the route: same argv helper, same payload shape.
+const recordsTool = recTools.find((t) => t.name === 'pha_records')
+check(!!recordsTool && typeof recordsTool.execute === 'function', 'tool pha_records is registered')
+if (recordsTool) {
+  const before = recSpawns.length
+  const out = await recordsTool.execute({ doc: 7, encoder: 'letters', kind: 'letter',
+    field: 'place=Malaca', ignore_case: true, limit: 500, offset: 3 })
+  const argv = recSpawns.slice(before).map((s) => s.argv).find((a) => a[1] === 'records')
+  check(!!argv && JSON.stringify(argv.slice(1)) === JSON.stringify([
+    'records', '--json', '--limit', '100', '--offset', '3', '--doc', '7',
+    '--encoder', 'letters', '--kind', 'letter', '--field', 'place=Malaca', '--ignore-case',
+  ]), 'pha_records builds the same argv as /pha/records (limit clamped to 100)')
+  check(out && out.ok === true && out.total === 42 && out.limit === 100 && out.records.length === 1,
+    'pha_records returns the parsed `pha records --json` payload with ok:true')
+}
+recPlugin.dispose()
 
 // 5. The client half stays loadable as a harness client module.
 const bundle = readFileSync(join(root, 'lib', 'client.js'), 'utf8')

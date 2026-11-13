@@ -13,6 +13,13 @@ The server resolves ``slug -> current sha256`` per request (cached on the DB's
 mtime), so a re-scan/re-edit is picked up without a restart and without the
 consumer rewriting its markdown.
 
+Encoder records are served as JSON (there is no HTML record table)::
+``/records.json`` archive-wide, and ``/doc/<slug>/records.json[?page=N]`` for
+one document (or the records that START on one page).  Filters mirror
+``pha records``: encoder, kind, collection, repeatable field=NAME=VALUE,
+ignore_case, limit/offset.  A record row carries stable slug/rel_path identity
+and a viewer URL, never an absolute filesystem path.
+
 Read-only by construction: the DB is opened read-only, no route mutates
 anything, and mutations stay behind the existing scan/edit lock.
 """
@@ -121,6 +128,31 @@ def _meta_url(slug: str) -> str:
     return f"/doc/{slug}/meta.json"
 
 
+def _records_url(slug: str, page: int | None = None) -> str:
+    url = f"/doc/{slug}/records.json"
+    return f"{url}?page={int(page)}" if page is not None else url
+
+
+def _query_int(query: dict[str, list[str]], name: str, default: int) -> int:
+    """One integer query parameter; a non-integer is a 400, not a silent default."""
+    values = query.get(name)
+    if not values:
+        return default
+    try:
+        return int(values[0])
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be an integer") from None
+
+
+def _query_flag(query: dict[str, list[str]], *names: str) -> bool:
+    """A presence flag, with ``=0``/``=false``/``=no`` meaning false."""
+    for name in names:
+        if name in query:
+            value = (query[name][-1] or "").strip().lower()
+            return value not in ("0", "false", "no", "off")
+    return False
+
+
 def _go_url(slug: str) -> str:
     return f"/doc/{slug}/go"
 
@@ -192,7 +224,10 @@ def _connect_ro(db_path: Path) -> tuple[sqlite3.Connection, bool]:
     fallback to the caller, which must not treat its answer as authoritative.
     """
     base = Path(db_path).as_posix()
-    for query, degraded in (("mode=ro", False), ("immutable=1", True)):
+    # BOTH attempts are read-only. The fallback MUST carry mode=ro too: a bare
+    # `immutable=1` URI opens READWRITE|CREATE, which would auto-create a missing
+    # archive.db and silently turn a DB failure into an empty archive.
+    for query, degraded in (("mode=ro", False), ("mode=ro&immutable=1", True)):
         try:
             conn = sqlite3.connect(f"file:{base}?{query}", uri=True, timeout=5)
         except sqlite3.OperationalError:
@@ -417,9 +452,9 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
             if self.command != "HEAD":
                 self.wfile.write(body)
 
-        def _json(self, status: int, payload: dict) -> None:
+        def _json(self, status: int, payload: dict, extra: dict | None = None) -> None:
             self._send(status, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                       "application/json; charset=utf-8")
+                       "application/json; charset=utf-8", extra)
 
         def _error(self, status: int, message: str) -> None:
             self._json(status, {"ok": False, "error": message})
@@ -550,6 +585,124 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
             except sqlite3.Error as exc:
                 return None, str(exc)
 
+        def _records(self, slug: str | None, query: str) -> None:
+            """Encoder records as JSON: archive-wide or one document/page.
+
+            ``/records[.json]`` lists the whole archive;
+            ``/doc/<slug>/records[.json][?page=N]`` scopes it to a document (and
+            to the records that START on page N).  Filters mirror
+            ``pha records``.  Read-only and model-free: the rows are read in one
+            transaction so ``total`` and the page cannot disagree mid-encode.
+            """
+            q = parse_qs(query, keep_blank_values=True)
+            try:
+                limit = max(1, min(_query_int(q, "limit", 200), 1000))
+                offset = max(0, _query_int(q, "offset", 0))
+                page_value = None
+                if "page" in q:
+                    page_value = _query_int(q, "page", 0)
+                    if page_value < 1:
+                        raise ValueError("page must be >= 1")
+                fields: dict[str, str] = {}
+                for raw in q.get("field", []):
+                    name, sep, value = raw.partition("=")
+                    if not sep or not name:
+                        raise ValueError(f"field expects NAME=VALUE (got {raw!r})")
+                    fields[name] = value
+            except ValueError as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+
+            encoder = (q.get("encoder") or [None])[0]
+            kind = (q.get("kind") or q.get("record_kind") or [None])[0]
+            collection = (q.get("collection") or [None])[0]
+            ignore_case = _query_flag(q, "ignore_case", "case_insensitive")
+
+            doc = None
+            if slug is not None:
+                doc = index.get(slug)
+                if doc is None:
+                    self._error(HTTPStatus.NOT_FOUND, f"unknown slug {slug!r}")
+                    return
+
+            try:
+                conn, degraded = _connect_ro(cfg.db_path)
+            except sqlite3.Error:
+                # Never echo the exception: sqlite messages can carry the
+                # absolute DB path, and this server exposes no machine paths.
+                self._error(HTTPStatus.SERVICE_UNAVAILABLE,
+                            "cannot open the archive database")
+                return
+            try:
+                try:
+                    conn.execute("BEGIN")
+                    listing = db.record_listing(
+                        conn, limit=limit, offset=offset,
+                        document_id=doc["id"] if doc is not None else None,
+                        collection=collection, encoder=encoder,
+                        record_kind=kind, fields=fields or None,
+                        ignore_case=ignore_case, page=page_value,
+                    )
+                    conn.execute("ROLLBACK")
+                except ValueError as exc:
+                    self._error(HTTPStatus.BAD_REQUEST, str(exc))
+                    return
+                except sqlite3.Error:
+                    self._error(HTTPStatus.SERVICE_UNAVAILABLE,
+                                "cannot read the archive records")
+                    return
+            finally:
+                conn.close()
+
+            records = []
+            for row in listing["records"]:
+                rec = db.record_public(row)
+                rel_path = addresses.document_rel_path(
+                    cfg, {"path": row["path"], "filename": row["filename"],
+                          "dir_path": row["dir_path"]})
+                rec_slug = addresses.doc_slug(rel_path)
+                page_no = rec["page_no"]
+                page_int = None
+                if isinstance(page_no, int) and not isinstance(page_no, bool):
+                    page_int = page_no
+                elif isinstance(page_no, str) and page_no.strip().isdigit():
+                    page_int = int(page_no.strip())
+                records.append({
+                    "id": rec["id"],
+                    "document_id": rec["document_id"],
+                    "slug": rec_slug,
+                    "rel_path": rel_path,
+                    "filename": row["filename"],
+                    "collection": row["dir_path"] or "(root)",
+                    "page_no": page_int if page_int is not None else page_no,
+                    "encoder": rec["encoder"],
+                    "kind": rec["kind"],
+                    "created_at": rec["created_at"],
+                    "data": rec["data"],
+                    "viewer_url": (_viewer_url(rec_slug, page_int)
+                                   if page_int is not None else None),
+                })
+            payload: dict = {
+                "ok": True,
+                "total": listing["total"],
+                "limit": listing["limit"],
+                "offset": listing["offset"],
+                # A degraded read means the immutable fallback ignored a live
+                # WAL: an empty list is not authoritative while the archive is
+                # being written (same contract as /health).
+                "degraded": degraded,
+                "records": records,
+            }
+            if doc is not None:
+                payload.update({
+                    "slug": slug,
+                    "rel_path": doc.get("rel_path"),
+                    "document_id": doc.get("id"),
+                    "filename": doc.get("filename"),
+                    "page": page_value,
+                })
+            self._json(HTTPStatus.OK, payload, {"Cache-Control": "no-cache"})
+
         # ---- routes ------------------------------------------------------
         def do_GET(self):  # noqa: N802 - stdlib signature
             self.route()
@@ -558,7 +711,9 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
             self.route()
 
         def route(self) -> None:
-            path = unquote(urlparse(self.path).path)
+            parsed = urlparse(self.path)
+            path = unquote(parsed.path)
+            query = parsed.query
             if path in ("/health", "/health.json"):
                 self._json(HTTPStatus.OK, {
                     "ok": True,
@@ -571,10 +726,18 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                     "last_error": index.last_error(),
                 })
                 return
+            if path in ("/records", "/records.json"):
+                self._records(None, query)
+                return
             if not path.startswith("/doc/"):
                 self._error(HTTPStatus.NOT_FOUND, "not found")
                 return
             rest = path[len("/doc/"):]
+            # `records` is a JSON suffix, like `meta.json`; slugs never contain
+            # a slash, so `rsplit` yields exactly the document slug.
+            if rest.endswith("/records") or rest.endswith("/records.json"):
+                self._records(rest.rsplit("/", 1)[0], query)
+                return
             if rest.endswith("/meta.json"):
                 self._meta(rest[: -len("/meta.json")])
                 return
@@ -620,6 +783,10 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                 "render_url": f"/doc/{slug}/p{{page}}.jpg",
                 "viewer_url": f"/doc/{slug}/p{{page}}",
                 "overview_url": _overview_url(slug),
+                # Encoder records (JSON): the whole document, and the records
+                # that START on a page. `{page}` is substituted by the caller.
+                "records_url": _records_url(slug),
+                "page_records_url": f"/doc/{slug}/records.json?page={{page}}",
                 "pages": {"first": 1, "last": total},
             })
 
@@ -752,6 +919,7 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                 f'<footer><span class="muted">{html.escape(doc.get("rel_path") or "")}</span>',
                 '<span class="spacer"></span>',
                 f'<a href="{_jpg_url(slug, page)}">jpg</a>',
+                f'<a href="{_records_url(slug, page)}">records</a>',
                 f'<a href="{_meta_url(slug)}">meta.json</a>',
                 f'<code>pha cite {doc.get("id")} {page}</code></footer>',
             ))
@@ -805,6 +973,7 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
             bits.append('</div></main>')
             bits.append('<footer><span class="muted">pha serve</span>'
                         '<span class="spacer"></span>'
+                        f'<a href="{_records_url(slug)}">records.json</a> '
                         f'<a href="{_meta_url(slug)}">meta.json</a></footer>')
             self._html(HTTPStatus.OK, _html_page(name, "".join(bits)))
 
@@ -861,6 +1030,7 @@ def run_server(cfg: Config, host: str = "127.0.0.1", port: int = 8765,
     print(f"  health:  {base}/health")
     print(f"  example: {base}/doc/<slug>/p001   (image + transcription + edited reading)")
     print(f"  image:   {base}/doc/<slug>/p001.jpg")
+    print(f"  records: {base}/doc/<slug>/records.json   (encoder output, JSON)")
     print("  Ctrl-C to stop")
     try:
         srv.serve_forever()

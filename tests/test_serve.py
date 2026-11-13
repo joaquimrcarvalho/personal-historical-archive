@@ -508,3 +508,199 @@ def test_serve_still_works_without_the_bibliography_table(cfg, add_document):
         assert json.loads(body)["reference"] is None
     finally:
         s.close()
+
+# ---- encoder records (JSON) ---------------------------------------------------
+
+def _add_record(cfg, doc_id, *, encoder="letters", kind="letter",
+                data=None, source=None):
+    conn = _db.connect(cfg.db_path)
+    _db.add_record(conn, doc_id, encoder, kind,
+                   json.dumps(data or {"kind": kind, "text": "record text",
+                                       "page_start": 1}), source)
+    conn.commit()
+    conn.close()
+
+
+def _seed_records(cfg, doc_id, *, page_start=1, encoder="letters", kind="letter",
+                  text="record text", **fields):
+    data = {"kind": kind, "text": text, "page_start": page_start, **fields}
+    _add_record(cfg, doc_id, encoder=encoder, kind=kind, data=data)
+
+
+def test_records_archive_json_carries_identity_not_absolute_path(cfg, add_document,
+                                                                server):
+    doc_id = add_document()
+    _seed_records(cfg, doc_id, page_start=1, place="Malaca")
+
+    status, ctype, body = server.get("/records.json")
+    assert status == 200
+    assert ctype.startswith("application/json")
+    data = json.loads(body)
+    assert data["ok"] is True
+    assert data["total"] == 1
+    assert data["limit"] == 200 and data["offset"] == 0
+    assert data["degraded"] is False
+    rec = data["records"][0]
+    assert rec["id"] == 1 and rec["document_id"] == doc_id
+    assert rec["slug"] == "colx-d"
+    assert rec["rel_path"] == "collections/COLX/d.pdf"
+    assert rec["filename"] == "d.pdf"
+    assert rec["collection"] == "collections/COLX"
+    assert rec["page_no"] == 1
+    assert rec["viewer_url"] == "/doc/colx-d/p001"
+    assert rec["encoder"] == "letters" and rec["kind"] == "letter"
+    assert rec["data"]["place"] == "Malaca"
+    assert "path" not in rec          # never leak machine paths from serve
+
+    status, _ctype, body = server.get("/records")     # extensionless alias
+    assert status == 200
+    assert json.loads(body)["total"] == 1
+
+
+def test_records_document_and_page_routes(cfg, add_document, server):
+    doc_id = add_document(pages=(1, 2))
+    _seed_records(cfg, doc_id, page_start=1, text="carta")
+    _seed_records(cfg, doc_id, kind="report", text="relatorio", page_start=2)
+
+    status, _ctype, body = server.get("/doc/colx-d/records.json")
+    assert status == 200
+    data = json.loads(body)
+    assert data["total"] == 2
+    assert data["slug"] == "colx-d" and data["document_id"] == doc_id
+    assert data["filename"] == "d.pdf" and data["page"] is None
+    assert [r["kind"] for r in data["records"]] == ["letter", "report"]
+
+    one = json.loads(server.get("/doc/colx-d/records.json?page=1")[2])
+    assert one["total"] == 1
+    assert one["page"] == 1
+    assert [r["kind"] for r in one["records"]] == ["letter"]
+
+    two = json.loads(server.get("/doc/colx-d/records?page=2")[2])
+    assert [r["kind"] for r in two["records"]] == ["report"]
+
+
+def test_records_unknown_slug_is_json_404(cfg, add_document, server):
+    add_document()
+    status, ctype, body = server.get("/doc/nope/records.json")
+    assert status == 404
+    assert ctype.startswith("application/json")
+    assert json.loads(body)["ok"] is False
+
+
+def test_records_filters_and_pagination(cfg, add_document, server):
+    a = add_document(filename="a.pdf")
+    b = add_document(filename="b.pdf")
+    _seed_records(cfg, a, encoder="letters", kind="letter", place="Malaca",
+                  text="carta de Malaca")
+    _seed_records(cfg, a, encoder="letters", kind="report", place="Goa",
+                  text="relatorio")
+    _seed_records(cfg, b, encoder="person", kind="person", text="Xavier")
+
+    assert json.loads(server.get("/records.json?encoder=letters")[2])["total"] == 2
+    assert json.loads(server.get("/records.json?kind=report")[2])["total"] == 1
+    assert json.loads(server.get("/records.json?record_kind=person")[2])["total"] == 1
+    assert json.loads(server.get("/records.json?field=place%3DMalaca")[2])["total"] == 1
+    assert json.loads(server.get("/records.json?field=place%3Dmalaca")[2])["total"] == 0
+    assert json.loads(server.get(
+        "/records.json?field=place%3Dmalaca&ignore_case=1")[2])["total"] == 1
+    assert json.loads(server.get(
+        "/records.json?field=place%3Dmalaca&ignore_case=0")[2])["total"] == 0
+
+    page = json.loads(server.get("/records.json?limit=1&offset=1")[2])
+    assert page["total"] == 3 and page["limit"] == 1 and page["offset"] == 1
+    assert len(page["records"]) == 1
+    assert json.loads(server.get("/records.json?limit=5000")[2])["limit"] == 1000
+
+    # page filter is start-page based, archive-wide too
+    assert json.loads(server.get("/records.json?page=1")[2])["total"] == 3
+
+
+def test_records_bad_parameters_are_400(cfg, add_document, server):
+    add_document()
+    for path in (
+        "/records.json?limit=x",
+        "/records.json?offset=x",
+        "/records.json?page=0",
+        "/records.json?page=x",
+        "/records.json?field=place",
+        "/records.json?field=bad%20name%3Dx",
+    ):
+        status, ctype, body = server.get(path)
+        assert status == 400, path
+        assert ctype.startswith("application/json")
+        payload = json.loads(body)
+        assert payload["ok"] is False and payload["error"], path
+
+
+def test_records_without_records_table_returns_zeros(cfg, add_document, server):
+    """An archive whose DB predates encoder records must serve empty JSON, not 500."""
+    add_document()
+    assert json.loads(server.get("/records.json")[2])["total"] == 0
+
+    conn = _db.connect(cfg.db_path)
+    conn.execute("DROP TABLE record_embeddings")
+    conn.execute("DROP TABLE records_fts")
+    conn.execute("DROP TABLE records")
+    conn.commit()
+    conn.close()
+
+    status, _ctype, body = server.get("/records.json")
+    assert status == 200
+    assert json.loads(body) == {"ok": True, "total": 0, "limit": 200,
+                                "offset": 0, "degraded": False, "records": []}
+    status, _ctype, body = server.get("/doc/colx-d/records.json")
+    assert status == 200
+    assert json.loads(body)["total"] == 0
+
+
+def test_records_links_appear_in_meta_viewer_and_overview(cfg, add_document, server):
+    add_document()
+    meta = json.loads(server.get("/doc/colx-d/meta.json")[2])
+    assert meta["records_url"] == "/doc/colx-d/records.json"
+    assert meta["page_records_url"] == "/doc/colx-d/records.json?page={page}"
+
+    status, _ctype, body = server.get("/doc/colx-d/p001")
+    assert status == 200
+    assert b"/doc/colx-d/records.json?page=1" in body
+
+    status, _ctype, body = server.get("/doc/colx-d/")
+    assert status == 200
+    assert b"/doc/colx-d/records.json" in body
+
+
+def test_records_head_and_cache_headers(cfg, add_document, server):
+    add_document()
+    status, _ctype, body = server.get("/records.json")
+    assert status == 200
+    # `_Server.get` does not expose headers; request HEAD directly to check both.
+    req = urllib.request.Request(server.base + "/records.json", method="HEAD")
+    with urllib.request.urlopen(req, timeout=5) as r:
+        assert r.status == 200
+        assert r.headers.get("Cache-Control") == "no-cache"
+        assert r.read() == b""
+
+def test_connect_ro_never_creates_a_missing_archive(tmp_path):
+    """Both read modes are read-only: a missing archive.db must raise, not be
+    auto-created (a bare immutable=1 URI is READWRITE|CREATE)."""
+    from personal_historical_archive.serve import _connect_ro
+
+    missing = tmp_path / "not-an-archive.db"
+    with pytest.raises(sqlite3.OperationalError):
+        _connect_ro(missing)
+    assert not missing.exists()
+
+
+def test_records_missing_db_is_generic_503(cfg, add_document, server):
+    """A DB failure is a 503 whose message never leaks the absolute DB path."""
+    add_document()
+    for suffix in ("", "-wal", "-shm"):
+        Path(str(cfg.db_path) + suffix).unlink(missing_ok=True)
+
+    status, ctype, body = server.get("/records.json")
+    assert status == 503
+    assert ctype.startswith("application/json")
+    payload = json.loads(body)
+    assert payload["ok"] is False
+    assert "archive" in payload["error"]
+    assert str(cfg.archive_dir) not in payload["error"]
+    assert not cfg.db_path.exists()       # the failed read must not create it

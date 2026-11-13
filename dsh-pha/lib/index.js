@@ -51,6 +51,9 @@ const DB_SCRIPT = [
   'has_bib = q.execute("select 1 from sqlite_master where type = ? and name = ?", ("table", "document_bibliography")).fetchone() is not None',
   'bib_sel = bib_cols if has_bib else null_cols',
   'bib_join = " left join document_bibliography b on b.document_id = d.id" if has_bib else ""',
+  '# Same idea for the encoder output: `records` exists only once an archive has been',
+  '# encoded. Probe it so a view of an older archive reports no counts instead of failing.',
+  'has_records = q.execute("select 1 from sqlite_master where type = ? and name = ?", ("table", "records")).fetchone() is not None',
   'if op == "documents":',
   '    rows = q.execute("select " + cols_docs + ", " + bib_sel + " from documents d" + bib_join + " order by d.id").fetchall()',
   "    held = []\n    # Sidecar presence is read FROM DISK, so it is right even on an archive whose\n    # snapshot table does not exist yet (presence-only: never inherited).\n    for r in rows:\n        d = dict(r)\n        p = d.get(\"path\") or \"\"\n        if os.path.isdir(p):\n            base, stem = p, os.path.basename(p)\n        else:\n            base, stem = os.path.dirname(p), os.path.splitext(os.path.basename(p))[0]\n        found = [os.path.join(base, stem + e) for e in (\".dc.json\", \".bib\", \".mods.xml\")]\n        found = [f for f in found if os.path.isfile(f)]\n        d[\"bib_sidecar_name\"] = found[0] if found else None\n        d[\"bib_sidecar_present\"] = bool(found)\n        held.append(d)\n    out(held)",
@@ -67,6 +70,13 @@ const DB_SCRIPT = [
   '    pid = int(sys.argv[3]); pno = int(sys.argv[4])',
   '    r = q.execute("select d.sha256 as sha256, p.source_name as source_name from documents d left join pages p on p.document_id = d.id and p.page_no = ? where d.id = ?", (pno, pid)).fetchone()',
   '    out(dict(r) if r else None)',
+  'if op == "recordcounts":',
+  // One grouped count is cheap (no record bodies are read): the view badges each
+  // document with how many encoder records it has.
+  '    if not has_records:',
+  '        out({})',
+  '    rows = q.execute("select document_id, count(*) from records group by document_id").fetchall()',
+  '    out({str(r[0]): r[1] for r in rows})',
   'out({"error": "unknown op: " + op})',
 ].join('\n')
 
@@ -584,6 +594,59 @@ function apply(ctx, config) {
     }
   }
 
+  // `pha records --json` is the browse counterpart of a record search: no query,
+  // no model call. The view lists one page of encoder output at a time and the
+  // agent tool pages the same listing, so both build the argv through one helper —
+  // a browser request and an agent call can never drift apart. The CLI's own cap
+  // is 1000; the view asks for much less, so clamp here to keep one response
+  // (subprocess stdout is capped) and the rendered table bounded.
+  const RECORDS_LIMIT = 100
+  const RECORDS_LIMIT_DEFAULT = 25
+  function recordsNum(v, fallback) {
+    // An absent OR empty option is "not given", not zero: `?limit=` must mean the
+    // default page, and `?offset=` must start at the beginning.
+    if (v === undefined || v === null || String(v).trim() === '') return fallback
+    const n = Math.trunc(Number(v))
+    return Number.isFinite(n) ? n : fallback
+  }
+  function recordsLimit(v) {
+    return Math.min(RECORDS_LIMIT, Math.max(1, recordsNum(v, RECORDS_LIMIT_DEFAULT)))
+  }
+  // A query-string flag (`?ignore_case`) is present-and-not-false; 0/false/no turn
+  // it off, so a form that always submits the field still works.
+  function flagOn(v) {
+    if (v === undefined || v === null) return false
+    if (typeof v === 'boolean') return v
+    return !/^(0|false|no)$/i.test(String(v))
+  }
+  function recordsArgv(a, fields) {
+    const argv = ['records', '--json',
+      '--limit', String(recordsLimit(a.limit)),
+      '--offset', String(Math.max(0, recordsNum(a.offset, 0)))]
+    // `--doc` is an integer option: only a positive whole number is a document id
+    // (the CLI would exit 2 on anything else, turning a bad link into a 500).
+    const doc = Number(a.doc)
+    if (Number.isInteger(doc) && doc > 0) argv.push('--doc', String(doc))
+    if (a.encoder) argv.push('--encoder', String(a.encoder))
+    if (a.kind) argv.push('--kind', String(a.kind))
+    if (a.collection) argv.push('--collection', String(a.collection))
+    for (const f of fields || []) if (f) argv.push('--field', String(f))
+    if (flagOn(a.ignore_case)) argv.push('--ignore-case')
+    return argv
+  }
+  async function runRecords(a, fields) {
+    const r = await phaRun(recordsArgv(a, fields))
+    if (r.code !== 0) throw new Error(cliFailure(r, 'pha records failed'))
+    // `readFrom` returns a HEAD-LESS tail when stdout exceeds its cap; JSON parsed
+    // from that is either an exception or a corrupt listing. Say what to do instead.
+    if (r.lossy) {
+      throw new Error('pha records output exceeds the response buffer — request a smaller page (lower --limit)')
+    }
+    return parseJson(r.out)
+  }
+
+  const SEARCH_SOURCES = ['pages', 'records', 'notes', 'all']
+
   const tools = [
     ['pha_status', 'Run `pha status` on the configured archive and return its text report (documents, pages, chunks, new and on-hold files).', {}, [], async () => {
       const r = await phaRun(['status'])
@@ -607,6 +670,20 @@ function apply(ctx, config) {
       if (r.code !== 0) throw new Error(cliFailure(r, 'pha bib failed'))
       const d = parseJson(r.out)
       return Object.assign({}, d, { ok: true, found: !!d.reference })
+    }],
+    ['pha_records', 'List the structured records the encoders produced (`pha records --json`) — the browse counterpart of a record search: no query and no model call. Filter by document, encoder, kind, collection or an exact record field (NAME=VALUE), and page through the encoder output with limit/offset. Returns total, limit, offset and records (id, document_id, filename, collection, path, page_no, encoder, kind, created_at, data).', {
+      doc: { type: 'integer', description: 'only records of document #N' },
+      encoder: { type: 'string', description: 'only records produced by this encoder id' },
+      kind: { type: 'string', description: 'only records of this kind (e.g. letter, person)' },
+      collection: { type: 'string', description: 'restrict to a collection/dir, e.g. COLX or collections/COLX' },
+      field: { type: 'string', description: 'require an exact record field value, one NAME=VALUE (e.g. place=Malaca)' },
+      ignore_case: { type: 'boolean', description: 'match the field value case-insensitively (ASCII/SQLite NOCASE)' },
+      limit: { type: 'integer', description: 'max records to return (default 25, clamped to 1..100)' },
+      offset: { type: 'integer', description: 'skip the first N matching records (pagination)' },
+    }, [], async (a) => {
+      // Only one NAME=VALUE field: the schema is scalar, so a multi-field caller
+      // issues several calls (or the route, which repeats --field).
+      return Object.assign({ ok: true }, await runRecords(a, a.field ? [String(a.field)] : []))
     }],
     ['pha_search', 'Full-text search across the archive (keyword / phrase match). Returns structured hits with document id, page number, variant and snippet text — pages that contain the query terms, plus the archive\'s own notes on the subject (`kind: "note"`), which are earlier conclusions to check the pages against, not evidence themselves.', { query: { type: 'string', description: 'search terms' }, limit: { type: 'integer', description: 'max hits (default 5, max 20)' } }, ['query'], async (a) => {
       const q = String(a.query || '').trim()
@@ -775,6 +852,21 @@ function apply(ctx, config) {
       if (r.code !== 0) throw new Error(cliFailure(r, 'pha page failed'))
       return { ok: true, page: parseJson(r.out) }
     })],
+    ['/pha/records', json(async (p, req) => {
+      // `field` is repeatable (`?field=a=1&field=b=2`), which the object form of
+      // the params loses — read the raw query string for it.
+      const fields = new URL(req.url, 'http://x').searchParams.getAll('field')
+      const records = await runRecords({
+        doc: p.doc, encoder: p.encoder, kind: p.kind, collection: p.collection,
+        ignore_case: p.ignore_case, limit: p.limit, offset: p.offset,
+      }, fields)
+      // Exactly the CLI's payload: the view and an agent must see the same record
+      // shape, so nothing is re-mapped or filtered here.
+      return Object.assign({ ok: true }, records)
+    })],
+    // Per-document encoder-record counts, served from one cheap SQL group-by: the
+    // view badges documents without asking for (or receiving) the record bodies.
+    ['/pha/recordcounts', json(async () => ({ ok: true, counts: await runDb('recordcounts') }))],
     ['/pha/open', json(async (p) => {
       if (p.path) return await runOpen({ path: p.path })
       if (!p.doc || !p.page) throw new Error('doc and page required (or path)')
@@ -844,18 +936,38 @@ function apply(ctx, config) {
       const q = String(p.q || '').trim()
       if (!q) throw new Error('query required')
       const limit = Math.min(20, Math.max(1, Number(p.limit) || 5))
-      // The view lists/highlights documents, so it asks for pages only: a note
-      // hit has no document_id/page_no and would become a phantom document.
-      const r = await phaRun(['search', q, '--mode', 'keyword', '--source', 'pages',
+      // The view lists/highlights documents, so it defaults to pages only: a note
+      // hit has no document_id/page_no and would become a phantom document. An
+      // explicit, whitelisted `source` widens the same search to the encoder
+      // records (or notes/all); an unknown value keeps the old default.
+      const wanted = String(p.source || '').toLowerCase()
+      const source = SEARCH_SOURCES.indexOf(wanted) >= 0 ? wanted : 'pages'
+      const r = await phaRun(['search', q, '--mode', 'keyword', '--source', source,
                               '--json', '--limit', String(limit)])
       if (r.code !== 0) throw new Error('pha search failed: ' + String(r.err || r.out).slice(0, 400))
       const data = parseJson(r.out)
-      const results = (data.results || []).map((hit) => ({
-        document_id: hit.document_id, filename: hit.filename, collection: hit.collection,
-        page_no: hit.page_no, variant: hit.variant,
-        text: String(hit.text || '').slice(0, 900),
-      }))
-      return { ok: true, query: q, results }
+      const results = (data.results || [])
+        // A note is the researcher's own conclusion, not a document row: the view
+        // renders document hits, so notes stay out of that list (as before).
+        .filter((hit) => hit.kind !== 'note')
+        .map((hit) => {
+          const row = {
+            kind: hit.kind || null,
+            document_id: hit.document_id, filename: hit.filename, collection: hit.collection,
+            page_no: hit.page_no, variant: hit.variant,
+            text: String(hit.text || '').slice(0, 900),
+          }
+          // A record hit keeps its identity instead of becoming a page-shaped row:
+          // `page_no` is the record's START page, and the record itself is a row of
+          // its own (record_id/encoder/record_kind select it in /pha/records).
+          if (hit.kind === 'record') {
+            row.record_id = hit.record_id
+            row.encoder = hit.encoder
+            row.record_kind = hit.record_kind
+          }
+          return row
+        })
+      return { ok: true, query: q, source, results }
     })],
     ['/pha/pageImage', json(pageImage)],
     // The page image, binary (the view's <img> uses this). Kept separate from the

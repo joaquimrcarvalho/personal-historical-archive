@@ -32,6 +32,7 @@ Model tools (registered globally, so they are available to the agent in **every*
 | `pha_open` | open a page in the OS-default app so a human can correct the library file (pha never edits the text) |
 | `pha_pending` | library page files a human edited but that are not yet imported, and which pass brings them back in sync |
 | `pha_search` | full-text search (hybrid) → structured hits, including the archive's notes (`kind: "note"`) |
+| `pha_records` | browse encoder records with no text query — filter by document/encoder/kind/collection/exact `NAME=VALUE` field, page with `limit`/`offset`; returns parsed record `data` |
 | `pha_archive` | archive dir + engine health (`pha doctor`) |
 | `pha_job_start` / `pha_job_status` / `pha_job_kill` | run `pha scan/edit/encode/reindex/review/inbox` as background jobs (`scan` + `page` = single-page rescan, with `palaeographer`/`model`/`dry_run`/`unpin`/`no_pin`) |
 
@@ -102,7 +103,7 @@ ln -s /path/to/repo/dsh-pha "$DSH_HOME/profiles/<name>/node_modules/@personal-hi
 > — outside the profile's `node_modules` — and fail. Since one unloadable row makes the whole
 > harness refuse to start, the host half builds its tool definitions itself (the same raw JSON
 > Schema the registry validates) instead of importing `@deepseek-ai/dsh-tools`. `npm run smoke`
-> checks that invariant, the twelve tool definitions and the routes offline.
+> checks that invariant, the thirteen tool definitions and the routes offline.
 
 ### 2. Add a composition row to the profile
 
@@ -150,7 +151,7 @@ packaged app does not compose — so inserted rows land at the next profile star
 *client* bundles are different: the running app stat-polls them and reloads the view without
 a restart.
 
-After the profile starts, the twelve `pha_*` tools are registered in the host `tools`
+After the profile starts, the thirteen `pha_*` tools are registered in the host `tools`
 registry and appear in every session's tool catalog. Trigger them like any tool, e.g. ask the
 agent: `list the documents`, `show document 1 page 2`, `search for missão`. Mutating actions
 (`pha scan/edit/encode/reindex/review/inbox`) can be started with `pha_job_start` and polled
@@ -380,15 +381,18 @@ checks.
 The graphical **PHA view** is preserved in this package as:
 
 - **Host data layer** (`lib/index.js`): same-origin read-only routes under `/pha/*`
-  (`/pha/documents`, `/pha/document`, `/pha/page`, `/pha/search`, `/pha/status`,
-  `/pha/archive`), plus the page image as **binary** at `/pha/render` (`/pha/pageImage`,
+  (`/pha/documents`, `/pha/document`, `/pha/page`, `/pha/search`, `/pha/records`,
+  `/pha/recordcounts`, `/pha/status`, `/pha/archive`), plus the page image as **binary**
+  at `/pha/render` (`/pha/pageImage`,
   the older base64 data-URL form, is kept for a client bundle cached before it), and
   `/pha/source`, which launches a document's **original** (PDF / image / folder of page
   images) in the OS-default app through `pha open --source`.
 - **Client module source** (`src/client/index.js`): the PHA conversation view (document
-  list + search, page reader with raw/edited, side-by-side page image, markdown rendering,
-  draggable splitter, an **open the original** button on every document row), registered
-  into `conversation.view`, fetching `/pha/*`.
+  list + search, encoder records — a per-document **Encoded records** block plus an
+  archive-wide **Records** mode with encoder/kind/field filters and paging — page reader
+  with raw/edited, side-by-side page image, markdown rendering, draggable splitter, an
+  **open the original** button on every document row), registered into
+  `conversation.view`, fetching `/pha/*`.
 
 `package.json` already declares the module (`dsh.client` → `./client`) and the `dsh.client`
 inject list. The view ships **self-contained**: the browser bundle `lib/client.js` is

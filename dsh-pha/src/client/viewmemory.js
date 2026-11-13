@@ -11,7 +11,9 @@
 // file into lib/client.js (the served bundle stays one dependency-free module).
 
 /** What to remember: the selection (document + page + variant, note, definition, inbox
- *  item, search results) and the view preferences. */
+ *  item, search results) and the view preferences. The archive-wide Records mode is a
+ *  reading *position* too, so its mode + filters come back; its fetched rows never do
+ *  (they are re-read from the archive, like every other piece of content). */
 export function snapshotView(state, ui) {
   const s = state || {}
   const u = ui || {}
@@ -28,6 +30,9 @@ export function snapshotView(state, ui) {
     def: s.selectedDef ? { path: s.selectedDef.path } : null,
     inbox: s.inboxSel || null,
     search: (s.searchMode && s.hits) ? { query: s.query || '', hits: s.hits, pageVariant: s.searchPageVariant || null } : null,
+    // Only the mode and the filter VALUES: the record rows themselves are content and
+    // are out of date the moment an encoder runs again.
+    recordsMode: s.recordMode ? { filters: Object.assign({ encoder: '', kind: '', field: '', ignoreCase: false }, s.recordFilters || {}) } : null,
     plain: s.plainOverride === undefined ? null : s.plainOverride,
     ui: {
       textOn: u.textOn !== false,
@@ -58,6 +63,12 @@ export function seedState(defaults, memory) {
   if (m.note) s.noteMode = true
   if (m.def) s.defMode = true
   if (m.inbox) s.inboxSel = m.inbox
+  if (m.recordsMode) {
+    s.recordMode = true
+    s.recordFilters = Object.assign({ encoder: '', kind: '', field: '', ignoreCase: false }, m.recordsMode.filters || {})
+    // The rows are reloaded by the view's boot effect; a snapshot never carries them.
+    s.records = null
+  }
   return s
 }
 

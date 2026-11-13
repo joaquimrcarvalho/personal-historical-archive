@@ -188,8 +188,10 @@ def make_server(cfg: Config) -> FastMCP:
         Returns, when present:
             transcribed: the faithful raw transcription (palaeographer output).
             edited: dict of editor-id -> edited text (optional editor pass).
-            encoded: list of structured records derived from this page
-                (encoder output; records tag their source page number).
+            encoded: ALWAYS a list (empty when there are none) of structured
+                records that START on this page; each item is
+                {id, encoder, kind, data} with `data` the parsed record object.
+                A record spanning several pages is listed on its start page.
             image_base64: JPEG bytes of the page render (if include_image and
                 the render exists), plus its JPEG size.
         """
@@ -231,6 +233,8 @@ def make_server(cfg: Config) -> FastMCP:
             out["next_page"] = page_no + 1 if (total and page_no < total) else None
             out["page_url"] = addresses.viewer_url(cfg.serve_base_url, out["slug"], page_no)
             out["overview_url"] = addresses.overview_url(cfg.serve_base_url, out["slug"])
+            out["records_url"] = addresses.records_url(
+                cfg.serve_base_url, out["slug"], page_no)
             # The document's bibliographic reference, so a client can cite the
             # work without re-parsing a sidecar it cannot reach.
             out.update(_bibliography_fields(conn, document_id))
@@ -254,18 +258,10 @@ def make_server(cfg: Config) -> FastMCP:
             out["page_model"] = (db.row_get(page, "palaeographer_model")
                                  or doc["palaeographer_model"])
             out["pinned"] = bool(db.row_get(page, "pinned_at"))
-            # encoded records for this page (source is the page number)
-            recs = conn.execute(
-                "SELECT id, encoder, kind, data FROM records WHERE document_id=? AND source=?",
-                (document_id, str(page_no))).fetchall()
-            out["encoded"] = []
-            for r in recs:
-                try:
-                    out["encoded"].append({"id": r["id"], "encoder": r["encoder"],
-                                           "kind": r["kind"], "data": r["data"]})
-                except Exception:
-                    continue
-            out["encoded"] = out["encoded"] or None
+            # Encoder records that START on this page — the same reader as
+            # `pha page --json`, so both surfaces agree. Always a list, and
+            # `data` is the parsed record object (not the raw JSON string).
+            out["encoded"] = db.page_records(conn, document_id, page_no)
             # cached page render (the image the model actually read)
             render = addresses.render_path(cfg, doc, page_no, page["source_name"])
             out["render"] = str(render) if render else None
@@ -309,6 +305,63 @@ def make_server(cfg: Config) -> FastMCP:
             out["data"] = rec
             out["page_no"] = db.record_start_page(rec)
             return out
+        finally:
+            conn.close()
+
+    @mcp.tool()
+    def pha_records(document_id: int | None = None, encoder: str | None = None,
+                    kind: str | None = None, collection: str | None = None,
+                    field: str | None = None, ignore_case: bool = False,
+                    limit: int = 25, offset: int = 0) -> dict:
+        """List encoder records — browse encoder output without a text query.
+
+        The MCP counterpart of `pha records`: reads the records table directly,
+        so no FTS or embedding model is needed and it works on an archive whose
+        record index was never rebuilt. Filters combine; `page_no` is the
+        record's START page (None when the record is not page-grounded).
+
+        Args:
+            document_id: only records of this document (from `pha_list_documents`).
+            encoder: only records produced by this encoder id.
+            kind: only records of this kind (e.g. letter, person).
+            collection: restrict to a collection/directory, e.g. "COLX".
+            field: one exact record field match as NAME=VALUE, e.g. "place=Malaca".
+            ignore_case: match the field value case-insensitively (ASCII).
+            limit: maximum records to return (1-500; default 25).
+            offset: skip this many matching records (pagination).
+
+        Returns:
+            {total, limit, offset, records:[{id, document_id, filename,
+            collection, path, page_no, encoder, kind, created_at, data}]} with
+            `data` the parsed record object.
+        """
+        fields = None
+        if field:
+            name, sep, value = str(field).partition("=")
+            if not sep or not name:
+                return {"error": "field must be NAME=VALUE, e.g. place=Malaca"}
+            fields = {name: value}
+        limit = max(1, min(int(limit), 500))
+        offset = max(0, int(offset))
+        conn = db.connect(cfg.db_path, readonly=True)   # query tool: no DDL on connect
+        try:
+            if document_id is not None and db.get_document(conn, document_id) is None:
+                return {"error": f"no document with id {document_id}"}
+            try:
+                listing = db.record_listing(
+                    conn, limit=limit, offset=offset,
+                    document_id=document_id, collection=collection,
+                    encoder=encoder, record_kind=kind, fields=fields,
+                    ignore_case=ignore_case,
+                )
+            except ValueError as exc:
+                return {"error": str(exc)}
+            return {
+                "total": listing["total"],
+                "limit": listing["limit"],
+                "offset": listing["offset"],
+                "records": [db.record_public(row) for row in listing["records"]],
+            }
         finally:
             conn.close()
 

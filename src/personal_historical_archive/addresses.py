@@ -284,3 +284,12 @@ def viewer_url(base_url: str, slug: str, page_no: int) -> str:
 def overview_url(base_url: str, slug: str) -> str:
     """The stable URL of the served document overview (page ranges + jump box)."""
     return f"{base_url.rstrip('/')}/doc/{slug}/"
+
+
+def records_url(base_url: str, slug: str, page_no: int | None = None) -> str:
+    """The stable URL of the served document's records JSON.
+
+    With ``page_no`` it narrows to the records that START on that page.
+    """
+    url = f"{base_url.rstrip('/')}/doc/{slug}/records.json"
+    return f"{url}?page={int(page_no)}" if page_no is not None else url

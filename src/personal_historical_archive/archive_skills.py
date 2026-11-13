@@ -403,7 +403,8 @@ same item.
   spelling and/or translation, named entities refined):
   - M: `pha_get_page(…)` → the `edited` dict (`{editor: text}`); the page has
     an edited version if that dict is non-empty. `encoded` records, when
-    present, are structured extracts of the page — useful for list/record
+    present, are structured extracts of the page that START on it (a record
+    spanning several pages appears on its start page) — useful for list/record
     questions.
   - C: `pha page <doc> <page> --edited` (errors with a clear message if the
     document has no editor configured or the page was never edited). Checking

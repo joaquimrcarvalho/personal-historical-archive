@@ -95,9 +95,12 @@ const PAGE = {
 }
 
 /** Render the whole view with a state as if the archive had loaded (the hooks are
- *  stubbed, so nothing fetches or mounts). `stateOverrides` replaces seed fields. */
-function renderLoadedView(stateOverrides) {
+ *  stubbed, so nothing fetches or mounts). `stateOverrides` replaces seed fields;
+ *  `harness.searchText` types a query into the (otherwise empty) search box. */
+function renderLoadedView(stateOverrides, harness) {
+  const hx = harness || {}
   const fetched = []
+  let stringSeen = 0
   const seed = Object.assign({
     docs: DOCS,
     status: STATUS,
@@ -124,6 +127,12 @@ function renderLoadedView(stateOverrides) {
         // The two boolean view toggles are initialized from functions: turn the image
         // pane on so the reading pane (and the link under the image) is rendered.
         if (typeof init === 'function' && typeof v === 'boolean') return [true, () => {}]
+        // The first plain string hook is the search box: a check may type into it,
+        // since a stubbed setState cannot.
+        if (typeof v === 'string') {
+          stringSeen += 1
+          if (stringSeen === 1 && hx.searchText !== undefined) return [hx.searchText, () => {}]
+        }
         return [v, () => {}]
       },
       useEffect: () => {},
@@ -341,6 +350,126 @@ walk(plain, plainNodes)
 const plainExt = plainNodes.filter((n) => n.type === 'a')
 check(plainExt.length >= 1 && plainExt.every((n) => n.props.target === '_blank'),
   'without a link context, links still default to a new tab')
+
+// ---- encoded records (the pane's block, the document-row count, Records mode, and the
+// search source selector). The records routes are stubbed like every fetch here, so
+// these checks pin the RENDER shapes and the page/document a click targets — not the
+// host route (that is part A).
+const RECORD_DOC_ROWS = [
+  { id: 101, document_id: 18, filename: 'schutte.pdf', collection: 'collections/schutte', path: '/a/dropbox/collections/schutte/schutte.pdf', page_no: 2, encoder: 'table', kind: 'entry', created_at: '2026-01-01', data: { text: 'Angola 1553', role: 'head' } },
+  { id: 102, document_id: 18, filename: 'schutte.pdf', collection: 'collections/schutte', path: '/a/dropbox/collections/schutte/schutte.pdf', page_no: null, encoder: 'table', kind: 'entry', created_at: '2026-01-01', data: { name: 'orphan note' } },
+]
+const RECORD_ARCHIVE_ROWS = [
+  { id: 201, document_id: 18, filename: 'schutte.pdf', collection: 'collections/schutte', path: '/a/x', page_no: 2, encoder: 'table', kind: 'entry', created_at: '2026-01-01', data: { text: 'Antwerp market' } },
+  { id: 202, document_id: 1, filename: '1576', collection: 'collections/cat', path: '/a/y', page_no: null, encoder: 'index', kind: 'name', created_at: '2026-01-01', data: { name: 'Silva' } },
+]
+const textOf = (n) => {
+  if (n === null || n === undefined) return ''
+  if (typeof n !== 'object') return String(n)
+  if (Array.isArray(n)) return n.map(textOf).join('')
+  return textOf(n.children)
+}
+const hasClass = (n, c) => String((n.props && n.props.className) || '').split(/\s+/).includes(c)
+const tick = () => new Promise((resolve) => setTimeout(resolve, 10))
+
+try {
+  const pane = renderLoadedView({ records: RECORD_DOC_ROWS, recordsTotal: 2, recordOpen: 101 })
+  const recRows = pane.nodes.filter((n) => hasClass(n, 'pha-rec'))
+  check(recRows.length === 2, 'the document pane renders one row per encoded record')
+  const paneHeader = pane.nodes.find((n) => String((n.props && n.props.className) || '') === 'pha-group-h' && textOf(n).includes('Encoded records'))
+  check(!!paneHeader && textOf(paneHeader) === 'Encoded records (2)',
+    'the pane has the "Encoded records (N)" header')
+  check(pane.nodes.some((n) => hasClass(n, 'pha-rec-encoder') && textOf(n) === 'table'),
+    'records are grouped by encoder')
+  check(pane.nodes.some((n) => hasClass(n, 'pha-rec-tag') && textOf(n) === '[table/entry]'),
+    'a record row shows its encoder/kind')
+  const recordJson = pane.nodes.filter((n) => n.type === 'pre' && hasClass(n, 'pha-pre') && textOf(n).includes('Angola 1553'))
+  check(recordJson.length === 1, 'the expanded record renders its whole data as JSON in a .pha-pre')
+  const openPageButtons = pane.nodes.filter((n) => n.type === 'button' && textOf(n) === 'open page')
+  check(openPageButtons.length === 1,
+    'only the page-grounded record has an "open page" action (a null page gets no dead link)')
+  await openPageButtons[0].props.onClick({ stopPropagation() {} })
+  await tick()
+  check(pane.fetched.includes('/pha/page?doc=18&page=2'), "a record's \"open page\" opens that page of its document")
+} catch (e) { check(false, 'the per-document Records block renders and its actions work — threw: ' + e.message) }
+
+try {
+  const counted = renderLoadedView({ recordCounts: { 18: 3 } })
+  const metas = counted.nodes.filter((n) => hasClass(n, 'pha-doc-meta')).map(textOf)
+  check(metas.includes('3p · 3r'), 'a document row appends its record count as "Nr" (like pha status)')
+  check(metas.includes('4p'), 'a document without records keeps its plain meta')
+} catch (e) { check(false, 'the document row shows its record count — threw: ' + e.message) }
+
+try {
+  const rm = renderLoadedView({
+    recordMode: true,
+    records: RECORD_ARCHIVE_ROWS,
+    recordsTotal: 2,
+    recordsOffset: 0,
+    recordsLimit: 25,
+    recordFilters: { encoder: '', kind: '', field: '', ignoreCase: false },
+    status: Object.assign({}, STATUS, { records: { total: 2, by_encoder: { table: 1, index: 1 } } }),
+  })
+  const hdr = rm.nodes.find((n) => String((n.props && n.props.className) || '') === 'pha-group-h' && /encoded records/i.test(textOf(n)))
+  check(!!hdr && /\(2\)/.test(textOf(hdr)), 'Records mode shows a header with the total')
+  const encoderSelect = rm.nodes.find((n) => n.type === 'select' && n.children.some((c) => c && c.props && c.props.value === 'table'))
+  check(!!encoderSelect, 'the encoder filter is a select built from status.records.by_encoder')
+  check(rm.nodes.some((n) => n.type === 'input' && n.props && n.props.type === 'checkbox'),
+    'the ignore-case filter is a checkbox')
+  check(rm.nodes.some((n) => n.type === 'input' && n.props && String(n.props.placeholder) === 'field NAME=VALUE'),
+    'the field filter is a NAME=VALUE input')
+  check(rm.nodes.some((n) => n.type === 'select' && String(n.props.value) === '25' && n.props.title === 'records per page'),
+    'the limit selector is present')
+  const recordsButton = rm.nodes.find((n) => n.type === 'button' && /^Records/.test(textOf(n)))
+  check(!!recordsButton && textOf(recordsButton) === 'Records (2)',
+    'the toolbar "Records (N)" button carries the archive total from pha status')
+  const archiveRows = rm.nodes.filter((n) => hasClass(n, 'pha-rec'))
+  check(archiveRows.length === 2, 'Records mode renders a row per record')
+  const pageRow = archiveRows.find((n) => textOf(n).includes('schutte.pdf'))
+  const nullRow = archiveRows.find((n) => textOf(n).includes('1576'))
+  check(!!pageRow && textOf(pageRow).includes('[table/entry]') && textOf(pageRow).includes('p.2') && textOf(pageRow).includes('Antwerp market'),
+    'a record row shows document, encoder/kind, page and text')
+  check(!!nullRow && textOf(nullRow).includes('not page-grounded'), 'a null page renders "not page-grounded", not a link')
+  check(rm.nodes.filter((n) => n.type === 'a').every((n) => !textOf(n).includes('1576')),
+    'no dead link is created for a record without a page')
+  await pageRow.props.onClick()
+  await tick()
+  check(rm.fetched.includes('/pha/document?doc=18') && rm.fetched.includes('/pha/page?doc=18&page=2'),
+    'clicking a record row opens its document and lands on its page')
+  await nullRow.props.onClick()
+  await tick()
+  check(rm.fetched.includes('/pha/document?doc=1'), 'clicking a page-less record row still opens its document')
+  check(!rm.fetched.some((u) => { const uu = String(u); return uu === '/pha/page?doc=1' || uu.indexOf('/pha/page?doc=1&') === 0 }),
+    'a page-less record opens no page (no dead link)')
+} catch (e) { check(false, 'Records mode renders filters, rows and page targeting — threw: ' + e.message) }
+
+try {
+  const mixed = renderLoadedView({
+    searchMode: true,
+    searchSource: 'all',
+    hits: [
+      { document_id: 18, filename: 'schutte.pdf', collection: 'collections/schutte', page_no: 2, variant: 'raw', text: 'page hit' },
+      { kind: 'record', record_id: 201, encoder: 'table', record_kind: 'entry', document_id: 18, filename: 'schutte.pdf', collection: 'collections/schutte', page_no: 2, text: 'Angola record text' },
+    ],
+  })
+  const srcSelect = mixed.nodes.find((n) => n.type === 'select' && n.children.some((c) => c && c.props && c.props.value === 'all'))
+  check(!!srcSelect && String(srcSelect.props.value) === 'all',
+    'the search line carries a source selector (pages / records / all)')
+  check(mixed.nodes.some((n) => hasClass(n, 'pha-chip') && textOf(n) === 'record'),
+    'a record hit carries a "record" chip')
+  const hitRow = mixed.nodes.find((n) => hasClass(n, 'pha-doc') && textOf(n).includes('Angola record text'))
+  check(!!hitRow && textOf(hitRow).includes('[table/entry]'), 'a record hit shows its encoder/kind')
+  await hitRow.props.onClick()
+  await tick()
+  check(mixed.fetched.includes('/pha/document?doc=18') && mixed.fetched.includes('/pha/page?doc=18&page=2'),
+    'clicking a record hit opens the same document/page as a page hit')
+  const typed = renderLoadedView({ searchSource: 'records' }, { searchText: 'angola' })
+  const searchButton = typed.nodes.filter((n) => n.type === 'button' && textOf(n) === 'Search')[0]
+  await searchButton.props.onClick()
+  await tick()
+  check(typed.fetched.includes('/pha/search?q=angola&limit=20&source=records'),
+    'Search sends the chosen source to /pha/search')
+} catch (e) { check(false, 'search renders record hits and sends the source — threw: ' + e.message) }
 
 console.log('')
 if (failures > 0) {

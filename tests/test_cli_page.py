@@ -50,6 +50,17 @@ def _page_args(**kw):
     return SimpleNamespace(**base)
 
 
+def _add_record(cfg, doc_id, *, encoder="letters", kind="letter",
+                data=None, source=None):
+    """One encoder record row for a document (page-grounded by default)."""
+    conn = _db.connect(cfg.db_path)
+    _db.add_record(conn, doc_id, encoder, kind,
+                   json.dumps(data or {"kind": kind, "text": "record text",
+                                       "page_start": 1}), source)
+    conn.commit()
+    conn.close()
+
+
 def test_cli_page_raw_json(tmp_path, capsys):
     cfg = _make_cfg(tmp_path)
     cfg.ensure_dirs()
@@ -155,6 +166,7 @@ def test_cli_page_json_carries_stable_address_fields(cfg, add_document, write_va
     assert data["sha256"]
     assert data["render_exists"] is True
     assert data["render"].endswith("p001.jpg")
+    assert data["records_url"].endswith("/doc/colx-d/records.json?page=1")
     assert data["variants"]["edited-french-ocr@deepseek-v4-flash"]["filled"] is True
 
 
@@ -190,3 +202,38 @@ def test_cli_page_navigation_boundaries(cfg, add_document, capsys):
     cli.cmd_page(cfg, _page_args(doc=doc_id, page=3))
     last = json.loads(capsys.readouterr().out)
     assert last["prev_page"] == 2 and last["next_page"] is None
+
+
+# ---- encoded records on the page ----------------------------------------------
+
+def test_cli_page_json_lists_encoded_records_starting_on_that_page(cfg, add_document,
+                                                                  capsys):
+    """`--json` carries the encoder output for the page (same reader as MCP),
+    with `data` parsed rather than the raw JSON string."""
+    doc_id = add_document(pages=(1, 2))
+    _add_record(cfg, doc_id, data={"kind": "letter", "text": "carta de Malaca",
+                                   "page_start": 1})
+    _add_record(cfg, doc_id, kind="report", data={"kind": "report",
+                                                  "text": "report on page two",
+                                                  "page_start": 2})
+
+    cli.cmd_page(cfg, _page_args(doc=doc_id, page=1))
+    first = json.loads(capsys.readouterr().out)
+    assert len(first["encoded"]) == 1
+    rec = first["encoded"][0]
+    assert rec["encoder"] == "letters" and rec["kind"] == "letter"
+    assert isinstance(rec["data"], dict)          # parsed, not the raw string
+    assert rec["data"]["text"] == "carta de Malaca"
+
+    # start-page semantics: the page-2 record belongs to page 2 only
+    cli.cmd_page(cfg, _page_args(doc=doc_id, page=2))
+    second = json.loads(capsys.readouterr().out)
+    assert [r["kind"] for r in second["encoded"]] == ["report"]
+
+
+def test_cli_page_json_encoded_is_an_empty_list_without_records(cfg, add_document,
+                                                               capsys):
+    doc_id = add_document()
+    cli.cmd_page(cfg, _page_args(doc=doc_id))
+    data = json.loads(capsys.readouterr().out)
+    assert data["encoded"] == []     # always a list, never null

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import personal_historical_archive.config as c
@@ -193,6 +194,12 @@ def test_get_page_versions(tmp_path):
     assert r["edited"] == {"generic": "EDITED TEXT"}
     assert len(r["encoded"]) == 1
     assert r["encoded"][0]["kind"] == "letter"
+    # `data` is the parsed record object, not the raw JSON string
+    assert r["encoded"][0]["data"] == {
+        "letter": "x", "letter_attributes": {"from": "a"}}
+    # always a list, even when the page has no encoder output
+    assert fns["pha_get_page"](doc_id, 2)["encoded"] == []
+    assert r["records_url"].endswith("/records.json?page=1")
 
 
 def _sidecar_cfg(tmp_path: Path) -> Config:
@@ -393,3 +400,45 @@ def test_pha_handoff_status_reports_leases_and_is_read_only(tmp_path):
 
     # read-only: the lease is untouched and still open
     assert [l.handoff_id for l in handoff.active_leases(cfg)] == [res["handoff_id"]]
+
+
+def test_pha_records_browses_and_filters(tmp_path):
+    """`pha_records` is the MCP browse surface: no query, parsed data, filters."""
+    cfg = _make_config(tmp_path)
+    seed = _seed(cfg)
+    conn = db.connect(cfg.db_path)
+    try:
+        db.add_record(conn, seed["doc1"], "letters", "letter", json.dumps({
+            "kind": "letter", "text": "carta", "from": "Xavier",
+            "place": "Malaca", "page_start": 1}))
+        db.add_record(conn, seed["doc1"], "letters", "report", json.dumps({
+            "kind": "report", "text": "relatorio", "place": "Goa",
+            "page_start": 2}))
+        db.add_record(conn, seed["doc2"], "person", "person", json.dumps({
+            "kind": "person", "text": "Xavier"}))
+        conn.commit()
+    finally:
+        conn.close()
+
+    import asyncio
+    mcp = mcp_server.make_server(cfg)
+    fns = {t.name: t.fn for t in asyncio.run(mcp.list_tools())}
+    assert "pha_records" in fns
+
+    allr = fns["pha_records"]()
+    assert allr["total"] == 3 and len(allr["records"]) == 3
+    assert isinstance(allr["records"][0]["data"], dict)
+    assert allr["records"][0]["page_no"] == 1
+
+    assert fns["pha_records"](encoder="letters")["total"] == 2
+    assert fns["pha_records"](kind="report")["total"] == 1
+    assert fns["pha_records"](field="place=Malaca")["total"] == 1
+    assert fns["pha_records"](field="place=malaca")["total"] == 0
+    assert fns["pha_records"](field="place=malaca", ignore_case=True)["total"] == 1
+    assert fns["pha_records"](document_id=seed["doc2"])["total"] == 1
+
+    page = fns["pha_records"](limit=1, offset=2)
+    assert page["total"] == 3 and page["limit"] == 1 and len(page["records"]) == 1
+
+    assert "error" in fns["pha_records"](field="place")
+    assert "error" in fns["pha_records"](document_id=999)

@@ -1414,6 +1414,7 @@ def _record_filter_where(
     record_kind: str | None = None,
     fields: dict | None = None,
     ignore_case: bool = False,
+    page: int | None = None,
 ) -> tuple[str, list]:
     """Shared WHERE fragment for record listings (`r` = records, `d` = documents)."""
     where: list[str] = []
@@ -1421,6 +1422,12 @@ def _record_filter_where(
     if document_id is not None:
         where.append("r.document_id = ?")
         params.append(int(document_id))
+    if page is not None:
+        # `records.source` is the normalised START page (written by add_record
+        # from page_start/page/start_page/source_page). A record spanning
+        # several pages is still found only on the page it starts on.
+        where.append("r.source = ?")
+        params.append(str(int(page)))
     clause, dir_params = _dir_clause(collection, alias="d")
     if clause:
         where.append(clause.lstrip(" AND "))
@@ -1449,19 +1456,22 @@ def record_field_search(
     ignore_case: bool = False,
     document_id: int | None = None,
     offset: int = 0,
+    page: int | None = None,
 ) -> list[sqlite3.Row]:
     """List records matching exact JSON field filters, without a text query.
 
-    `document_id` scopes the listing to one document and `offset` paginates a
-    large set; the order (document, record source page, record id) is stable,
-    so consecutive pages neither overlap nor skip. Returns [] on an archive
-    whose DB predates the `records` table, like the rest of the read helpers.
+    `document_id` scopes the listing to one document, `page` to records that
+    START on that page, and `offset` paginates a large set; the order
+    (document, record source page, record id) is stable, so consecutive pages
+    neither overlap nor skip. Returns [] on an archive whose DB predates the
+    `records` table, like the rest of the read helpers.
     """
     # Build the filter first: an invalid --field name is a usage error on every
     # archive, including one whose DB has no records table yet.
     where, params = _record_filter_where(
         document_id=document_id, collection=collection, encoder=encoder,
         record_kind=record_kind, fields=fields, ignore_case=ignore_case,
+        page=page,
     )
     if not _table_exists(conn, "records"):
         return []
@@ -1488,11 +1498,13 @@ def count_records(
     record_kind: str | None = None,
     fields: dict | None = None,
     ignore_case: bool = False,
+    page: int | None = None,
 ) -> int:
     """Number of records matching the same filters as `record_field_search`."""
     where, params = _record_filter_where(
         document_id=document_id, collection=collection, encoder=encoder,
         record_kind=record_kind, fields=fields, ignore_case=ignore_case,
+        page=page,
     )
     if not _table_exists(conn, "records"):
         return 0
@@ -1514,6 +1526,7 @@ def record_listing(
     record_kind: str | None = None,
     fields: dict | None = None,
     ignore_case: bool = False,
+    page: int | None = None,
 ) -> dict:
     """One page of records plus the total matching the filters.
 
@@ -1525,14 +1538,65 @@ def record_listing(
     total = count_records(
         conn, document_id=document_id, collection=collection,
         encoder=encoder, record_kind=record_kind, fields=fields,
-        ignore_case=ignore_case,
+        ignore_case=ignore_case, page=page,
     )
     records = record_field_search(
         conn, limit=limit, collection=collection, encoder=encoder,
         record_kind=record_kind, fields=fields, ignore_case=ignore_case,
-        document_id=document_id, offset=offset,
+        document_id=document_id, offset=offset, page=page,
     )
     return {"total": total, "limit": limit, "offset": offset, "records": records}
+
+
+def record_public(row) -> dict:
+    """The public projection of one records row.
+
+    `row` must come from `record_field_search` / `record_listing` (the `id` is
+    aliased `record_id` and the document join supplies filename/dir_path/path).
+    Keeping this in one place is what will stop `pha records --json` and the
+    served endpoints/view from drifting apart; `pha records` uses it today.
+    """
+    data = _as_record_dict(row["data"])
+    return {
+        "id": row["record_id"],
+        "document_id": row["document_id"],
+        "filename": row["filename"],
+        "collection": row["dir_path"] or "(root)",
+        "path": row["path"],
+        "page_no": record_start_page(data),
+        "encoder": row["encoder"],
+        "kind": row["record_kind"],
+        "created_at": row["created_at"],
+        "data": data,
+    }
+
+
+def page_records(conn: sqlite3.Connection, document_id: int, page_no: int) -> list[dict]:
+    """Records whose START page is `page_no`, in the per-page public shape.
+
+    Start-page semantics: `records.source` is normalised by `add_record`, so a
+    record spanning several pages is listed only on the page it starts on.
+    `data` is the parsed record object (never the raw JSON string). Returns []
+    on an archive whose DB predates the `records` table.
+    """
+    if not _table_exists(conn, "records"):
+        return []
+    rows = conn.execute(
+        "SELECT id, encoder, kind, data FROM records "
+        "WHERE document_id = ? AND source = ? ORDER BY id",
+        (int(document_id), str(int(page_no))),
+    ).fetchall()
+    return [{"id": r["id"], "encoder": r["encoder"], "kind": r["kind"],
+             "data": _as_record_dict(r["data"])} for r in rows]
+
+
+def record_encoders_for_document(conn: sqlite3.Connection, document_id: int) -> list[str]:
+    """Encoder ids that have rows for one document, sorted (used by export)."""
+    if not _table_exists(conn, "records"):
+        return []
+    return [r["encoder"] for r in conn.execute(
+        "SELECT DISTINCT encoder FROM records WHERE document_id = ? "
+        "ORDER BY encoder", (int(document_id),))]
 
 
 def record_stats(conn: sqlite3.Connection) -> dict:

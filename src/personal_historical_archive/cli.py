@@ -31,6 +31,7 @@ from .ingest import (
     unpin_pages,
     watch,
     write_document_pages,
+    write_records_file,
 )
 from .model_client import ModelClient, ModelError
 from .filters import FilterError
@@ -652,9 +653,17 @@ def cmd_page(cfg: Config, args) -> None:
             "bibliography": bib.to_dict() if bib else None,
             "page_url": addresses.viewer_url(cfg.serve_base_url, slug, args.page),
             "overview_url": addresses.overview_url(cfg.serve_base_url, slug),
+            # Encoder records for this page, as served JSON (the inline
+            # `encoded` list below is the same set of records).
+            "records_url": addresses.records_url(cfg.serve_base_url, slug, args.page),
         }
         if getattr(args, "json", False):
-            print(json.dumps({**meta, "text": text}, ensure_ascii=False, indent=2))
+            # `encoded`: the encoder records that START on this page, parsed
+            # (same shape as MCP pha_get_page). Always a list, so a consumer
+            # can iterate without a null check.
+            print(json.dumps({**meta,
+                              "encoded": db.page_records(conn, doc["id"], args.page),
+                              "text": text}, ensure_ascii=False, indent=2))
             return
         print(f"== {doc['filename']} — page {args.page}"
               + (f" [{editor_id}]" if edited else " [raw]") + " ==")
@@ -709,21 +718,7 @@ def cmd_records(cfg: Config, args) -> None:
             # An invalid --field name is a usage error, not a crash.
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(2)
-        records = []
-        for row in listing["records"]:
-            data = db._as_record_dict(row["data"])
-            records.append({
-                "id": row["record_id"],
-                "document_id": row["document_id"],
-                "filename": row["filename"],
-                "collection": row["dir_path"] or "(root)",
-                "path": row["path"],
-                "page_no": db.record_start_page(data),
-                "encoder": row["encoder"],
-                "kind": row["record_kind"],
-                "created_at": row["created_at"],
-                "data": data,
-            })
+        records = [db.record_public(row) for row in listing["records"]]
         total = listing["total"]
     finally:
         conn.close()
@@ -2881,8 +2876,10 @@ def cmd_unbundle(cfg: Config, args) -> None:
 
 
 def cmd_export(cfg: Config, args) -> None:
-    """Regenerate per-page transcription + editor files from the DB (no
-    re-extraction / re-editing).
+    """Regenerate the library files from the DB (no re-extraction / re-editing).
+
+    Writes per-page transcription/editor files AND `records-<encoder>.json` for
+    every encoder that has rows for the document (the DB is authoritative).
 
     Scope it with `--doc N` (one document id) or `--path <dropbox-relative
     path>` (a collection, a single document, or a directory-of-images); with
@@ -2891,10 +2888,13 @@ def cmd_export(cfg: Config, args) -> None:
     This is the repair command for a library folder that went missing, or that
     was written under a folder name this machine no longer computes: the text
     comes from the database, the folder name from `ingest._doc_slug()`, so the
-    result is what a scan/edit pass would have written — no model is called and
-    nothing in the DB changes apart from the `exported_at` write stamps. It
-    reads and writes only `library/`, so it takes no model-server lock; do not
-    run it over a document a scan/edit is writing at the same moment.
+    result is what a scan/edit/encode pass would have written — no model is
+    called and nothing in the DB changes apart from the `exported_at` write
+    stamps. It reads and writes only `library/`, so it takes no model-server
+    lock; do not run it over a document a scan/edit/encode is writing at the
+    same moment. Existing `records-*.json` files are overwritten in place but
+    never deleted: an encoder removed from a collection can still leave a file
+    that a later `pha encode` would rewrite.
     """
     from .ingest import _documents_under, write_edited_pages
 
@@ -2920,23 +2920,37 @@ def cmd_export(cfg: Config, args) -> None:
         else:
             docs = db.list_documents(conn, limit=10000)
         n = 0
+        n_records = 0
         for d in docs:
             out = write_document_pages(cfg, conn, d["id"])
-            if not out:
-                continue
-            n += 1
-            if d["editor"]:
+            if out and d["editor"]:
                 write_edited_pages(cfg, conn, d["id"], d["editor"],
                                    model=d["editor_model"] or None)
+            # Encoder output is derived from the `records` rows, so restoring a
+            # lost document folder restores its records files too. One file per
+            # (document, encoder); no page export is required for this.
+            rec_files = []
+            for encoder_id in db.record_encoders_for_document(conn, d["id"]):
+                rf = write_records_file(cfg, conn, d["id"], encoder_id)
+                if rf is not None:
+                    rec_files.append(rf)
+            n_records += len(rec_files)
+            if not out and not rec_files:
+                continue
+            n += 1
             # A scoped run names each document (and where it landed) — that is
             # how an operator confirms the folder whose loss they are repairing.
             if scoped:
-                print(f"  #{d['id']:3d} {d['filename']}  ->  {out}")
+                label = out if out else rec_files[0].parent
+                extra = (f"  (+{len(rec_files)} records file(s))"
+                         if rec_files else "")
+                print(f"  #{d['id']:3d} {d['filename']}  ->  {label}{extra}")
+        suffix = f", {n_records} records file(s)" if n_records else ""
         if scoped:
             prefix = f"doc #{args.doc}" if args.doc is not None else args.path
-            print(f"exported {n} document(s) ({prefix}) to {cfg.library}")
+            print(f"exported {n} document(s) ({prefix}) to {cfg.library}{suffix}")
         else:
-            print(f"exported {n} document(s) to {cfg.library}")
+            print(f"exported {n} document(s) to {cfg.library}{suffix}")
     finally:
         conn.close()
 
@@ -4997,7 +5011,9 @@ def main(argv: list[str] | None = None) -> None:
     pg.add_argument("--edited", action="store_true",
                     help="show the edited variant (translated/modernized) instead of the raw reading")
     pg.add_argument("--editor", default=None, help="editor id when --edited (default: the document's editor)")
-    pg.add_argument("--json", action="store_true", help="structured output for agents")
+    pg.add_argument("--json", action="store_true",
+                    help="structured output for agents (includes `encoded`, the "
+                         "records that start on this page, and nav/address fields)")
     pg.set_defaults(fn=cmd_page)
 
     rr = sub.add_parser(
@@ -5173,7 +5189,9 @@ def main(argv: list[str] | None = None) -> None:
     _add_wait_args(r)
     r.set_defaults(fn=cmd_reindex)
 
-    e = sub.add_parser("export", help="regenerate per-page transcription + editor files from the DB")
+    e = sub.add_parser(
+        "export",
+        help="regenerate library page files and records-*.json from the DB")
     e.add_argument("--path", "--collection", default=None,
                    help="only export the document or collection at this dropbox subpath "
                         "(e.g. collections/COLX or collections/COLX/doc.pdf); default: every document")

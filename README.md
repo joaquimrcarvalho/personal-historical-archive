@@ -48,8 +48,9 @@ structured records grounded to the page each one starts on.
      ▼
  SQLite (data/archive.db) ──► `pha search` (hybrid keyword+semantic,
      ▲                           optional --collection filter)
-     └────────────────────────── FastMCP server: pha_search / pha_get_document /
-                                 pha_list_documents / pha_scan_now / pha_extraction_status
+     └────────────────────────── FastMCP server: pha_search / pha_records /
+                                 pha_get_document / pha_list_documents /
+                                 pha_scan_now / pha_extraction_status
 ```
 
 **How the phases and their configuration files fit together:**
@@ -141,7 +142,7 @@ pha search "Timor" --source notes  # only the notes/ folder — what you already
 # every hit prints its library page file + a shortcut to read the full page:
 pha page 12 37              # full raw transcription of doc 12, page 37
 pha page 12 37 --edited     # the edited (modernized/translated) variant
-pha page NAME 37 --json     # structured output for agents (adds slug/rel_path/render/variants)
+pha page NAME 37 --json     # structured output for agents (slug/rel_path/render/variants + encoded records)
 
 # 5. cite a page durably (stable slug + the exact filled variant)
 pha cite 12 37 --edited     # paste-ready; survives a re-scan (no date, no hash)
@@ -523,7 +524,7 @@ version.
 
 This repo also ships a [DeepSeek Harness](https://www.deepseek.com/en/harness/)
 host plugin, [`dsh-pha/`](dsh-pha/), that lets a Harness agent drive pha from chat on any
-machine with both installed. It provides the twelve `pha_*` model tools, a read-only archive
+machine with both installed. It provides the thirteen `pha_*` model tools, a read-only archive
 accessor (`immutable=1` sqlite open), a background job runner, a same-origin `/pha/*` JSON
 API, and a PHA conversation view (client module).
 
@@ -1105,7 +1106,11 @@ printed i–xv but occupies PDF pages 1-15).
   `page_no` in search hits. To browse records without a text query, use
   `pha records [--doc N] [--encoder ID] [--kind K] [--field NAME=VALUE]
   [--limit/--offset] [--json]`; `pha status` reports the record totals and each
-  document's record count.
+  document's record count. `pha page --json` carries the records that START on
+  that page as `encoded`, and `pha export` regenerates the
+  `records-<encoder>.json` files from the DB (the repair path for a lost
+  library folder). A record spanning several pages is listed only on its start
+  page.
 - `pages:` may be a literal range, or a per-document structure register:
   put `<stem>.structure.json` beside the source with a `pages` object, and
   set the encoder to `pages: "@structure:documents"` (or another named
@@ -1295,7 +1300,9 @@ pha notes [list|index|show NAME] [--force] [--json]
                                 #   (re)index it, print one note. `pha search` also indexes on demand
 pha page DOC PAGE [--edited]    # print the FULL text of one page (doc = id or filename substring)
                                 #   --edited reads the edited/translated variant; when there is
-                                #   none it names the pass that produces it (`pha edit --path …`)
+                                #   none it names the pass that produces it (`pha edit --path …`);
+                                #   --json also carries `encoded`: the encoder records that
+                                #   START on the page (parsed `data`, [] when none)
 pha records [--doc N] [--encoder ID] [--kind K] [--collection COLX] [--field NAME=VALUE] [--ignore-case] [--limit N] [--offset N] [--json]
                                 #   browse encoder output without a search query: filter by
                                 #   document, encoder, record kind or an exact JSON field;
@@ -1307,7 +1314,9 @@ pha cite DOC PAGE [--edited] [--editor ID|--palaeographer ID] [--json]
                                 #   nothing is filled, and lists the candidates when several are
 pha serve [--host H] [--port 8765] [--quiet]
                                 # read-only HTTP endpoint with stable URLs that resolve the
-                                #   current render per request (a re-scan never changes the URL)
+                                #   current render per request (a re-scan never changes the URL);
+                                #   also serves encoder records as JSON: /records.json and
+                                #   /doc/<slug>/records.json[?page=N]
 pha open DOC PAGE [--edited]    # open that page's library .md in the OS-default editor
 pha open FILE.md                # …or any archive .md/.yaml (notes, definitions, pha.yaml)
 pha open --source DOC|PATH      # …or the document's ORIGINAL: its PDF, single image, or
@@ -1327,10 +1336,12 @@ pha version [--short|--json]    # which pha is this, and where it is installed (
 pha status [--json]            # archive summary; --json is the PHA view's source for what
                                #   is not scanned yet and what is parked in the inbox
 pha export [--doc N] [--path collections/COLX]
-                                # rewrite the library page files from the database (no
-                                #   re-extraction, no model call); --doc/--path scope it to
-                                #   one document or one collection — the repair for a library
-                                #   folder that was deleted or is missing
+                                # rewrite the library page files AND records-*.json from
+                                #   the database (no re-extraction, no model call);
+                                #   --doc/--path scope it to one document or one collection
+                                #   — the repair for a library folder that was deleted or
+                                #   is missing. Existing records files are overwritten in
+                                #   place; files with no rows in the DB are left alone
 pha reindex [--doc N] [--page P] [--path collections/COLX] [--source pages|records|notes|all] [--force]
                           # re-embed; INCREMENTAL by default — only chunks whose text
                           #   changed (or whose vector came from another embed model) are
@@ -1439,7 +1450,7 @@ lowercase, non-alphanumerics to `-`), so it survives a re-scan and changes only
 on rename/move.
 
 ```bash
-pha page 47 51 --json          # → slug/rel_path/sha256/render/variants + page_count/prev/next/urls
+pha page 47 51 --json          # → slug/rel_path/sha256/render/variants/encoded + page_count/prev/next/urls
 pha cite 47 51 --edited        # → slug + the exact filled variant + the viewer URL
 pha serve                      # → http://127.0.0.1:8765/doc/<slug>/p051
 ```
@@ -1468,7 +1479,16 @@ form, so it works with JavaScript off; the arrow keys work when it is on.
 | `/doc/<slug>/` | the document **overview**: page count, variants, page ranges, "start reading" |
 | `/doc/<slug>/go?page=N` | the jump-box target (redirects to the viewer) |
 | `/doc/<slug>/p<NNN>.jpg` | the raw render (unchanged — inline embeds use this) |
-| `/doc/<slug>/meta.json` | metadata + `viewer_url` / `overview_url` / `pages` |
+| `/doc/<slug>/meta.json` | metadata + `viewer_url` / `overview_url` / `records_url` / `page_records_url` / `pages` |
+| `/records.json` | every encoder record in the archive as JSON (`?encoder=`/`?kind=`/`?collection=`/`?field=`/`?ignore_case=`/`?limit=`/`?offset=`/`?page=`) |
+| `/doc/<slug>/records.json` | one document's encoder records as JSON; `?page=N` narrows to the records that START on page N |
+
+The records endpoints are JSON-only (the HTML viewer stays a page reader): each
+row carries the stable `slug`/`rel_path`/`filename`/`page_no` identity and a
+`viewer_url`, never an absolute filesystem path; `total`/`limit`/`offset` make
+paging possible and `degraded` says when the read came from the immutable
+fallback (no live WAL, so an empty list may be stale). They are read-only and
+model-free, so they work on an archive whose record index was never rebuilt.
 
 The server's host and port live in `config.yaml` (`serve: {host, port}`, default
 `127.0.0.1:8765`), and `pha cite` / `pha page --json` quote that base URL, so a

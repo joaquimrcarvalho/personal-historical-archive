@@ -8,6 +8,8 @@ drive the **personal-historical-archive** tool from chat, on any machine that ha
 
 - **`pha_*` model tools** (host): `pha_status`, `pha_documents`, `pha_document`,
   `pha_page`, `pha_bib` (one document's bibliographic reference), `pha_search`,
+  `pha_records` (browse encoder records with no text query — document/encoder/
+  kind/exact-field filters and paging),
   `pha_open` (open a page in the OS-default app so a human can correct the
   library file), `pha_pending` (library corrections not yet imported), `pha_archive`,
   `pha_job_start`, `pha_job_status`, `pha_job_kill` — plus a
@@ -15,11 +17,14 @@ drive the **personal-historical-archive** tool from chat, on any machine that ha
   this WAL database without `-wal`/`-shm`) and a background job runner for
   `scan/edit/encode/reindex/review/inbox`.
 - **A durable data API** for the GUI: same-origin read-only `/pha/*` JSON routes
-  (`/pha/documents`, `/pha/document`, `/pha/page`, `/pha/search`, `/pha/pageImage`,
+  (`/pha/documents`, `/pha/document`, `/pha/page`, `/pha/search`, `/pha/records`,
+  `/pha/recordcounts`, `/pha/pageImage`,
   `/pha/status`, `/pha/archive`), plus `/pha/source`, which opens a document's original
   PDF / image folder through `pha open --source` — all registered on the harness
   `webServer` service.
-- **A PHA conversation view** (document list + search, page reader raw/edited, side-by-side
+- **A PHA conversation view** (document list + search, encoder records (per-document
+  section and an archive-wide Records mode with filters and paging), page reader
+  raw/edited, side-by-side
   page image with a link to the same page in the `pha serve` viewer, markdown rendering,
   draggable splitter, an **open** button on every document row that launches the original
   file) as a client module source at `dsh-pha/src/client/index.js`. It is registered into
