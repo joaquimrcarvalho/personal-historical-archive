@@ -330,6 +330,18 @@
           "commit": "537002489136"
         }
       ]
+    },
+    "0.49.6": {
+      "date": "2026-11-13",
+      "summary": "Tabbed Raw/Edited/Records in the pha serve viewer; colored record-count chips in the PHA document list",
+      "changes": [
+        {
+          "type": "feat",
+          "scope": "serve,dsh-pha",
+          "text": "records in the serve page tabs; colored record counts",
+          "commit": "b92a865cab78"
+        }
+      ]
     }
   }
 }
