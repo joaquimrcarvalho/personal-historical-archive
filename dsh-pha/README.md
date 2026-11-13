@@ -388,9 +388,9 @@ The graphical **PHA view** is preserved in this package as:
   `/pha/source`, which launches a document's **original** (PDF / image / folder of page
   images) in the OS-default app through `pha open --source`.
 - **Client module source** (`src/client/index.js`): the PHA conversation view (document
-  list + search, encoder records — a per-document **Encoded records** block plus an
-  archive-wide **Records** mode with encoder/kind/field filters and paging — page reader
-  with raw/edited, side-by-side page image, markdown rendering, draggable splitter, an
+  list + search, a per-document **Reading / Records** tab switch (the page reader vs the
+  document's encoder rows) plus an archive-wide **Records** mode with
+  encoder/kind/field filters and paging — page reader with raw/edited, side-by-side page image, markdown rendering, draggable splitter, an
   **open the original** button on every document row), registered into
   `conversation.view`, fetching `/pha/*`.
 

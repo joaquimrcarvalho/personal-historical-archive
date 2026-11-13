@@ -373,12 +373,27 @@ const hasClass = (n, c) => String((n.props && n.props.className) || '').split(/\
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10))
 
 try {
-  const pane = renderLoadedView({ records: RECORD_DOC_ROWS, recordsTotal: 2, recordOpen: 101 })
+  // Default: opening a document shows the page reader. A long records list must not
+  // bury the pages — it lives behind its own tab.
+  const reading = renderLoadedView({ records: RECORD_DOC_ROWS, recordsTotal: 2 })
+  check(reading.nodes.filter((n) => hasClass(n, 'pha-rec')).length === 0,
+    'opening a document shows the page reader, not the records list')
+  check(reading.nodes.some((n) => hasClass(n, 'pha-pages')), 'the page list is visible by default')
+  check(reading.nodes.some((n) => n.type === 'button' && textOf(n) === 'Reading'),
+    'the document pane has a "Reading" tab')
+  const recordsTab = reading.nodes.find((n) => n.type === 'button'
+    && /encoder records produced for this document/.test(String((n.props && n.props.title) || '')))
+  check(!!recordsTab && textOf(recordsTab) === 'Records(2)',
+    'the documents pane has a "Records (N)" tab carrying the document total')
+  check(reading.nodes.some((n) => n.type === 'button' && textOf(n) === '‹ prev') ||
+    reading.nodes.some((n) => hasClass(n, 'pha-pages')),
+    'the reading view keeps its page navigation')
+
+  const pane = renderLoadedView({ records: RECORD_DOC_ROWS, recordsTotal: 2, recordOpen: 101, docTab: 'records' })
+  check(pane.nodes.filter((n) => hasClass(n, 'pha-pages')).length === 0,
+    'the Records tab hides the page reader')
   const recRows = pane.nodes.filter((n) => hasClass(n, 'pha-rec'))
-  check(recRows.length === 2, 'the document pane renders one row per encoded record')
-  const paneHeader = pane.nodes.find((n) => String((n.props && n.props.className) || '') === 'pha-group-h' && textOf(n).includes('Encoded records'))
-  check(!!paneHeader && textOf(paneHeader) === 'Encoded records (2)',
-    'the pane has the "Encoded records (N)" header')
+  check(recRows.length === 2, 'the document Records tab renders one row per encoded record')
   check(pane.nodes.some((n) => hasClass(n, 'pha-rec-encoder') && textOf(n) === 'table'),
     'records are grouped by encoder')
   check(pane.nodes.some((n) => hasClass(n, 'pha-rec-tag') && textOf(n) === '[table/entry]'),
@@ -391,7 +406,7 @@ try {
   await openPageButtons[0].props.onClick({ stopPropagation() {} })
   await tick()
   check(pane.fetched.includes('/pha/page?doc=18&page=2'), "a record's \"open page\" opens that page of its document")
-} catch (e) { check(false, 'the per-document Records block renders and its actions work — threw: ' + e.message) }
+} catch (e) { check(false, 'the per-document view tabs between page reader and records — threw: ' + e.message) }
 
 try {
   const counted = renderLoadedView({ recordCounts: { 18: 3 } })
