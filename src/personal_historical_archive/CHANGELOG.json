@@ -252,6 +252,24 @@
           "commit": "8dac8bcfee71"
         }
       ]
+    },
+    "0.49.0": {
+      "date": "2026-11-13",
+      "summary": "Browse and display encoded records: pha records CLI, status counts, page JSON, export repair, serve JSON endpoints, MCP tool, and the DSH PHA view",
+      "changes": [
+        {
+          "type": "feat",
+          "scope": "records",
+          "text": "search, browse and display encoder output everywhere",
+          "commit": "9ce65ac647f0"
+        },
+        {
+          "type": "docs",
+          "scope": "enhancements",
+          "text": "record the archive-relocate request",
+          "commit": "1ec851e132c1"
+        }
+      ]
     }
   }
 }
