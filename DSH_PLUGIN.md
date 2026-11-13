@@ -22,10 +22,10 @@ drive the **personal-historical-archive** tool from chat, on any machine that ha
   `/pha/status`, `/pha/archive`), plus `/pha/source`, which opens a document's original
   PDF / image folder through `pha open --source` — all registered on the harness
   `webServer` service.
-- **A PHA conversation view** (document list + search, a per-document **Reading /
-  Records** tab switch (page reader vs the document's encoder rows) and an
-  archive-wide Records mode with filters and paging, page reader raw/edited,
-  side-by-side
+- **A PHA conversation view** (document list + search, a per-document **Pages / Records** switch in the page-list slot (browse the
+  document by page or by its encoder rows, with the selected page's image and
+  readings always visible) and an archive-wide Records mode with filters and
+  paging, page reader raw/edited, side-by-side
   page image with a link to the same page in the `pha serve` viewer, markdown rendering,
   draggable splitter, an **open** button on every document row that launches the original
   file) as a client module source at `dsh-pha/src/client/index.js`. It is registered into

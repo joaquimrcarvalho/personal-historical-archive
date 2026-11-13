@@ -439,6 +439,7 @@ const CSS = [
   '.pha-tabs{display:flex;gap:4px;align-items:center;margin:2px 0 6px;flex-wrap:wrap}',
   '.pha-tab-count{opacity:.7;font-size:11px;margin-left:3px}',
   '.pha-rec-more{display:flex;gap:6px;align-items:center;margin-top:6px}',
+  '.pha-rec-browser{max-height:34vh;overflow:auto;border-top:1px solid var(--dsw-alias-border-l1,#333);padding-top:4px}',
   // The search-source selector (pages / records / all) sits in the search line but
   // must not grow like the text input does.
   '.pha-select{flex:0 0 auto;min-width:76px;max-width:100px}',
@@ -543,7 +544,7 @@ function PhaView(props) {
   const inputActions = props ? props.inputActions : null
   const inputState = (props && typeof props.useInput === 'function') ? props.useInput((s) => s) : null
   const h = React.createElement
-  const [state, setState] = React.useState(() => seedState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageLoading: false, noteMsg: null, status: null, statusErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null, srcMsg: null, recordMode: false, records: null, recordsTotal: 0, recordsOffset: 0, recordsLimit: 25, recordsErr: null, recordLoading: false, recordFilters: { encoder: '', kind: '', field: '', ignoreCase: false }, recordOpen: null, recordCounts: null, searchSource: 'pages', docTab: 'reading' }, viewBoot))
+  const [state, setState] = React.useState(() => seedState({ docs: null, docsErr: null, archive: null, selectedId: null, detail: null, hits: null, searchMode: false, notes: null, selectedNote: null, noteMode: false, page: null, pageReq: null, pageErr: null, editMsg: null, pendingPages: null, pendingNeeds: null, defs: null, selectedDef: null, defMode: false, defMsg: null, config: null, configMode: false, configMsg: null, collEncoders: null, plainOverride: null, pageLoading: false, noteMsg: null, status: null, statusErr: null, inboxSel: null, inboxPlan: null, inboxMsg: null, inboxBusy: false, bib: null, bibErr: null, srcMsg: null, recordMode: false, records: null, recordsTotal: 0, recordsOffset: 0, recordsLimit: 25, recordsErr: null, recordLoading: false, recordFilters: { encoder: '', kind: '', field: '', ignoreCase: false }, recordOpen: null, recordCounts: null, searchSource: 'pages', listMode: 'pages' }, viewBoot))
   const [searchText, setSearchText] = React.useState('')
   const [jump, setJump] = React.useState('')
   const [range, setRange] = React.useState(1)
@@ -835,8 +836,8 @@ function PhaView(props) {
       recordOpen: keepRecords ? s.recordOpen : null,
       recordsErr: keepRecords ? s.recordsErr : null,
       recordLoading: keepRecords ? s.recordLoading : false,
-      // Every document opens on its page reader; the records tab is one click away.
-      docTab: 'reading',
+      // Every document opens showing its page list; the records list is one click away.
+      listMode: 'pages',
     }))
     const r = await get('/pha/document?doc=' + encodeURIComponent(id))
     setState((s) => ({ ...s, detail: r && r.ok ? { doc: r.doc, pages: r.pages || [], edits: r.edits || [], matched: false } : null }))
@@ -853,7 +854,7 @@ function PhaView(props) {
     const vmap = {}
     matched.forEach((hit) => { vmap[hit.page_no] = hit.variant })
     const pages = r && r.ok && r.pages ? r.pages.filter((p) => vmap[p.page_no] !== undefined) : []
-    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null, records: null, recordsTotal: 0, recordsOffset: 0, recordOpen: null, recordsErr: null, recordLoading: false, docTab: 'reading' }))
+    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null, records: null, recordsTotal: 0, recordsOffset: 0, recordOpen: null, recordsErr: null, recordLoading: false, listMode: 'pages' }))
     loadPending(id)
     // A search-opened document shows its encoder records too (the pane's block is not
     // specific to the document-list path).
@@ -1704,29 +1705,29 @@ function PhaView(props) {
     const bibLive = (s.bib && s.bib.found) ? s.bib : null
     const refText = (bibLive && bibLive.reference) || d.reference || null
     const modsOnly = !!((bibLive && bibLive.sidecar) && /\.mods\.xml$/i.test(bibLive.sidecar))
-    // The document pane has two views: the page reader (image / raw / edited) and the
-    // encoder rows for THIS document. They are peers behind a tab bar, not one list
-    // above the other — a 69-record document must not bury the page view. In
-    // archive-wide Records mode `records` holds that list instead, so the document tab
-    // bar is not shown there (the reading pane still works).
-    const docTab = s.docTab === 'records' ? 'records' : 'reading'
+    // The document's *page list* is a navigation slot, and records are another way to
+    // navigate the same document: one small switch replaces the page strip with the
+    // document's encoder rows. The page CONTEXT (image + raw/edited reading) is not
+    // part of that slot and always stays visible, so browsing records never hides
+    // what the selected page says.
+    const listMode = s.listMode === 'records' ? 'records' : 'pages'
     const docRecordRows = (!s.recordMode && s.records) ? s.records : null
     const docRecordCount = docRecordRows ? docRecordRows.length : 0
     const docRecordTotal = Number(s.recordsTotal) || docRecordCount
-    const docTabs = !s.recordMode ? h('div', { className: 'pha-tabs' },
+    const listTabs = !s.recordMode ? h('div', { className: 'pha-tabs' },
       h('button', {
-        className: 'pha-btn small' + (docTab === 'reading' ? ' on' : ''),
-        title: 'the page reader: image, raw transcription and edited reading',
-        onClick: () => setState((x) => ({ ...x, docTab: 'reading' })),
-      }, 'Reading'),
+        className: 'pha-btn small' + (listMode === 'pages' ? ' on' : ''),
+        title: 'browse this document by page',
+        onClick: () => setState((x) => ({ ...x, listMode: 'pages' })),
+      }, 'Pages'),
       h('button', {
-        className: 'pha-btn small' + (docTab === 'records' ? ' on' : ''),
-        title: "the encoder records produced for this document",
-        onClick: () => setState((x) => ({ ...x, docTab: 'records' })),
+        className: 'pha-btn small' + (listMode === 'records' ? ' on' : ''),
+        title: 'browse this document by its encoder records (the page context stays visible)',
+        onClick: () => setState((x) => ({ ...x, listMode: 'records' })),
       }, 'Records', docRecordTotal ? h('span', { className: 'pha-tab-count' }, '(' + docRecordTotal + ')') : null),
     ) : null
-    const recordsBlock = (!s.recordMode && docTab === 'records')
-      ? h('div', { className: 'pha-rec-block' },
+    const recordsBlock = (!s.recordMode && listMode === 'records')
+      ? h('div', { className: 'pha-rec-block pha-rec-browser' },
           s.recordLoading && !docRecordCount ? h('div', { className: 'pha-muted' }, 'loading encoded records…') : null,
           s.recordsErr ? h('div', { className: 'pha-err' }, s.recordsErr) : null,
           docRecordCount ? groupRecords(docRecordRows).map((g) => h('div', { className: 'pha-rec-group', key: 'rg-' + g.encoder },
@@ -1747,7 +1748,7 @@ function PhaView(props) {
           ) : null,
         )
       : null
-    const readingVisible = s.recordMode || docTab !== 'records'
+    const showPages = s.recordMode || listMode === 'pages'
     right = h('div', { className: 'pha-right' },
       h('div', null,
         h('strong', null, '#' + d.id + ' ' + d.filename),
@@ -1776,7 +1777,6 @@ function PhaView(props) {
         bibLive ? h('button', { className: 'pha-btn small' + (bibOpen ? ' on' : ''), title: 'the reference record and its sidecar', onClick: () => setBibOpen(!bibOpen) }, 'Reference') : null,
         (bibLive && bibLive.verified === false) ? h('span', { className: 'pha-chip busy', title: 'machine-drafted or imported — confirm the source before citing it' }, 'unverified reference') : null,
       ),
-      docTabs,
       (bibOpen || (bibLive && bibLive.verified === false && !refText)) ? h('div', { className: 'pha-bib' },
         s.bibErr ? h('div', { className: 'pha-err' }, s.bibErr) : null,
         bibLive ? h('div', null,
@@ -1795,8 +1795,9 @@ function PhaView(props) {
           ),
         ) : h('div', { className: 'pha-muted' }, 'no bibliographic reference for this document (presence-only — a reference is never inherited)'),
       ) : null,
+      listTabs,
       recordsBlock,
-      readingVisible ? h('div', { className: 'pha-pages' },
+      showPages ? h('div', { className: 'pha-pages' },
         h('div', { className: 'pha-jump' },
           h('span', { className: 'pha-muted' }, (searchMode ? listPages.length + ' matched / ' : '') + totalPages + ' pages'),
           h('input', { className: 'pha-num', type: 'number', min: 1, max: totalPages, value: jump, placeholder: 'page #', onChange: (e) => setJump(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') goTo(Number(jump)) } }),
@@ -1815,7 +1816,7 @@ function PhaView(props) {
                 '. Its pages are produced there and appear after `pha handoff fetch`.')
             : 'No pages…'),
       ) : null,
-      readingVisible ? h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
+      h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
         h('button', { className: 'pha-btn small' + (showImg ? ' on' : ''), title: 'show/hide the page image', onClick: () => setShowImg(!showImg) }, 'Image'),
         h('button', { className: 'pha-btn small' + (textOn ? ' on' : ''), title: 'show/hide the text pane', onClick: () => setTextOn(!textOn) }, 'Text'),
         textOn ? h('button', { className: 'pha-btn small' + (selIsEdited ? '' : ' primary'), title: 'the raw transcription of this page', onClick: () => { if (s.pageReq) openPage(s.pageReq.page, false) } }, 'Raw') : null,
@@ -1823,22 +1824,22 @@ function PhaView(props) {
         textOn ? h('button', { className: 'pha-btn small' + (plain ? ' on' : ''), title: plain ? 'shown as plain text — click to render it as markdown' : 'shown as rendered markdown — click for plain text', onClick: () => setState((x) => ({ ...x, plainOverride: !plain })) }, plain ? 'MD' : 'TXT') : null,
         h('span', { className: 'pha-spacer' }),
         h('button', { className: 'pha-btn small', title: 'Open this page in your default markdown editor (the OS picks the app)', onClick: editOpen }, 'Edit'),
-      ) : null,
-      (readingVisible && !hasEdited && textOn) ? h('div', { className: 'pha-muted', style: { fontSize: 12 } },
+      ),
+      (!hasEdited && textOn) ? h('div', { className: 'pha-muted', style: { fontSize: 12 } },
         'no edited text in the archive for this document yet'
         + (d.editor ? ' (editor ' + d.editor + ')' : ' (no editor configured)')
         + ' — the Edited button has nothing to show until the edit pass has run.') : null,
-      (readingVisible && pendingCount) ? h('div', { className: 'pha-muted', style: { fontSize: 12, color: 'var(--dsw-alias-state-warn-primary,#e8890c)' } },
+      pendingCount ? h('div', { className: 'pha-muted', style: { fontSize: 12, color: 'var(--dsw-alias-state-warn-primary,#e8890c)' } },
         '✏️ ' + pendingCount + ' page(s) edited in the library — not imported into the archive yet. '
         + 'Run: pha review' + ((s.pendingNeeds && s.pendingNeeds.edit) ? ' · pha edit · pha reindex' : ' · pha reindex')
         + ' (page numbers in amber)') : null,
-      (readingVisible && s.editMsg) ? h('div', { className: 'pha-muted', style: { fontSize: 12 } }, s.editMsg) : null,
-      readingVisible ? h('div', { className: 'pha-content' },
+      s.editMsg ? h('div', { className: 'pha-muted', style: { fontSize: 12 } }, s.editMsg) : null,
+      h('div', { className: 'pha-content' },
         mediaBlock,
         mediaSplit,
         textBlock,
         (!mediaBlock && !textBlock) ? h('div', { className: 'pha-empty' }, 'Nothing to show — toggle image or text.') : null,
-      ) : null,
+      ),
     )
   }
 
