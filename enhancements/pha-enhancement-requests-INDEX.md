@@ -1,6 +1,6 @@
 # pha enhancement requests - index
 
-Last reviewed: 2026-10-23. Current release: pha 0.46.4.
+Last reviewed: 2026-10-23. Current release: pha 0.46.5.
 
 This file is the map, not the detail: each row links to the full document.
 Open includes anything not fully shipped. A partially implemented item stays
@@ -30,6 +30,7 @@ or otherwise resolved; the document remains for the record.
 | [pha-handoff-enhancement-request.md](pha-handoff-enhancement-request.md) | SHIPPED (0.29.0) - follow-on open | Two-machine hand-over works; the section 12 render gap remains: an unscanned hand-out can come home with no page images. |
 | [pha-stage-extends-enhancement-request.md](pha-stage-extends-enhancement-request.md) | Draft | Compose prompt files with extends (base plus delta). |
 | [pha-skills-zotero-backlinks-enhancement-request.md](pha-skills-zotero-backlinks-enhancement-request.md) | IMPLEMENTED in this change (unreleased) | The bundled `pha-zotero-bibliography` skill gains the two-way backlinks (`record_id` = Zotero item key; `pha-doc`/`pha-slug`/`pha-path` in the item's `extra`; a `linked_url` child for the viewer), the local-API write-authorization flow it never had, and the two traps (document page number, never a `library/` path). §8.1 resolved: the archive-local `zotero-export/` staging text is stale — the local API's attachment `/file` redirect gives the PDF's path directly, so Route A now imports the file and the RDF export is explicitly the fallback. |
+| [pha-relocate-archive-enhancement-request.md](pha-relocate-archive-enhancement-request.md) | Draft — decisions recorded 2026-10-23 | **Moving an archive breaks it silently.** `documents.path` holds an absolute path and is the key a scan matches on, so a copied archive at a new root makes every document look new: the next scan re-extracts all of it (and duplicates the rows) and reports success. Measured on 0.46.5. Proposed: **`pha archive-relocate NEW`** — preflight (no job holding a model-server lock), WAL checkpoint + DB backup, one transaction rebasing `documents.path` plus, by default (`--paths all`), `notes.path` and `document_bibliography.sidecar_path`; `--global` writes the per-user pointer, `--no-pointer` skips it; report paths missing on disk. Detection: `pha status` warns, and `pha scan`/`pha edit`/`pha encode` **warn and hold** (stop before any work, `--ignore-moved` overrides), naming the command. **Phase 2 (proposed, §13):** make `documents.rel_path` (POSIX, dropbox-relative — the value already stored as `dir_path`+`filename` and used by hand-off) the identity, backfilled from `path`, with a partial unique index and "write both, read `rel_path` first" for downgrade safety; then a move needs only the pointer change and `archive-relocate` becomes a repair tool. |
 
 ### Proposals
 
