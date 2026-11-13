@@ -270,6 +270,18 @@
           "commit": "1ec851e132c1"
         }
       ]
+    },
+    "0.49.1": {
+      "date": "2026-11-13",
+      "summary": "A finished document that lost its transcription files is now reported by pha status and pha doctor and rebuilt by pha export --doc N, and export no longer overwrites an un-imported human correction.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "library",
+          "text": "report and repair a done document whose transcription files are gone",
+          "commit": "97c09f795ace"
+        }
+      ]
     }
   }
 }
