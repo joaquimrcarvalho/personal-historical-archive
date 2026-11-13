@@ -388,6 +388,11 @@ try {
   check(!!pagesTab && textOf(pagesTab) === 'Pages', 'the list slot has a "Pages" tab')
   check(!!recordsTab && textOf(recordsTab) === 'Records(2)',
     'the list slot has a "Records (N)" tab carrying the document total')
+  const indexPanel = reading.nodes.find((n) => hasClass(n, 'pha-index'))
+  check(!!indexPanel && /^0 0 \d+%$/.test(String((indexPanel.props && indexPanel.props.style && indexPanel.props.style.flex) || '')),
+    'the page-list / records panel has an allocated height (not a collapsed flex item)')
+  check(reading.nodes.some((n) => hasClass(n, 'pha-hsplit') && n.props.onPointerDown),
+    'a draggable splitter separates the list panel from the reading pane')
 
   const pane = renderLoadedView({ records: RECORD_DOC_ROWS, recordsTotal: 2, recordOpen: 101, listMode: 'records' })
   check(pane.nodes.filter((n) => hasClass(n, 'pha-pages')).length === 0,

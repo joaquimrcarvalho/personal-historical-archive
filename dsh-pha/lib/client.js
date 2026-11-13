@@ -187,6 +187,7 @@ function snapshotView(state, ui) {
       showImg: !!u.showImg,
       leftPct: Number(u.leftPct) > 0 ? Number(u.leftPct) : 38,
       mediaPct: Number(u.mediaPct) > 0 ? Number(u.mediaPct) : 45,
+      indexPct: Number(u.indexPct) > 0 ? Number(u.indexPct) : 30,
     },
   }
 }
@@ -228,6 +229,7 @@ function seedUi(memory) {
     showImg: !!u.showImg,
     leftPct: Number(u.leftPct) > 0 ? Number(u.leftPct) : 38,
     mediaPct: Number(u.mediaPct) > 0 ? Number(u.mediaPct) : 45,
+    indexPct: Number(u.indexPct) > 0 ? Number(u.indexPct) : 30,
   }
 }
 
@@ -691,7 +693,15 @@ const CSS = [
   '.pha-search{display:flex;gap:6px;align-items:center;padding:0 0 6px;border-bottom:1px solid var(--dsw-alias-border-l1,#333);position:sticky;top:0;background:var(--dsw-alias-bg-base,transparent);z-index:2}',
   '.pha-split{width:6px;flex:0 0 6px;cursor:col-resize;background:var(--dsw-alias-border-l1,#333);touch-action:none}',
   '.pha-split:hover,.pha-split.drag{background:var(--dsw-alias-brand-primary,#0b5fff)}',
-  '.pha-right{flex:1;min-width:0;overflow:auto;overscroll-behavior:contain;padding:12px;display:flex;flex-direction:column;gap:10px}',
+  '.pha-right{flex:1;min-width:0;overflow:hidden;overscroll-behavior:contain;padding:12px;display:flex;flex-direction:column;gap:10px}',
+  // Below the document header: a height-resizable index panel (page list or record list)
+  // over the reading pane. The panel is a real, allocated space, never a shrunk flex item.
+  '.pha-body{flex:1;min-height:0;display:flex;flex-direction:column;gap:4px}',
+  '.pha-index{flex:0 0 auto;min-height:64px;display:flex;flex-direction:column;gap:4px;overflow:hidden}',
+  '.pha-list-pane{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}',
+  '.pha-hsplit{height:6px;flex:0 0 6px;cursor:row-resize;background:var(--dsw-alias-border-l1,#333);border-radius:3px;touch-action:none}',
+  '.pha-hsplit:hover,.pha-hsplit.drag{background:var(--dsw-alias-brand-primary,#0b5fff)}',
+  '.pha-reading{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:10px}',
   '.pha-group{margin-bottom:10px}',
   '.pha-group-h{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:4px 2px;color:var(--dsw-alias-label-secondary,inherit)}',
   '.pha-doc{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:6px;cursor:pointer;border:1px solid transparent}',
@@ -807,7 +817,7 @@ const CSS = [
   '.pha-tabs{display:flex;gap:4px;align-items:center;margin:2px 0 6px;flex-wrap:wrap}',
   '.pha-tab-count{opacity:.7;font-size:11px;margin-left:3px}',
   '.pha-rec-more{display:flex;gap:6px;align-items:center;margin-top:6px}',
-  '.pha-rec-browser{max-height:34vh;overflow:auto;border-top:1px solid var(--dsw-alias-border-l1,#333);padding-top:4px}',
+  '.pha-rec-browser{border-top:1px solid var(--dsw-alias-border-l1,#333);padding-top:4px}',
   // The search-source selector (pages / records / all) sits in the search line but
   // must not grow like the text input does.
   '.pha-select{flex:0 0 auto;min-width:76px;max-width:100px}',
@@ -918,6 +928,9 @@ function PhaView(props) {
   const [range, setRange] = React.useState(1)
   const [leftPct, setLeftPct] = React.useState(() => seedUi(viewBoot).leftPct)
   const [mediaPct, setMediaPct] = React.useState(() => seedUi(viewBoot).mediaPct)
+  // Height of the page-list / records panel above the reading pane (percent of .pha-body).
+  const [indexPct, setIndexPct] = React.useState(() => seedUi(viewBoot).indexPct)
+  const [draggingIndex, setDraggingIndex] = React.useState(false)
   const [dragging, setDragging] = React.useState(false)
   const [draggingMedia, setDraggingMedia] = React.useState(false)
   const [showImg, setShowImg] = React.useState(() => seedUi(viewBoot).showImg)
@@ -968,7 +981,7 @@ function PhaView(props) {
   // Keep this session's reading position, so switching tabs and coming back lands on the
   // same document and page.
   React.useEffect(() => {
-    viewMemory.set(sid, snapshotView(state, { textOn: textOn, showImg: showImg, leftPct: leftPct, mediaPct: mediaPct }))
+    viewMemory.set(sid, snapshotView(state, { textOn: textOn, showImg: showImg, leftPct: leftPct, mediaPct: mediaPct, indexPct: indexPct }))
   })
 
   React.useEffect(() => {
@@ -1562,6 +1575,18 @@ function PhaView(props) {
     setMediaPct(Math.min(85, Math.max(15, Math.round(((e.clientX - rect.left) / rect.width) * 100))))
   }
   function endMediaDrag() { setDraggingMedia(false) }
+  // The page-list / records panel resizes vertically; the reading pane keeps the rest.
+  // The records list is often long, so the panel starts tall enough to be useful and
+  // the splitter is the way to trade space with the page image/text.
+  function startIndexDrag(e) { e.currentTarget.setPointerCapture(e.pointerId); setDraggingIndex(true) }
+  function dragIndexMove(e) {
+    if (!draggingIndex || e.buttons === 0) return
+    const par = e.currentTarget.parentElement
+    const rect = par ? par.getBoundingClientRect() : null
+    if (!rect || rect.height === 0) return
+    setIndexPct(Math.min(80, Math.max(12, Math.round(((e.clientY - rect.top) / rect.height) * 100))))
+  }
+  function endIndexDrag() { setDraggingIndex(false) }
   function goTo(v) {
     const total = s.detail ? Math.max(1, (s.detail.pages || []).length) : 0
     const page = Number(v)
@@ -2163,9 +2188,15 @@ function PhaView(props) {
           ),
         ) : h('div', { className: 'pha-muted' }, 'no bibliographic reference for this document (presence-only — a reference is never inherited)'),
       ) : null,
-      listTabs,
-      recordsBlock,
-      showPages ? h('div', { className: 'pha-pages' },
+      h('div', { className: 'pha-body' },
+        h('div', {
+          className: 'pha-index',
+          style: { flex: '0 0 ' + indexPct + '%' },
+        },
+          listTabs,
+          h('div', { className: 'pha-list-pane' },
+            recordsBlock,
+            showPages ? h('div', { className: 'pha-pages' },
         h('div', { className: 'pha-jump' },
           h('span', { className: 'pha-muted' }, (searchMode ? listPages.length + ' matched / ' : '') + totalPages + ' pages'),
           h('input', { className: 'pha-num', type: 'number', min: 1, max: totalPages, value: jump, placeholder: 'page #', onChange: (e) => setJump(e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') goTo(Number(jump)) } }),
@@ -2184,8 +2215,20 @@ function PhaView(props) {
                 '. Its pages are produced there and appear after `pha handoff fetch`.')
             : 'No pages…'),
       ) : null,
-      h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
-        h('button', { className: 'pha-btn small' + (showImg ? ' on' : ''), title: 'show/hide the page image', onClick: () => setShowImg(!showImg) }, 'Image'),
+          ),
+        ),
+        h('div', {
+          className: 'pha-hsplit' + (draggingIndex ? ' drag' : ''),
+          title: 'drag to resize the page-list / records panel (the reading pane keeps the rest)',
+          onPointerDown: startIndexDrag,
+          onPointerMove: dragIndexMove,
+          onPointerUp: endIndexDrag,
+          onPointerCancel: endIndexDrag,
+          onLostPointerCapture: endIndexDrag,
+        }),
+        h('div', { className: 'pha-reading' },
+          h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
+            h('button', { className: 'pha-btn small' + (showImg ? ' on' : ''), title: 'show/hide the page image', onClick: () => setShowImg(!showImg) }, 'Image'),
         h('button', { className: 'pha-btn small' + (textOn ? ' on' : ''), title: 'show/hide the text pane', onClick: () => setTextOn(!textOn) }, 'Text'),
         textOn ? h('button', { className: 'pha-btn small' + (selIsEdited ? '' : ' primary'), title: 'the raw transcription of this page', onClick: () => { if (s.pageReq) openPage(s.pageReq.page, false) } }, 'Raw') : null,
         textOn ? h('button', { className: 'pha-btn small' + (selIsEdited ? ' primary' : ''), disabled: !hasEdited, title: hasEdited ? ('the edited text of this page (editor: ' + editors.join(', ') + ')') : 'this document has no edited text yet — run: pha edit', onClick: () => { if (s.pageReq) openPage(s.pageReq.page, true) } }, hasEdited ? ('Edited (' + editors.join(', ') + ')') : 'Edited') : null,
@@ -2207,6 +2250,8 @@ function PhaView(props) {
         mediaSplit,
         textBlock,
         (!mediaBlock && !textBlock) ? h('div', { className: 'pha-empty' }, 'Nothing to show — toggle image or text.') : null,
+      ),
+        ),
       ),
     )
   }
