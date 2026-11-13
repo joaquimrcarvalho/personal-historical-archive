@@ -1203,9 +1203,13 @@ def cmd_open(cfg: Config, args) -> None:
                                      variant="edited" if edited else "raw",
                                      source_name=page["source_name"], editor_id=editor_id)
             if path is None:
+                # `pha scan` does not rewrite a finished document (nothing is
+                # stale), so it is not a cure: name the command that rebuilds
+                # library files from the database, scoped to this document.
                 print(f"no library file on disk for {doc['filename']} page {args.page}"
                       + (" (edited)" if edited else "")
-                      + " — run `pha scan`/`pha export` first", file=sys.stderr)
+                      + f" — run `pha export --doc {doc['id']}` to rewrite it "
+                        "from the database", file=sys.stderr)
                 sys.exit(1)
         target = path.resolve()
         arc = Path(cfg.archive_dir).resolve()
@@ -1750,7 +1754,8 @@ def cmd_status(cfg: Config, args) -> None:
                 ],
                 "out_on_handover": out_on_handover,
                 "library_missing": [
-                    {"doc_id": i, "filename": m["filename"], "dir_path": m["dir_path"]}
+                    {"doc_id": i, "filename": m["filename"], "dir_path": m["dir_path"],
+                     "reason": m.get("reason", "folder")}
                     for i, m in sorted(lib_missing.items())
                 ],
             }, ensure_ascii=False, indent=2))
@@ -1838,9 +1843,14 @@ def cmd_status(cfg: Config, args) -> None:
                         # model and pinned, so a bulk pass keeps them.
                         meta.append(f"{pinned[d['id']]} pinned")
                     if d["id"] in lib_missing:
-                        # `done`, but no library folder on disk at all: the text
-                        # is in the database and the served output is gone.
-                        meta.append("⚠ library folder missing")
+                        # `done`, but its library output is not on disk: the text
+                        # is in the database and the served output is gone. Two
+                        # shapes — no folder at all, or a folder that lost the
+                        # `transcription-*` variant every later stage derives from.
+                        if lib_missing[d["id"]].get("reason") == "transcription":
+                            meta.append("⚠ transcription missing")
+                        else:
+                            meta.append("⚠ library folder missing")
                     meta.append(f"updated {_fmt_ts(d['updated_at'])}")
                     age = time.time() - (d["updated_at"] or 0)
                     if d["status"] == "processing" and age >= _STALL_STATUS_S:
@@ -1852,7 +1862,10 @@ def cmd_status(cfg: Config, args) -> None:
                     if d["id"] in lib_missing:
                         # Its own line: the command must never be the part a
                         # narrow terminal truncates away.
-                        print(_fit(f"        ⚠ no library folder on disk for "
+                        what = ("no transcription files on disk"
+                                if lib_missing[d["id"]].get("reason") == "transcription"
+                                else "no library folder on disk")
+                        print(_fit(f"        ⚠ {what} for "
                                    f"#{d['id']} — run `pha export --doc {d['id']}`",
                                    width))
                 if unscanned.get(key):
@@ -2895,8 +2908,13 @@ def cmd_export(cfg: Config, args) -> None:
     same moment. Existing `records-*.json` files are overwritten in place but
     never deleted: an encoder removed from a collection can still leave a file
     that a later `pha encode` would rewrite.
+
+    A page file holding a human correction that `pha review` has not imported
+    yet is left exactly as it is (and counted in the report): the database has
+    the older text, so rewriting it would silently discard the correction. Run
+    `pha review --doc N` first to import it, then export again.
     """
-    from .ingest import _documents_under, write_edited_pages
+    from .ingest import _documents_under, pending_review_files, write_edited_pages
 
     if args.doc is not None and args.path:
         print("--doc and --path are mutually exclusive", file=sys.stderr)
@@ -2921,11 +2939,19 @@ def cmd_export(cfg: Config, args) -> None:
             docs = db.list_documents(conn, limit=10000)
         n = 0
         n_records = 0
+        n_kept = 0
         for d in docs:
-            out = write_document_pages(cfg, conn, d["id"])
+            # A page a human edited but that is not imported yet holds the ONLY
+            # copy of that correction: the database still has the older text,
+            # so rewriting the file would discard it. Export is the repair
+            # command, and following it must never cost the correction — keep
+            # those files (and their mtime, which is what keeps them pending).
+            keep = {Path(p["path"]) for p in pending_review_files(cfg, conn, d["id"])}
+            n_kept += len(keep)
+            out = write_document_pages(cfg, conn, d["id"], keep=keep)
             if out and d["editor"]:
                 write_edited_pages(cfg, conn, d["id"], d["editor"],
-                                   model=d["editor_model"] or None)
+                                   model=d["editor_model"] or None, keep=keep)
             # Encoder output is derived from the `records` rows, so restoring a
             # lost document folder restores its records files too. One file per
             # (document, encoder); no page export is required for this.
@@ -2944,8 +2970,13 @@ def cmd_export(cfg: Config, args) -> None:
                 label = out if out else rec_files[0].parent
                 extra = (f"  (+{len(rec_files)} records file(s))"
                          if rec_files else "")
+                if keep:
+                    extra += f"  (kept {len(keep)} un-imported correction(s))"
                 print(f"  #{d['id']:3d} {d['filename']}  ->  {label}{extra}")
         suffix = f", {n_records} records file(s)" if n_records else ""
+        if n_kept:
+            print(f"kept {n_kept} un-imported library correction(s) — "
+                  "run `pha review` to import them, then export again")
         if scoped:
             prefix = f"doc #{args.doc}" if args.doc is not None else args.path
             print(f"exported {n} document(s) ({prefix}) to {cfg.library}{suffix}")

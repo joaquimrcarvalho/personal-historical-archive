@@ -128,6 +128,45 @@ def test_export_regenerates_a_deleted_folder(tmp_path, capsys):
     assert str(doc_dir) in capsys.readouterr().out  # the folder is named back
 
 
+def test_export_keeps_an_un_imported_correction_and_still_repairs_the_raw_folder(
+        tmp_path, capsys):
+    """Repair the loss without eating the human's reading (doc 67's shape).
+
+    The raw transcription folder is gone; the edited page holds a correction
+    that `pha review` has not imported. Export must rewrite the raw pages from
+    the database AND leave the corrected file — text and mtime — exactly as it
+    is, because the database has only the older text."""
+    cfg = _make_cfg(tmp_path)
+    conn = _db.connect(cfg.db_path)
+    try:
+        a = _add_doc(cfg, conn, "a.pdf", editor="fixer")
+    finally:
+        conn.close()
+    _export(cfg, doc=a)
+    capsys.readouterr()
+    doc_dir = next((cfg.library / "collections/COLX").iterdir())
+    raw_dir = doc_dir / "transcription-default@test-model"
+    edited = doc_dir / "edited-fixer@test-model" / "page-002.md"
+
+    import os
+    import shutil
+    shutil.rmtree(raw_dir)                       # the transcription is lost
+    edited.write_text(edited.read_text(encoding="utf-8").replace(
+        "edited a.pdf page 2", "edited a.pdf page 2 (historian's reading)"),
+        encoding="utf-8")
+    future = time.time() + 60
+    os.utime(edited, (future, future))           # newer than exported_at
+
+    _export(cfg, doc=a)
+    out = capsys.readouterr().out
+
+    assert (raw_dir / "page-001.md").is_file()   # raw pages restored from the DB
+    body = edited.read_text(encoding="utf-8")
+    assert "(historian's reading)" in body       # correction survived
+    assert edited.stat().st_mtime == pytest.approx(future, abs=1)  # still pending
+    assert "kept 1 un-imported library correction(s)" in out
+
+
 def test_export_doc_and_path_are_mutually_exclusive(tmp_path, capsys):
     cfg = _make_cfg(tmp_path)
     with pytest.raises(SystemExit) as exc:

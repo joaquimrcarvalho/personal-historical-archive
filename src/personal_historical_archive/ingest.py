@@ -1921,16 +1921,24 @@ def _pages_dir_for(cfg: Config, doc, variant: str) -> Path | None:
     return None
 
 
-def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
+def write_document_pages(cfg: Config, conn, doc_id: int,
+                         *, keep: set[Path] | None = None) -> Path | None:
     """Write per-page transcription files with repeated front matter, grouped
     by palaeographer at the document level:
 
         library/<rel_dir>/<slug>/transcription-<pal>/page-NNN.md
+
+    ``keep`` names page files that must NOT be touched (neither rewritten nor
+    re-stamped): `pha export` passes the files a human edited but that are not
+    imported yet, so repairing a library never discards an un-imported
+    correction. A scan/edit pass never passes it — there the point is to write
+    the new reading.
     """
     doc = db.get_document(conn, doc_id)
     pages = db.get_pages(conn, doc_id)
     if not doc:
         return None
+    keep = {Path(k).resolve() for k in keep} if keep else set()
     pal = doc["palaeographer"] or "default"
     pal_model = doc["palaeographer_model"] or None
     # Resolve the folder that already exists instead of recomputing the name:
@@ -1996,6 +2004,8 @@ def write_document_pages(cfg: Config, conn, doc_id: int) -> Path | None:
         # images document (e.g. 505V.md); otherwise page-NNN.md.
         name = f"{p['source_name']}.md" if p["source_name"] else f"page-{p['page_no']:03d}.md"
         f = out_dir / name
+        if f.resolve() in keep:
+            continue  # an un-imported human correction: keep it, and its mtime
         f.write_text(text, encoding="utf-8")
         # record when we wrote this file so `pha status` can detect later
         # human edits via the file's mtime (timestamp, not content, compare).
@@ -2053,7 +2063,7 @@ def _edit_needed(
 
 
 def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str,
-                       *, model: str | None) -> Path | None:
+                       *, model: str | None, keep: set[Path] | None = None) -> Path | None:
     """Write the editor's per-page output to library/.../edited-<editor>[@<model>].
 
     ``editor_id``/``model`` name the VARIANT FOLDER, i.e. the pass that owns the
@@ -2074,6 +2084,7 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str,
     doc = db.get_document(conn, doc_id)
     if not doc:
         return None
+    keep = {Path(k).resolve() for k in keep} if keep else set()
     ed_model = model or None
     doc_dir = _resolve_library_dir(cfg, doc)
     _stamp_library_slug(conn, doc, doc_dir)
@@ -2120,6 +2131,8 @@ def write_edited_pages(cfg: Config, conn, doc_id: int, editor_id: str,
         )
         name = f"{p['source_name']}.md" if p["source_name"] else f"page-{p['page_no']:03d}.md"
         f = out_dir / name
+        if f.resolve() in keep:
+            continue  # an un-imported human correction: keep it, and its mtime
         f.write_text(text, encoding="utf-8")
         # record the write time so later human edits are detected by mtime
         conn.execute("UPDATE page_edits SET exported_at = ? WHERE id = ?",
@@ -2154,19 +2167,26 @@ def _library_doc_dir(cfg: Config, doc) -> Path | None:
 
 
 def library_missing_documents(cfg: Config, conn) -> list[dict]:
-    """`done` documents with NO library folder at all on disk (F4).
+    """`done` documents whose library output is missing on disk (F4).
 
-    A document can be complete in the database and have no library: the folder
-    name was recomputed under another timezone, or a cleanup outside pha removed
-    it, and nothing re-derives that path for a finished document — so `pha
-    status` looked clean while the human-readable output was gone (see
-    `enhancements/pha-library-slug-timezone-bug-report.md`, §3 and §8).
+    Two shapes, both invisible to every pass once the document is finished:
 
-    Cheap by construction: one directory listing per collection folder, then a
-    prefix test per document — never a stat or a glob per row. The test is
-    "is there ANY `<stem>_*` folder", so a document whose folder carries a
-    different date than this machine computes is NOT reported (it has a library;
-    that is a path-resolution question, not a missing one).
+    - ``reason: "folder"`` — NO ``<stem>_*`` folder at all. The folder name was
+      recomputed under another timezone, or a cleanup outside pha removed it
+      (see `enhancements/pha-library-slug-timezone-bug-report.md`, §3 and §8).
+    - ``reason: "transcription"`` — a folder exists but carries no
+      ``transcription-*`` variant: only the edited/records output survived. The
+      transcription is the base stage every other stage derives from, so this
+      is the same loss one step further from nothing — and it is harder to see,
+      because the document does have a library folder (doc 67, 2026-11-13: the
+      ``_2026-09-18`` folder that held the raw pages was retired as a
+      "superseded variant" while the edited pages lived in ``_2026-09-17``).
+
+    Cheap enough for `pha status`: one directory listing per collection folder,
+    then a prefix test per document, and one `iterdir` per candidate folder
+    (cached — a document has one folder in a healthy archive). A document whose
+    folder carries a different date than this machine computes is NOT reported
+    for that alone (it has a library; that is a path-resolution question).
 
     Migration-safe: it never names `library_slug` in SQL, because `pha status`
     opens the database READ-ONLY and therefore runs no migration.
@@ -2178,6 +2198,7 @@ def library_missing_documents(cfg: Config, conn) -> list[dict]:
     if not rows:
         return []
     listings: dict[str, set[str]] = {}
+    with_transcription: dict[Path, bool] = {}
     out: list[dict] = []
     for r in rows:
         rel = r["dir_path"] or ""
@@ -2189,9 +2210,22 @@ def library_missing_documents(cfg: Config, conn) -> list[dict]:
                 listings[rel] = set()
         stem = Path(r["path"]).stem
         prefix = f"{stem}_"
-        if not any(n.startswith(prefix) for n in listings[rel]):
+        folders = [n for n in listings[rel] if n.startswith(prefix)]
+        if not folders:
+            reason = "folder"
+        else:
+            reason = None
+            for name in folders:
+                folder = cfg.library / Path(rel) / name
+                if folder not in with_transcription:
+                    with_transcription[folder] = _holds_transcription(folder)
+                if with_transcription[folder]:
+                    break
+            else:
+                reason = "transcription"
+        if reason:
             out.append({"id": int(r["id"]), "filename": r["filename"],
-                        "dir_path": rel})
+                        "dir_path": rel, "reason": reason})
     return out
 
 

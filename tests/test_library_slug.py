@@ -215,16 +215,49 @@ def test_library_missing_reports_only_a_truly_absent_folder(tmp_path):
     elsewhere = _add_doc(cfg, name="elsewhere.pdf")
     pending = _add_doc(cfg, name="pending.pdf", status="pending")
     # a library under a date this machine no longer computes is NOT missing
-    (_collection(cfg) / "elsewhere_1999-12-31").mkdir(parents=True)
+    elsewhere_dir = _collection(cfg) / "elsewhere_1999-12-31"
+    (elsewhere_dir / "transcription-default").mkdir(parents=True)
 
+    conn = _db.connect(cfg.db_path)
+    try:
+        got = {m["id"]: m for m in ingest.library_missing_documents(cfg, conn)}
+    finally:
+        conn.close()
+    assert got[absent]["reason"] == "folder"
+    assert elsewhere not in got
+    assert pending not in got  # only a `done` document is expected to have one
+
+
+def test_library_missing_reports_a_folder_that_lost_its_transcription(tmp_path):
+    """The doc-67 shape: the folder exists, but only the edited pages survived.
+
+    The transcription is the base stage every later stage derives from, so a
+    folder without it is the same loss one step further from nothing — and the
+    old "is there any `<stem>_*` folder" test called it healthy."""
+    cfg = _cfg(tmp_path)
+    cfg.ensure_dirs()
+    doc_id = _add_doc(cfg, name="edited-only.pdf")
+    folder = _collection(cfg) / "edited-only_2026-01-01"
+    edited = folder / "edited-latin-to-english"
+    edited.mkdir(parents=True)
+    (edited / "page-001.md").write_text("---\npage: 1\n---\n\nedited 1\n",
+                                        encoding="utf-8")
+
+    conn = _db.connect(cfg.db_path)
+    try:
+        got = {m["id"]: m for m in ingest.library_missing_documents(cfg, conn)}
+    finally:
+        conn.close()
+    assert got[doc_id]["reason"] == "transcription"
+
+    # the base stage back on disk clears it
+    (folder / "transcription-default").mkdir()
     conn = _db.connect(cfg.db_path)
     try:
         ids = {m["id"] for m in ingest.library_missing_documents(cfg, conn)}
     finally:
         conn.close()
-    assert absent in ids
-    assert elsewhere not in ids
-    assert pending not in ids  # only a `done` document is expected to have one
+    assert doc_id not in ids
 
 
 def test_status_flags_a_done_document_with_no_library_folder(tmp_path, capsys):
@@ -244,6 +277,19 @@ def test_status_json_carries_library_missing(tmp_path, capsys):
     cli.cmd_status(cfg, SimpleNamespace(json=True))
     data = json.loads(capsys.readouterr().out)
     assert [m["doc_id"] for m in data["library_missing"]] == [doc_id]
+    assert data["library_missing"][0]["reason"] == "folder"
+
+
+def test_status_names_the_transcription_loss(tmp_path, capsys):
+    cfg = _cfg(tmp_path)
+    cfg.ensure_dirs()
+    doc_id = _add_doc(cfg, name="edited-only.pdf")
+    folder = _collection(cfg) / "edited-only_2026-01-01"
+    (folder / "edited-latin-to-english").mkdir(parents=True)
+    cli.cmd_status(cfg, SimpleNamespace(json=False))
+    out = capsys.readouterr().out
+    assert "transcription missing" in out
+    assert f"pha export --doc {doc_id}" in out
 
 
 def test_doctor_reports_a_missing_library():

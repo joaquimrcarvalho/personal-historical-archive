@@ -287,20 +287,34 @@ def render(report: dict[str, Any]) -> str:
     if report.get("lock_dir"):
         lines.append(f"  lock dir: {report['lock_dir']}")
     lines.append("")
-    # Library health: a `done` document with no library folder on disk has its
-    # text in the database and none of the served output the archive exists for.
-    # Nothing re-derives that path for a finished document, so it is reported
-    # here and in `pha status` (pha-library-slug-timezone-bug-report.md, F4).
+    # Library health: a `done` document whose library output is not on disk has
+    # its text in the database and none of the served output the archive exists
+    # for. Two shapes: no folder at all, or a folder whose `transcription-*` is
+    # gone while the edited/records output survived. Nothing re-derives either
+    # path for a finished document, so it is reported here and in `pha status`
+    # (pha-library-slug-timezone-bug-report.md, F4).
     missing = report.get("library_missing") or []
     if missing:
+        def _did(m):  # ingest entries carry `id`, the view/test shape `doc_id`
+            return m.get("doc_id", m.get("id"))
+        no_folder = [m for m in missing if m.get("reason") != "transcription"]
+        no_transcription = [m for m in missing if m.get("reason") == "transcription"]
         lines.append("library")
-        noun = "document" if len(missing) == 1 else "documents"
-        lines.append(f"  ! {len(missing)} done {noun} with NO library folder on disk")
-        lines.append("    (complete in the database, but the served text is missing —")
-        lines.append("     the folder name was recomputed in another timezone, or it was")
-        lines.append("     removed outside pha). Re-export them:")
+        if no_folder:
+            noun = "document" if len(no_folder) == 1 else "documents"
+            lines.append(f"  ! {len(no_folder)} done {noun} with NO library folder on disk")
+            lines.append("    (complete in the database, but the served text is missing —")
+            lines.append("     the folder name was recomputed in another timezone, or it was")
+            lines.append("     removed outside pha). Re-export them:")
+        if no_transcription:
+            noun = "document" if len(no_transcription) == 1 else "documents"
+            lines.append(f"  ! {len(no_transcription)} done {noun} whose library folder has")
+            lines.append("    NO transcription variant on disk (only the edited/records output")
+            lines.append("    survived; the reading every later stage derives from is gone).")
+            lines.append("    Re-export them:")
         for m in missing[:10]:
-            lines.append(f"      #{m['doc_id']}  {m['filename']}   →  pha export --doc {m['doc_id']}")
+            why = "   (transcription variant missing)" if m.get("reason") == "transcription" else ""
+            lines.append(f"      #{_did(m)}  {m['filename']}   →  pha export --doc {_did(m)}{why}")
         if len(missing) > 10:
             lines.append(f"      … and {len(missing) - 10} more (pha status lists them all)")
         lines.append("")

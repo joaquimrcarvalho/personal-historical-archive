@@ -129,7 +129,11 @@ def test_open_doc_page_no_library_file_fails(tmp_path, capsys):
     conn.close()
     with pytest.raises(SystemExit):
         cli.cmd_open(cfg, SimpleNamespace(doc=str(doc_id), page=2, edited=False, editor=None))
-    assert "no library file on disk" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "no library file on disk" in err
+    # the cure must be the command that rewrites library files from the DB —
+    # `pha scan` does not touch a finished document, so it is not a cure.
+    assert f"pha export --doc {doc_id}" in err
 
 
 def test_open_opener_failure_is_reported(tmp_path, capsys, monkeypatch):
