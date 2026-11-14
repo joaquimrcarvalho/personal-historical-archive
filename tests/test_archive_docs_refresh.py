@@ -74,7 +74,7 @@ def test_archive_agents_md_tells_agents_to_sign_github_output():
     """Anything an agent writes on GitHub — commit, PR, review or issue comment
     — carries the attribution signature naming the model that wrote it."""
     agents = ai.ARCHIVE_AGENTS_MD
-    assert "Generated with Personal Historical Archive by Joaquim Carvalho" in agents
+    assert "on behalf of Joaquim Carvalho" in agents
     assert f"({ai.PHA_GITHUB})" in agents
     assert "<model>" in agents and "DeepSeek V4-1017" in agents
     assert "Never add it to something the human wrote" in agents
@@ -86,8 +86,8 @@ def test_repo_contract_documents_the_same_signature():
     root = Path(__file__).resolve().parents[1]
     contract = (root / "AGENTS.md").read_text(encoding="utf-8")
     releasing = (root / "RELEASING.md").read_text(encoding="utf-8")
-    assert ("Generated with Personal Historical Archive by Joaquim Carvalho "
-            f"({ai.PHA_GITHUB})") in contract
+    assert "on behalf of Joaquim Carvalho" in contract
+    assert f"({ai.PHA_GITHUB})" in contract
     assert "DeepSeek V4-1017" in contract
     assert "signature line" in releasing
 

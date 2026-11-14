@@ -26,10 +26,11 @@ them*.
   and issue comments. Verbatim, with the model actually running the session in
   place of `<model>` (at the time of writing: `DeepSeek V4-1017`):
 
-  `Generated with Personal Historical Archive by Joaquim Carvalho (https://github.com/joaquimrcarvalho/personal-historical-archive) and <model>`
+  `Generated with Personal Historical Archive (https://github.com/joaquimrcarvalho/personal-historical-archive) by <model>, on behalf of Joaquim Carvalho`
 
   This signature replaces the older bare `Model:` trailer — it names the model
-  *and* attributes the work.
+  that did the work and states that the work was done **on Joaquim's behalf**
+  (the commit or pull request is the agent's, not his).
 - Commits, pull requests and comments made by the human do NOT carry the
   signature — it is manual only (there is no hook).
 - **Version bumps are manual and user-driven, but the release unit is the

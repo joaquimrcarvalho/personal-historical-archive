@@ -497,9 +497,11 @@ bundled one: read `skills/<name>/SKILL.md` before the task it covers.
 If you act on GitHub from inside this archive — a commit, a pull-request
 description, a review comment, an issue comment — end it with this line,
 verbatim, with the model actually running your session in place of `<model>`
-(at the time of writing, `DeepSeek V4-1017`):
+(at the time of writing, `DeepSeek V4-1017`). The line names the model and
+states that the work was done on the human's behalf — the human is not the
+author of what you wrote:
 
-`Generated with Personal Historical Archive by Joaquim Carvalho ({PHA_GITHUB}) and <model>`
+`Generated with Personal Historical Archive ({PHA_GITHUB}) by <model>, on behalf of Joaquim Carvalho`
 
 Never add it to something the human wrote. This matters when you contribute a
 fix or a skill back to pha, or comment on an issue; it does not apply to the
