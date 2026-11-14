@@ -392,6 +392,9 @@ def test_workbench_has_a_draggable_divider(cfg):
     assert "max-height:calc(100vh" in benchui.BENCH_CSS
     assert "overflow:auto" in benchui.BENCH_CSS
     assert "scrollbar-gutter:stable" in benchui.BENCH_CSS
+    # the workbench uses the full window width (no centred 1400px column)
+    assert "max-width:1400px" not in benchui.BENCH_CSS
+    assert ".bench-main{display:block;padding:.75rem 1rem;max-width:none" in benchui.BENCH_CSS
     # the readings stack vertically: one entry block per comparison entry
     assert page.count('class="entry"') == 2
 
@@ -422,3 +425,16 @@ def test_save_draft_allows_a_partial_page_and_is_not_gold(cfg):
     benchui.save_gold(wb, corpus, "001", fields, wb.token)
     assert corpus.is_gold("001") and not corpus.is_draft("001")
     assert corpus.gold_meta("001")["status"] == bench.STATUS_GOLD
+
+
+def test_gold_page_warns_before_demotion_to_draft(cfg):
+    corpus = make_corpus(cfg)
+    write_gold = corpus.gold_path("001")
+    write_gold.parent.mkdir(parents=True, exist_ok=True)
+    write_gold.write_text("---\npage: '001'\nstatus: human-corrected\n"
+                          "reviewed_by: R\nreadings_hash: ''\n---\n\n"
+                          "## Corrected text\n\n```\n[1] a\n[2] b\n```\n",
+                          encoding="utf-8")
+    wb = benchui.Workbench(cfg)
+    page = benchui.render_page(wb, corpus, "001").decode()
+    assert "already validated as gold" in page

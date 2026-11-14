@@ -57,7 +57,7 @@ button{background:#f7f6f3;color:#1b1b1b;border:1px solid #bbb;border-radius:4px;
 .entry textarea,.savebar input[type=text]{background:#fff;color:#1b1b1b}
 .reading-line .txt{color:#1b1b1b}
 .entry,.card,.pagecard,.savebar,.badge2{color:#1b1b1b}
-.bench-main{display:block;padding:1rem;max-width:1400px;margin:0 auto;width:100%}
+.bench-main{display:block;padding:.75rem 1rem;max-width:none;margin:0;width:100%}
 .bench-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:.8rem}
 .card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:.7rem .8rem;color:inherit;
   text-decoration:none;display:block}
@@ -502,6 +502,15 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
     entries_html = []
     nums = []
     reading_data = {}
+    draft_click = ""
+    if data["is_gold"]:
+        draft_click = (' onclick="return confirm(\'This page is already validated '
+                       'as gold. Saving a draft marks it draft and excludes it from '
+                       'scoring until you Save gold again. Continue?\')"')
+    draft_button = ('<button type="submit" name="status" value="draft"'
+                    + draft_click
+                    + ' title="save part-way through; excluded from scoring">'
+                      'Save draft</button>')
     rules_html = ""
     if data["editing_rules"]:
         rules_html = ("<details><summary>editing rules</summary><ul>"
@@ -560,9 +569,8 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
               f'<label class="muted">reviewer <input type="text" name="reviewer" '
               f'value="{esc(reviewer)}" required></label>'
               '<button type="submit" name="status" value="gold">Save gold</button> '
-              '<button type="submit" name="status" value="draft" '
-              'title="save part-way through; excluded from scoring">Save draft</button>'
-              f'<span class="muted"><span class="kbd">⌘S</span> saves · '
+              + draft_button
+              + f'<span class="muted"><span class="kbd">⌘S</span> saves · '
               f'"use" copies a reading into its entry · readings_hash '
               f'<code>{esc(corpus.readings_hash(page))[:19]}…</code></span>'
               '</div></form>'
