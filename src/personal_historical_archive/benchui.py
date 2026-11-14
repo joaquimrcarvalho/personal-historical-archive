@@ -76,8 +76,11 @@ button{background:#f7f6f3;color:#1b1b1b;border:1px solid #bbb;border-radius:4px;
 .pagecard img{width:100%;height:110px;object-fit:cover;border-radius:4px;background:#eee}
 .workbench{display:grid;grid-template-columns:minmax(280px,var(--media-w,44%)) 12px minmax(320px,1fr);
   gap:0 1rem;align-items:start;--media-w:44%}
-.workbench .media{position:sticky;top:.5rem;min-width:0}
-.workbench .media img{width:100%;border:1px solid #ccc;border-radius:4px;background:#fff}
+.workbench .media{position:sticky;top:.5rem;min-width:0;align-self:start;
+  max-height:calc(100vh - 1.5rem);overflow:auto;overscroll-behavior:contain;
+  scrollbar-gutter:stable}
+.workbench .media img{width:100%;height:auto;display:block;border:1px solid #ccc;
+  border-radius:4px;background:#fff}
 .workbench .editpane{min-width:0}
 .divider{grid-column:2;align-self:stretch;min-height:70vh;position:relative;cursor:col-resize;
   touch-action:none;border:0;background:transparent;padding:0}
@@ -108,7 +111,8 @@ button{background:#f7f6f3;color:#1b1b1b;border:1px solid #bbb;border-radius:4px;
 .entry .badge2.warn{margin-left:.3rem}
 .verify pre{white-space:pre-wrap;font-size:12px}
 .kbd{font-family:ui-monospace,Menlo,monospace;font-size:11px;background:#eee;padding:0 .25rem;border-radius:3px}
-@media (max-width:850px){.workbench{grid-template-columns:1fr}.workbench .media{position:static}
+@media (max-width:850px){.workbench{grid-template-columns:1fr}
+  .workbench .media{position:static;max-height:none;overflow:visible}
   .divider{display:none}}
 """
 

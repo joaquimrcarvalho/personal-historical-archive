@@ -388,6 +388,10 @@ def test_workbench_has_a_draggable_divider(cfg):
     assert "pha-bench-media" in page          # the persisted width key
     assert "--media-w" in benchui.BENCH_CSS
     assert ".divider{" in benchui.BENCH_CSS
+    # the image pane fills the pane width and scrolls on its own
+    assert "max-height:calc(100vh" in benchui.BENCH_CSS
+    assert "overflow:auto" in benchui.BENCH_CSS
+    assert "scrollbar-gutter:stable" in benchui.BENCH_CSS
     # the readings stack vertically: one entry block per comparison entry
     assert page.count('class="entry"') == 2
 
