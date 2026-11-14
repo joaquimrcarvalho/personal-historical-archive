@@ -342,6 +342,18 @@
           "commit": "b92a865cab78"
         }
       ]
+    },
+    "0.49.7": {
+      "date": "2026-11-14",
+      "summary": "Agent-made commits, pull requests and comments now name the model that wrote them and say they were made on Joaquim's behalf.",
+      "changes": [
+        {
+          "type": "docs",
+          "scope": "agents",
+          "text": "sign agent commits and PRs as made by the model, on your behalf",
+          "commit": "3d85a2641a4b"
+        }
+      ]
     }
   }
 }
