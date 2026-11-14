@@ -135,6 +135,20 @@ notes here
     assert bench.extract_transcription(ref) == "[1] a/b"
 
 
+def test_unclosed_fence_is_tolerated():
+    # many hand-made readings open ``` and never close it before the heading
+    text = "## Transcription\n\n```\nrow one\nrow two\n\n## Notes\n\nnote\n"
+    assert bench.extract_transcription(text) == "row one\nrow two"
+
+
+def test_pipe_table_rows_are_tabular():
+    a = "| Nomen | Patria |\n|---|---|\n| 1 P. Gaspar | Lusitanus |\n| 2 P. Luis | Italus |\n| 3 P. Juan | Hispanus |"
+    b = a.replace("Italus", "Hispanus")
+    assert bench.looks_tabular(a) and bench.looks_tabular(b)
+    rows_a = bench._tabular_rows(a)[1]
+    assert rows_a[1] == "P. Gaspar | Lusitanus |"
+
+
 def test_error_block_and_empty_are_not_readings():
     assert not bench.is_valid_reading("")
     assert not bench.is_valid_reading("ERROR: model call failed")

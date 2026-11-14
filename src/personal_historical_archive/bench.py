@@ -75,6 +75,8 @@ ROW_RE = re.compile(r"^(\d+)\s*[|.)]\s*(.*)$")
 # A numbered row that is really a table row: a separator, then whitespace, then
 # text. Stricter than ROW_RE so "1.º de henero" is not mistaken for row 1.
 STRICT_ROW_RE = re.compile(r"^(\d+)\s*[|.)]\s+(\S.*)$", re.M)
+# markdown pipe-table row: "| 3 P. Petrus Gómez | Hispanus ... |"
+PIPE_ROW_RE = re.compile(r"^\|\s*(\d+)\s+(.*)$")
 CAPTION_RE = re.compile(r"^#\s*Benchmark:\s*(.+?)\s+—\s+(.+)$", re.M)
 MODEL_RE = re.compile(r"model `([^`]+)`")
 RULES_RE = re.compile(r"pha palaeographer ([^,\s]+)")
@@ -251,6 +253,11 @@ def first_fenced(region: str) -> str | None:
             continue
         if s.startswith("```"):
             return "\n".join(lines[start + 1:i])
+    if start is not None:
+        # an unclosed fence: many hand-made readings open ``` and never close
+        # it before the next heading. Treat the rest as the block rather than
+        # leaking the fence into the transcription.
+        return "\n".join(lines[start + 1:])
     return None
 
 
@@ -898,9 +905,13 @@ def _tabular_rows(text: str) -> tuple[list[str], dict[int, str]]:
         if not s:
             continue
         m = ROW_RE.match(s)
+        pm = PIPE_ROW_RE.match(s) if not m else None
         if m:
             cur = int(m.group(1))
             rows[cur] = m.group(2).strip()
+        elif pm:
+            cur = int(pm.group(1))
+            rows[cur] = pm.group(2).strip()
         elif cur is not None:
             rows[cur] += " " + s
         else:
@@ -914,7 +925,10 @@ def _lines_of(text: str) -> list[str]:
 
 def looks_tabular(text: str | None, min_rows: int = 3) -> bool:
     """Whether a transcription reads as a numbered table (catalogue rows)."""
-    return len(STRICT_ROW_RE.findall(text or "")) >= min_rows
+    text = text or ""
+    return (len(STRICT_ROW_RE.findall(text))
+            + sum(1 for ln in text.splitlines() if PIPE_ROW_RE.match(ln.strip()))
+            ) >= min_rows
 
 
 def _reader_title(corpus: Corpus) -> str:
@@ -1525,6 +1539,13 @@ def _print_table(rows: list[list[str]], headers: list[str]) -> None:
         print("  ".join(str(c).ljust(w) for c, w in zip(r, widths)))
 
 
+def cmd_serve(cfg: Config, args) -> int:
+    from . import benchui
+
+    benchui.run_server(cfg, host=args.host, port=args.port, quiet=args.quiet)
+    return 0
+
+
 def cmd_init(cfg: Config, args) -> int:
     root = Path(args.path).expanduser()
     corpus = init_corpus(root, title=args.title,
@@ -1689,6 +1710,7 @@ def cmd_page(cfg: Config, args) -> int:
 
 
 COMMANDS = {
+    "serve": cmd_serve,
     "init": cmd_init,
     "list": cmd_list,
     "status": cmd_status,

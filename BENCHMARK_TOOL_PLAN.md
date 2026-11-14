@@ -31,13 +31,16 @@ with a YAML header — option (b) (§11.2).
 
 The rest of this document is the evidence and the build plan.
 
-**Implementation status (2026-11-14):** P0 and P1 are shipped —
-`src/personal_historical_archive/bench.py` and the `pha bench` command group
-(`init`, `list`, `status`, `verify`, `compare`, `reference`, `run`, `page`), with
-tests in `tests/test_bench.py`. All nine corpora under the archive's
-`benchmarks/` carry a `bench.yaml`; the 1577 and BNP `human/` files carry the
-decided front matter (1577: one `human-corrected` page, seven `pending`). P2–P5
-(the viewer, the workbench, scoring, export) remain. Details in §14.
+**Implementation status (2026-11-14):** P0–P3 are shipped. `bench.py` and the
+`pha bench` group (`init`, `list`, `status`, `verify`, `compare`, `reference`,
+`run`, `page`) are the engine; `viewer.py` is the shared page shell extracted
+from `serve.py`; `benchui.py` is the local writable workbench
+(`pha bench serve`), with tests in `tests/test_bench.py` and
+`tests/test_benchui.py`. All nine corpora under the archive's `benchmarks/`
+carry a `bench.yaml`, have a comparison and, where a source is declared, serve
+their page images; the 1577 and BNP `human/` files carry the decided front
+matter (1577: one `human-corrected` page, seven `pending`). P4 (scoring) and P5
+(export) remain, as does the PHA View entry point. Details in §14.
 
 ---
 
@@ -595,7 +598,43 @@ bench` command group is the engine. Concretely:
 - The three `jesuit-archive/local-tools/` scripts are still present and still
   work; they retire once the skill points at `pha bench` and the last corpus
   using them is rebuilt.
-- `pha bench score` (P4), the shared viewer module (P2) and the workbench (P3)
-  are not implemented. `pha bench run` has not been exercised against a paid
-  model in this pass; only its planning path (`--dry-run`) and the real corpora's
-  parsing/verification were.
+- `pha bench score` (P4) and `pha bench export` (P5) are not implemented.
+  `pha bench run` has not been exercised against a paid model in this pass; only
+  its planning path (`--dry-run`) and the real corpora's parsing/verification
+  were.
+
+**Shipped (P2/P3).**
+
+- `viewer.py` now holds the page shell (`CSS`, `html_page`, `esc`), imported by
+  `serve.py` — the "share the code, not the service" split SEARCH_WEB_SPEC asks
+  for, without touching `serve.py`'s routes or its read-only contract.
+- `benchui.py` + `pha bench serve`: corpus list, corpus page (page grid with
+  gold/stale/missing badges, verification report, rebuild buttons), and the
+  **page workbench** — image beside the stacked readings, one textarea per
+  `[n]` entry pre-filled from the gold, the reference, or the on-the-fly merge,
+  a "use" button per reading, `⌘S` to save, and a reviewer field.
+- **Save contract implemented**: form token, `base` hash guard (a file changed
+  on disk is never overwritten), contiguous non-empty entries, a required
+  reviewer, the structural verifier run on the exact bytes before an atomic
+  replace, `readings_hash` recorded, and an append-only `review-log.jsonl`.
+  Writes only `human/`, plus generated `comparison/` and `reference/`.
+- Image resolution: corpus `images/` → declared source directory (in place) →
+  PDF rendered on demand into the ignored `<archive>/.pha-test/bench-cache/`.
+- **Conversions done on the real corpora**: `document.path` set for 1577,
+  Schütte, 1587, 1567-Coimbra and 1576 (images now resolve); comparisons built
+  for 1587, 1567, 1576 and Schütte with `pha bench compare` (a mechanical draft,
+  regenerable at any time); every corpus verifies with 0 failures.
+- Parser hardening found by the real data: readings that open a ``` fence and
+  never close it (several older corpora) are now read correctly, and markdown
+  pipe-table rows (`| 3 P. Petrus Gómez | …`) are recognised as numbered table
+  rows.
+- **Deviations, recorded**: the app is stdlib `http.server` + the shared
+  `viewer.py` shell rather than FastAPI/Jinja2 — the shared viewer is
+  stdlib-only by design, and one more dependency was not worth it for a local
+  single-user tool (FastAPI stays the plan for `pha web`). Routes use query
+  strings (`/page?c=<corpus>&p=<page>`) instead of `/c/<corpus>/p/<page>`,
+  because corpus paths are deeply nested; the app is loopback-only and the
+  server prints its URL.
+- **Not done**: the PHA View entry point (a read-only link/panel in `dsh-pha`)
+  is deferred until the plugin is next revisited; it is a convenience, not part
+  of the authoring loop.

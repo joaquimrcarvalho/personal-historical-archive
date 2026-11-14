@@ -5497,6 +5497,15 @@ def main(argv: list[str] | None = None) -> None:
                       help="max_tokens for every reader (reasoning models need room; default 32768)")
     brun.set_defaults(fn=cmd_bench)
 
+    bserve = bnsub.add_parser(
+        "serve", help="run the local workbench: image + readings + gold editor (writes only the gold)")
+    bserve.add_argument("--host", default="127.0.0.1",
+                        help="bind address (default 127.0.0.1; wider binding has no auth)")
+    bserve.add_argument("--port", type=int, default=8766,
+                        help="port (default 8766, next to `pha serve`'s 8765)")
+    bserve.add_argument("--quiet", action="store_true", help="suppress per-request logging")
+    bserve.set_defaults(fn=cmd_bench)
+
     bpage = bnsub.add_parser("page", help="print one page's readings, comparison and gold")
     bpage.add_argument("corpus")
     bpage.add_argument("page")

@@ -1,0 +1,309 @@
+"""`pha bench serve` — the workbench: rendering, save contract, HTTP surface."""
+from __future__ import annotations
+
+import json
+import threading
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+import pytest
+import yaml
+
+from personal_historical_archive import bench, benchui
+
+HEADER = """# Benchmark: {page} — {label}
+
+Source: book.pdf (pha page 1)
+Model: {label} via api (model `{model}`); pha palaeographer rules, editor pass OFF
+
+## Transcription
+
+```
+{body}
+```
+"""
+
+COMPARISON = """# 001 — Comparative readings (1. Model A · 2. Model B)
+
+Context: two entries.
+
+## Entry-by-entry comparison
+
+```
+[1] = all readings: P. Manuel Rodrigues, professo.
+
+[2] 1. P. Juan Correa, Ministro
+    2. P. Juan Correa, Praepositus
+```
+
+## Key differences on this page
+
+- [2] role differs
+"""
+
+
+def write_reading(root: Path, reader: str, page: str, body: str) -> Path:
+    d = root / reader
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{page}.md"
+    p.write_text(HEADER.format(page=page, label=f"Model {reader}", model=f"m-{reader}",
+                               body=body), encoding="utf-8")
+    return p
+
+
+def make_corpus(cfg, name="c", comparison=True):
+    root = cfg.bench_root / "collections" / name
+    root.mkdir(parents=True, exist_ok=True)
+    for r in ("A", "B"):
+        (root / r).mkdir(exist_ok=True)
+    (root / "bench.yaml").write_text(yaml.safe_dump({
+        "title": "Test corpus",
+        "palaeographer": "rules",
+        "document": {"path": ""},
+        "readings": [{"dir": "A", "label": "Model A", "model": "m-A"},
+                     {"dir": "B", "label": "Model B", "model": "m-B"}],
+        "gold": {"reviewer": "Reviewer"},
+    }, sort_keys=False), encoding="utf-8")
+    write_reading(root, "A", "001", "1. one\n2. two")
+    write_reading(root, "B", "001", "1. one\n2. TWO")
+    if comparison:
+        (root / "comparison").mkdir(exist_ok=True)
+        (root / "comparison" / "001.md").write_text(COMPARISON, encoding="utf-8")
+    return bench.load_corpus(root)
+
+
+def rows_fields(wb, corpus, page="001"):
+    data = wb.page_data(corpus, page)
+    fields = {"c": str(corpus.root.relative_to(wb.root)), "p": page,
+              "nums": ",".join(str(r["num"]) for r in data["rows"]),
+              "base": data["base_sha"], "reviewer": "Reviewer"}
+    for row in data["rows"]:
+        fields[f"e{row['num']}"] = f"{row['text']} EDITED"
+    return fields, data
+
+
+# --------------------------------------------------------------------------- rendering
+
+
+def test_index_and_corpus_render(cfg):
+    corpus = make_corpus(cfg)
+    (corpus.root / "images").mkdir()
+    (corpus.root / "images" / "001.jpg").write_bytes(b"jpeg")
+    wb = benchui.Workbench(cfg)
+
+    index = benchui.render_index(wb)
+    assert b"Test corpus" in index
+    assert b"/corpus?c=" in index
+    assert b"/img?c=" in benchui.render_corpus(wb, corpus)
+
+    page = benchui.render_page(wb, corpus, "001")
+    assert b'name="e1"' in page and b'name="e2"' in page
+    assert b"data-put=\"2\"" in page
+    assert b"Save gold" in page
+    assert b"readings-data" in page
+
+
+def test_render_page_escapes_model_text(cfg):
+    corpus = make_corpus(cfg)
+    corpus.comparison_path("001").write_text(
+        COMPARISON.replace("P. Juan Correa, Ministro",
+                           "<script>alert(1)</script>")
+                  .replace("P. Juan Correa, Praepositus", "a & b"),
+        encoding="utf-8")
+    wb = benchui.Workbench(cfg)
+    page = benchui.render_page(wb, corpus, "001").decode()
+    assert "<script>alert(1)</script>" not in page
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert "a &amp; b" in page
+
+
+def test_page_without_comparison_offers_build(cfg):
+    corpus = make_corpus(cfg, comparison=False)
+    wb = benchui.Workbench(cfg)
+    page = benchui.render_page(wb, corpus, "001").decode()
+    assert "build comparison" in page
+    assert 'name="e1"' not in page
+
+
+def test_page_data_starts_from_merge_when_no_gold(cfg):
+    corpus = make_corpus(cfg)
+    wb = benchui.Workbench(cfg)
+    data = wb.page_data(corpus, "001")
+    assert data["rows"][0]["text"].startswith("P. Manuel Rodrigues")
+    assert data["rows"][0]["source"] == "merge"
+    assert data["base_sha"] == ""
+
+
+# --------------------------------------------------------------------------- save contract
+
+
+def test_save_writes_gold(cfg):
+    corpus = make_corpus(cfg)
+    wb = benchui.Workbench(cfg)
+    fields, _ = rows_fields(wb, corpus)
+    reviewer = benchui.save_gold(wb, corpus, "001", fields, wb.token)
+
+    assert reviewer == "Reviewer"
+    gold = corpus.gold_path("001").read_text(encoding="utf-8")
+    meta, body_text = bench.split_front_matter(gold)
+    assert meta["status"] == bench.STATUS_GOLD
+    assert meta["reviewed_by"] == "Reviewer"
+    assert meta["readings_hash"] == corpus.readings_hash("001")
+    assert "## Corrected text" in body_text
+    assert "[1] P. Manuel Rodrigues, professo. EDITED" in body_text
+    assert "[2] " in body_text and "EDITED" in body_text
+    assert bench.verify_gold_text(gold, corpus.readings_hash("001"))[0] == []
+    assert corpus.is_gold("001")
+    assert not corpus.is_stale("001")
+
+    # the review log records the save, without the text
+    log = (corpus.root / "review-log.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    entry = json.loads(log[-1])
+    assert entry["reviewer"] == "Reviewer" and entry["entries"] == 2
+    assert "text" not in entry
+
+
+def test_save_refuses_stale_base(cfg):
+    corpus = make_corpus(cfg)
+    wb = benchui.Workbench(cfg)
+    fields, _ = rows_fields(wb, corpus)
+    benchui.save_gold(wb, corpus, "001", fields, wb.token)
+    fields["base"] = ""            # the form was loaded before the first save
+    with pytest.raises(benchui.SaveError) as exc:
+        benchui.save_gold(wb, corpus, "001", fields, wb.token)
+    assert exc.value.status == 409
+    assert "changed on disk" in str(exc.value)
+
+
+def test_save_refuses_missing_reviewer_empty_entry_and_bad_token(cfg):
+    corpus = make_corpus(cfg)
+    wb = benchui.Workbench(cfg)
+    fields, _ = rows_fields(wb, corpus)
+    fields["reviewer"] = ""
+    corpus.gold_reviewer = ""
+    with pytest.raises(benchui.SaveError) as exc:
+        benchui.save_gold(wb, corpus, "001", fields, wb.token)
+    assert exc.value.status == 400
+    assert "reviewer" in str(exc.value)
+
+    fields, _ = rows_fields(wb, corpus)
+    fields["e2"] = ""
+    with pytest.raises(benchui.SaveError) as exc:
+        benchui.save_gold(wb, corpus, "001", fields, wb.token)
+    assert "[2] is empty" in str(exc.value)
+
+    fields, _ = rows_fields(wb, corpus)
+    with pytest.raises(benchui.SaveError) as exc:
+        benchui.save_gold(wb, corpus, "001", fields, "not-the-token")
+    assert exc.value.status == 409
+
+
+def test_save_preserves_rules_and_notes(cfg):
+    corpus = make_corpus(cfg)
+    gold = corpus.gold_path("001")
+    gold.parent.mkdir(parents=True, exist_ok=True)
+    gold.write_text("""---
+page: "001"
+status: human-corrected
+reviewed_by: Earlier
+reviewed_at: 2026-01-01
+editing_rules:
+- "u -> v"
+readings_hash: sha256:old
+---
+
+# 001
+Context: c
+
+## Corrected text
+
+```
+[1] old
+[2] old
+```
+
+## Notes
+
+An older note.
+""", encoding="utf-8")
+    wb = benchui.Workbench(cfg)
+    fields, data = rows_fields(wb, corpus)
+    assert data["base_sha"]
+    benchui.save_gold(wb, corpus, "001", fields, wb.token)
+    text = gold.read_text(encoding="utf-8")
+    assert "u -> v" in text                      # editing rules survive
+    assert "An older note." not in text          # the note is regenerated
+    assert "EDITED" in text
+
+
+def test_save_refuses_non_contiguous_entries(cfg):
+    corpus = make_corpus(cfg)
+    wb = benchui.Workbench(cfg)
+    fields, _ = rows_fields(wb, corpus)
+    fields["nums"] = "1,3"
+    with pytest.raises(benchui.SaveError):
+        benchui.save_gold(wb, corpus, "001", fields, wb.token)
+
+
+# --------------------------------------------------------------------------- images
+
+
+def test_image_resolution(cfg):
+    corpus = make_corpus(cfg)
+    wb = benchui.Workbench(cfg)
+    assert benchui.image_path(wb, corpus, "001") is None
+
+    (corpus.root / "images").mkdir()
+    img = corpus.root / "images" / "001.jpg"
+    img.write_bytes(b"jpeg")
+    assert benchui.image_path(wb, corpus, "001") == img
+
+    # a directory-of-images document is read in place
+    (corpus.root / "images" / "001.jpg").unlink()
+    src = cfg.data / "dropbox" / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "001.jpg").write_bytes(b"jpeg2")
+    corpus.document = "dropbox/src"
+    assert benchui.image_path(wb, corpus, "001") == src / "001.jpg"
+
+
+# --------------------------------------------------------------------------- http
+
+
+def test_http_roundtrip(cfg):
+    corpus = make_corpus(cfg)
+    (corpus.root / "images").mkdir()
+    (corpus.root / "images" / "001.jpg").write_bytes(b"jpeg")
+    server = benchui.make_server(cfg, port=0, quiet=True)
+    port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        assert urllib.request.urlopen(base + "/").read().find(b"Test corpus") >= 0
+        rel = str(corpus.root.relative_to(cfg.bench_root))
+        q = urllib.parse.urlencode({"c": rel, "p": "001"})
+        page = urllib.request.urlopen(base + "/page?" + q).read()
+        assert b'name="e1"' in page
+        img = urllib.request.urlopen(base + "/img?" + q).read()
+        assert img == b"jpeg"
+
+        wb = server.wb
+        fields, _ = rows_fields(wb, corpus)
+        data = urllib.parse.urlencode({**fields, "token": wb.token}).encode()
+        req = urllib.request.Request(base + "/save", data=data, method="POST")
+        saved = urllib.request.urlopen(req).read()
+        assert b"Saved. The gold page is written and verified." in saved
+        assert corpus.is_gold("001")
+
+        # a save with no token is refused
+        data = urllib.parse.urlencode(fields).encode()
+        req = urllib.request.Request(base + "/save", data=data, method="POST")
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req)
+        assert exc.value.code == 409
+    finally:
+        server.shutdown()
+        server.server_close()

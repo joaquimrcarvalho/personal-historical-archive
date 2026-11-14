@@ -1,0 +1,765 @@
+"""``pha bench serve`` — the benchmark workbench (P2 read-only + P3 authoring).
+
+A local, loopback-only app for the one job the CLI cannot do well: reading the
+page image beside the stacked readings and writing the human-corrected gold
+entry by entry.
+
+It is **not** `pha serve` and **not** PHA View. `pha serve` is read-only by
+contract and shares its viewer code with the future public site; PHA View is a
+chat surface. This app owns the one writable surface of the benchmark pipeline
+(BENCHMARK_TOOL_PLAN.md §3, §6), and its write allow-list is exactly:
+
+    human/<page>.md                  the gold, with front matter + readings_hash
+    reference/<page>.md              optional, generated (never hand-edited)
+    comparison/<page>.md             optional, generated
+
+It never writes readings, library files or the database. Every save is guarded:
+the file must not have changed since it was loaded, the entries must be
+contiguous and non-empty, a reviewer must be identified, and the structural
+checks that `pha bench verify` applies run in-process first.
+
+Served with the standard library (`http.server`) and the shared `viewer.py`
+shell: no Node, no build step, no new dependency, no network.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import secrets
+import sys
+import time
+import urllib.parse
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+from . import bench
+from .config import Config
+from .viewer import CSS, esc, html_page
+
+MAX_FORM_BYTES = 8 * 1024 * 1024
+ENTRY_RE = re.compile(r"^\[(\d+)\]\s*(.*)$")
+PAGE_QS = re.compile(r"^[A-Za-z0-9._-]+$")
+
+BENCH_CSS = """\
+.bench-main{display:block;padding:1rem;max-width:1400px;margin:0 auto;width:100%}
+.bench-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:.8rem}
+.card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:.7rem .8rem;color:inherit;
+  text-decoration:none;display:block}
+.card:hover{border-color:#999}
+.card h3{margin:.1rem 0 .3rem;font-size:15px}
+.muted{color:#666;font-size:13px}
+.badges{display:flex;gap:.3rem;flex-wrap:wrap;margin:.25rem 0}
+.badge2{font-size:11px;border:1px solid #ccc;border-radius:999px;padding:0 .45rem;background:#f7f6f3}
+.badge2.gold{background:#e8f5e9;border-color:#a5d6a7}
+.badge2.warn{background:#fff4e5;border-color:#ffcc80}
+.badge2.bad{background:#fdecea;border-color:#f5c6c2}
+.bench-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.5rem}
+.pagecard{background:#fff;border:1px solid #ddd;border-radius:6px;padding:.35rem;text-align:center;
+  color:inherit;text-decoration:none;font-size:12px}
+.pagecard img{width:100%;height:110px;object-fit:cover;border-radius:4px;background:#eee}
+.workbench{display:grid;grid-template-columns:minmax(300px,44%) 1fr;gap:1rem;align-items:start}
+.workbench .media{position:sticky;top:.5rem}
+.workbench .media img{width:100%;border:1px solid #ccc;border-radius:4px;background:#fff}
+.readings{margin:.2rem 0 .4rem}
+.reading-line{display:flex;gap:.5rem;align-items:flex-start;padding:.2rem 0;border-top:1px dashed #eee}
+.reading-line .n{color:#888;min-width:1.1rem}
+.reading-line .txt{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:12.5px;flex:1}
+.reading-line button{font-size:11px;padding:.05rem .4rem;cursor:pointer}
+.entry{background:#fff;border:1px solid #ddd;border-radius:6px;padding:.5rem .6rem;margin:.5rem 0}
+.entry h4{margin:.1rem 0 .2rem;font-size:13px;color:#555}
+.entry textarea{width:100%;min-height:2.6rem;font:12.5px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;
+  padding:.35rem;border:1px solid #ccc;border-radius:4px;resize:vertical}
+.entry textarea.dirty{border-color:#e0a800;background:#fffdf5}
+.savebar{position:sticky;bottom:0;background:#f1efe9;border-top:1px solid #ddd;padding:.5rem .6rem;
+  display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin-top:1rem}
+.savebar input[type=text]{padding:.25rem .4rem}
+.ok{background:#e8f5e9;border:1px solid #a5d6a7;padding:.4rem .6rem;border-radius:4px}
+.err{background:#fdecea;border:1px solid #f5c6c2;padding:.4rem .6rem;border-radius:4px}
+.verify pre{white-space:pre-wrap;font-size:12px}
+.kbd{font-family:ui-monospace,Menlo,monospace;font-size:11px;background:#eee;padding:0 .25rem;border-radius:3px}
+@media (max-width:850px){.workbench{grid-template-columns:1fr}.workbench .media{position:static}}
+"""
+
+
+class SaveError(Exception):
+    """A refused save; carries the HTTP status to show."""
+
+    def __init__(self, message: str, status: int = HTTPStatus.BAD_REQUEST):
+        super().__init__(message)
+        self.status = status
+
+
+# --------------------------------------------------------------------------- helpers
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def entry_texts(text: str) -> dict[int, str]:
+    """The ``[n]`` entries of a gold/reference page as ``{n: text}``."""
+    body = bench.extract_transcription(text)
+    out: dict[int, list[str]] = {}
+    cur: int | None = None
+    for line in body.splitlines():
+        m = ENTRY_RE.match(line.strip())
+        if m:
+            cur = int(m.group(1))
+            out[cur] = [m.group(2)]
+        elif cur is not None:
+            out[cur].append(line)
+    return {n: "\n".join(lines).strip() for n, lines in out.items()}
+
+
+def _corpus_by_rel(wb: "Workbench", rel: str) -> bench.Corpus:
+    root = wb.root
+    p = (root / rel)
+    if not str(p.resolve()).startswith(str(root.resolve()) + os.sep):
+        raise SaveError("corpus path escapes the bench root", HTTPStatus.BAD_REQUEST)
+    if not p.is_dir():
+        raise SaveError(f"no such corpus: {rel}", HTTPStatus.NOT_FOUND)
+    corpus = bench.load_corpus(p)
+    if not corpus.readers:
+        raise SaveError(f"no readers in {rel}", HTTPStatus.NOT_FOUND)
+    return corpus
+
+
+def _rel(wb: "Workbench", corpus: bench.Corpus) -> str:
+    return str(corpus.root.relative_to(wb.root))
+
+
+def _link(path: str, **params) -> str:
+    q = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+    return f"{path}?{q}" if q else path
+
+
+# --------------------------------------------------------------------------- images
+
+
+def image_path(wb: "Workbench", corpus: bench.Corpus, page: str) -> Path | None:
+    """The page image: corpus images/, then the declared source document.
+
+    A directory of images is read in place; a PDF page is rendered on demand
+    into ``<archive>/.pha-test/bench-cache/`` (so the first view pays once), never into
+    the corpus itself — publishing materialises ``images/`` at export time.
+    """
+    images = corpus.images_dir
+    if images is not None:
+        for ext in bench.IMAGE_EXTS:
+            p = images / f"{page}{ext}"
+            if p.is_file():
+                return p
+    doc = corpus.document
+    if not doc:
+        return None
+    p = Path(doc)
+    if not p.is_absolute():
+        p = wb.cfg.data / p
+    if p.is_file() and p.suffix.lower() in bench.IMAGE_EXTS:
+        return p if p.stem == page else None
+    if p.is_dir():
+        for f in sorted(p.rglob("*")):
+            if f.is_file() and f.stem == page and f.suffix.lower() in bench.IMAGE_EXTS:
+                return f
+        return None
+    if not p.is_file():
+        return None
+    page_no = bench.pha_page_for(corpus, page, wb.cfg.data)
+    if page_no is None:
+        return None
+    key = hashlib.sha1(str(p).encode("utf-8")).hexdigest()[:12]
+    cache = wb.cfg.data / ".pha-test" / "bench-cache" / key
+    out = cache / f"p{page_no:03d}.jpg"
+    try:
+        fresh = out.is_file() and out.stat().st_mtime >= p.stat().st_mtime
+    except OSError:
+        fresh = False
+    if fresh:
+        return out
+    from .extract import render_document
+
+    try:
+        made = render_document(p, cache, dpi=wb.cfg.render_dpi,
+                               max_px=wb.cfg.max_image_px,
+                               jpeg_quality=wb.cfg.jpeg_quality,
+                               pages={page_no})
+    except Exception:  # noqa: BLE001 - a render failure must not kill the page
+        return None
+    return made[0] if made else None
+
+
+def _content_type(path: Path) -> str:
+    return {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+            ".tif": "image/tiff", ".tiff": "image/tiff",
+            ".webp": "image/webp"}.get(path.suffix.lower(), "application/octet-stream")
+
+
+# --------------------------------------------------------------------------- context
+
+
+class Workbench:
+    """Per-process state: the bench root, the corpus list, the form token."""
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.root = bench.bench_root(cfg)
+        self.token = secrets.token_urlsafe(18)
+
+    def corpora(self) -> list[bench.Corpus]:
+        return bench.discover(self.root)
+
+    def corpus(self, rel: str) -> bench.Corpus:
+        return _corpus_by_rel(self, rel)
+
+    def page(self, rel: str, page: str) -> bench.Corpus:
+        if not PAGE_QS.match(page or ""):
+            raise SaveError("bad page id", HTTPStatus.BAD_REQUEST)
+        corpus = self.corpus(rel)
+        if page not in corpus.page_ids():
+            raise SaveError(f"no page {page!r} in this corpus", HTTPStatus.NOT_FOUND)
+        return corpus
+
+    # -- page model -------------------------------------------------------
+    def page_data(self, corpus: bench.Corpus, page: str) -> dict:
+        comp = corpus.comparison_path(page)
+        comp_text = comp.read_text(encoding="utf-8") if comp.is_file() else ""
+        entries = bench.parse_comparison_entries(comp_text) if comp_text else []
+        gold_path = corpus.gold_path(page)
+        gold_text = gold_path.read_text(encoding="utf-8") if gold_path.is_file() else ""
+        ref_path = corpus.reference_path(page)
+        ref_text = ref_path.read_text(encoding="utf-8") if ref_path.is_file() else ""
+        gold_entries = entry_texts(gold_text) if gold_text else {}
+        ref_entries = entry_texts(ref_text) if ref_text else {}
+        rows = []
+        seen: set[int] = set()
+        for e in entries:
+            seen.add(e.num)
+            if e.kind == "all":
+                readings = [(0, e.text)]
+            else:
+                readings = list(enumerate(e.readings, 1))
+            text = gold_entries.get(e.num)
+            source = "gold"
+            if text is None:
+                text = ref_entries.get(e.num)
+                source = "reference" if text is not None else ""
+            if text is None:
+                text = bench.merge_readings(e.readings) if e.kind == "diff" else e.text
+                source = "merge"
+            rows.append({"num": e.num, "readings": readings, "text": text,
+                         "source": source})
+        for num in sorted(set(gold_entries) - seen):
+            rows.append({"num": num, "readings": [], "text": gold_entries[num],
+                         "source": "gold"})
+        return {
+            "entries": entries,
+            "rows": rows,
+            "gold_text": gold_text,
+            "gold_entries": gold_entries,
+            "ref_text": ref_text,
+            "comp_text": comp_text,
+            "base_sha": _sha256(gold_path.read_bytes()) if gold_path.is_file() else "",
+            "meta": corpus.gold_meta(page),
+            "status": bench.page_status(corpus, page),
+            "readers": [r.dir for r in corpus.readers],
+        }
+
+
+# --------------------------------------------------------------------------- render
+
+
+def _badges(status: bench.PageStatus) -> str:
+    out = []
+    if status.gold:
+        out.append('<span class="badge2 gold">gold</span>')
+    elif status.gold_status:
+        out.append(f'<span class="badge2">{esc(status.gold_status)}</span>')
+    if status.stale:
+        out.append('<span class="badge2 warn">stale</span>')
+    if status.missing:
+        out.append(f'<span class="badge2 bad">{len(status.missing)} missing</span>')
+    if not status.compared and status.entries:
+        out.append('<span class="badge2 warn">comparison older</span>')
+    return '<span class="badges">' + "".join(out) + "</span>" if out else ""
+
+
+def _head(title: str, crumbs: str = "") -> str:
+    return ("<header><strong>pha bench</strong>"
+            + (f'<span class="muted">{crumbs}</span>' if crumbs else "")
+            + '<span class="spacer"></span>'
+            + '<span class="muted">local workbench — writes only the gold</span>'
+            "</header>")
+
+
+def render_index(wb: Workbench) -> bytes:
+    corpora = wb.corpora()
+    cards = []
+    for c in corpora:
+        st = bench.corpus_status(c)
+        rel = _rel(wb, c)
+        cards.append(
+            f'<a class="card" href="{_link("/corpus", c=rel)}">'
+            f'<h3>{esc(c.title)}</h3>'
+            f'<div class="muted">{esc(rel)}</div>'
+            '<div class="badges">'
+            f'<span class="badge2">{len(c.readers)} readers</span>'
+            f'<span class="badge2">{st["pages"]} pages</span>'
+            f'<span class="badge2 gold">{st["gold"]} gold</span>'
+            + (f'<span class="badge2 warn">{st["stale"]} stale</span>' if st["stale"] else "")
+            + "</div></a>")
+    pending = ""
+    try:
+        cands = bench.candidates(wb.root)
+    except OSError:
+        cands = []
+    if cands:
+        items = "".join(
+            f'<li><code>{esc(str(p.relative_to(wb.root)))}</code> — '
+            f'<code>pha bench init {esc(str(p))}</code></li>' for p in cands)
+        pending = (f'<h2>Unconfigured</h2><p class="muted">Corpus-shaped folders '
+                   f'without <code>bench.yaml</code>:</p><ul>{items}</ul>')
+    body = (f'{_head("corpora")}<main class="bench-main">'
+            f'<h1>Benchmark corpora</h1>'
+            f'<div class="muted">bench root: <code>{esc(str(wb.root))}</code></div>'
+            f'<div class="bench-cards" style="margin-top:1rem">{"".join(cards)}</div>'
+            f'{pending}</main>')
+    return html_page("pha bench", body, f"<style>{BENCH_CSS}</style>")
+
+
+def render_corpus(wb: Workbench, corpus: bench.Corpus, verify: bool = False,
+                  notice: str = "") -> bytes:
+    rel = _rel(wb, corpus)
+    pages = corpus.page_ids()
+    cards = []
+    for page in pages:
+        st = bench.page_status(corpus, page)
+        badges = _badges(st)
+        cards.append(
+            f'<a class="pagecard" href="{_link("/page", c=rel, p=page)}">'
+            f'<img loading="lazy" src="{_link("/img", c=rel, p=page)}" alt="">'
+            f'<div><strong>{esc(page)}</strong></div>{badges}</a>')
+    verify_html = ""
+    if verify:
+        reps = bench.verify_corpus(corpus, readings=len(corpus.readers) or None,
+                                   include_gold=True)
+        lines = []
+        for r in reps:
+            name = (str(r.path.relative_to(corpus.root))
+                    if r.path.is_relative_to(corpus.root) else str(r.path))
+            mark = "ok" if r.ok else "FAIL"
+            lines.append(f"{mark:4s} {name}")
+            lines += [f"     - {p}" for p in r.problems]
+            lines += [f"     warn: {w}" for w in r.warnings]
+        verify_html = ('<h2>Verification</h2><div class="verify"><pre>'
+                       + esc("\n".join(lines)) + "</pre></div>")
+    st = bench.corpus_status(corpus)
+    body = (f'{_head(corpus.title, " · " + esc(rel))}'
+            f'<main class="bench-main">'
+            f'<p><a href="/">← all corpora</a></p>'
+            f'<h1>{esc(corpus.title)}</h1>'
+            f'<div class="muted">{esc(str(corpus.root))}</div>'
+            + (f'<p class="ok">{esc(notice)}</p>' if notice else "")
+            + f'<p>readers: {esc(", ".join(r.dir for r in corpus.readers)) or "(none)"} · '
+              f'pages: {st["pages"]} · compared: {st["compared"]} · '
+              f'gold: {st["gold"]} · stale: {st["stale"]}</p>'
+            f'<div class="savebar" style="position:static;margin:.5rem 0">'
+            f'<a class="badge2" href="{_link("/corpus", c=rel, verify=1)}">run verification</a>'
+            f'<form method="post" action="/build" style="display:inline">'
+            f'<input type="hidden" name="token" value="{wb.token}">'
+            f'<input type="hidden" name="c" value="{esc(rel)}">'
+            f'<button name="what" value="comparison">rebuild comparison</button>'
+            f'<button name="what" value="reference">rebuild reference</button>'
+            f'</form>'
+            f'<span class="muted">Writes <code>comparison/</code> and '
+            f'<code>reference/</code> only, never the gold.</span></div>'
+            f'<div class="bench-grid">{"".join(cards)}</div>'
+            f'{verify_html}</main>')
+    return html_page(f"pha bench — {corpus.title}", body,
+                     f"<style>{BENCH_CSS}</style>")
+
+
+def _readings_html(row: dict) -> str:
+    if not row["readings"]:
+        return '<p class="muted">no comparison entry for this number</p>'
+    out = []
+    for k, text in row["readings"]:
+        label = "all" if k == 0 else str(k)
+        out.append(
+            f'<div class="reading-line"><span class="n">{label}</span>'
+            f'<span class="txt">{esc(text)}</span>'
+            f'<button type="button" data-put="{row["num"]}" data-k="{k}" '
+            f'title="use this reading for the gold entry">use</button></div>')
+    return "".join(out)
+
+
+def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
+                error: str = "", saved: bool = False) -> bytes:
+    data = wb.page_data(corpus, page)
+    rel = _rel(wb, corpus)
+    ids = corpus.page_ids()
+    i = ids.index(page) if page in ids else 0
+    prev_p = ids[i - 1] if i > 0 else None
+    next_p = ids[i + 1] if i + 1 < len(ids) else None
+    if not data["comp_text"]:
+        body = (f'{_head(corpus.title, " · " + esc(page))}'
+                f'<main class="bench-main"><p><a href="{_link("/corpus", c=rel)}">'
+                f'← {esc(corpus.title)}</a></p>'
+                f'<h1>{esc(page)}</h1>'
+                '<p class="err">No comparison for this page yet. The workbench '
+                'edits entry-aligned text, so build the comparison first '
+                '(it is mechanical and can be rebuilt at any time).</p>'
+                f'<form method="post" action="/build">'
+                f'<input type="hidden" name="token" value="{wb.token}">'
+                f'<input type="hidden" name="c" value="{esc(rel)}">'
+                f'<input type="hidden" name="page" value="{esc(page)}">'
+                f'<button name="what" value="comparison">build comparison</button> '
+                f'<button name="what" value="reference">build reference</button>'
+                f'</form></main>')
+        return html_page(f"pha bench — {page}", body,
+                         f"<style>{BENCH_CSS}</style>")
+
+    image = image_path(wb, corpus, page)
+    img_html = (f'<img src="{_link("/img", c=rel, p=page)}" alt="page {esc(page)}">'
+                f'<div class="muted"><a href="{_link("/img", c=rel, p=page, full=1)}" '
+                f'target="_blank">open full size</a></div>') if image else (
+        '<p class="muted">No image: set <code>document.path</code> in '
+        '<code>bench.yaml</code> or add <code>images/</code>.</p>')
+    entries_html = []
+    nums = []
+    reading_data = {}
+    for row in data["rows"]:
+        nums.append(row["num"])
+        for k, text in row["readings"]:
+            reading_data[f'{row["num"]}:{k}'] = text
+        badge = f'<span class="badge2">{esc(row["source"])}</span>' if row["source"] else ""
+        entries_html.append(
+            f'<div class="entry"><h4>[{row["num"]}] {badge}</h4>'
+            f'<div class="readings">{_readings_html(row)}</div>'
+            f'<textarea name="e{row["num"]}" spellcheck="false">{esc(row["text"])}</textarea>'
+            "</div>")
+    reviewer = data["meta"].get("reviewed_by") or corpus.gold_reviewer or ""
+    status = data["status"]
+    body = (f'{_head(corpus.title, " · " + esc(page))}'
+            f'<main class="bench-main"><p>'
+            f'<a href="{_link("/corpus", c=rel)}">← {esc(corpus.title)}</a>'
+            f'{" · ‹ " + _link("/page", c=rel, p=prev_p) if prev_p else ""}'
+            f'{" · " + _link("/page", c=rel, p=next_p) + " ›" if next_p else ""}'
+            "</p>"
+            f'<h1>{esc(page)} {_badges(status)}</h1>'
+            + (f'<p class="ok">Saved. The gold page is written and verified.</p>'
+               if saved else "")
+            + (f'<p class="err">{esc(error)}</p>' if error else "")
+            + f'<div class="workbench"><div class="media">{img_html}</div><div>'
+            + f'<form method="post" action="/save" id="saveform">'
+              f'<input type="hidden" name="token" value="{wb.token}">'
+              f'<input type="hidden" name="c" value="{esc(rel)}">'
+              f'<input type="hidden" name="p" value="{esc(page)}">'
+              f'<input type="hidden" name="base" value="{data["base_sha"]}">'
+              f'<input type="hidden" name="nums" value="{",".join(str(n) for n in nums)}">'
+            + "".join(entries_html)
+            + '<div class="savebar">'
+              f'<label class="muted">reviewer <input type="text" name="reviewer" '
+              f'value="{esc(reviewer)}" required></label>'
+              '<button type="submit">Save gold</button>'
+              f'<span class="muted"><span class="kbd">⌘S</span> saves · '
+              f'"use" copies a reading into its entry · readings_hash '
+              f'<code>{esc(corpus.readings_hash(page))[:19]}…</code></span>'
+              '</div></form>'
+              f'<p class="muted">Gold data: {esc(_yaml(data["meta"])) if data["meta"] else "(none yet)"}</p>'
+            "</div></div></main>"
+            '<script type="application/json" id="readings-data">'
+            + json.dumps(reading_data, ensure_ascii=False).replace("</", "<\\/")
+            + "</script>"
+            "<script>(function(){const T=JSON.parse(document.getElementById('readings-data').textContent);"
+            "document.querySelectorAll('button[data-put]').forEach(b=>{"
+            "b.addEventListener('click',()=>{"
+            "const ta=document.querySelector('textarea[name=\"e'+b.dataset.put+'\"]');"
+            "if(!ta)return;ta.value=T[b.dataset.put+':'+b.dataset.k]||'';"
+            "ta.classList.add('dirty');ta.focus();});});})();"
+            "document.addEventListener('keydown',e=>{"
+            "if((e.metaKey||e.ctrlKey)&&e.key==='s'){e.preventDefault();"
+            "document.getElementById('saveform').requestSubmit();}});"
+            "</script>")
+    return html_page(f"pha bench — {page}", body,
+                     f"<style>{BENCH_CSS}</style>")
+
+
+# --------------------------------------------------------------------------- save
+
+
+def _gold_from_existing(text: str, block: str, page: str) -> str:
+    """Replace the corrected block inside an existing gold/reference page."""
+    m = re.search(r"^(## (?:Corrected text|Reference text[^\n]*))\s*$", text, re.M)
+    if m:
+        head = text[:m.start()]
+        rest = text[m.end():]
+        notes = re.search(r"^## Notes\s*$", rest, re.M)
+        tail = ("\n## Notes\n" + rest[notes.end():].lstrip("\n")) if notes else ""
+        return f"{head}## Corrected text\n\n```\n{block}\n```\n{tail}"
+    return f"{text.rstrip()}\n\n## Corrected text\n\n```\n{block}\n```\n"
+
+
+def _synthesize(corpus: bench.Corpus, page: str, block: str) -> str:
+    comp = corpus.comparison_path(page)
+    title = f"# {page} — Corrected text"
+    context = "Context: (see the comparison)"
+    if comp.is_file():
+        text = comp.read_text(encoding="utf-8")
+        m = re.search(r"^# (.+)$", text, re.M)
+        if m:
+            title = "# " + m.group(1).replace("Comparative readings", "Corrected text")
+        c = re.search(r"^Context: .*$", text, re.M)
+        if c:
+            context = c.group(0)
+    return f"{title}\n\n{context}\n\n## Corrected text\n\n```\n{block}\n```\n"
+
+
+def save_gold(wb: Workbench, corpus: bench.Corpus, page: str,
+              fields: dict, token: str) -> str:
+    """Write the gold page. Returns the reviewer name on success.
+
+    Raises SaveError (with an HTTP status) on any refused save. Every rule here
+    exists to protect human work: no token, no save; a file that changed on
+    disk is not overwritten; an empty or renumbered entry is refused; the
+    structural verifier runs before the write.
+    """
+    if not secrets.compare_digest(str(token or ""), wb.token):
+        raise SaveError("stale form token — reload the page and try again",
+                        HTTPStatus.CONFLICT)
+    reviewer = str(fields.get("reviewer") or "").strip() or corpus.gold_reviewer
+    if not reviewer:
+        raise SaveError("a reviewer name is required: the gold must say who "
+                        "validated it", HTTPStatus.BAD_REQUEST)
+    try:
+        nums = [int(x) for x in str(fields.get("nums") or "").split(",") if x.strip()]
+    except ValueError:
+        raise SaveError("bad entry list", HTTPStatus.BAD_REQUEST) from None
+    if not nums:
+        raise SaveError("this page has no entries to save", HTTPStatus.BAD_REQUEST)
+    if nums != list(range(1, len(nums) + 1)):
+        raise SaveError("entries are not contiguous from [1]", HTTPStatus.BAD_REQUEST)
+
+    texts: dict[int, str] = {}
+    for n in nums:
+        value = str(fields.get(f"e{n}") or "").strip()
+        if not value:
+            raise SaveError(f"entry [{n}] is empty — the gold cannot lose an "
+                            "entry; write the reading or rebuild the comparison",
+                            HTTPStatus.BAD_REQUEST)
+        texts[n] = value
+    block = "\n".join(f"[{n}] {texts[n]}" for n in nums)
+
+    gold_path = corpus.gold_path(page)
+    existing = gold_path.read_text(encoding="utf-8") if gold_path.is_file() else ""
+    existing_meta, existing_body = (bench.split_front_matter(existing) if existing
+                                    else ({}, ""))
+    if str(fields.get("base") or "") != (
+            _sha256(gold_path.read_bytes()) if gold_path.is_file() else ""):
+        raise SaveError("the gold file changed on disk since it was loaded — "
+                        "reload before saving", HTTPStatus.CONFLICT)
+
+    ref = corpus.reference_path(page)
+    ref_body = (bench.split_front_matter(ref.read_text(encoding="utf-8"))[1]
+                if ref.is_file() else "")
+    base = existing_body or ref_body
+    content = (_gold_from_existing(base, block, page) if base
+               else _synthesize(corpus, page, block))
+    notes = re.search(r"^## Notes\s*$", content, re.M)
+    if notes:
+        content = content[:notes.start()].rstrip() + "\n\n## Notes\n\n"
+    else:
+        content = content.rstrip() + "\n\n## Notes\n\n"
+    content += f"Reviewed {reviewer} {time.strftime('%Y-%m-%d')}.\n"
+    meta = {
+        "page": page,
+        "status": bench.STATUS_GOLD,
+        "reviewed_by": reviewer,
+        "reviewed_at": time.strftime("%Y-%m-%d"),
+        "readings": [r.dir for r in corpus.readers],
+        "readings_hash": corpus.readings_hash(page),
+        "source": str(corpus.root.relative_to(wb.root)),
+    }
+    if existing_meta.get("editing_rules"):
+        meta["editing_rules"] = existing_meta["editing_rules"]
+    # structural checks run on the exact bytes that would be written
+    problem = bench.verify_gold_text(
+        "---\n" + _yaml(meta) + "---\n\n" + content,
+        corpus.readings_hash(page))
+    probs = problem[0]
+    if probs:
+        raise SaveError("refused: " + "; ".join(probs), HTTPStatus.BAD_REQUEST)
+
+    gold_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = gold_path.with_suffix(".md.tmp")
+    tmp.write_text("---\n" + _yaml(meta) + "---\n\n" + content, encoding="utf-8")
+    os.replace(tmp, gold_path)
+    with (corpus.root / "review-log.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "page": page, "reviewer": reviewer, "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "entries": len(nums), "readings_hash": meta["readings_hash"],
+        }, ensure_ascii=False) + "\n")
+    return reviewer
+
+
+def _yaml(meta: dict) -> str:
+    import yaml
+    return yaml.safe_dump(meta, sort_keys=False, allow_unicode=True)
+
+
+# --------------------------------------------------------------------------- http
+
+
+class Handler(BaseHTTPRequestHandler):
+    wb: Workbench
+    quiet: bool = False
+    server_version = "pha-bench/1"
+
+    # -- plumbing ---------------------------------------------------------
+    def _send(self, status: int, body: bytes, ctype: str,
+              headers: dict | None = None) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "same-origin")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _html(self, status: int, body: bytes) -> None:
+        self._send(status, body, "text/html; charset=utf-8")
+
+    def _error(self, status: int, message: str) -> None:
+        body = (f'{_head("error")}<main class="bench-main"><h1>{status}</h1>'
+                f'<p class="err">{esc(message)}</p>'
+                f'<p><a href="/">← all corpora</a></p></main>')
+        self._html(status, html_page("pha bench — error", body,
+                                     f"<style>{BENCH_CSS}</style>"))
+
+    def _params(self) -> dict:
+        u = urllib.parse.urlparse(self.path)
+        return {k: v[-1] for k, v in urllib.parse.parse_qs(u.query).items()}
+
+    def do_HEAD(self) -> None:  # noqa: N802 - stdlib API
+        self.do_GET()
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib API
+        try:
+            q = self._params()
+            path = urllib.parse.urlparse(self.path).path
+            if path in ("/", "/index.html"):
+                self._html(200, render_index(self.wb))
+            elif path == "/healthz":
+                self._send(200, b'{"ok":true}', "application/json")
+            elif path == "/corpus":
+                c = self.wb.corpus(q.get("c", ""))
+                self._html(200, render_corpus(self.wb, c, verify=bool(q.get("verify")),
+                                              notice=q.get("notice", "")))
+            elif path == "/page":
+                c = self.wb.page(q.get("c", ""), q.get("p", ""))
+                self._html(200, render_page(self.wb, c, q.get("p", ""),
+                                            saved=bool(q.get("saved"))))
+            elif path == "/img":
+                self._image(q)
+            else:
+                self._error(404, "not found")
+        except SaveError as e:
+            self._error(int(e.status), str(e))
+        except Exception as e:  # noqa: BLE001 - a local tool must show the error
+            self._error(500, f"{type(e).__name__}: {e}")
+
+    def _image(self, q: dict) -> None:
+        c = self.wb.page(q.get("c", ""), q.get("p", ""))
+        p = image_path(self.wb, c, q.get("p", ""))
+        if p is None:
+            self._send(404, b"no image for this page", "text/plain; charset=utf-8")
+            return
+        self._send(200, p.read_bytes(), _content_type(p))
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib API
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0 or length > MAX_FORM_BYTES:
+                raise SaveError("bad form size", HTTPStatus.BAD_REQUEST)
+            form = urllib.parse.parse_qs(
+                self.rfile.read(length).decode("utf-8", "replace"),
+                keep_blank_values=True)
+            fields = {k: v[0] for k, v in form.items()}
+            path = urllib.parse.urlparse(self.path).path
+            if path == "/save":
+                c = self.wb.page(fields.get("c", ""), fields.get("p", ""))
+                save_gold(self.wb, c, fields.get("p", ""), fields, fields.get("token", ""))
+                rel = _rel(self.wb, c)
+                self._redirect(_link("/page", c=rel, p=fields.get("p", ""), saved=1))
+            elif path == "/build":
+                c = self.wb.corpus(fields.get("c", ""))
+                if not secrets.compare_digest(str(fields.get("token") or ""), self.wb.token):
+                    raise SaveError("stale form token", HTTPStatus.CONFLICT)
+                what = fields.get("what", "")
+                page = fields.get("page") or ""
+                if what == "comparison":
+                    bench.build_comparison(c, profile="auto")
+                elif what == "reference":
+                    bench.build_reference(c, readings=len(c.readers) or None)
+                else:
+                    raise SaveError("unknown build target", HTTPStatus.BAD_REQUEST)
+                rel = _rel(self.wb, c)
+                if page:
+                    self._redirect(_link("/page", c=rel, p=page))
+                else:
+                    self._redirect(_link("/corpus", c=rel,
+                                         notice=f"rebuilt {what}"))
+            else:
+                self._error(404, "not found")
+        except SaveError as e:
+            self._error(int(e.status), str(e))
+        except SystemExit as e:  # bench commands raise SystemExit on bad input
+            self._error(400, str(e))
+        except Exception as e:  # noqa: BLE001
+            self._error(500, f"{type(e).__name__}: {e}")
+
+    def _redirect(self, location: str) -> None:
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, fmt: str, *args) -> None:
+        if not self.quiet:
+            sys.stderr.write("  %s\n" % (fmt % args))
+
+
+def make_server(cfg: Config, host: str = "127.0.0.1", port: int = 8766,
+                quiet: bool = False) -> ThreadingHTTPServer:
+    wb = Workbench(cfg)
+    handler = type("BoundHandler", (Handler,), {"wb": wb, "quiet": quiet})
+    server = ThreadingHTTPServer((host, port), handler)
+    server.daemon_threads = True
+    server.wb = wb  # exposed for tests and for a future `--open` helper
+    return server
+
+
+def run_server(cfg: Config, host: str = "127.0.0.1", port: int = 8766,
+               quiet: bool = False) -> None:
+    server = make_server(cfg, host, port, quiet)
+    actual_host, actual_port = server.server_address[:2]
+    shown = "127.0.0.1" if actual_host in ("0.0.0.0", "::") else actual_host
+    print(f"pha bench serve: http://{shown}:{actual_port}/")
+    print(f"  corpora under {bench.bench_root(cfg)}; writes only human/, "
+          f"reference/ and comparison/")
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        print("  warning: bound beyond loopback — this workbench has no "
+              "authentication; use only on a trusted network", file=sys.stderr)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped")
+    finally:
+        server.server_close()
