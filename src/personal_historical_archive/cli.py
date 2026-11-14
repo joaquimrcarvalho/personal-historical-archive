@@ -5497,6 +5497,23 @@ def main(argv: list[str] | None = None) -> None:
                       help="max_tokens for every reader (reasoning models need room; default 32768)")
     brun.set_defaults(fn=cmd_bench)
 
+    bsc = bnsub.add_parser("score", help="score the readings against the human gold")
+    bsc.add_argument("corpus")
+    bsc.add_argument("--dry-run", action="store_true", help="report without writing scores/")
+    bsc.add_argument("--json", action="store_true", help="print results.json to stdout")
+    bsc.set_defaults(fn=cmd_bench)
+
+    bex = bnsub.add_parser("export", help="write a self-contained static site for a corpus")
+    bex.add_argument("corpus")
+    bex.add_argument("--out", default=None,
+                     help="output directory (default: <archive>/exports/bench/<corpus>)")
+    bex.add_argument("--no-images", action="store_true", help="text-only export")
+    bex.add_argument("--no-score", action="store_true", help="do not compute/embed scores")
+    bex.add_argument("--force", action="store_true", help="overwrite a non-empty output directory")
+    bex.add_argument("--max-image-px", type=int, default=1600,
+                     help="downscale page images to this long edge (0 = copy originals)")
+    bex.set_defaults(fn=cmd_bench)
+
     bserve = bnsub.add_parser(
         "serve", help="run the local workbench: image + readings + gold editor (writes only the gold)")
     bserve.add_argument("--host", default="127.0.0.1",

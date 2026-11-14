@@ -33,14 +33,16 @@ The rest of this document is the evidence and the build plan.
 
 **Implementation status (2026-11-14):** P0–P3 are shipped. `bench.py` and the
 `pha bench` group (`init`, `list`, `status`, `verify`, `compare`, `reference`,
-`run`, `page`) are the engine; `viewer.py` is the shared page shell extracted
-from `serve.py`; `benchui.py` is the local writable workbench
-(`pha bench serve`), with tests in `tests/test_bench.py` and
-`tests/test_benchui.py`. All nine corpora under the archive's `benchmarks/`
+`run`, `page`, `score`, `export`, `serve`) are the engine; `viewer.py` is the
+shared page shell extracted from `serve.py`; `benchui.py` is the local writable
+workbench (`pha bench serve`); `benchexport.py` writes the static site. Tests
+live in `tests/test_bench.py`, `tests/test_benchui.py` and
+`tests/test_benchscore.py`. All nine corpora under the archive's `benchmarks/`
 carry a `bench.yaml`, have a comparison and, where a source is declared, serve
 their page images; the 1577 and BNP `human/` files carry the decided front
 matter (1577: one `human-corrected` page, seven `pending`). P4 (scoring) and P5
-(export) remain, as does the PHA View entry point. Details in §14.
+(export) are implemented; only the PHA View entry point and the skill-text
+re-sync remain. Details in §14.
 
 ---
 
@@ -456,6 +458,13 @@ decides a prosopography: names, places, dates). Honesty rules from
 `VLM_BENCHMARK_INFRA_PLAN.md` §11.4 carry over: `n_pages` on every aggregate, no
 global ranking from a small sample, stale gold excluded, provenance shown.
 
+*As implemented:* CER is computed with `difflib` character alignment on two
+normalisation profiles; entry-exact counts only entries the gold and the
+comparison share (a deliberate split/merge is reported, never guessed);
+names are capitalised-token matches, not entity links; the reference merge is
+scored as its first variant (it is a variant digest, and scoring the slashes
+would be meaningless); pages with pending or stale gold are excluded by name.
+
 ---
 
 ## 8. Migration of the local scripts
@@ -638,3 +647,27 @@ bench` command group is the engine. Concretely:
 - **Not done**: the PHA View entry point (a read-only link/panel in `dsh-pha`)
   is deferred until the plugin is next revisited; it is a convenience, not part
   of the authoring loop.
+
+**Shipped (P4/P5).**
+
+- `pha bench score` and `bench.score_corpus`: CER (diplomatic/modern),
+  per-entry exact match where the gold and comparison share a number, and a
+  token-level names metric; pending and stale gold pages are excluded with the
+  reason; `scores/results.json` + `scores/results.csv` are written (relative
+  corpus id, timezone-stamped) and the caveats are part of the artefact.
+  The workbench shows the table and can trigger a score.
+- `pha bench export`: a self-contained static site (index, one page per page,
+  one CSS file, copied images, `data/results.json`/`.csv`, `manifest.json`),
+  with the gold, the labelled machine merge when there is no gold, the readings,
+  the comparison in a `<details>`, provenance, the caveats and a rights line.
+  Images are downscaled to 1600 px on the long edge with pymupdf (no new
+  dependency), and the export self-checks that no absolute host path leaked into
+  the HTML. It refuses a non-empty directory without `--force`.
+- Real run: 1577 scored on its single gold page (the other seven are `pending`
+  and excluded) — `Qwen3.8-Max` 0.127 CER-diplomatic / 54.7% entry-exact,
+  `DeepSeek-V4-FVE` 0.208 / 20.0%, `M3` 0.293 / 26.7%, the first-variant merge
+  0.347 / —. **n = 1: a screen for failure, not a ranking**, as the artefact
+  itself says. The exported 1577 site is 916 KB for 8 pages with images.
+- Known limits, deliberately visible: names are not entity-linked (a variant
+  spelling is a miss); CER is `difflib`, not a gold-standard edit distance;
+  entry-exact is undefined where a reviewer split or merged entries.

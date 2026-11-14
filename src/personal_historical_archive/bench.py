@@ -32,11 +32,13 @@ scoring, P4).
 """
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import os
 import re
 import sys
+import time
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -119,6 +121,7 @@ class Corpus:
     images_mode: str = "render"
     gold_reviewer: str = ""
     notes: str = ""
+    rights: str = ""
     configured: bool = False
 
     # -- paths ------------------------------------------------------------
@@ -450,6 +453,7 @@ def load_corpus(root: Path) -> Corpus:
         images_mode=str(images.get("mode") or "render"),
         gold_reviewer=str(gold.get("reviewer") or ""),
         notes=str(raw.get("notes") or ""),
+        rights=str(raw.get("rights") or ""),
         configured=configured,
     )
 
@@ -1526,6 +1530,305 @@ def page_view(corpus: Corpus, page: str) -> dict:
     }
 
 
+# --------------------------------------------------------------------------- scoring
+
+SCORE_VERSION = 1
+
+# A capitalised token that is a name, not a sentence-opening function word.
+NAME_RE = re.compile(r"[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÿ'’\-]{2,}")
+NAME_STOP = {
+    "anna", "annos", "ano", "aos", "aquela", "aquele", "as", "ate", "bispo",
+    "caso", "casa", "casos", "cidade", "colegio", "com", "como", "companhia",
+    "confessa", "da", "das", "de", "dei", "dela", "dele", "do", "dos", "e",
+    "em", "entrada", "esse", "esta", "estado", "este", "foi", "grao", "ha", "huma",
+    "hum", "igreja", "irmaos", "item", "la", "mais", "mas", "mes", "ministro",
+    "missao", "na", "nas", "nem", "no", "nos", "nossa", "nosso", "o", "os",
+    "outra", "outro", "padre", "padres", "para", "pela", "pelo", "por",
+    "predicador", "preposito", "professo", "provincia", "que", "se", "sem",
+    "seu", "sua", "suas", "seus", "sob", "tem", "theologia", "todos", "um",
+    "uma", "vice", "votos",
+}
+
+
+def _ws(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def norm_diplomatic(text: str) -> str:
+    """Case-folded, whitespace-collapsed — diacritics and punctuation kept."""
+    return _ws(text.casefold())
+
+
+def norm_modern(text: str) -> str:
+    """A modern-Spanish/Portuguese comparison form.
+
+    Folds long-s, strips diacritics, treats u/v as one letter, drops
+    punctuation, case-folds. It is deliberately a *comparison* form: the gold
+    text itself is never normalised in place.
+    """
+    t = text.replace("ſ", "s").replace("ƒ", "s")
+    t = unicodedata.normalize("NFKD", t)
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    t = t.casefold().replace("u", "v")
+    t = re.sub(r"[^0-9a-z\s]", " ", t)
+    return _ws(t)
+
+
+PROFILES = {"diplomatic": norm_diplomatic, "modern": norm_modern}
+
+
+def cer(gold: str, reading: str, profile: str) -> float | None:
+    """Character error rate of ``reading`` against ``gold`` (0 = identical).
+
+    Uses difflib's character alignment (no dependency); a replacement counts as
+    the longer of the two spans, so CER can exceed 1 when a reader adds text.
+    """
+    norm = PROFILES[profile]
+    g = norm(gold or "")
+    r = norm(reading or "")
+    if not g:
+        return None
+    sm = difflib.SequenceMatcher(a=g, b=r, autojunk=False)
+    errors = sum(max(i2 - i1, j2 - j1) for tag, i1, i2, j1, j2 in sm.get_opcodes()
+                 if tag != "equal")
+    return round(errors / len(g), 6)
+
+
+def name_tokens(text: str) -> list[str]:
+    """Capitalised tokens that plausibly are names (heuristic, documented)."""
+    out: list[str] = []
+    for m in NAME_RE.finditer(text or ""):
+        tok = m.group(0)
+        if tok.casefold() in NAME_STOP or len(tok) < 3:
+            continue
+        if tok.isupper():
+            continue
+        out.append(tok)
+    return out
+
+
+def _page_text_from_entries(entries: dict[int, str]) -> str:
+    return "\n".join(entries[n] for n in sorted(entries))
+
+
+def entry_texts(text: str) -> dict[int, str]:
+    """The ``[n]`` entries of a gold/reference page as ``{n: text}``.
+
+    The body of a gold entry can span several lines; the number is the
+    identity, so the returned mapping is what scoring and the workbench use.
+    """
+    body = extract_transcription(text)
+    out: dict[int, list[str]] = {}
+    cur: int | None = None
+    for line in body.splitlines():
+        m = ENTRY_RE.match(line.strip())
+        if m:
+            cur = int(m.group(1))
+            out[cur] = [m.group(2)]
+        elif cur is not None:
+            out[cur].append(line)
+    return {n: "\n".join(lines).strip() for n, lines in out.items()}
+
+
+def resolve_first_variant(text: str) -> str:
+    """The reference merge with each ``a/b`` variant resolved to its first form.
+
+    ``reference/`` is a variant *digest* (common words once, variants joined by
+    ``/``), not a reading; scoring the digest would count every slash as an
+    error. Taking the first variant gives the machine's baseline reading, which
+    is what is compared to the gold.
+    """
+    out = []
+    for tok in (text or "").split():
+        out.append(tok.split("/")[0])
+    return " ".join(out)
+
+
+def _reading_texts(corpus: "Corpus", page: str) -> dict[str, str | None]:
+    """The full text of every candidate reading, keyed like the aggregate."""
+    out: dict[str, str | None] = {r.dir: corpus.reading(r, page) for r in corpus.readers}
+    ref = corpus.reference_path(page)
+    if ref.is_file():
+        body = extract_transcription(ref.read_text(encoding="utf-8"))
+        out["reference"] = (resolve_first_variant(body)
+                            if is_valid_reading(body) else None)
+    return out
+
+
+def score_page(corpus: "Corpus", page: str) -> dict:
+    """Score one page; returns ``{scored: bool, reason?, readers?}``."""
+    if not corpus.is_gold(page):
+        return {"scored": False, "reason": "no human-corrected gold (pending)"}
+    if corpus.is_stale(page):
+        return {"scored": False,
+                "reason": "gold is stale: the readings changed since the review"}
+    gold_path = corpus.gold_path(page)
+    gold_entries = entry_texts(gold_path.read_text(encoding="utf-8"))
+    if not gold_entries:
+        return {"scored": False, "reason": "gold has no [n] entries"}
+    gold_text = _page_text_from_entries(gold_entries)
+
+    comp = corpus.comparison_path(page)
+    comp_entries = []
+    if comp.is_file():
+        comp_entries = parse_comparison_entries(comp.read_text(encoding="utf-8"))
+    divergent = bool(comp_entries) and all(
+        e.kind == "diff" and len(e.readings) == 1 for e in comp_entries)
+
+    texts = _reading_texts(corpus, page)
+    scores: dict[str, dict] = {}
+    for key, reading in texts.items():
+        if reading is None:
+            continue
+        if key == "reference" and divergent:
+            continue
+        row: dict = {
+            "cer_diplomatic": cer(gold_text, reading, "diplomatic"),
+            "cer_modern": cer(gold_text, reading, "modern"),
+        }
+        # entry-exact: only where the comparison and the gold share the number
+        exact = total = 0
+        if comp_entries:
+            k = ([r.dir for r in corpus.readers].index(key) + 1
+                 if key in [r.dir for r in corpus.readers] else None)
+            for e in comp_entries:
+                gold_entry = gold_entries.get(e.num)
+                if gold_entry is None:
+                    continue
+                if e.kind == "all":
+                    reading_entry = e.text
+                elif k is not None and k - 1 < len(e.readings):
+                    reading_entry = e.readings[k - 1]
+                else:
+                    continue
+                total += 1
+                if norm_modern(gold_entry) == norm_modern(reading_entry):
+                    exact += 1
+        row["entry_exact"] = [exact, total]
+        tokens = name_tokens(gold_text)
+        gold_norm = norm_modern(gold_text)
+        found = 0
+        for tok in tokens:
+            if norm_modern(tok) and norm_modern(tok) in norm_modern(reading):
+                found += 1
+        row["names"] = [found, len(tokens)]
+        row["chars"] = len(reading)
+        scores[key] = row
+    if not scores:
+        return {"scored": False, "reason": "no readings and no reference"}
+    return {"scored": True, "divergent": divergent, "readers": scores,
+            "gold_entries": len(gold_entries)}
+
+
+def score_corpus(corpus: "Corpus", write: bool = True,
+                 corpus_id: str | None = None) -> dict:
+    """Score every page with a valid gold; returns the citable results dict."""
+    pages = corpus.page_ids()
+    page_rows: list[dict] = []
+    excluded: list[dict] = []
+    for page in pages:
+        row = score_page(corpus, page)
+        row["page"] = page
+        if row["scored"]:
+            page_rows.append(row)
+        else:
+            excluded.append({"page": page, "reason": row["reason"]})
+    keys: list[str] = [r.dir for r in corpus.readers]
+    if any("reference" in p.get("readers", {}) for p in page_rows):
+        keys.append("reference")
+    aggregates: dict[str, dict] = {}
+    for key in keys:
+        rows = [p["readers"][key] for p in page_rows if key in p.get("readers", {})]
+        if not rows:
+            continue
+        cers = [r["cer_diplomatic"] for r in rows if r["cer_diplomatic"] is not None]
+        cers2 = [r["cer_modern"] for r in rows if r["cer_modern"] is not None]
+        exact_ok = sum(r["entry_exact"][0] for r in rows)
+        exact_n = sum(r["entry_exact"][1] for r in rows)
+        names_ok = sum(r["names"][0] for r in rows)
+        names_n = sum(r["names"][1] for r in rows)
+        aggregates[key] = {
+            "pages": len(rows),
+            "cer_diplomatic": round(sum(cers) / len(cers), 6) if cers else None,
+            "cer_modern": round(sum(cers2) / len(cers2), 6) if cers2 else None,
+            "entry_exact": round(exact_ok / exact_n, 6) if exact_n else None,
+            "entry_total": exact_n,
+            "names_found": names_ok,
+            "names_total": names_n,
+            "names": round(names_ok / names_n, 6) if names_n else None,
+            "partial": len(rows) < len(page_rows),
+        }
+    caveats: list[str] = []
+    n = len(page_rows)
+    if n == 0:
+        caveats.append("no page has a valid gold: score nothing until a page "
+                       "is human-corrected and not stale")
+    elif n < 5:
+        caveats.append(f"n_pages={n}: a screen for failure, not a ranking")
+    if excluded:
+        caveats.append(f"{len(excluded)} page(s) excluded: "
+                       + ", ".join(f"{e['page']} ({e['reason']})" for e in excluded[:6])
+                       + (" …" if len(excluded) > 6 else ""))
+    partial = [k for k, a in aggregates.items() if a["partial"]]
+    if partial:
+        caveats.append("partial coverage: " + ", ".join(partial)
+                       + " did not read every scored page; their rows are not "
+                         "comparable to the full-coverage rows")
+    caveats.append("names are token-level and diacritic-insensitive; they are "
+                   "not entity-linked, so a variant spelling scores as a miss")
+    caveats.append("CER uses difflib character alignment on the printed "
+                   "normalisation profile; it is a screen, not a grade")
+    results = {
+        "schema": SCORE_VERSION,
+        "generator": "pha bench score",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "corpus": corpus_id or corpus.root.name,
+        "title": corpus.title,
+        "profiles": {
+            "diplomatic": "case-folded, whitespace collapsed; diacritics and "
+                          "punctuation kept",
+            "modern": "long-s folded, diacritics stripped, u/v merged, "
+                      "punctuation dropped, case-folded",
+        },
+        "readers": [{"dir": r.dir, "label": r.name, "model": r.model}
+                    for r in corpus.readers] + (
+            [{"dir": "reference",
+              "label": "machine merge (reference/, first variant)"}]
+            if "reference" in aggregates else []),
+        "pages": page_rows,
+        "excluded": excluded,
+        "aggregates": aggregates,
+        "caveats": caveats,
+    }
+    if write:
+        write_scores(corpus.root / "scores", results)
+    return results
+
+
+def write_scores(out_dir: Path, results: dict) -> None:
+    """Write ``results.json`` + ``results.csv`` (the citable artefacts)."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "results.json").write_text(
+        json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_scores_csv(out_dir / "results.csv", results.get("pages") or [])
+
+
+def _write_scores_csv(path: Path, pages: list[dict]) -> None:
+    import csv
+
+    cols = ["page", "reader", "cer_diplomatic", "cer_modern", "entry_ok",
+            "entry_total", "names_found", "names_total", "chars"]
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(cols)
+        for p in pages:
+            for reader, r in sorted(p["readers"].items()):
+                w.writerow([p["page"], reader, r["cer_diplomatic"], r["cer_modern"],
+                            r["entry_exact"][0], r["entry_exact"][1],
+                            r["names"][0], r["names"][1], r["chars"]])
+
+
 # --------------------------------------------------------------------------- CLI
 
 
@@ -1537,6 +1840,56 @@ def _print_table(rows: list[list[str]], headers: list[str]) -> None:
     print("  ".join("-" * w for w in widths))
     for r in rows:
         print("  ".join(str(c).ljust(w) for c, w in zip(r, widths)))
+
+
+def cmd_score(cfg: Config, args) -> int:
+    corpus = resolve_corpus(cfg, args.corpus)
+    res = score_corpus(corpus, write=not args.dry_run,
+                       corpus_id=_corpus_id(cfg, corpus))
+    if args.json:
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return 0
+    print(f"corpus: {corpus.title}")
+    print(f"scored pages: {len(res['pages'])}; excluded: {len(res['excluded'])}")
+    if res["aggregates"]:
+        rows = []
+        for key, a in res["aggregates"].items():
+            rows.append([key, str(a["pages"]),
+                         "—" if a["cer_diplomatic"] is None else f"{a['cer_diplomatic']:.3f}",
+                         "—" if a["cer_modern"] is None else f"{a['cer_modern']:.3f}",
+                         "—" if a["entry_exact"] is None else f"{a['entry_exact']:.1%}",
+                         "—" if a["names"] is None else f"{a['names']:.1%}",
+                         "partial" if a["partial"] else ""])
+        _print_table(rows, ["reader", "pages", "CER dipl.", "CER mod.",
+                            "entry", "names", ""])
+    print()
+    for caveat in res["caveats"]:
+        print(f"  · {caveat}")
+    if not args.dry_run:
+        print(f"\nwrote {corpus.root / 'scores' / 'results.json'}")
+    return 0
+
+
+def _corpus_id(cfg: Config, corpus: "Corpus") -> str:
+    try:
+        return str(corpus.root.relative_to(bench_root(cfg)))
+    except ValueError:
+        return corpus.root.name
+
+
+def cmd_export(cfg: Config, args) -> int:
+    from . import benchexport
+
+    corpus = resolve_corpus(cfg, args.corpus)
+    res = benchexport.export_site(
+        corpus, cfg, out=args.out, images=not args.no_images,
+        score=not args.no_score, force=args.force,
+        max_image_px=args.max_image_px)
+    print(f"exported {res['pages']} page(s) to {res['out']}")
+    print(f"  images: {res['images']}  scores: {'yes' if res['scores'] else 'no'}")
+    for w in res["warnings"]:
+        print(f"  warning: {w}")
+    return 0
 
 
 def cmd_serve(cfg: Config, args) -> int:
@@ -1717,6 +2070,8 @@ COMMANDS = {
     "verify": cmd_verify,
     "compare": cmd_compare,
     "reference": cmd_reference,
+    "score": cmd_score,
+    "export": cmd_export,
     "run": cmd_run,
     "page": cmd_page,
 }

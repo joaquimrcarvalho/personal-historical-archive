@@ -100,21 +100,6 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def entry_texts(text: str) -> dict[int, str]:
-    """The ``[n]`` entries of a gold/reference page as ``{n: text}``."""
-    body = bench.extract_transcription(text)
-    out: dict[int, list[str]] = {}
-    cur: int | None = None
-    for line in body.splitlines():
-        m = ENTRY_RE.match(line.strip())
-        if m:
-            cur = int(m.group(1))
-            out[cur] = [m.group(2)]
-        elif cur is not None:
-            out[cur].append(line)
-    return {n: "\n".join(lines).strip() for n, lines in out.items()}
-
-
 def _corpus_by_rel(wb: "Workbench", rel: str) -> bench.Corpus:
     root = wb.root
     p = (root / rel)
@@ -232,8 +217,8 @@ class Workbench:
         gold_text = gold_path.read_text(encoding="utf-8") if gold_path.is_file() else ""
         ref_path = corpus.reference_path(page)
         ref_text = ref_path.read_text(encoding="utf-8") if ref_path.is_file() else ""
-        gold_entries = entry_texts(gold_text) if gold_text else {}
-        ref_entries = entry_texts(ref_text) if ref_text else {}
+        gold_entries = bench.entry_texts(gold_text) if gold_text else {}
+        ref_entries = bench.entry_texts(ref_text) if ref_text else {}
         rows = []
         seen: set[int] = set()
         for e in entries:
@@ -377,9 +362,46 @@ def render_corpus(wb: Workbench, corpus: bench.Corpus, verify: bool = False,
             f'<span class="muted">Writes <code>comparison/</code> and '
             f'<code>reference/</code> only, never the gold.</span></div>'
             f'<div class="bench-grid">{"".join(cards)}</div>'
+            f'{_scores_html(corpus)}'
             f'{verify_html}</main>')
     return html_page(f"pha bench — {corpus.title}", body,
                      f"<style>{BENCH_CSS}</style>")
+
+
+def _fmt(x, pct: bool = False) -> str:
+    if x is None:
+        return "—"
+    return f"{x:.1%}" if pct else f"{x:.3f}"
+
+
+def _scores_html(corpus: bench.Corpus) -> str:
+    path = corpus.root / "scores" / "results.json"
+    if not path.is_file():
+        return ('<h2>Scores</h2><p class="muted">No scores yet — run '
+                '<code>pha bench score</code> (or the button above) once a page '
+                'has a valid gold.</p>')
+    try:
+        res = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return '<h2>Scores</h2><p class="err">scores/results.json is unreadable.</p>'
+    rows = []
+    for key, a in (res.get("aggregates") or {}).items():
+        rows.append(
+            "<tr><td>" + esc(key) + "</td>"
+            f"<td>{a.get('pages')}</td>"
+            f"<td>{_fmt(a.get('cer_diplomatic'))}</td>"
+            f"<td>{_fmt(a.get('cer_modern'))}</td>"
+            f"<td>{_fmt(a.get('entry_exact'), True)}</td>"
+            f"<td>{_fmt(a.get('names'), True)}</td>"
+            f"<td>{'partial' if a.get('partial') else ''}</td></tr>")
+    caveats = "".join(f"<li>{esc(c)}</li>" for c in res.get("caveats") or [])
+    return ('<h2>Scores <span class="muted">(' + esc(str(res.get("generated_at", "")))
+            + ')</span></h2>'
+            '<div class="verify"><table><thead><tr><th>reader</th><th>pages</th>'
+            '<th>CER dipl.</th><th>CER mod.</th><th>entry</th><th>names</th>'
+            '<th></th></tr></thead><tbody>' + "".join(rows)
+            + '</tbody></table></div>'
+            f'<ul class="muted">{caveats}</ul>')
 
 
 def _readings_html(row: dict) -> str:
@@ -708,6 +730,10 @@ class Handler(BaseHTTPRequestHandler):
                     bench.build_comparison(c, profile="auto")
                 elif what == "reference":
                     bench.build_reference(c, readings=len(c.readers) or None)
+                elif what == "score":
+                    bench.score_corpus(c, write=True,
+                                       corpus_id=_rel(self.wb, c))
+                    what = "scores"
                 else:
                     raise SaveError("unknown build target", HTTPStatus.BAD_REQUEST)
                 rel = _rel(self.wb, c)
