@@ -123,6 +123,7 @@ class Corpus:
     images_mode: str = "render"
     gold_reviewer: str = ""
     editing_rules: list[str] = field(default_factory=list)
+    editing_rule_notes: list[dict] = field(default_factory=list)
     notes: str = ""
     rights: str = ""
     configured: bool = False
@@ -452,9 +453,9 @@ def load_corpus(root: Path) -> Corpus:
         readers = infer_readers(root) if root.is_dir() else []
     images = raw.get("images") or {}
     gold = raw.get("gold") or {}
-    rules = gold.get("editing_rules") or raw.get("editing_rules") or []
-    if isinstance(rules, str):
-        rules = [rules]
+    rules_raw = gold.get("editing_rules") or raw.get("editing_rules") or []
+    if isinstance(rules_raw, str):
+        rules_raw = [rules_raw]
     return Corpus(
         root=root,
         title=str(raw.get("title") or root.name),
@@ -464,7 +465,8 @@ def load_corpus(root: Path) -> Corpus:
         document_pages=pages,
         images_mode=str(images.get("mode") or "render"),
         gold_reviewer=str(gold.get("reviewer") or ""),
-        editing_rules=[str(x) for x in rules],
+        editing_rules=[n["rule"] for n in _rule_notes(rules_raw)],
+        editing_rule_notes=_rule_notes(rules_raw),
         notes=str(raw.get("notes") or ""),
         rights=str(raw.get("rights") or ""),
         configured=configured,
@@ -596,7 +598,7 @@ def init_corpus(root: Path, title: str | None = None,
             for r in readers
         ],
         "gold": {"reviewer": corpus.gold_reviewer,
-                 "editing_rules": corpus.editing_rules},
+                 "editing_rules": _rules_out(corpus)},
     }
     yml.write_text(
         "# Benchmark corpus (pha bench). Reader order is the 1..N numbering used in\n"
@@ -607,6 +609,46 @@ def init_corpus(root: Path, title: str | None = None,
     )
     corpus.configured = True
     return corpus
+
+
+def _rule_notes(raw_rules) -> list[dict]:
+    """Normalise `gold.editing_rules` entries.
+
+    An entry is either the rule string (what the gold front matter records) or a
+    mapping ``{rule, explain, example}``: the workbench shows the explanation
+    and the example beside the rule, while the artefact keeps the short line.
+    """
+    notes: list[dict] = []
+    for item in raw_rules:
+        if isinstance(item, dict):
+            rule = str(item.get("rule") or item.get("text") or "").strip()
+            if not rule:
+                continue
+            notes.append({"rule": rule,
+                          "explain": str(item.get("explain") or "").strip(),
+                          "example": str(item.get("example") or "").strip()})
+        else:
+            rule = str(item).strip()
+            if rule:
+                notes.append({"rule": rule, "explain": "", "example": ""})
+    return notes
+
+
+def _rules_out(corpus: Corpus) -> list:
+    notes = {n["rule"]: n for n in corpus.editing_rule_notes}
+    out: list = []
+    for rule in corpus.editing_rules:
+        n = notes.get(rule) or {}
+        if n.get("explain") or n.get("example"):
+            item = {"rule": rule}
+            if n.get("explain"):
+                item["explain"] = n["explain"]
+            if n.get("example"):
+                item["example"] = n["example"]
+            out.append(item)
+        else:
+            out.append(rule)
+    return out
 
 
 def save_corpus_yaml(corpus: Corpus) -> None:
@@ -622,7 +664,7 @@ def save_corpus_yaml(corpus: Corpus) -> None:
             for r in corpus.readers
         ],
         "gold": {"reviewer": corpus.gold_reviewer,
-                 "editing_rules": corpus.editing_rules},
+                 "editing_rules": _rules_out(corpus)},
     }
     (corpus.root / "bench.yaml").write_text(
         yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")

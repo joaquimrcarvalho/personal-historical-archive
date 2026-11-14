@@ -438,3 +438,17 @@ def test_gold_page_warns_before_demotion_to_draft(cfg):
     wb = benchui.Workbench(cfg)
     page = benchui.render_page(wb, corpus, "001").decode()
     assert "already validated as gold" in page
+
+
+def test_rule_explanations_are_shown_open_on_the_page(cfg):
+    corpus = make_corpus(cfg)
+    corpus.editing_rules = ["u -> v"]
+    corpus.editing_rule_notes = [{"rule": "u -> v",
+                                  "explain": "write v when it is the consonant",
+                                  "example": "votos, but Manuel"}]
+    wb = benchui.Workbench(cfg)
+    page = benchui.render_page(wb, corpus, "001").decode()
+    assert "editing rules — how to apply them" in page
+    assert "write v when it is the consonant" in page
+    assert "votos, but Manuel" in page
+    assert "<details open" in page

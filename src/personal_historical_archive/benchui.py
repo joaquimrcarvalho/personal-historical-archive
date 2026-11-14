@@ -109,6 +109,15 @@ button{background:#f7f6f3;color:#1b1b1b;border:1px solid #bbb;border-radius:4px;
 .err{background:#fdecea;border:1px solid #f5c6c2;padding:.4rem .6rem;border-radius:4px}
 .warnbox{background:#fff4e5;border:1px solid #ffcc80;padding:.4rem .6rem;border-radius:4px}
 .entry .badge2.warn{margin-left:.3rem}
+.rules{margin:.3rem 0 .6rem;background:#fff;border:1px solid #e3e1db;border-radius:6px;padding:.45rem .7rem}
+.rules summary{cursor:pointer;color:#555;font-size:13px}
+.rules ol{margin:.4rem 0 0;padding-left:1.3rem;columns:2;column-gap:2.2rem}
+.rules li{break-inside:avoid}
+.rules li{margin:.4rem 0;font-size:13px}
+.rules .explain{color:#333;margin-top:.1rem}
+.rules .example{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:#f4f2ec;
+  padding:.12rem .35rem;border-radius:3px;display:inline-block;margin-top:.2rem}
+@media (max-width:1100px){.rules ol{columns:1}}
 .verify pre{white-space:pre-wrap;font-size:12px}
 .kbd{font-family:ui-monospace,Menlo,monospace;font-size:11px;background:#eee;padding:0 .25rem;border-radius:3px}
 @media (max-width:850px){.workbench{grid-template-columns:1fr}
@@ -294,6 +303,7 @@ class Workbench:
             "pending_copy": pending_copy,
             "flagged": sum(1 for r in rows if r["flags"]),
             "editing_rules": corpus.editing_rules,
+            "editing_rule_notes": corpus.editing_rule_notes,
             "status": bench.page_status(corpus, page),
             "readers": [r.dir for r in corpus.readers],
         }
@@ -512,7 +522,19 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
                     + ' title="save part-way through; excluded from scoring">'
                       'Save draft</button>')
     rules_html = ""
-    if data["editing_rules"]:
+    notes = data.get("editing_rule_notes") or []
+    if notes:
+        items = []
+        for n in notes:
+            extra = ""
+            if n.get("explain"):
+                extra += f'<div class="explain">{esc(n["explain"])}</div>'
+            if n.get("example"):
+                extra += f'<div class="example">{esc(n["example"])}</div>'
+            items.append(f'<li><strong>{esc(n["rule"])}</strong>{extra}</li>')
+        rules_html = ('<details open class="rules"><summary>editing rules — how to '
+                      'apply them</summary><ol>' + "".join(items) + "</ol></details>")
+    elif data["editing_rules"]:
         rules_html = ("<details><summary>editing rules</summary><ul>"
                       + "".join(f"<li>{esc(r)}</li>" for r in data["editing_rules"])
                       + "</ul></details>")
@@ -535,9 +557,11 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
     body = (f'{_head(corpus.title, " · " + esc(page))}'
             f'<main class="bench-main"><p>'
             f'<a href="{_link("/corpus", c=rel)}">← {esc(corpus.title)}</a>'
-            f'{" · ‹ " + _link("/page", c=rel, p=prev_p) if prev_p else ""}'
-            f'{" · " + _link("/page", c=rel, p=next_p) + " ›" if next_p else ""}'
-            "</p>"
+            + (f' · <a href="{_link("/page", c=rel, p=prev_p)}">‹ {esc(prev_p)}</a>'
+               if prev_p else "")
+            + (f' · <a href="{_link("/page", c=rel, p=next_p)}">{esc(next_p)} ›</a>'
+               if next_p else "")
+            + "</p>"
             f'<h1>{esc(page)} {_badges(status)}</h1>'
             + ('<p class="warnbox">This page has a <strong>pending copy</strong> of an '
                'older reference — it is not gold. Editing starts from '

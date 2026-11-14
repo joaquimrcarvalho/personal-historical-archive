@@ -485,3 +485,25 @@ def test_entry_flags():
     assert bench.entry_flags(["P. Luis [?]", "P. Luis"]) == ["illegible"]
     # lower-case orthographic noise is not an image question
     assert bench.entry_flags(["Gonçalo del rego", "Goncalo del Rego"]) == []
+
+
+def test_editing_rules_can_carry_explanations(cfg):
+    root = cfg.bench_root / "collections" / "rules"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "bench.yaml").write_text(
+        "title: Rules\nreadings: [{dir: A, model: m}]\n"
+        "gold:\n  reviewer: R\n  editing_rules:\n"
+        "  - {rule: \"u -> v\", explain: \"consonant v with a u shape\","
+        " example: \"votos / Manuel\"}\n"
+        "  - plain rule\n", encoding="utf-8")
+    corpus = bench.load_corpus(root)
+    assert corpus.editing_rules == ["u -> v", "plain rule"]
+    assert corpus.editing_rule_notes[0]["explain"] == "consonant v with a u shape"
+    assert corpus.editing_rule_notes[0]["example"] == "votos / Manuel"
+    assert corpus.editing_rule_notes[1]["explain"] == ""
+
+    bench.save_corpus_yaml(corpus)
+    import yaml as _yaml
+    raw = _yaml.safe_load((root / "bench.yaml").read_text())
+    assert raw["gold"]["editing_rules"][0]["explain"] == "consonant v with a u shape"
+    assert raw["gold"]["editing_rules"][1] == "plain rule"
