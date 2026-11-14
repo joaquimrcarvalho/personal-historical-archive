@@ -452,3 +452,36 @@ def test_rule_explanations_are_shown_open_on_the_page(cfg):
     assert "write v when it is the consonant" in page
     assert "votos, but Manuel" in page
     assert "<details open" in page
+
+
+def test_save_status_aliases_are_accepted(cfg):
+    corpus = make_corpus(cfg)
+    wb = benchui.Workbench(cfg)
+    fields, _ = rows_fields(wb, corpus)
+    benchui.save_gold(wb, corpus, "001", fields, wb.token, status="gold")
+    assert corpus.is_gold("001")
+
+
+def test_http_save_gold_accepts_the_form_status(cfg):
+    corpus = make_corpus(cfg)
+    server = benchui.make_server(cfg, port=0, quiet=True)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        wb = server.wb
+        fields, _ = rows_fields(wb, corpus)
+        payload = urllib.parse.urlencode(
+            {**fields, "status": "human-corrected", "token": wb.token}).encode()
+        req = urllib.request.Request(base + "/save", data=payload, method="POST")
+        page = urllib.request.urlopen(req).read()
+        assert b"Saved. The gold page is written and verified." in page
+        assert corpus.is_gold("001")
+        rel = str(corpus.root.relative_to(cfg.bench_root))
+        check = urllib.request.urlopen(
+            base + "/page?" + urllib.parse.urlencode({"c": rel, "p": "001"})).read()
+        assert b'class="badge2 gold">gold' in check
+    finally:
+        server.shutdown()
+        server.server_close()

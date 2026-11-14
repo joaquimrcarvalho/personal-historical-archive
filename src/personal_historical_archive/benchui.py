@@ -592,7 +592,7 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
             + '<div class="savebar">'
               f'<label class="muted">reviewer <input type="text" name="reviewer" '
               f'value="{esc(reviewer)}" required></label>'
-              '<button type="submit" name="status" value="gold">Save gold</button> '
+              '<button type="submit" name="status" value="human-corrected" data-primary>Save gold</button> '
               + draft_button
               + f'<span class="muted"><span class="kbd">⌘S</span> saves · '
               f'"use" copies a reading into its entry · readings_hash '
@@ -611,7 +611,7 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
             "ta.classList.add('dirty');ta.focus();});});})();"
             "document.addEventListener('keydown',e=>{"
             "if((e.metaKey||e.ctrlKey)&&e.key==='s'){e.preventDefault();"
-            "const gb=document.querySelector('button[name=status][value=gold]');"
+            "const gb=document.querySelector('button[data-primary]');"
             "document.getElementById('saveform').requestSubmit(gb);}});"
             "</script>"
             "<script>(function(){"
@@ -682,6 +682,7 @@ def save_gold(wb: Workbench, corpus: bench.Corpus, page: str,
     empty entries — that is what saving part-way means — and is excluded from
     scoring; it is still the page the reviewer resumes from.
     """
+    status = {"gold": bench.STATUS_GOLD, "draft": bench.STATUS_DRAFT}.get(status, status)
     if status not in (bench.STATUS_GOLD, bench.STATUS_DRAFT):
         raise SaveError(f"unknown save status {status!r}", HTTPStatus.BAD_REQUEST)
     if not secrets.compare_digest(str(token or ""), wb.token):
@@ -862,6 +863,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/save":
                 c = self.wb.page(fields.get("c", ""), fields.get("p", ""))
                 status = fields.get("status") or bench.STATUS_GOLD
+                status = {"gold": bench.STATUS_GOLD,
+                          "draft": bench.STATUS_DRAFT}.get(status, status)
                 if status not in (bench.STATUS_GOLD, bench.STATUS_DRAFT):
                     raise SaveError(f"unknown save status {status!r}",
                                     HTTPStatus.BAD_REQUEST)
