@@ -58,7 +58,7 @@ a{color:#0b5fff}
 .muted{color:#777;font-size:13px}
 h1{font-size:1.15rem;margin:.2rem 0}
 h2{font-size:1rem;margin:1.4rem 0 .4rem}
-form{display:inline-flex;gap:.3rem;align-items:center}
+.inline-form{display:inline-flex;gap:.3rem;align-items:center}
 input[type=number]{width:5.5rem;padding:.2rem .35rem;font:inherit}
 button{font:inherit;padding:.22rem .55rem}
 .ranges{display:flex;flex-wrap:wrap;gap:.35rem}

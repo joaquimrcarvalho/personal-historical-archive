@@ -256,3 +256,22 @@ def test_export_text_only(cfg, tmp_path):
     assert res["images"] == 0
     assert any("text-only" in w for w in res["warnings"])
     assert not any((tmp_path / "site" / "images").iterdir())
+
+
+def test_export_labels_a_draft_and_never_as_gold(cfg, tmp_path):
+    corpus = make_corpus(cfg)
+    gold = corpus.gold_path("001")
+    gold.parent.mkdir(parents=True, exist_ok=True)
+    gold.write_text("---\npage: '001'\nstatus: draft\nreviewed_by: Reviewer\n"
+                    "readings_hash: ''\n---\n\n## Corrected text\n\n```\n"
+                    "[1] P. Manuel Rodrigues, professo.\n\n[2]\n```\n",
+                    encoding="utf-8")
+    corpus.comparison_path("001").parent.mkdir(parents=True, exist_ok=True)
+    corpus.comparison_path("001").write_text(COMPARISON, encoding="utf-8")
+    res = benchexport.export_site(corpus, cfg, out=tmp_path / "site")
+    page = (tmp_path / "site" / "pages" / "001.html").read_text()
+    assert "Draft (not validated)" in page
+    assert "<h2>Gold</h2><pre>" not in page
+    assert res["scores"] is False
+    st = bench.corpus_status(corpus)
+    assert st["gold"] == 0 and st["drafts"] == 1

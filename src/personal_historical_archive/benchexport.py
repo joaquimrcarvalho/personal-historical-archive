@@ -77,6 +77,8 @@ def _gold_badge(corpus: bench.Corpus, page: str) -> str:
     out = []
     if st.gold:
         out.append('<span class="badge2 gold">human-corrected</span>')
+    elif st.draft:
+        out.append('<span class="badge2 draft">draft — not validated</span>')
     elif st.gold_status:
         out.append(f'<span class="badge2">{esc(st.gold_status)}</span>')
     else:
@@ -133,9 +135,14 @@ def _page_html(corpus: bench.Corpus, page: str, image_rel: str | None,
         nav.append(f'<a href="{esc(_page_name(ids[i + 1]))}.html">{esc(ids[i + 1])} ›</a>')
     nav.append("</p>")
     gold_text = ""
+    draft_text = ""
     gold = corpus.gold_path(page)
     if gold.is_file():
-        gold_text = bench.extract_transcription(gold.read_text(encoding="utf-8"))
+        body_text = bench.extract_transcription(gold.read_text(encoding="utf-8"))
+        if corpus.is_gold(page):
+            gold_text = body_text
+        elif corpus.is_draft(page):
+            draft_text = body_text
     ref_text = ""
     ref = corpus.reference_path(page)
     if ref.is_file():
@@ -181,7 +188,11 @@ def _page_html(corpus: bench.Corpus, page: str, image_rel: str | None,
             f'<h1>{esc(page)} {_gold_badge(corpus, page)}</h1>'
             + (f'<h2>Gold</h2><pre>{esc(gold_text)}</pre>' if gold_text
                else ('<h2>Gold</h2><p class="small">No human-corrected reading yet. '
-                     'The machine merge is shown below, unreviewed.</p>'
+                     + ('A draft exists but is not validated; it is shown below, '
+                        'unreviewed. ' if draft_text else '')
+                     + 'The machine merge is shown below, unreviewed.</p>'
+                     + (f'<h2>Draft (not validated)</h2><pre>{esc(draft_text)}</pre>'
+                        if draft_text else "")
                      + (f'<h2>Machine merge (not reviewed)</h2><pre>{esc(ref_text)}</pre>'
                         if ref_text else "")))
             + _provenance(meta)
@@ -215,7 +226,7 @@ def _index_html(corpus: bench.Corpus, ids: list[str], image_map: dict[str, str],
             f'<h1>{esc(corpus.title)}</h1>'
             f'<p class="small">{esc(corpus.notes or "")}</p>'
             f'<p>{st["pages"]} pages · {len(corpus.readers)} readings · '
-            f'{st["gold"]} human-corrected · {st["stale"]} stale</p>'
+            f'{st["gold"]} human-corrected · {st["drafts"]} draft · {st["stale"]} stale</p>'
             f'<p class="small">{esc(", ".join(r.name for r in corpus.readers))}</p>'
             f'<div class="grid">{ "".join(cards) }</div>'
             + score_html

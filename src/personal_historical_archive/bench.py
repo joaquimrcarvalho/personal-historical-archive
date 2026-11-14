@@ -68,7 +68,8 @@ REF_SECTION_LONG = "## Reference text (variants in slashes)"
 STATUS_GOLD = "human-corrected"
 STATUS_MERGED = "machine-merged"
 STATUS_PENDING = "pending"
-GOLD_STATUSES = (STATUS_GOLD, STATUS_MERGED, STATUS_PENDING)
+STATUS_DRAFT = "draft"
+GOLD_STATUSES = (STATUS_GOLD, STATUS_MERGED, STATUS_PENDING, STATUS_DRAFT)
 
 ANNOT = re.compile(r"\s*\([^)]*(?:reading|renders|is written|not transcribed|omitted)[^)]*\)")
 ALL_RE = re.compile(r"^=\s*all\b[^:]*:\s*(.*)$", re.I)
@@ -212,10 +213,16 @@ class Corpus:
     def is_gold(self, page: str) -> bool:
         return str(self.gold_meta(page).get("status") or "") == STATUS_GOLD
 
+    def is_draft(self, page: str) -> bool:
+        """A part-reviewed page: kept and resumed, but never scored as gold."""
+        return str(self.gold_meta(page).get("status") or "") == STATUS_DRAFT
+
     def is_stale(self, page: str) -> bool:
         meta = self.gold_meta(page)
         recorded = str(meta.get("readings_hash") or "")
-        return bool(recorded) and self.is_gold(page) and recorded != self.readings_hash(page)
+        status = str(meta.get("status") or "")
+        return (bool(recorded) and status in (STATUS_GOLD, STATUS_DRAFT)
+                and recorded != self.readings_hash(page))
 
 
 # --------------------------------------------------------------------------- text helpers
@@ -850,6 +857,7 @@ class PageStatus:
     missing: list[str] = field(default_factory=list)
     compared: bool = False
     gold: bool = False
+    draft: bool = False
     gold_status: str = ""
     stale: bool = False
     entries: int = 0
@@ -879,6 +887,7 @@ def page_status(corpus: Corpus, page: str) -> PageStatus:
     meta = corpus.gold_meta(page)
     st.gold_status = str(meta.get("status") or "")
     st.gold = st.gold_status == STATUS_GOLD
+    st.draft = st.gold_status == STATUS_DRAFT
     st.stale = corpus.is_stale(page)
     return st
 
@@ -894,10 +903,12 @@ def corpus_status(corpus: Corpus) -> dict:
         "readings_complete": sum(1 for p in pages if not p.missing),
         "compared": sum(1 for p in pages if p.compared),
         "gold": sum(1 for p in pages if p.gold),
+        "drafts": sum(1 for p in pages if p.draft),
         "stale": sum(1 for p in pages if p.stale),
         "page_status": [
             {"page": p.page, "present": p.present, "missing": p.missing,
-             "compared": p.compared, "gold": p.gold, "status": p.gold_status,
+             "compared": p.compared, "gold": p.gold, "draft": p.draft,
+             "status": p.gold_status,
              "stale": p.stale, "entries": p.entries}
             for p in pages
         ],
@@ -1533,6 +1544,7 @@ def page_view(corpus: Corpus, page: str) -> dict:
         "comparison": comp.read_text(encoding="utf-8") if comp.is_file() else None,
         "gold": gold.read_text(encoding="utf-8") if gold.is_file() else None,
         "gold_status": meta.get("status"),
+        "draft": corpus.is_draft(page),
         "readings_hash": corpus.readings_hash(page),
         "stale": corpus.is_stale(page),
     }
@@ -1715,6 +1727,8 @@ def _reading_texts(corpus: "Corpus", page: str) -> dict[str, str | None]:
 def score_page(corpus: "Corpus", page: str) -> dict:
     """Score one page; returns ``{scored: bool, reason?, readers?}``."""
     if not corpus.is_gold(page):
+        if corpus.is_draft(page):
+            return {"scored": False, "reason": "draft (not validated)"}
         return {"scored": False, "reason": "no human-corrected gold (pending)"}
     if corpus.is_stale(page):
         return {"scored": False,
@@ -2019,16 +2033,18 @@ def cmd_status(cfg: Config, args) -> int:
     print(f"title  : {corpus.title}")
     print(f"readers: {', '.join(r.dir for r in corpus.readers) or '(none)'}")
     print(f"pages  : {st['pages']}  readings complete: {st['readings_complete']}  "
-          f"compared: {st['compared']}  gold: {st['gold']}  stale: {st['stale']}")
+          f"compared: {st['compared']}  gold: {st['gold']}  "
+          f"drafts: {st['drafts']}  stale: {st['stale']}")
     if args.pages or args.all:
         print()
         rows = []
         for p in st["page_status"]:
-            flags = ("G" if p["gold"] else "-") + ("S" if p["stale"] else "-")
+            mark = "G" if p["gold"] else ("D" if p.get("draft") else "-")
+            flags = mark + ("S" if p["stale"] else "-")
             rows.append([p["page"], flags, str(p["entries"]),
                          ",".join(p["missing"]) or ""])
         _print_table(rows, ["page", "gs", "entries", "missing readings"])
-        print("\nG = human-corrected gold, S = stale (readings changed)")
+        print("\nG = human-corrected gold, D = draft, S = stale (readings changed)")
     return 0
 
 

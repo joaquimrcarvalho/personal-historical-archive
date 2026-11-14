@@ -91,7 +91,9 @@ the agent's work whenever the draft is wrong.
    hand-edit it, regenerate it.
 
 7. **Human review.** The reviewer works in `pha bench serve` (the page image
-   beside the stacked readings; saving writes `human/`). Agents do not edit
+   beside the stacked readings; a draggable divider sets the split). **Save
+   draft** keeps a part-finished page for the next session (`status: draft`,
+   excluded from scoring); **Save gold** completes it. Agents do not edit
    `human/` — see below.
 
 8. **Score and export.** `pha bench score <corpus>` writes
@@ -222,7 +224,7 @@ it and against which readings:
 
     ---
     page: 507v
-    status: human-corrected        # human-corrected | machine-merged | pending
+    status: human-corrected        # human-corrected | machine-merged | pending | draft
     reviewed_by: Joaquim Carvalho
     reviewed_at: 2026-08-30
     readings: [DeepSeek-V4-FVE, M3, Qwen3.8-Max]
@@ -232,7 +234,8 @@ it and against which readings:
 - Only `status: human-corrected` counts as gold. `pending` marks a copy kept
   for reference (August 2026: seven of the eight 1577 files are such copies of
   an older reference, not reviewed readings); `machine-merged` is a generated
-  merge.
+  merge; `draft` is a part-reviewed page saved from the workbench — excluded
+  from scoring, and the page the reviewer resumes from.
 - `readings_hash` makes the gold **stale** when a reading beneath it changes
   (a re-read, a new model, a prompt edit). `pha bench status` and
   `pha bench verify` report it, and `pha bench score` excludes a stale page.
@@ -254,6 +257,8 @@ it and against which readings:
       when `pha` is not installed).
 - [ ] No `human-corrected` page is reported stale, and no agent has edited
       `human/`.
+- [ ] No `draft` page is treated as gold: drafts are excluded from scoring and
+      resumed from, never published as the reading.
 
 ## Examples
 

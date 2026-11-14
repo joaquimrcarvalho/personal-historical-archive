@@ -30,7 +30,8 @@ command can do — judging where the mechanical alignment is wrong.
 
 `bench.yaml` fixes the reader order — it is the `1..N` numbering in every
 comparison and reference file. `human/` is written only by the reviewer, via
-`pha bench serve`.
+`pha bench serve`: **Save draft** keeps a part-reviewed page (status `draft`,
+excluded from scoring), **Save gold** completes it.
 
 ## Commands
 

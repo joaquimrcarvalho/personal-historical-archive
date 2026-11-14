@@ -633,10 +633,14 @@ bench` command group is the engine. Concretely:
   names, disagree on a number, or contain an illegible `[?]`/`[illegible]` mark
   (orthographic noise does not flag).
 - **Save contract implemented**: form token, `base` hash guard (a file changed
-  on disk is never overwritten), contiguous non-empty entries, a required
-  reviewer, the structural verifier run on the exact bytes before an atomic
-  replace, `readings_hash` recorded, and an append-only `review-log.jsonl`.
-  Writes only `human/`, plus generated `comparison/` and `reference/`.
+  on disk is never overwritten), contiguous entries, a required reviewer, the
+  structural verifier run on the exact bytes before an atomic replace,
+  `readings_hash` recorded, and an append-only `review-log.jsonl`. Writes only
+  `human/`, plus generated `comparison/` and `reference/`.
+- **Draft saving**: a long page can be saved part-way with **Save draft**
+  (`status: draft`, empty entries allowed). A draft is excluded from scoring and
+  is the page the reviewer resumes from; **Save gold** completes it and applies
+  the non-empty rule.
 - Image resolution: corpus `images/` → declared source directory (in place) →
   PDF rendered on demand into the ignored `<archive>/.pha-test/bench-cache/`.
 - **Conversions done on the real corpora**: `document.path` set for 1577,

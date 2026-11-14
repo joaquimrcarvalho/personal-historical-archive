@@ -359,3 +359,62 @@ def test_flagged_entries_and_their_count(cfg):
     assert "check image: name" in page
     assert "check image: illegible" in page
     assert "3 of 3 entries are flagged" in page
+
+
+def test_bench_css_is_light_and_scopes_the_shared_form_rule():
+    """Regression: a global form rule from the shared viewer laid the entries
+    out in one row, and dark-mode text landed on the hardcoded white cards."""
+    from personal_historical_archive.viewer import CSS as shared_css
+
+    import re
+
+    assert ".inline-form" in shared_css
+    assert not re.search(r"(^|\})\s*form\{display:inline-flex", shared_css)
+    assert ":root{color-scheme:light}" in benchui.BENCH_CSS
+    assert ".bench-main form{display:block" in benchui.BENCH_CSS
+    for rule in ("body{background:#faf9f7;color:#1b1b1b}",
+                 ".reading-line .txt{color:#1b1b1b}",
+                 ".entry textarea,.savebar input[type=text]{background:#fff;color:#1b1b1b}"):
+        assert rule in benchui.BENCH_CSS, rule
+
+
+def test_workbench_has_a_draggable_divider(cfg):
+    corpus = make_corpus(cfg)
+    wb = benchui.Workbench(cfg)
+    page = benchui.render_page(wb, corpus, "001").decode()
+    assert 'class="divider"' in page
+    assert 'role="separator"' in page and 'aria-orientation="vertical"' in page
+    assert 'class="editpane"' in page
+    assert "pha-bench-media" in page          # the persisted width key
+    assert "--media-w" in benchui.BENCH_CSS
+    assert ".divider{" in benchui.BENCH_CSS
+    # the readings stack vertically: one entry block per comparison entry
+    assert page.count('class="entry"') == 2
+
+
+def test_save_draft_allows_a_partial_page_and_is_not_gold(cfg):
+    corpus = make_corpus(cfg)
+    wb = benchui.Workbench(cfg)
+    fields, _ = rows_fields(wb, corpus)
+    fields["e2"] = ""                       # stopped mid-page
+    benchui.save_gold(wb, corpus, "001", fields, wb.token,
+                      status=bench.STATUS_DRAFT)
+    meta, _ = bench.split_front_matter(corpus.gold_path("001").read_text())
+    assert meta["status"] == bench.STATUS_DRAFT
+    assert corpus.is_draft("001") and not corpus.is_gold("001")
+    assert bench.score_page(corpus, "001")["reason"].startswith("draft")
+    assert "Draft saved by" in corpus.gold_path("001").read_text()
+
+    data = wb.page_data(corpus, "001")
+    assert data["is_draft"] is True and data["pending_copy"] is False
+    assert data["rows"][1]["text"] == ""
+    assert data["rows"][0]["source"] == "draft"
+    page = benchui.render_page(wb, corpus, "001").decode()
+    assert "saved part-way" in page and "Save draft" in page
+
+    # resume: the draft is the starting point, and Save gold completes it
+    fields, _ = rows_fields(wb, corpus)
+    fields["e2"] = "P. Juan Correa, Ministro"
+    benchui.save_gold(wb, corpus, "001", fields, wb.token)
+    assert corpus.is_gold("001") and not corpus.is_draft("001")
+    assert corpus.gold_meta("001")["status"] == bench.STATUS_GOLD

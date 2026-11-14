@@ -910,7 +910,7 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                 f'<span class="muted">p. {page}{of_total}</span>',
                 '<span class="spacer"></span>',
                 nav,
-                f'<form action="{_go_url(slug)}" method="get">'
+                f'<form class="inline-form" action="{_go_url(slug)}" method="get">'
                 f'<input type="number" name="page" min="1"{max_attr} value="{page}" '
                 'aria-label="page number"><button>go</button></form>',
                 '</header>',
@@ -963,7 +963,7 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                 _reference_html(doc),
                 '<h2>Pages</h2>',
                 f'<p class="ranges">{_range_links(slug, total)}</p>',
-                f'<form action="{_go_url(slug)}" method="get"><label>Go to page '
+                f'<form class="inline-form" action="{_go_url(slug)}" method="get"><label>Go to page '
                 f'<input type="number" name="page" min="1"{max_attr} required> '
                 '<button>go</button></label></form>',
             ]

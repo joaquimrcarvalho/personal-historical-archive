@@ -44,6 +44,19 @@ ENTRY_RE = re.compile(r"^\[(\d+)\]\s*(.*)$")
 PAGE_QS = re.compile(r"^[A-Za-z0-9._-]+$")
 
 BENCH_CSS = """\
+/* The workbench hardcodes light surfaces (white cards, paper-white panels), so
+   it forces a light scheme: on a dark-mode desktop the shared viewer CSS would
+   otherwise put light text on those white cards. It also overrides the shared
+   inline form rule — the save form is a block container, not a toolbar. */
+:root{color-scheme:light}
+body{background:#faf9f7;color:#1b1b1b}
+a{color:#0b57d0}
+.bench-main form{display:block;gap:0}
+button{background:#f7f6f3;color:#1b1b1b;border:1px solid #bbb;border-radius:4px;
+  padding:.18rem .5rem;cursor:pointer;font:inherit;font-size:12px}
+.entry textarea,.savebar input[type=text]{background:#fff;color:#1b1b1b}
+.reading-line .txt{color:#1b1b1b}
+.entry,.card,.pagecard,.savebar,.badge2{color:#1b1b1b}
 .bench-main{display:block;padding:1rem;max-width:1400px;margin:0 auto;width:100%}
 .bench-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:.8rem}
 .card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:.7rem .8rem;color:inherit;
@@ -55,14 +68,26 @@ BENCH_CSS = """\
 .badge2{font-size:11px;border:1px solid #ccc;border-radius:999px;padding:0 .45rem;background:#f7f6f3}
 .badge2.gold{background:#e8f5e9;border-color:#a5d6a7}
 .badge2.warn{background:#fff4e5;border-color:#ffcc80}
+.badge2.draft{background:#e8eefc;border-color:#a9c1f5}
 .badge2.bad{background:#fdecea;border-color:#f5c6c2}
 .bench-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.5rem}
 .pagecard{background:#fff;border:1px solid #ddd;border-radius:6px;padding:.35rem;text-align:center;
   color:inherit;text-decoration:none;font-size:12px}
 .pagecard img{width:100%;height:110px;object-fit:cover;border-radius:4px;background:#eee}
-.workbench{display:grid;grid-template-columns:minmax(300px,44%) 1fr;gap:1rem;align-items:start}
-.workbench .media{position:sticky;top:.5rem}
+.workbench{display:grid;grid-template-columns:minmax(280px,var(--media-w,44%)) 12px minmax(320px,1fr);
+  gap:0 1rem;align-items:start;--media-w:44%}
+.workbench .media{position:sticky;top:.5rem;min-width:0}
 .workbench .media img{width:100%;border:1px solid #ccc;border-radius:4px;background:#fff}
+.workbench .editpane{min-width:0}
+.divider{grid-column:2;align-self:stretch;min-height:70vh;position:relative;cursor:col-resize;
+  touch-action:none;border:0;background:transparent;padding:0}
+.divider::before{content:"";position:absolute;left:5px;top:0;bottom:0;width:2px;
+  background:#c9c5bc;border-radius:2px}
+.divider:hover::before,.divider:focus-visible::before{background:#5f5c55;width:4px;left:4px}
+.divider::after{content:"⋮";position:absolute;left:-1px;top:50%;transform:translateY(-50%);
+  color:#8a857b;font-size:14px;line-height:1;padding:.35rem .12rem;background:#faf9f7;
+  border:1px solid #d8d4cb;border-radius:6px}
+.divider:focus-visible{outline:2px solid #0b57d0;outline-offset:2px;border-radius:4px}
 .readings{margin:.2rem 0 .4rem}
 .reading-line{display:flex;gap:.5rem;align-items:flex-start;padding:.2rem 0;border-top:1px dashed #eee}
 .reading-line .n{color:#888;min-width:1.1rem}
@@ -83,7 +108,8 @@ BENCH_CSS = """\
 .entry .badge2.warn{margin-left:.3rem}
 .verify pre{white-space:pre-wrap;font-size:12px}
 .kbd{font-family:ui-monospace,Menlo,monospace;font-size:11px;background:#eee;padding:0 .25rem;border-radius:3px}
-@media (max-width:850px){.workbench{grid-template-columns:1fr}.workbench .media{position:static}}
+@media (max-width:850px){.workbench{grid-template-columns:1fr}.workbench .media{position:static}
+  .divider{display:none}}
 """
 
 
@@ -220,9 +246,13 @@ class Workbench:
         ref_path = corpus.reference_path(page)
         ref_text = ref_path.read_text(encoding="utf-8") if ref_path.is_file() else ""
         meta = corpus.gold_meta(page)
-        is_gold = str(meta.get("status") or "") == bench.STATUS_GOLD
-        pending_copy = bool(meta) and not is_gold
-        gold_entries = bench.entry_texts(gold_text) if (gold_text and is_gold) else {}
+        status = str(meta.get("status") or "")
+        is_gold = status == bench.STATUS_GOLD
+        is_draft = status == bench.STATUS_DRAFT
+        pending_copy = bool(meta) and not is_gold and not is_draft
+        gold_entries = (bench.entry_texts(gold_text)
+                        if (gold_text and (is_gold or is_draft)) else {})
+        base_source = "gold" if is_gold else "draft"
         ref_entries = bench.entry_texts(ref_text) if ref_text else {}
         rows = []
         seen: set[int] = set()
@@ -233,7 +263,7 @@ class Workbench:
             else:
                 readings = list(enumerate(e.readings, 1))
             text = gold_entries.get(e.num)
-            source = "gold"
+            source = base_source
             if text is None:
                 text = ref_entries.get(e.num)
                 source = "reference" if text is not None else ""
@@ -245,7 +275,7 @@ class Workbench:
                          "flags": bench.entry_flags([t for _, t in readings])})
         for num in sorted(set(gold_entries) - seen):
             rows.append({"num": num, "readings": [], "text": gold_entries[num],
-                         "source": "gold", "flags": []})
+                         "source": base_source, "flags": []})
         return {
             "entries": entries,
             "rows": rows,
@@ -256,6 +286,7 @@ class Workbench:
             "base_sha": _sha256(gold_path.read_bytes()) if gold_path.is_file() else "",
             "meta": meta,
             "is_gold": is_gold,
+            "is_draft": is_draft,
             "pending_copy": pending_copy,
             "flagged": sum(1 for r in rows if r["flags"]),
             "editing_rules": corpus.editing_rules,
@@ -271,6 +302,8 @@ def _badges(status: bench.PageStatus) -> str:
     out = []
     if status.gold:
         out.append('<span class="badge2 gold">gold</span>')
+    elif status.draft:
+        out.append('<span class="badge2 draft">draft</span>')
     elif status.gold_status:
         out.append(f'<span class="badge2">{esc(status.gold_status)}</span>')
     if status.stale:
@@ -278,7 +311,9 @@ def _badges(status: bench.PageStatus) -> str:
     if status.missing:
         out.append(f'<span class="badge2 bad">{len(status.missing)} missing</span>')
     if not status.compared and status.entries:
-        out.append('<span class="badge2 warn">comparison older</span>')
+        out.append('<span class="badge2 warn" title="the comparison file predates at '
+                   'least one reading; rebuild it only if the readings were re-run '
+                   'after the comparison was made">comparison older</span>')
     return '<span class="badges">' + "".join(out) + "</span>" if out else ""
 
 
@@ -495,13 +530,21 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
                'older reference — it is not gold. Editing starts from '
                '<code>reference/</code>; saving replaces the copy with the reviewed '
                'gold.</p>' if data["pending_copy"] else "")
+            + ('<p class="warnbox">This is a <strong>draft</strong> saved part-way '
+               'through the review: it is excluded from scoring. Keep going and use '
+               '<strong>Save gold</strong> when the page is complete.</p>'
+               if data["is_draft"] else "")
             + f'<p class="muted">{data["flagged"]} of {len(data["rows"])} entries are '
               'flagged for the image: a name with no majority, a differing number, or an illegible mark.</p>'
             + rules_html
             + (f'<p class="ok">Saved. The gold page is written and verified.</p>'
                if saved else "")
             + (f'<p class="err">{esc(error)}</p>' if error else "")
-            + f'<div class="workbench"><div class="media">{img_html}</div><div>'
+            + f'<div class="workbench"><div class="media">{img_html}</div>'
+              '<div class="divider" role="separator" aria-orientation="vertical" '
+              'aria-label="resize the image and the text" tabindex="0" '
+              'title="drag to resize · double-click to reset"></div>'
+            + '<div class="editpane">'
             + f'<form method="post" action="/save" id="saveform">'
               f'<input type="hidden" name="token" value="{wb.token}">'
               f'<input type="hidden" name="c" value="{esc(rel)}">'
@@ -512,7 +555,9 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
             + '<div class="savebar">'
               f'<label class="muted">reviewer <input type="text" name="reviewer" '
               f'value="{esc(reviewer)}" required></label>'
-              '<button type="submit">Save gold</button>'
+              '<button type="submit" name="status" value="gold">Save gold</button> '
+              '<button type="submit" name="status" value="draft" '
+              'title="save part-way through; excluded from scoring">Save draft</button>'
               f'<span class="muted"><span class="kbd">⌘S</span> saves · '
               f'"use" copies a reading into its entry · readings_hash '
               f'<code>{esc(corpus.readings_hash(page))[:19]}…</code></span>'
@@ -530,8 +575,29 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
             "ta.classList.add('dirty');ta.focus();});});})();"
             "document.addEventListener('keydown',e=>{"
             "if((e.metaKey||e.ctrlKey)&&e.key==='s'){e.preventDefault();"
-            "document.getElementById('saveform').requestSubmit();}});"
-            "</script>")
+            "const gb=document.querySelector('button[name=status][value=gold]');"
+            "document.getElementById('saveform').requestSubmit(gb);}});"
+            "</script>"
+            "<script>(function(){"
+            "const wb=document.querySelector('.workbench');"
+            "const div=wb&&wb.querySelector('.divider');if(!div)return;"
+            "const KEY='pha-bench-media';const clamp=p=>Math.min(78,Math.max(24,p));"
+            "const saved=localStorage.getItem(KEY);if(saved)wb.style.setProperty('--media-w',saved);"
+            "let drag=false;"
+            "const pct=ev=>{const r=wb.getBoundingClientRect();"
+            "const x=(ev.clientX!==undefined?ev.clientX:ev.touches[0].clientX)-r.left;"
+            "return clamp(x/r.width*100);};"
+            "const apply=p=>wb.style.setProperty('--media-w',p.toFixed(1)+'%');"
+            "div.addEventListener('pointerdown',e=>{drag=true;div.setPointerCapture(e.pointerId);e.preventDefault();});"
+            "div.addEventListener('pointermove',e=>{if(drag)apply(pct(e));});"
+            "const end=()=>{if(!drag)return;drag=false;"
+            "localStorage.setItem(KEY,wb.style.getPropertyValue('--media-w'));};"
+            "div.addEventListener('pointerup',end);div.addEventListener('pointercancel',end);"
+            "div.addEventListener('dblclick',()=>{wb.style.removeProperty('--media-w');localStorage.removeItem(KEY);});"
+            "div.addEventListener('keydown',e=>{const cur=parseFloat(wb.style.getPropertyValue('--media-w'))||44;"
+            "let p=null;if(e.key==='ArrowLeft')p=clamp(cur-2);if(e.key==='ArrowRight')p=clamp(cur+2);"
+            "if(p!==null){e.preventDefault();apply(p);localStorage.setItem(KEY,p.toFixed(1)+'%');}});"
+            "})();</script>")
     return html_page(f"pha bench — {page}", body,
                      f"<style>{BENCH_CSS}</style>")
 
@@ -567,14 +633,21 @@ def _synthesize(corpus: bench.Corpus, page: str, block: str) -> str:
 
 
 def save_gold(wb: Workbench, corpus: bench.Corpus, page: str,
-              fields: dict, token: str) -> str:
-    """Write the gold page. Returns the reviewer name on success.
+              fields: dict, token: str,
+              status: str = bench.STATUS_GOLD) -> str:
+    """Write a page file (gold or draft). Returns the reviewer name on success.
 
     Raises SaveError (with an HTTP status) on any refused save. Every rule here
     exists to protect human work: no token, no save; a file that changed on
-    disk is not overwritten; an empty or renumbered entry is refused; the
-    structural verifier runs before the write.
+    disk is not overwritten; a renumbered entry is refused; the structural
+    verifier runs before the write.
+
+    ``status`` is ``human-corrected`` (the gold) or ``draft``. A draft may have
+    empty entries — that is what saving part-way means — and is excluded from
+    scoring; it is still the page the reviewer resumes from.
     """
+    if status not in (bench.STATUS_GOLD, bench.STATUS_DRAFT):
+        raise SaveError(f"unknown save status {status!r}", HTTPStatus.BAD_REQUEST)
     if not secrets.compare_digest(str(token or ""), wb.token):
         raise SaveError("stale form token — reload the page and try again",
                         HTTPStatus.CONFLICT)
@@ -594,12 +667,12 @@ def save_gold(wb: Workbench, corpus: bench.Corpus, page: str,
     texts: dict[int, str] = {}
     for n in nums:
         value = str(fields.get(f"e{n}") or "").strip()
-        if not value:
+        if not value and status == bench.STATUS_GOLD:
             raise SaveError(f"entry [{n}] is empty — the gold cannot lose an "
-                            "entry; write the reading or rebuild the comparison",
-                            HTTPStatus.BAD_REQUEST)
+                            "entry; write the reading, use Save draft, or rebuild "
+                            "the comparison", HTTPStatus.BAD_REQUEST)
         texts[n] = value
-    block = "\n".join(f"[{n}] {texts[n]}" for n in nums)
+    block = "\n".join(f"[{n}] {texts[n]}".rstrip() for n in nums)
 
     gold_path = corpus.gold_path(page)
     existing = gold_path.read_text(encoding="utf-8") if gold_path.is_file() else ""
@@ -621,10 +694,15 @@ def save_gold(wb: Workbench, corpus: bench.Corpus, page: str,
         content = content[:notes.start()].rstrip() + "\n\n## Notes\n\n"
     else:
         content = content.rstrip() + "\n\n## Notes\n\n"
-    content += f"Reviewed {reviewer} {time.strftime('%Y-%m-%d')}.\n"
+    today = time.strftime("%Y-%m-%d")
+    if status == bench.STATUS_GOLD:
+        content += f"Reviewed {reviewer} {today}.\n"
+    else:
+        content += (f"Draft saved by {reviewer} {today} — not validated and "
+                    "excluded from scoring.\n")
     meta = {
         "page": page,
-        "status": bench.STATUS_GOLD,
+        "status": status,
         "reviewed_by": reviewer,
         "reviewed_at": time.strftime("%Y-%m-%d"),
         "readings": [r.dir for r in corpus.readers],
@@ -649,7 +727,10 @@ def save_gold(wb: Workbench, corpus: bench.Corpus, page: str,
     with (corpus.root / "review-log.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps({
             "page": page, "reviewer": reviewer, "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "entries": len(nums), "readings_hash": meta["readings_hash"],
+            "entries": len(nums),
+            "filled": sum(1 for t in texts.values() if t),
+            "status": status,
+            "readings_hash": meta["readings_hash"],
         }, ensure_ascii=False) + "\n")
     return reviewer
 
@@ -744,7 +825,12 @@ class Handler(BaseHTTPRequestHandler):
             path = urllib.parse.urlparse(self.path).path
             if path == "/save":
                 c = self.wb.page(fields.get("c", ""), fields.get("p", ""))
-                save_gold(self.wb, c, fields.get("p", ""), fields, fields.get("token", ""))
+                status = fields.get("status") or bench.STATUS_GOLD
+                if status not in (bench.STATUS_GOLD, bench.STATUS_DRAFT):
+                    raise SaveError(f"unknown save status {status!r}",
+                                    HTTPStatus.BAD_REQUEST)
+                save_gold(self.wb, c, fields.get("p", ""), fields,
+                          fields.get("token", ""), status=status)
                 rel = _rel(self.wb, c)
                 self._redirect(_link("/page", c=rel, p=fields.get("p", ""), saved=1))
             elif path == "/build":
