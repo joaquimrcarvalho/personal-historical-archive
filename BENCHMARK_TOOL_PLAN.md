@@ -601,12 +601,16 @@ bench` command group is the engine. Concretely:
 
 **Known gaps, deliberately left for the next pass.**
 
-- The `palaeographers-compare` skill text still documents the pre-front-matter
-  `human/` folder; `archive_skills.py` must be updated and the skill re-synced —
-  that is a tool change, so it belongs to the next release bump, not this one.
-- The three `jesuit-archive/local-tools/` scripts are still present and still
-  work; they retire once the skill points at `pha bench` and the last corpus
-  using them is rebuilt.
+- The `palaeographers-compare` skill is updated (2026-11-14): it now documents
+  `bench.yaml`, the `pha bench` workflow, the gold front matter/statuses and the
+  stale rule, and its README points at the commands. The archive copy was
+  re-synced with `pha skills update`. A release bump is still needed for the
+  text to reach installed machines.
+- The bundled skill scripts (`normalize_comparison.py`, `verify_comparison.py`,
+  `make_reference.py`) remain as the no-`pha` fallback; `pha bench verify|reference`
+  supersede them. The three `jesuit-archive/local-tools/` scripts are still
+  present and still work; they retire once the last corpus using them is
+  rebuilt.
 - `pha bench score` (P4) and `pha bench export` (P5) are not implemented.
   `pha bench run` has not been exercised against a paid model in this pass; only
   its planning path (`--dry-run`) and the real corpora's parsing/verification

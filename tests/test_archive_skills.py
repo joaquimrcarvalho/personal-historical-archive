@@ -159,3 +159,16 @@ def test_ensure_dirs_does_not_touch_the_project_root_skills(tmp_path):
     (root / "config.yaml").write_text("paths:\n  archive_dir: .\n")
     Config.load(root).ensure_dirs()
     assert not (root / "skills").exists()
+
+
+def test_palaeographers_compare_skill_documents_the_bench_workflow():
+    """The skill must describe the current corpus model, not the old one."""
+    files = dict(dict(ask.bundled_skill_files())["palaeographers-compare"])
+    text = files["SKILL.md"]
+    for marker in ("pha bench init", "pha bench compare", "pha bench verify",
+                   "pha bench serve", "pha bench score", "bench.yaml",
+                   "readings_hash", "status: human-corrected", "never edits `human/`"):
+        assert marker in text, marker
+    assert "images/`** (required)" not in text
+    readme = files["README.md"]
+    assert "pha skills update" in readme and "pha bench" in readme

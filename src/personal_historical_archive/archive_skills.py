@@ -1077,40 +1077,102 @@ description: Compare multiple palaeographers' (or transcription models') reading
 
 # Palaeographers Compare
 
-Produces a **uniform comparative edition** from two or more independent readings of the same document (e.g. three palaeographers, or several vision-model transcriptions of the same manuscript pages). The output is a `comparison/` folder with:
+Produces a **uniform comparative edition** from two or more independent
+readings of
+the same document (e.g. three palaeographers, or several vision-model
+transcriptions of the same pages) and keeps the corpus behind it in the shape
+`pha bench` expects:
 
-- one markdown file per page, in a **fixed uniform skeleton**, showing every entry with the readings stacked as `1.` … `N.` (or `= all readings:` when identical), plus a "Key differences" bullet list;
-- an `overview.md` summarising corpus, palaeographer mapping, systematic conventions, and the most significant disagreements.
+    <corpus>/
+      bench.yaml                 # reader order, source document, rules
+      <reader>/<page>.md         # one reading per reader per page
+      comparison/<page>.md       # aligned stacked readings (this skill's output)
+      reference/<page>.md        # machine merge, variants joined with '/'
+      human/<page>.md            # the human-corrected gold
+      images/                    # optional; otherwise resolved from the source
 
-The reference implementation of the workflow (and of the expected output format) is `palaeographers/comparison/` under the 1577 Portuguese Jesuit catalogue benchmark — the same layout (corpus readings + sibling `images/` + `comparison/`) must be reproduced for every new corpus.
+The output of the comparison step is still a `comparison/` folder: one markdown
+file per page in a **fixed uniform skeleton**, every entry with its readings
+stacked as `1.` … `N.` (or `= all readings:` when identical), plus a "Key
+differences" bullet list, and an `overview.md` that maps the readers, describes
+the conventions and highlights the significant disagreements.
+
+The reference implementation remains the 1577 Portuguese Jesuit catalogue
+benchmark under `benchmarks/collections/jesuit-catalogues/…/1577/palaeographers/`
+(readings + `comparison/` + `reference/` + `human/`).
 
 ## Inputs
 
-- An **input directory** containing one subdirectory per palaeographer (e.g. `palaeographers/DeepSeek-V4-FVE/`, `palaeographers/M3/`, `palaeographers/Qwen3.8-Max/`). Each subdirectory has one markdown file per page of the same document, with **matching basenames across palaeographers** (e.g. `507v.md`, `508.md`, …).
-- **`images/`** (required): a sibling of the `palaeographers/` folder holding a copy of
-  the **source image of every compared page**, with the same basename as the page files
-  (`507v.md` -> `507v.jpg`; `.jpg`/`.jpeg`/`.png`/`.tif`/`.tiff`/`.webp` accepted). It is
-  what a reviewer reads against when correcting a reading, and it keeps the benchmark
-  self-contained. `verify_comparison.py` checks it (`--require-images` makes a missing image a hard failure).
-- Each page file contains a transcription section. The transcription may be inside a fenced code block (under `## Transcription`) or be the body before `## Notes`. Only the transcription content is compared; `Notes` / `Named entities` / `Content summary` sections are context, never part of the comparison.
+- **One subdirectory per palaeographer** in the corpus folder, each holding one
+  markdown file per page of the same document, with **matching basenames across
+  readers** (`507v.md`, `508.md`, …). The transcription may sit inside a fenced
+  block under `## Transcription` or be the body before `## Notes`; an unclosed
+  fence left by an older run ends at the next heading. Only the transcription is
+  compared — `Notes` / `Named entities` / `Content summary` are context.
+- **`bench.yaml`** declares the reader order — that order is the `1..N`
+  numbering used in every comparison and reference file — plus the source
+  document, the transcription rules id and, optionally, the rights line.
+  `pha bench init` writes it (taking the order from the comparison's own title
+  when one exists); the order is data, not a guess made at generation time.
+- **Page images are resolved, not copied:** corpus `images/<page>.<ext>` → the
+  declared source directory → a PDF page rendered on demand.
+  `pha bench export` materialises the images into the published site, and
+  `pha bench verify` warns when no image can be found;
+  `pha bench verify --require-images` makes a missing image a hard failure. A
+  working corpus therefore does not need an `images/` folder.
 
 ## Workflow
 
-1. **Name the palaeographers.** List the subdirectories of the input dir. Fix their order with the user (this becomes the numbering used everywhere); default to folder order or alphabetical. Example: `1. DeepSeek-V4-FVE · 2. M3 · 3. Qwen3.8-Max`.
+`pha bench` does the mechanical steps; the comparative edition itself is still
+the agent's work whenever the draft is wrong.
 
-2. **Copy the page images.** Make sure an **`images/`** folder sits next to `palaeographers/` with a copy of every compared page image, named with the same basename as the page files (`507v.jpg`, `508.jpg`, ...). The comparison and the reference are meant to be corrected by a human **against the image**, so the benchmark must be self-contained. `verify_comparison.py` checks this.
+1. **Declare the corpus.** `pha bench init <corpus>` writes `bench.yaml` from the
+   reader folders. Set `document.path` (and `document.pages` when the page ids
+   are not the source image stems) and the `palaeographer` rules id, then check
+   the result with `pha bench status <corpus>`.
 
-3. **Discover the pages.** Take the intersection of filenames across all palaeographer subdirectories (a page must exist for every palaeographer). Sort them in reading order (recto/verso).
+2. **Produce readings** if they do not exist yet:
 
-4. **Read every transcription** for every page×palaeographer. Note per-page context (community/college, column layout, rotation, damage, show-through) from the notes sections.
+       pha bench run <corpus> --pages 4,5 --dry-run     # the plan, no model call
+       pha bench run <corpus> --pages 4,5
 
-5. **Generate the per-page comparison files** (see "Output format" below). This step fans out naturally — generate each page's file independently; you may parallelise pages across subagents, but every file must follow the same skeleton exactly.
+   Each run is a `pha test` scratch run: the archive is never touched and the
+   editor stays off. The model must be named per reader in `bench.yaml`; a
+   reader with no model is refused rather than run with the archive default.
 
-6. **Generate `overview.md`** (see "Overview" below).
+3. **Build the comparison draft.** `pha bench compare <corpus>` writes
+   `comparison/` — profile `tabular` for numbered catalogue rows, `lines` for
+   free text, `auto` by default. It is a mechanical draft: entries are aligned
+   by row number or by line position. **It overwrites `comparison/`**, so if the
+   folder holds a hand-edited edition, commit it (or copy it aside) before
+   rerunning.
 
-7. **Normalise + verify** the whole output folder with the bundled scripts (see "Scripts" below) so every file shares the exact skeleton.
+4. **Edit the comparison where the draft is wrong.** This is the skill's real
+   work: split or merge entries the mechanical pass got wrong, align a missed
+   line, rewrite Context, and write Key differences. Every file must follow the
+   uniform skeleton below. Pages fan out naturally to subagents, but the
+   skeleton is not negotiable.
+
+5. **Verify.** `pha bench verify <corpus>` checks the skeleton, contiguous
+   entries, each entry's reading count (default: the corpus's readers), the
+   images, and the gold's structure and freshness. The bundled
+   `scripts/verify_comparison.py` remains for a machine without `pha`.
+
+6. **Reference merge.** `pha bench reference <corpus>` writes `reference/` —
+   one line per entry, variants joined with `/`. It is generated; never
+   hand-edit it, regenerate it.
+
+7. **Human review.** The reviewer works in `pha bench serve` (the page image
+   beside the stacked readings; saving writes `human/`). Agents do not edit
+   `human/` — see below.
+
+8. **Score and export.** `pha bench score <corpus>` writes
+   `scores/results.json` (pending and stale gold pages excluded, with the
+   reasons and the caveats); `pha bench export <corpus> --out DIR` writes a
+   self-contained static site.
 
 ## Alignment rules
+
 
 - One **entry** = one line of the catalogue (a person's name with or without role, a heading such as `Casos.` / `1ª classe de humanidad.`, a count marker, the `+IESVS` header).
 - Entries appear in the same order in all readings; if a palaeographer misses, adds, or splits a line, align by position and meaning and **flag it** in Key differences.
@@ -1169,7 +1231,11 @@ Skeleton rules (non-negotiable):
 
 ## Scripts
 
-After generating the files, normalise and verify the whole folder:
+`pha bench verify` and `pha bench reference` supersede these scripts in an
+archive with the current pha; they are kept for a machine that has only the
+skill folder, and their checks are what `pha bench verify` runs.
+
+After generating the files by hand, normalise and verify the whole folder:
 
 ```bash
 # Merge per-entry fenced blocks into one block; restore blank lines; collapse double blanks
@@ -1187,6 +1253,10 @@ python3 scripts/verify_comparison.py comparison/ --readings 3
 - `make_reference.py` — builds a **`reference/` folder for producing a reference translation**: every entry becomes ONE line with common words written once and variants joined with `/` in reading order (any number of readings). See "Reference variant" below.
 
 ## Reference variant (for producing a reference translation)
+
+`pha bench reference <corpus>` is the supported path (same alignment, front
+matter and output skeleton); the bundled script below does the same merge when
+`pha` is not installed.
 
 From the comparison folder, generate a sibling `reference/` folder aimed at translation work:
 
@@ -1216,209 +1286,116 @@ Rules implemented by the script:
 - Entries identical in all readings are given as-is. Pages whose readings diverge fundamentally (every entry carrying a single full reading — e.g. a leaf read as blank vs index vs show-through) are auto-detected and kept unconsolidated; `--divergent PAGE` forces the same for a named page. Reading markers are recognised only in sequence (`1.`, `2.`, …), so an embedded number in a wrapped line ("3. Nouicos.") is not mistaken for a reading.
 - The output files keep the same uniform skeleton (title with palaeographer mapping, Context, one fenced block, Notes).
 
-## Human-reviewed gold standard (human/ folder)
+## Human-reviewed gold (`human/`)
 
-After the comparison and reference folders are produced, a **human reviewer** may edit the reference content into a corrected, variant-free version kept in a sibling `human/` folder: same page files and uniform skeleton, but with a `## Corrected text` section where the variants are resolved to the correct reading and the original line breaks are restored. (In the reference corpus, the review is by Joaquim Carvalho, started 2026-08-30; only `507v.md` has been reviewed so far — the other files are still unedited copies of the reference.)
+The gold is the reviewer's resolution of the variants: same page files, a
+`## Corrected text` section, and YAML front matter that records who validated
+it and against which readings:
 
-The reviewer documents the editing rules in the file header (e.g. kept line-break hyphens in their `=` form, original capitalisation preserved, dots kept as word separators, long dash runs reduced to three dashes, letter normalisation `u`→`v` and `ƒ`→`ss`/`s` particular to this hand) and signs the review in the Notes section.
+    ---
+    page: 507v
+    status: human-corrected        # human-corrected | machine-merged | pending
+    reviewed_by: Joaquim Carvalho
+    reviewed_at: 2026-08-30
+    readings: [DeepSeek-V4-FVE, M3, Qwen3.8-Max]
+    readings_hash: sha256:…
+    ---
 
-**Rules for agents:**
-
-- `human/` is **read-only for agents** — never edit, "correct", regenerate, or reformat anything inside it; the human review is authoritative and must remain untouched.
-- It may be **read freely**, and its purpose is twofold:
-  - **Benchmarking palaeographers**: compare each palaeographer's raw reading (or the consolidated reference line) against the human corrected text — count per-entry agreement on names, roles, spellings and offices; identify which palaeographer is most accurate per page and which readings the human rejected.
-  - **Improving prompts**: use the human version paired with the slashed variants as few-shot examples of correct readings, or feed the disagreements back into the transcription/vision prompt to target recurring failure modes (e.g. surname confusions, role misreadings).
-
-The three-folder pipeline is therefore: `comparison/` (aligned stacked readings) → `reference/` (slashed variants for translation) → `human/` (reviewed gold standard for benchmarking and prompt tuning).
+- Only `status: human-corrected` counts as gold. `pending` marks a copy kept
+  for reference (August 2026: seven of the eight 1577 files are such copies of
+  an older reference, not reviewed readings); `machine-merged` is a generated
+  merge.
+- `readings_hash` makes the gold **stale** when a reading beneath it changes
+  (a re-read, a new model, a prompt edit). `pha bench status` and
+  `pha bench verify` report it, and `pha bench score` excludes a stale page.
+- The reviewer works in `pha bench serve`, which writes the file for them. An
+  agent never edits `human/` — not to correct, not to reformat, not to
+  regenerate. It may read the gold freely, compare readings against it, and
+  use the disagreements to improve prompts (the gold paired with the slashed
+  variants is the best few-shot evidence there is).
 
 ## Quality checklist
+
 
 - [ ] Every page file shares the exact uniform skeleton (title / Context / one fenced block / Key differences).
 - [ ] All readings verbatim: diacritics, `[?]`/`[illegible]`, bracket expansions, honorific variants preserved.
 - [ ] `= all readings` (older files: `= all three`) used only for substantive identity; differing readings all shown.
 - [ ] Structural disagreements (class numbering, columns, fundamental page disagreements) flagged, not harmonised.
 - [ ] `overview.md` present with palaeographer mapping, conventions, page-by-page highlights, consensus notes.
-- [ ] `verify_comparison.py` passes for every file.
+- [ ] `pha bench verify <corpus>` passes (or `scripts/verify_comparison.py`
+      when `pha` is not installed).
+- [ ] No `human-corrected` page is reported stale, and no agent has edited
+      `human/`.
 
 ## Examples
 
 - `examples/entry-format.md` — minimal sample of the uniform skeleton.
-- Live reference output: `palaeographers/comparison/`, `palaeographers/reference/` and `palaeographers/human/` in the 1577 Jesuit catalogue benchmark (8 pages, 3 palaeographers).
+- Live reference output: `comparison/`, `reference/` and `human/` in the 1577
+  Jesuit catalogue benchmark (8 pages, 3 palaeographers); `pha bench status
+  <corpus>` reports its coverage and `pha bench verify` its shape.
 '''
 
 _SKILL_PALEOGRAPHERS_COMPARE_README = r'''# palaeographers-compare
 
-Compare several palaeographers' (or transcription models') readings of the same
-historical document, page by page, and turn them into three review surfaces:
+Compare two or more independent readings of the same historical document —
+different palaeographers, or different transcription models — and produce a
+uniform comparative edition: one markdown file per page with the readings
+stacked entry by entry, plus an overview of the disagreements.
 
-1. **`comparison/`** — every entry with the readings stacked side by side (`1.` … `N.`; any number of readings, 2 or more),
-   plus an overview of the differences;
-2. **`reference/`** — the same entries collapsed into one line each, with common words
-   written once and variants joined by `/`, made for producing a translation;
-3. **`human/`** — the place for your own hand-corrected, variant-free text (the gold standard).
+This folder is the **agent skill** for that work. In an archive managed by
+`personal-historical-archive` (`pha`), the corpus around it is declared by
+`bench.yaml` and driven by the `pha bench` commands; the skill adds the part no
+command can do — judging where the mechanical alignment is wrong.
 
-Works on any folder of aligned transcriptions. It needs nothing but Python 3 —
-no pha install, no special tooling, no network.
+## Install
 
----
+- **In a pha archive:** the skill is shipped there. `pha skills status` shows
+  whether it is current; `pha skills update` refreshes it (a file you edited is
+  reported and left alone until `--replace`).
+- **Standalone:** copy this folder to `~/.agents/skills/`, or publish it and
+  `npx skills add github.com/USER/palaeographers-compare`.
 
-## How to use it (step by step)
+## Corpus layout
 
-### What you need first
+    <corpus>/
+      bench.yaml                 # reader order, source document, rules, rights
+      <reader>/<page>.md         # one reading per reader per page
+      comparison/<page>.md       # this skill's output
+      reference/<page>.md        # machine merge ("a/b" variants)
+      human/<page>.md            # human-corrected gold (front matter + status)
+      images/                    # optional; resolved from the source otherwise
 
-A folder containing **one subdirectory per palaeographer**, each with **one markdown
-file per page, using the same filenames across all of them**, plus an **`images/`**
-folder next to it with a copy of the same pages:
+`bench.yaml` fixes the reader order — it is the `1..N` numbering in every
+comparison and reference file. `human/` is written only by the reviewer, via
+`pha bench serve`.
 
-```
-1577/
-├── images/                      507v.jpg  508.jpg  508v.jpg  ...  511.jpg
-└── palaeographers/
-    ├── DeepSeek-V4-FVE/         507v.md   508.md   508v.md   ...  511.md
-    ├── M3/                      507v.md   508.md   508v.md   ...  511.md
-    └── Qwen3.8-Max/             507v.md   508.md   508v.md   ...  511.md
-```
+## Commands
 
-Each page file needs its transcription (the readable text of the page). The `Notes` /
-named-entity sections are ignored; they are only used as context.
+| command | does |
+|---|---|
+| `pha bench init <corpus>` | writes `bench.yaml`, inferring readers and models |
+| `pha bench run <corpus> --pages …` | produces readings with `pha test` (no archive writes) |
+| `pha bench compare <corpus>` | mechanical comparison draft (`comparison/`) |
+| `pha bench verify <corpus>` | skeleton, entry counts, images, gold freshness |
+| `pha bench reference <corpus>` | the slashed merge (`reference/`) |
+| `pha bench serve` | the local workbench: image + readings + gold editor |
+| `pha bench score <corpus>` | scores readings against the gold (`scores/results.json`) |
+| `pha bench export <corpus> --out DIR` | a self-contained static site |
+| `pha bench status <corpus>` | coverage: readings, comparison, gold, stale |
 
-The `images/` folder holds the **source image of every compared page**, with the same
-basename as the page file (`507v.jpg` for `507v.md`; `.jpg`/`.jpeg`/`.png`/`.tif`/
-`.tiff`/`.webp` accepted). It is required: a reviewer correcting a reading needs the
-original next to it, and it keeps the benchmark self-contained. `verify_comparison.py`
-checks that every page has its image.
+The full workflow, the uniform page skeleton, the alignment and fidelity rules
+and the `human/` rules are in [`SKILL.md`](SKILL.md).
 
-### 1. Ask the agent
+## Scripts
 
-Give it the folder and fix the numbering — that numbering becomes `1.`, `2.`, … `N.`
-in every output file (any number of palaeographers works — 2 or more):
-
-> Compare the palaeographer readings in
-> `benchmarks/collections/jesuit-catalogues/jesuit-cat-type4/portugal/1577/palaeographers`
-> — **1 = DeepSeek-V4-FVE, 2 = M3, 3 = Qwen3.8-Max** — and produce the per-page
-> comparison plus an overview.
-
-If you don't give an order, the agent will ask you or use folder order. The skill also
-triggers on plain requests such as *"compare these transcriptions"*, *"collate the
-readings"*, or *"which readings disagree on this page?"*.
-
-### 2. Get the comparison
-
-The agent creates a `comparison/` folder inside the one you named:
-
-- `comparison/overview.md` — what the document is, who the palaeographers are, how much
-  they agree, the systematic spelling habits of each, and the most significant
-  disagreements per page.
-- `comparison/<page>.md` — one file per page, every entry numbered `[n]` with the three
-  readings stacked (`= all readings:` when they match), and a "Key differences" list.
-
-### 3. Review it
-
-Open `overview.md` first to see where the readings disagree, then dip into the page
-files for the exact wording. Anything one palaeographer left as `[illegible]` while
-another read a name is worth a look — those are the decisions that matter.
-
-### 4. Build the reference text (for translation)
-
-Ask: *"now build the reference text from the comparison"*. You get `reference/<page>.md`,
-one line per entry:
-
-```
-[7] P./P[adr]e Iuan/Juan Correa/correa —————————/— Ministro.
-```
-
-Read it as: the readings agree on everything except the variants separated by `/`
-(here `P.` / `P[adr]e`, `Iuan` / `Juan`, `Correa` / `correa`, a long dash / a short one).
-Common words appear once. This is the working text to translate from — where variants
-are listed, pick the correct reading (or simply skip them if the variant does not change
-the sense).
-
-### 5. Record your own correction (human gold standard)
-
-Copy `reference/` to a sibling folder named `human/` and edit it by hand: resolve the
-variants, restore the original line breaks, and note your editing rules at the top
-of each file.
-
-**Important:** `human/` is *yours*. Agents are told to treat it as **read-only** — they
-must never edit, reformat, or regenerate it. Its value is as the authoritative text,
-used later to **benchmark how accurate each palaeographer was** and to **improve the
-transcription prompts**.
-
-### Adding pages or a new palaeographer later
-
-Just add the files (same filenames in every palaeographer folder) and re-run the request.
-New pages get their own files; existing ones are regenerated, so re-check anything you had
-edited by hand in `comparison/` or `reference/` — `human/` is never touched.
-
----
-
-## What each output folder contains
-
-| Folder | Who writes it | What it is |
-|---|---|---|
-| `comparison/` | the agent | Aligned readings, `[n]` per entry, stacked `1.`…`N.`, plus `overview.md` |
-| `reference/` | the agent (`make_reference.py`) | One line per entry, variants joined by `/` — for translation |
-| `human/` | **you** | Hand-corrected, variant-free gold standard. Read-only for agents |
-
-## Useful commands (optional)
-
-The agent runs these for you; you can also run them yourself to check the output:
-
-```bash
-# force the uniform layout (one fenced block per page file) and report changes
-python3 scripts/normalize_comparison.py comparison/
-
-# check every page file is well formed (2 fences, correct sections, entries [1]..[N])
-python3 scripts/verify_comparison.py comparison/
-
-# ...and check every entry carries exactly N readings
-python3 scripts/verify_comparison.py comparison/ --readings 3
-
-# (re)build the reference text from the comparison
-python3 scripts/make_reference.py comparison/            # writes reference/ next to comparison/
-python3 scripts/make_reference.py comparison/ reference/ # explicit destination
-
-# guard against a wrong reading count (refuses to write if a page has more readings)
-python3 scripts/make_reference.py comparison/ --readings 3
-```
-
-Requires only Python 3 (standard library).
-
-## Notes and gotchas
-
-- **Uniform layout matters.** Every page file must have the same shape: title, one
-  `Context:` paragraph, one `## Entry-by-entry comparison` block with all `[n]` entries in
-  a *single* fenced code block, and one `## Key differences on this page` list. The
-  `normalize_comparison.py` + `verify_comparison.py` pair keeps that true.
-- **Readings are never "corrected"** by the skill: diacritics, `[?]`, `[illegible]`,
-  bracket expansions and odd spellings are preserved exactly as the palaeographer wrote them.
-- **Pages that cannot be compared** (one reads a blank leaf, another an index, a third
-  show-through) are auto-detected and each full reading is kept, rather than forced into a
-  misleading alignment.
-- **Any number of readings works** — 2, 3, 4 or more. Pass `--readings N` so that a page
-  with more readings than you expect is refused loudly instead of being silently merged
-  wrongly (the reference generator is N-ary; without the flag it auto-detects the count).
-- **Inside a pha archive**, work in a benchmark/working folder like the one above and never
-  edit pha's generated files (`library/`, `renders/`, `archive.db`).
-
-## Reference implementation
-
-`palaeographers/comparison/`, `palaeographers/reference/` and `palaeographers/human/` under
-the 1577 Portuguese Jesuit catalogue benchmark — 8 pages, 3 palaeographers
-(DeepSeek-V4-FVE, M3, Qwen3.8-Max).
-
-## Deploy / publish
-
-```bash
-cd ~/develop/historical-skills && ./deploy.sh   # copies to ~/.agents/skills/
-```
-
-To share: create a GitHub repo for this directory, push it, and others can install with
-`npx skills add github.com/USER/palaeographers-compare`.
+`scripts/normalize_comparison.py`, `scripts/verify_comparison.py` and
+`scripts/make_reference.py` still work on a machine without `pha`; in an archive
+with the current tool, `pha bench verify` and `pha bench reference` supersede
+them.
 
 ## License
 
-MIT
+MIT — see [`LICENSE`](LICENSE).
 '''
 
 _SKILL_PALEOGRAPHERS_COMPARE_LICENSE = r'''MIT License
