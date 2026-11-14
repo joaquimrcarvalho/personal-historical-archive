@@ -581,6 +581,10 @@ class Config:
     models_dir: Path
     # stage filters (<archive>/filters/<id>/); archive-level only (DEC-3)
     filters_dir: Path
+    # benchmark corpora (<archive>/benchmarks/ by default): the `pha bench`
+    # command group's data root. Kept in the archive because a corpus is
+    # evidence produced from this archive's documents (BENCHMARK_TOOL_PLAN.md).
+    bench_root: Path
     db_path: Path
     # model interface registry (models/<id>.md); stage rules files carry no
     # model — the model is chosen per document in pha.yaml (or this default).
@@ -810,6 +814,7 @@ class Config:
             encoders_dir=enc_dir,
             models_dir=models_dir,
             filters_dir=filters_dir,
+            bench_root=_p(archive_dir, (raw.get("bench") or {}).get("root", "benchmarks")),
             db_path=_p(archive_dir, paths.get("db", "archive.db")),
             models=models,
             default_model=str(vis.get("model", "default")).strip() or "default",

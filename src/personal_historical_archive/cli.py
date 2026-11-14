@@ -4171,6 +4171,15 @@ def cmd_mcp(cfg: Config, args) -> None:
     mcp_server.main(args.transport, args.host, args.port)
 
 
+def cmd_bench(cfg: Config, args) -> None:
+    """`pha bench` — benchmark corpora (readings, comparison, reference, verify)."""
+    from . import bench
+
+    rc = bench.run_command(cfg, args)
+    if rc:
+        sys.exit(rc)
+
+
 def cmd_serve(cfg: Config, args) -> None:
     """`pha serve` — a read-only viewer with stable page URLs.
 
@@ -5420,6 +5429,79 @@ def main(argv: list[str] | None = None) -> None:
     tt.add_argument("--dry-run", action="store_true",
                     help="with --clean: report what would be removed without deleting")
     tt.set_defaults(fn=cmd_test)
+
+    bn = sub.add_parser(
+        "bench",
+        help="benchmark corpora: readings, comparison, reference, verification")
+    bnsub = bn.add_subparsers(dest="bench_cmd", required=True)
+
+    binit = bnsub.add_parser("init", help="write bench.yaml for a corpus (infers readers/models)")
+    binit.add_argument("path", help="corpus folder (the one holding the reader folders)")
+    binit.add_argument("--title", default=None, help="corpus title (default: folder name)")
+    binit.add_argument("--palaeographer", default=None,
+                       help="transcription rules id shared by the readings")
+    binit.add_argument("--force", action="store_true", help="rewrite an existing bench.yaml")
+    binit.add_argument("--all-readers", action="store_true",
+                       help="include reader folders the comparison does not cover")
+    binit.set_defaults(fn=cmd_bench)
+
+    blist = bnsub.add_parser("list", help="list configured corpora under the bench root")
+    blist.add_argument("--root", default=None, help="override bench.root")
+    blist.add_argument("--json", action="store_true", help="structured output for agents")
+    blist.set_defaults(fn=cmd_bench)
+
+    bstat = bnsub.add_parser(
+        "status", help="coverage of a corpus: readings, comparison, gold, stale")
+    bstat.add_argument("corpus", help="corpus path, or a path suffix under the bench root")
+    bstat.add_argument("--all", action="store_true", help="print every page")
+    bstat.add_argument("--pages", action="store_true", help="print every page (same as --all)")
+    bstat.add_argument("--json", action="store_true", help="structured output for agents")
+    bstat.set_defaults(fn=cmd_bench)
+
+    bver = bnsub.add_parser("verify", help="verify comparison + gold skeletons")
+    bver.add_argument("corpus")
+    bver.add_argument("--readings", type=int, default=None,
+                      help="expected number of readings per entry (default: the corpus's readers)")
+    bver.add_argument("--require-images", action="store_true",
+                      help="fail when the corpus images/ folder or a page image is missing")
+    bver.add_argument("--no-gold", action="store_true", help="skip the gold pages")
+    bver.set_defaults(fn=cmd_bench)
+
+    bcmp = bnsub.add_parser("compare", help="build comparison/ from the readings")
+    bcmp.add_argument("corpus")
+    bcmp.add_argument("--profile", choices=["auto", "tabular", "lines"], default="auto",
+                      help="tabular rows, positional lines, or auto (default)")
+    bcmp.add_argument("--readings", type=int, default=None)
+    bcmp.add_argument("--dry-run", action="store_true", help="print what would be written")
+    bcmp.set_defaults(fn=cmd_bench)
+
+    bref = bnsub.add_parser("reference", help="build reference/ (slashed merge) from comparison/")
+    bref.add_argument("corpus")
+    bref.add_argument("--readings", type=int, default=None,
+                      help="expected readings per entry; refuses to write on MORE")
+    bref.add_argument("--divergent", action="append", default=[], metavar="PAGE",
+                      help="keep this page unconsolidated (repeatable)")
+    bref.add_argument("--dry-run", action="store_true")
+    bref.set_defaults(fn=cmd_bench)
+
+    brun = bnsub.add_parser(
+        "run", help="produce readings with `pha test` (never writes to the archive)")
+    brun.add_argument("corpus")
+    brun.add_argument("--pages", default=None,
+                      help="comma/space-separated page ids (default: every page in the corpus)")
+    brun.add_argument("--readers", default="all",
+                      help="all | comma-separated reader dirs")
+    brun.add_argument("--force", action="store_true", help="re-read pages that already have a reading")
+    brun.add_argument("--dry-run", action="store_true", help="print the plan; run no model")
+    brun.add_argument("--max-tokens", type=int, default=32768,
+                      help="max_tokens for every reader (reasoning models need room; default 32768)")
+    brun.set_defaults(fn=cmd_bench)
+
+    bpage = bnsub.add_parser("page", help="print one page's readings, comparison and gold")
+    bpage.add_argument("corpus")
+    bpage.add_argument("page")
+    bpage.add_argument("--json", action="store_true")
+    bpage.set_defaults(fn=cmd_bench)
 
     k = sub.add_parser("key", help="manage API keys (OS secret store or .env)")
     k.add_argument("--set", metavar="NAME", help="store a value for NAME (read from stdin)")
