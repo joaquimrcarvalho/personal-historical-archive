@@ -626,6 +626,12 @@ bench` command group is the engine. Concretely:
   **page workbench** — image beside the stacked readings, one textarea per
   `[n]` entry pre-filled from the gold, the reference, or the on-the-fly merge,
   a "use" button per reading, `⌘S` to save, and a reviewer field.
+- **Review aids**: corpus-level `gold.editing_rules` (bench.yaml) are written
+  into every saved gold and shown in the workbench; a `pending` page is labelled
+  as such and starts from `reference/` instead of from the unreviewed copy; and
+  each entry is flagged for the image when the readings share no majority on the
+  names, disagree on a number, or contain an illegible `[?]`/`[illegible]` mark
+  (orthographic noise does not flag).
 - **Save contract implemented**: form token, `base` hash guard (a file changed
   on disk is never overwritten), contiguous non-empty entries, a required
   reviewer, the structural verifier run on the exact bytes before an atomic

@@ -307,3 +307,55 @@ def test_http_roundtrip(cfg):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_pending_page_starts_from_reference_and_says_so(cfg):
+    corpus = make_corpus(cfg)
+    corpus.editing_rules = ["u -> v"]
+    gold = corpus.gold_path("001")
+    gold.parent.mkdir(parents=True, exist_ok=True)
+    gold.write_text("---\npage: '001'\nstatus: pending\nreadings_hash: ''\n---\n\n"
+                    "## Reference text\n\n```\n[1] OLD COPY\n[2] OLD\n```\n",
+                    encoding="utf-8")
+    ref = corpus.reference_path("001")
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    ref.write_text("---\npage: '001'\nstatus: machine-merged\n---\n\n"
+                   "## Reference text (variants in slashes)\n\n```\n"
+                   "[1] REF ONE\n[2] REF TWO\n```\n", encoding="utf-8")
+    wb = benchui.Workbench(cfg)
+    data = wb.page_data(corpus, "001")
+    assert data["pending_copy"] is True and data["is_gold"] is False
+    assert [r["text"] for r in data["rows"]] == ["REF ONE", "REF TWO"]
+    assert {r["source"] for r in data["rows"]} == {"reference"}
+    page = benchui.render_page(wb, corpus, "001").decode()
+    assert "pending copy" in page
+
+    fields, _ = rows_fields(wb, corpus)
+    benchui.save_gold(wb, corpus, "001", fields, wb.token)
+    meta, _ = bench.split_front_matter(corpus.gold_path("001").read_text())
+    assert meta["status"] == bench.STATUS_GOLD
+    assert meta["editing_rules"] == ["u -> v"]
+
+
+def test_flagged_entries_and_their_count(cfg):
+    corpus = make_corpus(cfg)
+    corpus.comparison_path("001").write_text(
+        "# 001 — Comparative readings (1. Model A · 2. Model B)\n\n"
+        "Context: flags.\n\n## Entry-by-entry comparison\n\n```\n"
+        "[1] 1. P. Juan Correa, Ministro 1568\n"
+        "    2. P. Juan Correa, Ministro 1569\n\n"
+        "[2] 1. P. Manuel Rodrigues\n"
+        "    2. P. Manuel Rodriguez\n\n"
+        "[3] 1. P. Luis [?]\n"
+        "    2. P. Luis\n"
+        "```\n\n## Key differences on this page\n\n- flags\n", encoding="utf-8")
+    wb = benchui.Workbench(cfg)
+    data = wb.page_data(corpus, "001")
+    flags = [r["flags"] for r in data["rows"]]
+    assert flags == [["number"], ["name"], ["illegible"]]
+    assert data["flagged"] == 3
+    page = benchui.render_page(wb, corpus, "001").decode()
+    assert "check image: number" in page
+    assert "check image: name" in page
+    assert "check image: illegible" in page
+    assert "3 of 3 entries are flagged" in page

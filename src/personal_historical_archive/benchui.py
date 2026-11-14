@@ -79,6 +79,8 @@ BENCH_CSS = """\
 .savebar input[type=text]{padding:.25rem .4rem}
 .ok{background:#e8f5e9;border:1px solid #a5d6a7;padding:.4rem .6rem;border-radius:4px}
 .err{background:#fdecea;border:1px solid #f5c6c2;padding:.4rem .6rem;border-radius:4px}
+.warnbox{background:#fff4e5;border:1px solid #ffcc80;padding:.4rem .6rem;border-radius:4px}
+.entry .badge2.warn{margin-left:.3rem}
 .verify pre{white-space:pre-wrap;font-size:12px}
 .kbd{font-family:ui-monospace,Menlo,monospace;font-size:11px;background:#eee;padding:0 .25rem;border-radius:3px}
 @media (max-width:850px){.workbench{grid-template-columns:1fr}.workbench .media{position:static}}
@@ -217,7 +219,10 @@ class Workbench:
         gold_text = gold_path.read_text(encoding="utf-8") if gold_path.is_file() else ""
         ref_path = corpus.reference_path(page)
         ref_text = ref_path.read_text(encoding="utf-8") if ref_path.is_file() else ""
-        gold_entries = bench.entry_texts(gold_text) if gold_text else {}
+        meta = corpus.gold_meta(page)
+        is_gold = str(meta.get("status") or "") == bench.STATUS_GOLD
+        pending_copy = bool(meta) and not is_gold
+        gold_entries = bench.entry_texts(gold_text) if (gold_text and is_gold) else {}
         ref_entries = bench.entry_texts(ref_text) if ref_text else {}
         rows = []
         seen: set[int] = set()
@@ -236,10 +241,11 @@ class Workbench:
                 text = bench.merge_readings(e.readings) if e.kind == "diff" else e.text
                 source = "merge"
             rows.append({"num": e.num, "readings": readings, "text": text,
-                         "source": source})
+                         "source": source,
+                         "flags": bench.entry_flags([t for _, t in readings])})
         for num in sorted(set(gold_entries) - seen):
             rows.append({"num": num, "readings": [], "text": gold_entries[num],
-                         "source": "gold"})
+                         "source": "gold", "flags": []})
         return {
             "entries": entries,
             "rows": rows,
@@ -248,7 +254,11 @@ class Workbench:
             "ref_text": ref_text,
             "comp_text": comp_text,
             "base_sha": _sha256(gold_path.read_bytes()) if gold_path.is_file() else "",
-            "meta": corpus.gold_meta(page),
+            "meta": meta,
+            "is_gold": is_gold,
+            "pending_copy": pending_copy,
+            "flagged": sum(1 for r in rows if r["flags"]),
+            "editing_rules": corpus.editing_rules,
             "status": bench.page_status(corpus, page),
             "readers": [r.dir for r in corpus.readers],
         }
@@ -453,11 +463,20 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
     entries_html = []
     nums = []
     reading_data = {}
+    rules_html = ""
+    if data["editing_rules"]:
+        rules_html = ("<details><summary>editing rules</summary><ul>"
+                      + "".join(f"<li>{esc(r)}</li>" for r in data["editing_rules"])
+                      + "</ul></details>")
     for row in data["rows"]:
         nums.append(row["num"])
         for k, text in row["readings"]:
             reading_data[f'{row["num"]}:{k}'] = text
         badge = f'<span class="badge2">{esc(row["source"])}</span>' if row["source"] else ""
+        flags = row["flags"]
+        if flags:
+            badge += ('<span class="badge2 warn">check image: '
+                      + esc(", ".join(flags)) + "</span>")
         entries_html.append(
             f'<div class="entry"><h4>[{row["num"]}] {badge}</h4>'
             f'<div class="readings">{_readings_html(row)}</div>'
@@ -472,6 +491,13 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
             f'{" · " + _link("/page", c=rel, p=next_p) + " ›" if next_p else ""}'
             "</p>"
             f'<h1>{esc(page)} {_badges(status)}</h1>'
+            + ('<p class="warnbox">This page has a <strong>pending copy</strong> of an '
+               'older reference — it is not gold. Editing starts from '
+               '<code>reference/</code>; saving replaces the copy with the reviewed '
+               'gold.</p>' if data["pending_copy"] else "")
+            + f'<p class="muted">{data["flagged"]} of {len(data["rows"])} entries are '
+              'flagged for the image: a name with no majority, a differing number, or an illegible mark.</p>'
+            + rules_html
             + (f'<p class="ok">Saved. The gold page is written and verified.</p>'
                if saved else "")
             + (f'<p class="err">{esc(error)}</p>' if error else "")
@@ -605,8 +631,9 @@ def save_gold(wb: Workbench, corpus: bench.Corpus, page: str,
         "readings_hash": corpus.readings_hash(page),
         "source": str(corpus.root.relative_to(wb.root)),
     }
-    if existing_meta.get("editing_rules"):
-        meta["editing_rules"] = existing_meta["editing_rules"]
+    rules = corpus.editing_rules or existing_meta.get("editing_rules") or []
+    if rules:
+        meta["editing_rules"] = list(rules)
     # structural checks run on the exact bytes that would be written
     problem = bench.verify_gold_text(
         "---\n" + _yaml(meta) + "---\n\n" + content,

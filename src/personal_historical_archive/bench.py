@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+from collections import Counter
 import json
 import os
 import re
@@ -120,6 +121,7 @@ class Corpus:
     document_pages: dict[int, str] = field(default_factory=dict)  # pha page -> page id
     images_mode: str = "render"
     gold_reviewer: str = ""
+    editing_rules: list[str] = field(default_factory=list)
     notes: str = ""
     rights: str = ""
     configured: bool = False
@@ -443,6 +445,9 @@ def load_corpus(root: Path) -> Corpus:
         readers = infer_readers(root) if root.is_dir() else []
     images = raw.get("images") or {}
     gold = raw.get("gold") or {}
+    rules = gold.get("editing_rules") or raw.get("editing_rules") or []
+    if isinstance(rules, str):
+        rules = [rules]
     return Corpus(
         root=root,
         title=str(raw.get("title") or root.name),
@@ -452,6 +457,7 @@ def load_corpus(root: Path) -> Corpus:
         document_pages=pages,
         images_mode=str(images.get("mode") or "render"),
         gold_reviewer=str(gold.get("reviewer") or ""),
+        editing_rules=[str(x) for x in rules],
         notes=str(raw.get("notes") or ""),
         rights=str(raw.get("rights") or ""),
         configured=configured,
@@ -582,7 +588,8 @@ def init_corpus(root: Path, title: str | None = None,
             {"dir": r.dir, "label": r.label, "model": r.model, "access": r.access}
             for r in readers
         ],
-        "gold": {"reviewer": corpus.gold_reviewer},
+        "gold": {"reviewer": corpus.gold_reviewer,
+                 "editing_rules": corpus.editing_rules},
     }
     yml.write_text(
         "# Benchmark corpus (pha bench). Reader order is the 1..N numbering used in\n"
@@ -607,7 +614,8 @@ def save_corpus_yaml(corpus: Corpus) -> None:
             {"dir": r.dir, "label": r.label, "model": r.model, "access": r.access}
             for r in corpus.readers
         ],
-        "gold": {"reviewer": corpus.gold_reviewer},
+        "gold": {"reviewer": corpus.gold_reviewer,
+                 "editing_rules": corpus.editing_rules},
     }
     (corpus.root / "bench.yaml").write_text(
         yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
@@ -1609,6 +1617,55 @@ def name_tokens(text: str) -> list[str]:
 
 def _page_text_from_entries(entries: dict[int, str]) -> str:
     return "\n".join(entries[n] for n in sorted(entries))
+
+
+ILLEGIBLE_RE = re.compile(r"\[\?\]|\[illegible\]", re.I)
+
+
+def _flag_form(text: str) -> str:
+    """The looser form used only to decide what needs the page image.
+
+    ``norm_modern`` plus i/j folded (the same period orthography problem as
+    u/v), so "Iuan"/"Juan" is orthographic noise rather than an image question.
+    Scoring keeps the stricter profile.
+    """
+    return norm_modern(text).replace("j", "i")
+
+
+def _has_majority(sets: list[frozenset]) -> bool:
+    if not sets:
+        return True
+    return Counter(sets).most_common(1)[0][1] >= 2
+
+
+def entry_flags(readings: list[str]) -> list[str]:
+    """Why an entry deserves the page image: a disputed name, a differing
+    number, or an illegible mark.
+
+    - **number**: any disagreement — a year or an age is never skimmable.
+    - **name**: no two readings agree on the name tokens (a majority is not
+      flagged; i/j and u/v variants count as agreement).
+    - **illegible**: any ``[?]`` / ``[illegible]`` mark.
+    Orthographic noise in lower-case words never flags.
+    """
+    texts = [r for r in readings if r]
+    if len(texts) < 2:
+        return []
+    flags: list[str] = []
+    if any(ILLEGIBLE_RE.search(t) for t in texts):
+        flags.append("illegible")
+    folded = [_flag_form(t) for t in texts]
+    digits = [frozenset(re.findall(r"\d+", t)) for t in folded]
+    if any(d != digits[0] for d in digits[1:]):
+        flags.append("number")
+    # presence of each candidate name in each reading's token stream, so a
+    # capitalisation-only difference is agreement
+    tokens = [set(t.split()) for t in folded]
+    candidates = set().union(*[{_flag_form(x) for x in name_tokens(t)} for t in texts])
+    name_sets = [frozenset(candidates & tok) for tok in tokens]
+    if not _has_majority(name_sets):
+        flags.append("name")
+    return flags
 
 
 def entry_texts(text: str) -> dict[int, str]:

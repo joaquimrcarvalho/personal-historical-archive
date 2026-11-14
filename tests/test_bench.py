@@ -474,3 +474,14 @@ def test_cli_bench_page_json(cfg, monkeypatch, capsys):
     assert out["page"] == "001"
     assert out["readings"][0]["text"] == "one"
     assert out["readings_hash"].startswith("sha256:")
+
+
+def test_entry_flags():
+    assert bench.entry_flags(["a", "a"]) == []
+    assert bench.entry_flags(["only one"]) == []
+    assert bench.entry_flags(["P. Juan 1568", "P. Juan 1569"]) == ["number"]
+    assert bench.entry_flags(["P. Juan Correa", "P. Juan Correa"]) == []
+    assert bench.entry_flags(["P. Juan Correa", "P. Juan Rodriguez"]) == ["name"]
+    assert bench.entry_flags(["P. Luis [?]", "P. Luis"]) == ["illegible"]
+    # lower-case orthographic noise is not an image question
+    assert bench.entry_flags(["Gonçalo del rego", "Goncalo del Rego"]) == []
