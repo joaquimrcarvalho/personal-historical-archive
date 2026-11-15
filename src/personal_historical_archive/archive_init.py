@@ -173,6 +173,30 @@ A document is a dropbox-relative subpath: `collections/COLX`, `documents/`
 (individual files), or a directory-of-images document (`documents/ms123`).
 `pha scan`/`pha edit`/`pha test` share the single-model lock — run one at a time.
 
+## Benchmark corpora (`pha bench`)
+
+The archive may hold **benchmark corpora** under `benchmarks/`: several model or
+prompt readings of the same pages, with a human-corrected gold. They are not
+part of the search index; they measure which reader is most accurate.
+
+- `pha bench list` shows them; `pha bench status <corpus>` shows coverage
+  (readings, comparison, gold, stale).
+- `pha bench serve` opens the local workbench (`http://127.0.0.1:8766/`): the
+  page image beside the readings, with a gold editor. Only the **reviewer**
+  saves gold; an agent never edits `human/`.
+- `pha bench run` produces readings (a `pha test` scratch run; no archive
+  writes, the model lock applies, the editor is off).
+- `pha bench compare` builds the aligned `comparison/` (a mechanical draft);
+  `pha bench verify` checks it; `pha bench reference` writes the slashed merge.
+- `pha bench score` scores only `human-corrected`, non-stale pages;
+  `pha bench export` writes a self-contained static site.
+- Adding a reader later (`pha bench add-reader`) makes every gold page stale:
+  re-open and save it before scoring.
+
+The rules — what an agent may edit (`comparison/`), what is generated
+(`reference/`), what is human-only (`human/`), and the `.review/` tick state —
+are in `skills/palaeographers-compare/SKILL.md`.
+
 ## Working on a handed-out document (`pha handoff`)
 
 A document may have been lent to this machine from another archive because this
@@ -245,11 +269,10 @@ one before the task, no pha source checkout needed:
   bibliographic sidecar, or build/refresh one document's reference from the
   owner's Zotero library (local-API MODS, an RDF export,
   `pha bib <doc> --to-json --write`).
-- `skills/palaeographers-compare/SKILL.md` — compare two or more palaeographers'
-  (or transcription models') readings of the same pages into a uniform
-  comparative edition (per-page files with the readings stacked,
-  `overview.md`), with bundled `scripts/` to normalise, verify and build the
-  `reference/` variant.
+- `skills/palaeographers-compare/SKILL.md` — build or extend a **benchmark
+  corpus**: compare two or more palaeographers'/models' readings of the same
+  pages, review the gold in `pha bench serve`, score it and export the site;
+  bundled `scripts/` normalise, verify and build the `reference/` variant.
 - `skills/obsidian-vault/SKILL.md` — search, create and organise notes in the
   owner's Obsidian vault and keep archive-derived notes in sync (YAML
   provenance and `scripts/archive_note_sync.py`; `OBSIDIAN_VAULT` /
@@ -399,6 +422,24 @@ root.
 - `skills/` — **pha-specific agent skills**: read the matching
   `skills/<name>/SKILL.md` before doing that task (see `skills/README.md`).
 - `renders/`, `archive.db` — generated cache and index (do not edit).
+
+## Benchmark corpora (`pha bench`)
+
+If the archive has a `benchmarks/` folder, those are **measurement corpora**:
+several model or prompt readings of the same pages plus a human-corrected gold.
+They are not part of the search index, and the rules differ from the library:
+
+- `comparison/` is an aligned edition an agent **may** edit; `reference/` is
+  generated; `human/` is the human gold and an agent **never** edits it. The
+  gold records `status` and `readings_hash`; a changed reading makes it stale,
+  and stale pages are excluded from scoring.
+- `pha bench run` produces readings (a `pha test` scratch run: no archive
+  writes, the model lock applies, the editor is off).
+- `pha bench serve` is the reviewer's local workbench
+  (`http://127.0.0.1:8766/`); only the reviewer saves gold. `.review/` holds
+  their per-entry ticks, not validation.
+- `pha bench score` and `pha bench export` are explicit commands; the workflow
+  is in `skills/palaeographers-compare/SKILL.md`.
 
 ## Read the bundled skills in `skills/` FIRST
 

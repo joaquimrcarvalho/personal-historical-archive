@@ -16,6 +16,7 @@ them*.
 | commands, configuration, quickstart | `README.md` |
 | explaining pha to the archive owner | `PIPELINE.md` |
 | a release or version bump | `RELEASING.md` |
+| running a benchmark, reviewing its gold, scoring or exporting a corpus | `BENCHMARK_TOOL_PLAN.md` (design) and `pha bench --help` |
 | filters / bibliography / web UI designs | `FILTERS_PLAN.md`, `BIBLIOGRAPHY_PLAN.md`, `WEB_INTERFACE_PLAN.md` |
 | proving which LM Studio model is local vs remote, or that a moved model store still works | `OPERATING.md` §4 (checkout tool `scripts/lmstudio_smoke.py`) |
 
@@ -74,6 +75,11 @@ embeddings, raw and edited variants both indexed) → hybrid search + FastMCP
 The project dir holds only code, `prompts/`, `schema/` and the `_sample.md`
 templates.
 
+**`pha bench`** extends this to **benchmark corpora**: several model/prompt
+readings of the same pages, aligned entry by entry, reviewed into a human gold,
+scored and exported as a static site. Design: `BENCHMARK_TOOL_PLAN.md`; data:
+`<archive>/benchmarks/`.
+
 Resolving which archive is in use, and the precedence of environment / legacy
 `.env` / project `config.yaml` / per-user settings / default, is documented in
 `ARCHITECTURE.md` §1. `pha info` reports the source that won and a
@@ -106,6 +112,37 @@ is the safe discovery probe.
 6. **Palaeographer prompts are transcription-only.** They reproduce the page
    faithfully and must not expand abbreviations, modernize, translate or
    normalise names; that belongs in the editor prompt. `ARCHITECTURE.md` §3.
+
+## Benchmark corpora (`pha bench`)
+
+A benchmark corpus holds several readings of the same pages — different models,
+different prompts, or both — plus a human-corrected gold. Corpora live under
+`<archive>/benchmarks/`; `bench.yaml` declares the reader order, which is the
+`1..N` numbering of every comparison and reference file. Design and status:
+`BENCHMARK_TOOL_PLAN.md`.
+
+- **Readings** are produced by `pha bench run` — a `pha test` scratch run: no
+  archive writes, the model-server lock applies, the editor is off, and every
+  reader must name its model. Existing corpora may already have readings;
+  `pha bench status <corpus>` is the safe first look.
+- **`comparison/` is the aligned edition and agents may edit it.**
+  **`reference/` is generated** (regenerate it, never hand-edit). **`human/` is
+  the human gold and an agent never edits it** — not to correct, reformat or
+  regenerate. Gold is per page (`status`, `reviewed_by`, `readings_hash`); a
+  changed reading makes the page **stale**, and stale pages are excluded from
+  scoring.
+- **`.review/<page>.json` is the reviewer's tick state**, not gold: read it, do
+  not treat it as validation.
+- **Scoring** (`pha bench score`) uses only `human-corrected`, non-stale pages;
+  `n_pages`, partial coverage and the token-level names metric are stated in
+  the artefact. `pha bench export` writes a self-contained static site and
+  publishes nothing by itself.
+- **Adding a reader changes the reading set, so every gold page becomes stale.**
+  `pha bench add-reader` inserts the new column into row-numbered comparisons;
+  hand-aligned pages are skipped unless `--force-lines`, whose line mapping must
+  be checked entry by entry.
+- The reviewer works in `pha bench serve` (loopback, image beside the readings);
+  it writes only `comparison/`, `reference/`, `human/` and `.review/`.
 
 ## Stage configuration, in one screen
 
