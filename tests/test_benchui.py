@@ -543,3 +543,57 @@ def test_http_save_draft_keeps_ticks_message(cfg):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_review_sidecar_roundtrip_and_stale_hash(cfg):
+    corpus = make_corpus(cfg)
+    benchui.write_review(corpus, "001", [2, 1, 2])
+    assert benchui.read_review(corpus, "001") == [1, 2]
+    path = benchui.review_path(corpus, "001")
+    data = json.loads(path.read_text())
+    assert data["readings_hash"] == corpus.readings_hash("001")
+    assert data["reviewed"] == [1, 2]
+
+    data["readings_hash"] = "sha256:old"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert benchui.read_review(corpus, "001") == []
+
+
+def test_http_review_endpoint_and_page_embedding(cfg):
+    corpus = make_corpus(cfg)
+    server = benchui.make_server(cfg, port=0, quiet=True)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        wb = server.wb
+        rel = str(corpus.root.relative_to(cfg.bench_root))
+        payload = urllib.parse.urlencode({
+            "c": rel, "p": "001", "token": wb.token,
+            "reviewed": json.dumps([2, 1])}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/review", data=payload, method="POST")
+        assert urllib.request.urlopen(req).read() == b'{"ok":true}'
+        assert benchui.read_review(corpus, "001") == [1, 2]
+        page = urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/page?" + urllib.parse.urlencode(
+                {"c": rel, "p": "001"})).read()
+        assert b'data-reviewed="1,2"' in page
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_save_gold_clears_sidecar_but_draft_keeps_it(cfg):
+    corpus = make_corpus(cfg)
+    wb = benchui.Workbench(cfg)
+    benchui.write_review(corpus, "001", [1])
+    fields, _ = rows_fields(wb, corpus)
+    benchui.save_gold(wb, corpus, "001", fields, wb.token,
+                      status=bench.STATUS_DRAFT)
+    assert benchui.review_path(corpus, "001").is_file()
+
+    benchui.write_review(corpus, "001", [1, 2])
+    fields, _ = rows_fields(wb, corpus)
+    benchui.save_gold(wb, corpus, "001", fields, wb.token)
+    assert not benchui.review_path(corpus, "001").exists()

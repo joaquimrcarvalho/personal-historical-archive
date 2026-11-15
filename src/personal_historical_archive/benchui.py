@@ -160,6 +160,67 @@ def _rel(wb: "Workbench", corpus: bench.Corpus) -> str:
     return str(corpus.root.relative_to(wb.root))
 
 
+REVIEW_DIR = ".review"
+
+
+def review_path(corpus: bench.Corpus, page: str) -> Path:
+    """The sidecar that records which entries were ticked as reviewed."""
+    return corpus.root / REVIEW_DIR / f"{page}.json"
+
+
+def read_review(corpus: bench.Corpus, page: str) -> list[int]:
+    """Stored ticks, valid only for the current readings.
+
+    A sidecar whose readings_hash no longer matches is ignored: a re-read may
+    have changed the entries, so old ticks are not trustworthy.
+    """
+    path = review_path(corpus, page)
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    if str(data.get("readings_hash") or "") != corpus.readings_hash(page):
+        return []
+    out: set[int] = set()
+    for item in data.get("reviewed") or []:
+        try:
+            n = int(item)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            out.add(n)
+    return sorted(out)
+
+
+def write_review(corpus: bench.Corpus, page: str, reviewed: list[int]) -> Path:
+    path = review_path(corpus, page)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    nums = sorted({int(n) for n in reviewed if int(n) > 0})
+    data = {
+        "page": page,
+        "readings_hash": corpus.readings_hash(page),
+        "reviewed": nums,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "updated_by": corpus.gold_reviewer or "",
+    }
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                   encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+
+def clear_review(corpus: bench.Corpus, page: str) -> None:
+    try:
+        review_path(corpus, page).unlink()
+    except FileNotFoundError:
+        pass
+
+
 def _link(path: str, **params) -> str:
     q = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
     return f"{path}?{q}" if q else path
@@ -484,7 +545,7 @@ def _readings_html(row: dict) -> str:
 
 def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
                 error: str = "", saved: bool = False,
-                saved_status: str = "") -> bytes:
+                saved_status: str = "", reviewed: list[int] | None = None) -> bytes:
     data = wb.page_data(corpus, page)
     rel = _rel(wb, corpus)
     ids = corpus.page_ids()
@@ -596,7 +657,9 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
             + '<div class="editpane">'
             + f'<form method="post" action="/save" id="saveform" autocomplete="off" '
               f'data-review-key="{esc(f"{rel}|{page}|{corpus.readings_hash(page)}")}" '
-              f'data-saved="{esc(saved_status)}">'
+              f'data-saved="{esc(saved_status)}" data-corpus="{esc(rel)}" '
+              f'data-page="{esc(page)}" '
+              f'data-reviewed="{",".join(str(n) for n in (reviewed or []))}">'
               f'<input type="hidden" name="token" value="{wb.token}">'
               f'<input type="hidden" name="c" value="{esc(rel)}">'
               f'<input type="hidden" name="p" value="{esc(page)}">'
@@ -654,23 +717,36 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
             "const form=document.getElementById('saveform');"
             "const KEY='pha-bench-review:'+(form?form.dataset.reviewKey:'');"
             "const saved=form?form.dataset.saved:'';"
+            "const token=form?form.querySelector('input[name=token]').value:'';"
+            "const corpus=form?form.dataset.corpus:'';"
+            "const page=form?form.dataset.page:'';"
+            "const ticks=(form&&form.dataset.reviewed)||'';"
+            "const serverTicks=new Set(ticks?ticks.split(',').map(Number):[]);"
             "const upd=()=>{if(out)out.textContent=boxes.filter(b=>b.checked).length"
             "+' / '+boxes.length;};"
             "const read=()=>{try{return new Set((JSON.parse(localStorage.getItem(KEY)"
             "||'[]')||[]).map(Number));}catch(e){return new Set();}};"
+            "let timer=null;"
+            "const push=()=>{if(!form||!token)return;const body=new URLSearchParams({"
+            "token:token,c:corpus,p:page,reviewed:JSON.stringify("
+            "boxes.filter(b=>b.checked).map(b=>Number(b.dataset.done)))});"
+            "fetch('/review',{method:'POST',body:body,keepalive:true}).catch(()=>{});};"
+            "const pushSoon=()=>{clearTimeout(timer);timer=setTimeout(push,250);};"
             "const write=()=>{try{localStorage.setItem(KEY,JSON.stringify("
-            "boxes.filter(b=>b.checked).map(b=>Number(b.dataset.done))));}catch(e){}};"
+            "boxes.filter(b=>b.checked).map(b=>Number(b.dataset.done))));}catch(e){}"
+            "pushSoon();};"
             "const apply=marks=>{boxes.forEach(b=>{const on=marks.has(Number(b.dataset.done));"
             "b.checked=on;b.closest('.entry').classList.toggle('done',on);});upd();};"
-            "let marks=read();"
+            "let marks=serverTicks.size?serverTicks:read();"
             "if(saved==='human-corrected'){try{localStorage.removeItem(KEY);}catch(e){}"
             "marks=new Set();}"
             "apply(marks);"
             "let ready=false;"
-            "const refresh=()=>{ready=true;apply(read());};"
+            "const refresh=()=>{ready=true;const m=serverTicks.size?serverTicks:read();"
+            "apply(m);if(!serverTicks.size&&m.size)push();};"
             "setTimeout(refresh,250);"
-            "window.addEventListener('load',()=>apply(read()));"
-            "window.addEventListener('pageshow',()=>apply(read()));"
+            "window.addEventListener('load',()=>{if(!ready)refresh();});"
+            "window.addEventListener('pageshow',()=>{if(!ready)refresh();else apply(read());});"
             "boxes.forEach(b=>{"
             "const ta=document.querySelector('textarea[name=\"e'+b.dataset.done+'\"]');"
             "if(ta)ta.addEventListener('input',()=>{if(!ready){apply(read());return;}"
@@ -807,6 +883,8 @@ def save_gold(wb: Workbench, corpus: bench.Corpus, page: str,
     tmp = gold_path.with_suffix(".md.tmp")
     tmp.write_text("---\n" + _yaml(meta) + "---\n\n" + content, encoding="utf-8")
     os.replace(tmp, gold_path)
+    if status == bench.STATUS_GOLD:
+        clear_review(corpus, page)
     with (corpus.root / "review-log.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps({
             "page": page, "reviewer": reviewer, "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -878,9 +956,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/page":
                 c = self.wb.page(q.get("c", ""), q.get("p", ""))
                 saved_status = q.get("saved", "")
-                self._html(200, render_page(self.wb, c, q.get("p", ""),
-                                            saved=bool(saved_status),
-                                            saved_status=saved_status))
+                self._html(200, render_page(
+                    self.wb, c, q.get("p", ""), saved=bool(saved_status),
+                    saved_status=saved_status,
+                    reviewed=read_review(c, q.get("p", ""))))
             elif path == "/img":
                 self._image(q)
             else:
@@ -921,6 +1000,26 @@ class Handler(BaseHTTPRequestHandler):
                 rel = _rel(self.wb, c)
                 self._redirect(_link("/page", c=rel, p=fields.get("p", ""),
                                      saved=status))
+            elif path == "/review":
+                if not secrets.compare_digest(str(fields.get("token") or ""),
+                                              self.wb.token):
+                    raise SaveError("stale form token", HTTPStatus.CONFLICT)
+                c = self.wb.corpus(fields.get("c", ""))
+                page = fields.get("p", "")
+                if page not in c.page_ids():
+                    raise SaveError(f"no page {page!r} in this corpus",
+                                    HTTPStatus.NOT_FOUND)
+                raw = fields.get("reviewed") or "[]"
+                try:
+                    nums = json.loads(raw)
+                except (TypeError, json.JSONDecodeError):
+                    nums = [x for x in raw.split(",") if x.strip()]
+                try:
+                    write_review(c, page, [int(x) for x in nums])
+                except (TypeError, ValueError):
+                    raise SaveError("bad reviewed list", HTTPStatus.BAD_REQUEST) from None
+                self._send(200, b'{"ok":true}', "application/json")
+
             elif path == "/build":
                 c = self.wb.corpus(fields.get("c", ""))
                 if not secrets.compare_digest(str(fields.get("token") or ""), self.wb.token):
