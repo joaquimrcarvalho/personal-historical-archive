@@ -485,3 +485,38 @@ def test_http_save_gold_accepts_the_form_status(cfg):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_corpus_page_has_a_score_button_and_it_scores(cfg):
+    corpus = make_corpus(cfg)
+    wb = benchui.Workbench(cfg)
+    page = benchui.render_corpus(wb, corpus).decode()
+    assert 'value="score"' in page and "score now" in page
+
+    server = benchui.make_server(cfg, port=0, quiet=True)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        wb = server.wb
+        rel = str(corpus.root.relative_to(cfg.bench_root))
+        payload = urllib.parse.urlencode(
+            {"c": rel, "what": "score", "token": wb.token}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/build", data=payload, method="POST")
+        urllib.request.urlopen(req).read()
+        assert (corpus.root / "scores" / "results.json").is_file()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_each_entry_has_a_review_checkbox(cfg):
+    corpus = make_corpus(cfg)
+    wb = benchui.Workbench(cfg)
+    page = benchui.render_page(wb, corpus, "001").decode()
+    assert 'data-done="1"' in page and 'data-done="2"' in page
+    assert 'id="donecount"' in page
+    assert 'autocomplete="off"' in page
+    assert "pageshow" in page                      # reset on reload/save
+    assert '<input type="checkbox" data-done="1" checked' not in page

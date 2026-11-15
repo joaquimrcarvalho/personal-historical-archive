@@ -99,6 +99,8 @@ button{background:#f7f6f3;color:#1b1b1b;border:1px solid #bbb;border-radius:4px;
 .reading-line button{font-size:11px;padding:.05rem .4rem;cursor:pointer}
 .entry{background:#fff;border:1px solid #ddd;border-radius:6px;padding:.5rem .6rem;margin:.5rem 0}
 .entry h4{margin:.1rem 0 .2rem;font-size:13px;color:#555}
+.entry .donebox{float:right;font-weight:normal;font-size:12px;color:#666;cursor:pointer}
+.entry.done{border-color:#a5d6a7;background:#fbfdf9}
 .entry textarea{width:100%;min-height:2.6rem;font:12.5px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;
   padding:.35rem;border:1px solid #ccc;border-radius:4px;resize:vertical}
 .entry textarea.dirty{border-color:#e0a800;background:#fffdf5}
@@ -409,7 +411,8 @@ def render_corpus(wb: Workbench, corpus: bench.Corpus, verify: bool = False,
             + (f'<p class="ok">{esc(notice)}</p>' if notice else "")
             + f'<p>readers: {esc(", ".join(r.dir for r in corpus.readers)) or "(none)"} · '
               f'pages: {st["pages"]} · compared: {st["compared"]} · '
-              f'gold: {st["gold"]} · stale: {st["stale"]}</p>'
+              f'gold: {st["gold"]} · drafts: {st["drafts"]} · '
+              f'stale: {st["stale"]}</p>'
             f'<div class="savebar" style="position:static;margin:.5rem 0">'
             f'<a class="badge2" href="{_link("/corpus", c=rel, verify=1)}">run verification</a>'
             f'<form method="post" action="/build" style="display:inline">'
@@ -417,9 +420,11 @@ def render_corpus(wb: Workbench, corpus: bench.Corpus, verify: bool = False,
             f'<input type="hidden" name="c" value="{esc(rel)}">'
             f'<button name="what" value="comparison">rebuild comparison</button>'
             f'<button name="what" value="reference">rebuild reference</button>'
+            f'<button name="what" value="score">score now</button>'
             f'</form>'
             f'<span class="muted">Writes <code>comparison/</code> and '
-            f'<code>reference/</code> only, never the gold.</span></div>'
+            f'<code>reference/</code>, and recomputes <code>scores/</code> — '
+            f'never the gold.</span></div>'
             f'<div class="bench-grid">{"".join(cards)}</div>'
             f'{_scores_html(corpus)}'
             f'{verify_html}</main>')
@@ -547,8 +552,10 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
         if flags:
             badge += ('<span class="badge2 warn">check image: '
                       + esc(", ".join(flags)) + "</span>")
+        done = (f'<label class="donebox" title="mark this entry as reviewed">'
+                f'<input type="checkbox" data-done="{row["num"]}"> reviewed</label>')
         entries_html.append(
-            f'<div class="entry"><h4>[{row["num"]}] {badge}</h4>'
+            f'<div class="entry"><h4>[{row["num"]}] {badge}{done}</h4>'
             f'<div class="readings">{_readings_html(row)}</div>'
             f'<textarea name="e{row["num"]}" spellcheck="false">{esc(row["text"])}</textarea>'
             "</div>")
@@ -572,7 +579,9 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
                '<strong>Save gold</strong> when the page is complete.</p>'
                if data["is_draft"] else "")
             + f'<p class="muted">{data["flagged"]} of {len(data["rows"])} entries are '
-              'flagged for the image: a name with no majority, a differing number, or an illegible mark.</p>'
+              'flagged for the image: a name with no majority, a differing number, '
+              f'or an illegible mark. · <strong id="donecount">0 / {len(data["rows"])}'
+              '</strong> reviewed</p>'
             + rules_html
             + (f'<p class="ok">Saved. The gold page is written and verified.</p>'
                if saved else "")
@@ -582,7 +591,7 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
               'aria-label="resize the image and the text" tabindex="0" '
               'title="drag to resize · double-click to reset"></div>'
             + '<div class="editpane">'
-            + f'<form method="post" action="/save" id="saveform">'
+            + f'<form method="post" action="/save" id="saveform" autocomplete="off">'
               f'<input type="hidden" name="token" value="{wb.token}">'
               f'<input type="hidden" name="c" value="{esc(rel)}">'
               f'<input type="hidden" name="p" value="{esc(page)}">'
@@ -633,7 +642,22 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
             "div.addEventListener('keydown',e=>{const cur=parseFloat(wb.style.getPropertyValue('--media-w'))||44;"
             "let p=null;if(e.key==='ArrowLeft')p=clamp(cur-2);if(e.key==='ArrowRight')p=clamp(cur+2);"
             "if(p!==null){e.preventDefault();apply(p);localStorage.setItem(KEY,p.toFixed(1)+'%');}});"
-            "})();</script>")
+            "})();</script>"
+            "<script>(function(){"
+            "const boxes=Array.from(document.querySelectorAll('input[data-done]'));"
+            "const out=document.getElementById('donecount');"
+            "const upd=()=>{if(out)out.textContent=boxes.filter(b=>b.checked).length"
+            "+' / '+boxes.length;};"
+            "const reset=()=>{boxes.forEach(b=>{b.checked=false;"
+            "b.closest('.entry').classList.remove('done');});upd();};"
+            "reset();setTimeout(reset,0);window.addEventListener('pageshow',reset);"
+            "boxes.forEach(b=>{"
+            "const ta=document.querySelector('textarea[name=\"e'+b.dataset.done+'\"]');"
+            "if(ta)ta.addEventListener('input',()=>{"
+            "if(!b.checked){b.checked=true;b.closest('.entry').classList.add('done');upd();}});"
+            "b.addEventListener('change',()=>{"
+            "b.closest('.entry').classList.toggle('done',b.checked);upd();});});"
+            "upd();})();</script>")
     return html_page(f"pha bench — {page}", body,
                      f"<style>{BENCH_CSS}</style>")
 

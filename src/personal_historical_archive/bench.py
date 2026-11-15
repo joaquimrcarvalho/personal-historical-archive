@@ -1760,9 +1760,16 @@ def _reading_texts(corpus: "Corpus", page: str) -> dict[str, str | None]:
     out: dict[str, str | None] = {r.dir: corpus.reading(r, page) for r in corpus.readers}
     ref = corpus.reference_path(page)
     if ref.is_file():
-        body = extract_transcription(ref.read_text(encoding="utf-8"))
-        out["reference"] = (resolve_first_variant(body)
-                            if is_valid_reading(body) else None)
+        text = ref.read_text(encoding="utf-8")
+        body = extract_transcription(text)
+        entries = entry_texts(text)
+        if entries:
+            # entry markers are not part of the reading; join the resolved entries
+            out["reference"] = "\n".join(
+                resolve_first_variant(v) for _, v in sorted(entries.items()))
+        else:
+            out["reference"] = (resolve_first_variant(body)
+                                if is_valid_reading(body) else None)
     return out
 
 
@@ -1802,14 +1809,23 @@ def score_page(corpus: "Corpus", page: str) -> dict:
         # entry-exact: only where the comparison and the gold share the number
         exact = total = 0
         if comp_entries:
-            k = ([r.dir for r in corpus.readers].index(key) + 1
-                 if key in [r.dir for r in corpus.readers] else None)
+            reader_dirs = [r.dir for r in corpus.readers]
+            k = reader_dirs.index(key) + 1 if key in reader_dirs else None
+            ref_entries = {}
+            if key == "reference":
+                ref = corpus.reference_path(page)
+                if ref.is_file():
+                    ref_entries = entry_texts(ref.read_text(encoding="utf-8"))
             for e in comp_entries:
                 gold_entry = gold_entries.get(e.num)
                 if gold_entry is None:
                     continue
                 if e.kind == "all":
                     reading_entry = e.text
+                elif key == "reference":
+                    if e.num not in ref_entries:
+                        continue
+                    reading_entry = resolve_first_variant(ref_entries[e.num])
                 elif k is not None and k - 1 < len(e.readings):
                     reading_entry = e.readings[k - 1]
                 else:

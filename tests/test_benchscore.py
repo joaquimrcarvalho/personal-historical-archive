@@ -275,3 +275,18 @@ def test_export_labels_a_draft_and_never_as_gold(cfg, tmp_path):
     assert res["scores"] is False
     st = bench.corpus_status(corpus)
     assert st["gold"] == 0 and st["drafts"] == 1
+
+
+def test_reference_entry_exact_is_computed_from_its_entries(cfg):
+    corpus = make_corpus(cfg)
+    write_gold(corpus)
+    (corpus.root / "reference").mkdir()
+    (corpus.root / "reference" / "001.md").write_text(
+        "---\npage: '001'\nstatus: machine-merged\n---\n\n"
+        "## Reference text (variants in slashes)\n\n```\n"
+        "[1] P. Manuel Rodrigues, professo.\n"
+        "[2] P. Juan Correa, Ministro/Praepositus\n```\n", encoding="utf-8")
+    row = bench.score_page(corpus, "001")
+    ref = row["readers"]["reference"]
+    assert ref["entry_exact"] == [2, 2]
+    assert ref["cer_diplomatic"] < 0.1
