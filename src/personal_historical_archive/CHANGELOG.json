@@ -354,6 +354,102 @@
           "commit": "3d85a2641a4b"
         }
       ]
+    },
+    "0.50.0": {
+      "date": "2026-11-15",
+      "summary": "Adds pha bench: a benchmark corpus model, the review workbench (image beside the readings, per-entry ticks, draft saving, scoring against the human gold) and a self-contained static export; the palaeographers-compare skill and the pha serve page view gain the same resizable split layout.",
+      "changes": [
+        {
+          "type": "feat",
+          "scope": "serve",
+          "text": "sticky page image and a resizable split in the viewer",
+          "commit": "9e6fb51cd1b5"
+        },
+        {
+          "type": "fix",
+          "scope": "bench-ui",
+          "text": "\"use\" ticks the entry, like typing does",
+          "commit": "d2ff2712972a"
+        },
+        {
+          "type": "feat",
+          "scope": "bench-ui",
+          "text": "review ticks live in a corpus sidecar, not only the browser",
+          "commit": "a8bacb11bb01"
+        },
+        {
+          "type": "feat",
+          "scope": "bench-ui",
+          "text": "keep the reviewed ticks between sessions",
+          "commit": "f1620eb6fde7"
+        },
+        {
+          "type": "feat",
+          "scope": "bench-ui",
+          "text": "a reviewed checkbox per entry, and fix the score button",
+          "commit": "7ce3a85b47de"
+        },
+        {
+          "type": "fix",
+          "scope": "bench-ui",
+          "text": "Save gold sent the word \"gold\", not the status value",
+          "commit": "290bc14f6051"
+        },
+        {
+          "type": "feat",
+          "scope": "bench-ui",
+          "text": "show the editing rules with plain-language explanations",
+          "commit": "3736f0bc2e8c"
+        },
+        {
+          "type": "feat",
+          "scope": "bench-ui",
+          "text": "use the full window width, and warn before demoting gold",
+          "commit": "8a9f40be6843"
+        },
+        {
+          "type": "feat",
+          "scope": "bench-ui",
+          "text": "the image pane fills its width and scrolls on its own",
+          "commit": "7e8da873cd8a"
+        },
+        {
+          "type": "feat",
+          "scope": "bench-ui",
+          "text": "readable panel, resizable split, and Save draft",
+          "commit": "2a412c52ba18"
+        },
+        {
+          "type": "feat",
+          "scope": "bench-ui",
+          "text": "review aids for the gold pass",
+          "commit": "8038f3d2ceaa"
+        },
+        {
+          "type": "docs",
+          "scope": "skill",
+          "text": "palaeographers-compare now teaches the `pha bench` workflow",
+          "commit": "79fd96522a32"
+        },
+        {
+          "type": "feat",
+          "scope": "bench",
+          "text": "scoring against the gold, and the static export",
+          "commit": "14feac65a6f7"
+        },
+        {
+          "type": "feat",
+          "scope": "bench",
+          "text": "the workbench (`pha bench serve`) and the shared viewer shell",
+          "commit": "944da625261a"
+        },
+        {
+          "type": "feat",
+          "scope": "bench",
+          "text": "`pha bench` — corpus model, verify, compare, reference, harvest",
+          "commit": "4c5193a06517"
+        }
+      ]
     }
   }
 }
