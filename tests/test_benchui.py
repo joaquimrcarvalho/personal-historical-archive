@@ -520,6 +520,7 @@ def test_each_entry_has_a_review_checkbox(cfg):
     assert 'autocomplete="off"' in page
     assert "pageshow" in page
     assert "localStorage" in page                  # ticks persist between sessions
+    assert "dispatchEvent(new Event('input'" in page  # "use" ticks the entry
     assert "data-review-key=" in page and "data-saved=" in page
     assert '<input type="checkbox" data-done="1" checked' not in page
 
