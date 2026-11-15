@@ -2130,6 +2130,180 @@ def cmd_verify(cfg: Config, args) -> int:
     return 1 if failed else 0
 
 
+def _reading_entries(text: str, entries: list[Entry]) -> tuple[dict[int, str], str]:
+    """Map a free-form reading onto the comparison's entry numbers.
+
+    Tabular when the reading parses as numbered rows that cover some of the
+    entry numbers; otherwise positionally, one line per entry.
+    """
+    nums = {e.num for e in entries}
+    if looks_tabular(text):
+        _pre, rows = _tabular_rows(text)
+        if rows and len(set(rows) & nums) >= max(1, len(nums) // 2):
+            return {n: rows.get(n, "") for n in nums}, "tabular"
+    lines = _lines_of(text)
+    return {e.num: (lines[e.num - 1] if e.num - 1 < len(lines) else "") for e in entries}, "lines"
+
+
+def _comparison_with_reader(corpus: Corpus, page: str, reader: Reader,
+                            allow_lines: bool = False) -> tuple[str | None, dict]:
+    """Rebuild one comparison file with the new reader as the last column.
+
+    The existing entries are kept verbatim; the new reading is mapped onto them
+    (by row number or line position) and appended as reading ``N+1``. Returns
+    ``(new_text, info)``; ``new_text`` is None when the page cannot take a
+    column (no comparison, no reading, divergent page, or a failed check).
+    """
+    comp = corpus.comparison_path(page)
+    if not comp.is_file():
+        return None, {"reason": "no comparison for this page"}
+    text = comp.read_text(encoding="utf-8")
+    entries = parse_comparison_entries(text)
+    if not entries:
+        return None, {"reason": "comparison has no [n] entries"}
+    if all(e.kind == "diff" and len(e.readings) == 1 for e in entries):
+        return None, {"reason": "page is kept unconsolidated (divergent readings)"}
+    reading = corpus.reading(reader, page)
+    if reading is None:
+        return None, {"reason": "no reading for this page"}
+    mapping, method = _reading_entries(reading, entries)
+    if method == "lines" and not allow_lines:
+        return None, {"reason": "the comparison is not row-numbered; its entries "
+                               "are hand-aligned (pass --force-lines to map by "
+                               "line position, then check every entry)"}
+    k = len(corpus.readers)          # the new reader's 1-based column
+    missing = [n for n, v in mapping.items() if not v.strip()]
+    block: list[str] = []
+    for e in entries:
+        base = [e.text] * (k - 1) if e.kind == "all" else list(e.readings)
+        value = mapping.get(e.num) or "[missing]"
+        texts = base + [value]
+        if all(norm_entry(t) == norm_entry(texts[0]) for t in texts):
+            block.append(f"[{e.num}] = all readings: {texts[0]}")
+        else:
+            lines = [f"[{e.num}] 1. {texts[0]}"]
+            lines += [f"    {i}. {t}" for i, t in enumerate(texts[1:], 2)]
+            block.append("\n".join(lines))
+    m2 = text.index(M2)
+    tail = text[m2 + len(M2):].strip("\n")
+    bullets = [ln for ln in tail.splitlines() if ln.strip()]
+    ctx = re.search(r"^Context: .*$", text, re.M)
+    body = [
+        f"# {page} — Comparative readings ({_reader_title(corpus)})",
+        "",
+        ctx.group(0) if ctx else "Context: (from the comparison)",
+        "",
+        M1,
+        "",
+        "```",
+        "\n\n".join(block),
+        "```",
+        "",
+        M2,
+        "",
+        *(bullets or ["- none: all readings agree on every entry"]),
+    ]
+    new_text = "\n".join(body) + "\n"
+    problems = verify_comparison_text(new_text, readings=k)
+    if problems:
+        return None, {"reason": "the rebuilt page failed its own check: "
+                               + "; ".join(problems)}
+    return new_text, {"method": method, "missing": missing, "entries": len(entries)}
+
+
+def add_reader(corpus: Corpus, cfg: Config, directory: str, model: str,
+               label: str = "", access: str = "", rules: str = "",
+               run: bool = True, dry_run: bool = False,
+               reference: bool = False, allow_lines: bool = False) -> dict:
+    """Append a reader, (optionally) run it, and insert its column.
+
+    Adding a reader changes the corpus's reading set, so every reviewed page
+    becomes stale (its readings_hash covers the set) — that is reported, never
+    papered over. Existing comparison files are extended in place rather than
+    regenerated, which preserves a hand-edited edition.
+    """
+    directory = (directory or "").strip()
+    model = (model or "").strip()
+    if not directory or not model:
+        raise SystemExit("--dir and --model are required")
+    if any(r.dir == directory for r in corpus.readers):
+        raise SystemExit(f"reader {directory!r} is already in the corpus")
+    reader = Reader(dir=directory, label=label.strip() or directory,
+                    model=model, access=access.strip(), rules=rules.strip())
+    plan = {"reader": reader, "updated": [], "skipped": [], "warnings": [],
+            "run": None, "stale_gold": 0, "dry_run": dry_run}
+    if dry_run:
+        plan["pages"] = [p for p in corpus.page_ids()
+                         if corpus.comparison_path(p).is_file()]
+        plan["needs_document"] = bool(run and not corpus.document)
+        return plan
+    if run and not corpus.document:
+        raise SystemExit(
+            "bench.yaml has no document: path — add it, or pass --no-run to use "
+            "readings that already exist")
+
+    corpus.readers.append(reader)
+    save_corpus_yaml(corpus)
+    if run:
+        plan["run"] = harvest(corpus, cfg, readers=[directory])
+        for f in plan["run"].get("failures") or []:
+            plan["warnings"].append(
+                f"run failed for {f.get('page')}: {f.get('error')}")
+
+    k = len(corpus.readers)
+    for page in corpus.page_ids():
+        if not corpus.comparison_path(page).is_file():
+            continue
+        new_text, info = _comparison_with_reader(corpus, page, reader,
+                                                 allow_lines=allow_lines)
+        if new_text is None:
+            plan["skipped"].append({"page": page, "reason": info["reason"]})
+            continue
+        corpus.comparison_path(page).write_text(new_text, encoding="utf-8")
+        plan["updated"].append(page)
+        if info.get("missing"):
+            plan["warnings"].append(
+                f"page {page}: {len(info['missing'])} entry(ies) had no text for "
+                f"{directory} (mapped {info['method']})")
+    if reference and plan["updated"]:
+        build_reference(corpus, readings=k)
+        plan["reference"] = True
+    plan["stale_gold"] = sum(1 for p in corpus.page_ids() if corpus.is_stale(p))
+    return plan
+
+
+def cmd_add_reader(cfg: Config, args) -> int:
+    corpus = resolve_corpus(cfg, args.corpus)
+    res = add_reader(corpus, cfg, directory=args.dir, model=args.model,
+                     label=args.label or "", access=args.access or "",
+                     rules=args.rules or "", run=not args.no_run,
+                     dry_run=args.dry_run, reference=args.reference)
+    if args.dry_run:
+        print(f"would add reader {res['reader'].dir} (model {res['reader'].model})")
+        print(f"pages with a comparison to extend: {len(res['pages'])}")
+        if res["needs_document"]:
+            print("warning: no document: path — --no-run would be required")
+        return 0
+    print(f"added reader: {res['reader'].dir} (model {res['reader'].model})")
+    if res["run"] is not None:
+        print(f"  runs: {res['run'].get('written', 0)} reading(s) written, "
+              f"{len(res['run'].get('failures') or [])} failed")
+    print(f"  comparison pages updated: {len(res['updated'])}"
+          + (f" ({', '.join(res['updated'][:8])}"
+             + (" …" if len(res['updated']) > 8 else "") + ")" if res['updated'] else ""))
+    for s in res["skipped"]:
+        print(f"  skipped {s['page']}: {s['reason']}")
+    for w in res["warnings"]:
+        print(f"  warning: {w}")
+    if res["stale_gold"]:
+        print(f"\n  {res['stale_gold']} gold page(s) are now stale: the reading set "
+              f"changed. Re-open them in `pha bench serve`, check the new column, "
+              f"and Save gold; scoring excludes them until then.")
+    print("\nnext: `pha bench verify %s` and `pha bench score %s`"
+          % (args.corpus, args.corpus))
+    return 1 if res["warnings"] or res["skipped"] else 0
+
+
 def cmd_compare(cfg: Config, args) -> int:
     corpus = resolve_corpus(cfg, args.corpus)
     res = build_comparison(corpus, profile=args.profile,
@@ -2199,6 +2373,7 @@ COMMANDS = {
     "list": cmd_list,
     "status": cmd_status,
     "verify": cmd_verify,
+    "add-reader": cmd_add_reader,
     "compare": cmd_compare,
     "reference": cmd_reference,
     "score": cmd_score,

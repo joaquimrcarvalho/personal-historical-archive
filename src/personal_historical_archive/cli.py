@@ -5475,6 +5475,27 @@ def main(argv: list[str] | None = None) -> None:
     bcmp.add_argument("--dry-run", action="store_true", help="print what would be written")
     bcmp.set_defaults(fn=cmd_bench)
 
+    bar = bnsub.add_parser(
+        "add-reader",
+        help="append a reader to bench.yaml and insert its column into the "
+             "existing comparison files (does not regenerate them)")
+    bar.add_argument("corpus")
+    bar.add_argument("--dir", required=True, help="new reader directory name")
+    bar.add_argument("--model", required=True, help="model interface id")
+    bar.add_argument("--label", default=None, help="display name (default: --dir)")
+    bar.add_argument("--access", default=None, help="access note, e.g. 'OpenRouter'")
+    bar.add_argument("--rules", default=None, help="palaeographer rules id (provenance)")
+    bar.add_argument("--no-run", action="store_true",
+                     help="do not run the model; use readings that already exist")
+    bar.add_argument("--dry-run", action="store_true", help="print the plan only")
+    bar.add_argument("--reference", action="store_true",
+                     help="rebuild reference/ from the extended comparisons")
+    bar.add_argument("--force-lines", action="store_true",
+                     help="allow inserting a column into a non-row-numbered "
+                          "(hand-aligned) comparison by line position; check "
+                          "every inserted entry")
+    bar.set_defaults(fn=cmd_bench)
+
     bref = bnsub.add_parser("reference", help="build reference/ (slashed merge) from comparison/")
     bref.add_argument("corpus")
     bref.add_argument("--readings", type=int, default=None,

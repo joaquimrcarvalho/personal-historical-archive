@@ -507,3 +507,89 @@ def test_editing_rules_can_carry_explanations(cfg):
     raw = _yaml.safe_load((root / "bench.yaml").read_text())
     assert raw["gold"]["editing_rules"][0]["explain"] == "consonant v with a u shape"
     assert raw["gold"]["editing_rules"][1] == "plain rule"
+
+
+def test_add_reader_inserts_a_column_and_marks_gold_stale(cfg):
+    corpus = make_corpus(cfg)
+    corpus.comparison_path("001").parent.mkdir(parents=True, exist_ok=True)
+    corpus.comparison_path("001").write_text(COMPARISON_2, encoding="utf-8")
+    h = corpus.readings_hash("001")
+    gold = corpus.gold_path("001")
+    gold.parent.mkdir(parents=True, exist_ok=True)
+    gold.write_text("---\npage: '001'\nstatus: human-corrected\nreviewed_by: R\n"
+                    f"readings_hash: {h}\n---\n\n## Corrected text\n\n```\n"
+                    "[1] P. Manuel Rodrigues, professo.\n"
+                    "[2] P. Juan Correa, Ministro\n"
+                    "[3] P. Luis de Vasconcellos.\n```\n", encoding="utf-8")
+    write_reading(corpus.root, "C", "001",
+                  "1. P. Manuel Rodrigues, professo.\n"
+                  "2. P. Juan Correa, Ministro\n3. P. Luis de Vasconcellos.")
+
+    res = bench.add_reader(corpus, cfg, directory="C", model="model-C",
+                           label="Model C", run=False)
+    assert res["updated"] == ["001"] and not res["skipped"]
+    text = corpus.comparison_path("001").read_text()
+    assert "3. Model C" in text
+    assert "    3. P. Juan Correa, Ministro" in text
+    assert "= all readings: P. Manuel Rodrigues" in text
+    assert "= all readings: P. Luis de Vasconcellos." in text
+    assert bench.verify_comparison_text(text, readings=3) == []
+
+    reloaded = bench.load_corpus(corpus.root)
+    assert [r.dir for r in reloaded.readers] == ["A", "B", "C"]
+    assert reloaded.readers[2].model == "model-C"
+    assert reloaded.is_stale("001") is True          # the reading set changed
+
+
+def test_add_reader_lines_profile(cfg):
+    corpus = make_corpus(cfg)
+    write_reading(corpus.root, "A", "001", "alpha beta\ngamma delta")
+    write_reading(corpus.root, "B", "001", "alpha beta\ngamma epsilon")
+    bench.build_comparison(corpus, profile="lines")
+    write_reading(corpus.root, "C", "001", "alpha beta\ngamma zeta")
+    res = bench.add_reader(corpus, cfg, directory="C", model="m-C", run=False,
+                           allow_lines=True)
+    assert res["updated"] == ["001"]
+    text = corpus.comparison_path("001").read_text()
+    assert "1. alpha beta" in text or "= all readings: alpha beta" in text
+    assert "3. gamma zeta" in text
+    assert bench.verify_comparison_text(text, readings=3) == []
+
+
+def test_add_reader_refuses_a_duplicate_and_dry_run_writes_nothing(cfg):
+    corpus = make_corpus(cfg)
+    corpus.comparison_path("001").parent.mkdir(parents=True, exist_ok=True)
+    corpus.comparison_path("001").write_text(COMPARISON_2, encoding="utf-8")
+    before_yaml = (corpus.root / "bench.yaml").read_text()
+    before_comp = corpus.comparison_path("001").read_text()
+    plan = bench.add_reader(corpus, cfg, directory="C", model="m-C",
+                            run=False, dry_run=True)
+    assert plan["dry_run"] and plan["pages"] == ["001"]
+    assert (corpus.root / "bench.yaml").read_text() == before_yaml
+    assert corpus.comparison_path("001").read_text() == before_comp
+
+    write_reading(corpus.root, "C", "001", "1. a\n2. b")
+    bench.add_reader(corpus, cfg, directory="C", model="m-C", run=False)
+    with pytest.raises(SystemExit):
+        bench.add_reader(corpus, cfg, directory="C", model="m-C", run=False)
+
+
+def test_add_reader_skips_a_page_without_its_reading(cfg):
+    corpus = make_corpus(cfg)
+    corpus.comparison_path("001").parent.mkdir(parents=True, exist_ok=True)
+    corpus.comparison_path("001").write_text(COMPARISON_2, encoding="utf-8")
+    res = bench.add_reader(corpus, cfg, directory="C", model="m-C", run=False)
+    assert res["updated"] == []
+    assert res["skipped"] and "no reading" in res["skipped"][0]["reason"]
+
+
+def test_add_reader_refuses_a_hand_aligned_comparison_by_default(cfg):
+    corpus = make_corpus(cfg)
+    write_reading(corpus.root, "A", "001", "alpha beta\ngamma delta")
+    write_reading(corpus.root, "B", "001", "alpha beta\ngamma epsilon")
+    bench.build_comparison(corpus, profile="lines")
+    write_reading(corpus.root, "C", "001", "alpha beta\ngamma zeta")
+    res = bench.add_reader(corpus, cfg, directory="C", model="m-C", run=False)
+    assert res["updated"] == []
+    assert "row-numbered" in res["skipped"][0]["reason"]
+    assert "3. Model C" not in corpus.comparison_path("001").read_text()

@@ -90,6 +90,13 @@ the agent's work whenever the draft is wrong.
    one line per entry, variants joined with `/`. It is generated; never
    hand-edit it, regenerate it.
 
+   **Adding a reader later:** `pha bench add-reader <corpus> --dir D --model M`
+   appends it and inserts its column into the existing comparisons without
+   regenerating them. Row-numbered pages are automatic; hand-aligned pages are
+   skipped unless `--force-lines` (a line mapping there is a guess). The gold
+   then becomes stale — the reading set is part of its hash — so re-open and
+   Save gold each page before scoring.
+
 7. **Human review.** The reviewer works in `pha bench serve` (the page image
    beside the stacked readings; a draggable divider sets the split). **Save
    draft** keeps a part-finished page for the next session (`status: draft`,

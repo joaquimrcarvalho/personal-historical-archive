@@ -640,6 +640,12 @@ bench` command group is the engine. Concretely:
   structural verifier run on the exact bytes before an atomic replace,
   `readings_hash` recorded, and an append-only `review-log.jsonl`. Writes only
   `human/`, plus generated `comparison/` and `reference/`.
+- **Adding a reader later**: `pha bench add-reader <corpus> --dir D --model M`
+  appends the reader and inserts its column into the existing comparison files
+  instead of regenerating them (row-numbered pages automatically; hand-aligned
+  pages are skipped unless `--force-lines`, because a line mapping there is a
+  guess). The gold becomes stale — the reading set is part of its hash — and is
+  reported, never silently re-scored.
 - **Draft saving**: a long page can be saved part-way with **Save draft**
   (`status: draft`, empty entries allowed). A draft is excluded from scoring and
   is the page the reviewer resumes from; **Save gold** completes it and applies
