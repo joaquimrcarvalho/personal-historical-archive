@@ -450,6 +450,24 @@
           "commit": "4c5193a06517"
         }
       ]
+    },
+    "0.51.0": {
+      "date": "2026-11-15",
+      "summary": "Adds pha bench add-reader, which appends a model to an existing benchmark and inserts its column into row-numbered comparisons without regenerating them, and documents the benchmark workflow in AGENTS.md, the archive guide and the palaeographers-compare skill.",
+      "changes": [
+        {
+          "type": "docs",
+          "scope": "",
+          "text": "benchmarks in the agent contract, the archive guide and the skill",
+          "commit": "881a0de278ea"
+        },
+        {
+          "type": "feat",
+          "scope": "bench",
+          "text": "add-reader — append a model without regenerating the comparison",
+          "commit": "95cda75570d5"
+        }
+      ]
     }
   }
 }
