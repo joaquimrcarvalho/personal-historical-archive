@@ -42,6 +42,7 @@ from . import addresses
 from . import db
 from .config import Config
 from .viewer import CSS as _CSS
+from .viewer import SPLITTER_JS
 from .viewer import html_page as _html_page
 
 _PAGE_RE = re.compile(r"^(?P<slug>.+)/p(?P<page>\d+)\.(?:jpg|jpeg)$")
@@ -899,6 +900,9 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
             }[view]
 
             main = (f'<main class="reader"><section class="reader-media">{media}</section>'
+                    '<div class="splitter" role="separator" aria-orientation="vertical" '
+                    'aria-label="resize the page image and the text" tabindex="0" '
+                    'title="drag to resize · double-click to reset"></div>'
                     f'<section class="reader-text">{text_panels}</section></main>')
 
             of_total = f" of {total}" if total else ""
@@ -931,6 +935,7 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                 pre.append(f'<link rel="prefetch" href="{_jpg_url(slug, page + 1)}" as="image">')
             js_prev = json.dumps(_viewer_url(slug, page - 1)) if has_prev else "null"
             js_next = json.dumps(_viewer_url(slug, page + 1)) if has_next else "null"
+            pre.append(SPLITTER_JS)
             pre.append("<script>const P=" + js_prev + ",N=" + js_next + ";"
                        "addEventListener('keydown',e=>{const t=e.target;"
                        "if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||"

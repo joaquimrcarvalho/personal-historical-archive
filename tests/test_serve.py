@@ -758,3 +758,15 @@ def test_records_missing_db_is_generic_503(cfg, add_document, server):
     assert "archive" in payload["error"]
     assert str(cfg.archive_dir) not in payload["error"]
     assert not cfg.db_path.exists()       # the failed read must not create it
+
+
+def test_page_view_has_a_resizable_split(cfg, add_document, write_render, server):
+    doc_id = add_document()
+    write_render(doc_id, 1, b"JPEG")
+    status, ctype, body = server.get("/doc/colx-d/p1")
+    assert status == 200
+    text = body.decode()
+    assert 'class="splitter"' in text and 'role="separator"' in text
+    assert "pha-serve-media" in text            # drag state persists
+    assert 'class="reader-media"' in text and 'class="reader-text"' in text
+    assert "--media-w" in text                  # the width variable is in the CSS

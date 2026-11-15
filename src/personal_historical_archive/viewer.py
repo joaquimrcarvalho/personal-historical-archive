@@ -23,11 +23,24 @@ footer{border-bottom:0;border-top:1px solid #ddd;margin-top:auto;font-size:13px}
 .spacer{flex:1}
 main{flex:1;display:flex;align-items:center;justify-content:center;padding:1rem}
 main.plain{display:block}
-main.reader{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(22rem,.8fr);
-  align-items:start;justify-content:stretch;gap:1rem;width:100%;max-width:96rem;
-  margin:0 auto}
-.reader-media{display:flex;justify-content:center;align-items:flex-start;min-width:0}
+main.reader{display:grid;
+  grid-template-columns:minmax(280px,var(--media-w,55%)) 12px minmax(22rem,1fr);
+  align-items:start;justify-content:stretch;gap:0 1rem;width:100%;max-width:96rem;
+  margin:0 auto;--media-w:55%}
+.reader-media{display:flex;justify-content:center;align-items:flex-start;min-width:0;
+  position:sticky;top:.5rem;align-self:start;max-height:calc(100vh - 1rem);
+  overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.reader-media img.page{width:100%;height:auto;max-height:none}
 .reader-text{min-width:0}
+.splitter{grid-column:2;align-self:stretch;min-height:60vh;position:relative;
+  cursor:col-resize;touch-action:none;border:0;background:transparent;padding:0}
+.splitter::before{content:"";position:absolute;left:5px;top:0;bottom:0;width:2px;
+  background:#c9c5bc;border-radius:2px}
+.splitter:hover::before,.splitter:focus-visible::before{background:#5f5c55;width:4px;left:4px}
+.splitter::after{content:"⋮";position:absolute;left:-1px;top:50%;transform:translateY(-50%);
+  color:#8a857b;font-size:14px;line-height:1;padding:.35rem .12rem;background:#faf9f7;
+  border:1px solid #d8d4cb;border-radius:6px}
+.splitter:focus-visible{outline:2px solid #0b57d0;outline-offset:2px;border-radius:4px}
 .reading{background:#fff;border:1px solid #e4e1da;border-radius:10px;
   padding:.85rem 1rem;margin-bottom:1rem}
 .reading:last-child{margin-bottom:0}
@@ -80,7 +93,8 @@ button{font:inherit;padding:.22rem .55rem}
 }
 @media (max-width:900px){
   main.reader{display:block;padding:.75rem}
-  .reader-media{margin-bottom:.9rem}
+  .reader-media{margin-bottom:.9rem;position:static;max-height:none;overflow:visible}
+  .splitter{display:none}
   img.page{max-height:70vh}
   pre.transcript{max-height:none}
 }
@@ -103,3 +117,25 @@ def html_page(title: str, body: str, head_extra: str = "") -> bytes:
         f"<style>{CSS}</style>\n"
         f"{head_extra}</head>\n<body>\n{body}\n</body>\n</html>\n"
     ).encode("utf-8")
+
+
+SPLITTER_JS = """<script>(function(){
+const wb=document.querySelector('main.reader'),d=wb&&wb.querySelector('.splitter');
+if(!d)return;
+const KEY='pha-serve-media',clamp=p=>Math.min(80,Math.max(25,p));
+const saved=localStorage.getItem(KEY);if(saved)wb.style.setProperty('--media-w',saved);
+let drag=false;
+const pct=ev=>{const r=wb.getBoundingClientRect();
+const x=(ev.clientX!==undefined?ev.clientX:(ev.touches&&ev.touches[0].clientX))-r.left;
+return clamp(x/r.width*100);};
+const apply=p=>wb.style.setProperty('--media-w',p.toFixed(1)+'%');
+d.addEventListener('pointerdown',e=>{drag=true;d.setPointerCapture(e.pointerId);e.preventDefault();});
+d.addEventListener('pointermove',e=>{if(drag)apply(pct(e));});
+const end=()=>{if(!drag)return;drag=false;
+localStorage.setItem(KEY,wb.style.getPropertyValue('--media-w'));};
+d.addEventListener('pointerup',end);d.addEventListener('pointercancel',end);
+d.addEventListener('dblclick',()=>{wb.style.removeProperty('--media-w');localStorage.removeItem(KEY);});
+d.addEventListener('keydown',e=>{const cur=parseFloat(wb.style.getPropertyValue('--media-w'))||55;
+let p=null;if(e.key==='ArrowLeft')p=clamp(cur-2);if(e.key==='ArrowRight')p=clamp(cur+2);
+if(p!==null){e.preventDefault();apply(p);localStorage.setItem(KEY,p.toFixed(1)+'%');}});
+})();</script>"""
