@@ -518,5 +518,28 @@ def test_each_entry_has_a_review_checkbox(cfg):
     assert 'data-done="1"' in page and 'data-done="2"' in page
     assert 'id="donecount"' in page
     assert 'autocomplete="off"' in page
-    assert "pageshow" in page                      # reset on reload/save
+    assert "pageshow" in page
+    assert "localStorage" in page                  # ticks persist between sessions
+    assert "data-review-key=" in page and "data-saved=" in page
     assert '<input type="checkbox" data-done="1" checked' not in page
+
+
+def test_http_save_draft_keeps_ticks_message(cfg):
+    corpus = make_corpus(cfg)
+    server = benchui.make_server(cfg, port=0, quiet=True)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        wb = server.wb
+        fields, _ = rows_fields(wb, corpus)
+        payload = urllib.parse.urlencode(
+            {**fields, "status": "draft", "token": wb.token}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/save", data=payload, method="POST")
+        page = urllib.request.urlopen(req).read()
+        assert "Draft saved — your ticks are kept".encode() in page
+        assert corpus.is_draft("001")
+    finally:
+        server.shutdown()
+        server.server_close()

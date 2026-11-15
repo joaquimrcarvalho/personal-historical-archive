@@ -631,7 +631,10 @@ bench` command group is the engine. Concretely:
   as such and starts from `reference/` instead of from the unreviewed copy; and
   each entry is flagged for the image when the readings share no majority on the
   names, disagree on a number, or contain an illegible `[?]`/`[illegible]` mark
-  (orthographic noise does not flag).
+  (orthographic noise does not flag). A per-entry **reviewed** tick (session
+  state in `localStorage`, keyed by corpus + page + `readings_hash`) lets a long
+  page be resumed across breaks; Save gold clears the ticks, Save draft keeps
+  them.
 - **Save contract implemented**: form token, `base` hash guard (a file changed
   on disk is never overwritten), contiguous entries, a required reviewer, the
   structural verifier run on the exact bytes before an atomic replace,

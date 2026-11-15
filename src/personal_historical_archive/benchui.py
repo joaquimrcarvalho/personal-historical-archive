@@ -483,7 +483,8 @@ def _readings_html(row: dict) -> str:
 
 
 def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
-                error: str = "", saved: bool = False) -> bytes:
+                error: str = "", saved: bool = False,
+                saved_status: str = "") -> bytes:
     data = wb.page_data(corpus, page)
     rel = _rel(wb, corpus)
     ids = corpus.page_ids()
@@ -583,15 +584,19 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
               f'or an illegible mark. · <strong id="donecount">0 / {len(data["rows"])}'
               '</strong> reviewed</p>'
             + rules_html
-            + (f'<p class="ok">Saved. The gold page is written and verified.</p>'
-               if saved else "")
+            + (f'<p class="ok">Draft saved — your ticks are kept for when you '
+               'come back.</p>' if saved and saved_status == bench.STATUS_DRAFT else
+               (f'<p class="ok">Saved. The gold page is written and verified.</p>'
+                if saved else ""))
             + (f'<p class="err">{esc(error)}</p>' if error else "")
             + f'<div class="workbench"><div class="media">{img_html}</div>'
               '<div class="divider" role="separator" aria-orientation="vertical" '
               'aria-label="resize the image and the text" tabindex="0" '
               'title="drag to resize · double-click to reset"></div>'
             + '<div class="editpane">'
-            + f'<form method="post" action="/save" id="saveform" autocomplete="off">'
+            + f'<form method="post" action="/save" id="saveform" autocomplete="off" '
+              f'data-review-key="{esc(f"{rel}|{page}|{corpus.readings_hash(page)}")}" '
+              f'data-saved="{esc(saved_status)}">'
               f'<input type="hidden" name="token" value="{wb.token}">'
               f'<input type="hidden" name="c" value="{esc(rel)}">'
               f'<input type="hidden" name="p" value="{esc(page)}">'
@@ -646,18 +651,35 @@ def render_page(wb: Workbench, corpus: bench.Corpus, page: str,
             "<script>(function(){"
             "const boxes=Array.from(document.querySelectorAll('input[data-done]'));"
             "const out=document.getElementById('donecount');"
+            "const form=document.getElementById('saveform');"
+            "const KEY='pha-bench-review:'+(form?form.dataset.reviewKey:'');"
+            "const saved=form?form.dataset.saved:'';"
             "const upd=()=>{if(out)out.textContent=boxes.filter(b=>b.checked).length"
             "+' / '+boxes.length;};"
-            "const reset=()=>{boxes.forEach(b=>{b.checked=false;"
-            "b.closest('.entry').classList.remove('done');});upd();};"
-            "reset();setTimeout(reset,0);window.addEventListener('pageshow',reset);"
+            "const read=()=>{try{return new Set((JSON.parse(localStorage.getItem(KEY)"
+            "||'[]')||[]).map(Number));}catch(e){return new Set();}};"
+            "const write=()=>{try{localStorage.setItem(KEY,JSON.stringify("
+            "boxes.filter(b=>b.checked).map(b=>Number(b.dataset.done))));}catch(e){}};"
+            "const apply=marks=>{boxes.forEach(b=>{const on=marks.has(Number(b.dataset.done));"
+            "b.checked=on;b.closest('.entry').classList.toggle('done',on);});upd();};"
+            "let marks=read();"
+            "if(saved==='human-corrected'){try{localStorage.removeItem(KEY);}catch(e){}"
+            "marks=new Set();}"
+            "apply(marks);"
+            "let ready=false;"
+            "const refresh=()=>{ready=true;apply(read());};"
+            "setTimeout(refresh,250);"
+            "window.addEventListener('load',()=>apply(read()));"
+            "window.addEventListener('pageshow',()=>apply(read()));"
             "boxes.forEach(b=>{"
             "const ta=document.querySelector('textarea[name=\"e'+b.dataset.done+'\"]');"
-            "if(ta)ta.addEventListener('input',()=>{"
-            "if(!b.checked){b.checked=true;b.closest('.entry').classList.add('done');upd();}});"
-            "b.addEventListener('change',()=>{"
-            "b.closest('.entry').classList.toggle('done',b.checked);upd();});});"
-            "upd();})();</script>")
+            "if(ta)ta.addEventListener('input',()=>{if(!ready){apply(read());return;}"
+            "if(!b.checked){b.checked=true;"
+            "b.closest('.entry').classList.add('done');upd();write();}});"
+            "b.addEventListener('change',()=>{if(!ready){apply(read());return;}"
+            "b.closest('.entry')"
+            ".classList.toggle('done',b.checked);upd();write();});});"
+            "})();</script>")
     return html_page(f"pha bench — {page}", body,
                      f"<style>{BENCH_CSS}</style>")
 
@@ -855,8 +877,10 @@ class Handler(BaseHTTPRequestHandler):
                                               notice=q.get("notice", "")))
             elif path == "/page":
                 c = self.wb.page(q.get("c", ""), q.get("p", ""))
+                saved_status = q.get("saved", "")
                 self._html(200, render_page(self.wb, c, q.get("p", ""),
-                                            saved=bool(q.get("saved"))))
+                                            saved=bool(saved_status),
+                                            saved_status=saved_status))
             elif path == "/img":
                 self._image(q)
             else:
@@ -895,7 +919,8 @@ class Handler(BaseHTTPRequestHandler):
                 save_gold(self.wb, c, fields.get("p", ""), fields,
                           fields.get("token", ""), status=status)
                 rel = _rel(self.wb, c)
-                self._redirect(_link("/page", c=rel, p=fields.get("p", ""), saved=1))
+                self._redirect(_link("/page", c=rel, p=fields.get("p", ""),
+                                     saved=status))
             elif path == "/build":
                 c = self.wb.corpus(fields.get("c", ""))
                 if not secrets.compare_digest(str(fields.get("token") or ""), self.wb.token):
