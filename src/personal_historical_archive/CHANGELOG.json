@@ -492,6 +492,18 @@
           "commit": "3df651a74159"
         }
       ]
+    },
+    "0.51.3": {
+      "date": "2026-11-19",
+      "summary": "The gold hash now covers the readers recorded in each page rather than the corpus's current reader set, so adding a reader later no longer invalidates reviewed pages: the new reader is scored against the existing gold, while re-reading or removing a recorded reader still marks it stale. Review ticks survive an addition, and verify and add-reader report accordingly.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "bench",
+          "text": "a gold page's hash covers the readers it was reviewed against",
+          "commit": "9b3dfe18897c"
+        }
+      ]
     }
   }
 }
