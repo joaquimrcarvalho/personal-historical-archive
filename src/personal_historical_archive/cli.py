@@ -1733,6 +1733,7 @@ def cmd_status(cfg: Config, args) -> None:
                 "pages": s["pages_done"],
                 "chunks": s["chunks"],
                 "chunks_embedded": s["chunks_embedded"],
+                "chunks_by_model": s.get("chunk_models", []),
                 "records": rec_stats,
                 "notes": note_stats,
                 "skills": skill_stats,
@@ -1772,6 +1773,15 @@ def cmd_status(cfg: Config, args) -> None:
             print("  documents: none")
         print(f"  pages:     {s['pages_done']} extracted")
         print(f"  chunks:    {s['chunks']} indexed   ({s['chunks_embedded']} embedded)")
+        other_models = [
+            m for m in (s.get("chunk_models") or [])
+            if (m["model"] or "") != (cfg.embed_model or "")
+        ]
+        if other_models:
+            n_other = sum(m["chunks"] for m in other_models)
+            names = ", ".join(str(m["model"] or "(unknown)") for m in other_models)
+            print(f"             {n_other} embedded with another model ({names}) "
+                  f"— semantic search skips them; `pha reindex` re-embeds them")
         rec_total = rec_stats.get("total", 0)
         if rec_total:
             rec_docs = rec_stats.get("documents", 0)

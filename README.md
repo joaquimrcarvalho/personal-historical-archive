@@ -1674,6 +1674,14 @@ After switching the embedding model run `pha reindex` — the stored vectors nam
 the model that produced them, so a changed model re-embeds every chunk
 automatically (no `--force` needed).
 
+**A half-migrated index is reported, not silently searched.** Semantic search
+scores only the vectors of the configured model (comparing two models' vectors
+is meaningless — with two quantizations of the same model it does not even
+error, it just ranks the other one's chunks out). Until `pha reindex` finishes,
+`pha status` prints the split (`N embedded with another model`) and each search
+returns a `note` naming the model and the command that fixes it. The record
+vectors behave the same way (`pha reindex --source records`).
+
 **Re-indexing is incremental.** `pha reindex` re-embeds only the chunks whose
 text changed since they were last indexed, plus any whose stored vector came
 from a different embed model; every other chunk keeps its stored vector. So

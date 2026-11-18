@@ -158,7 +158,11 @@ def semantic_search(
     q = _embed_query(client, model, query)
     if q is None:
         return []
-    embs = db.all_embeddings(conn, collection=collection)
+    # Score ONLY vectors this model produced. Cosine across two embedding
+    # models is not meaningful; with a different quantization of the same base
+    # model it does not error but quietly ranks the other model's chunks out,
+    # so a mixed index made semantic search cover only part of the archive.
+    embs = db.all_embeddings(conn, collection=collection, embed_model=model)
     if not embs:
         return []
     scored = [(cosine(q, unpack(b)), cid) for cid, b in embs]
@@ -169,6 +173,28 @@ def semantic_search(
         if d:
             out.append(d)
     return out
+
+
+def _join_notes(*notes: str | None) -> str | None:
+    """Join the non-empty degradation notes a search arm produced."""
+    parts = [n for n in notes if n]
+    return " | ".join(parts) if parts else None
+
+
+def _stale_embedding_note(conn: sqlite3.Connection, model: str | None) -> str | None:
+    """Say so when the page index still holds vectors from another model.
+
+    Those chunks are not scored (see `semantic_search`), so without this note a
+    half-re-embedded archive looks like it simply has fewer results. `pha
+    status` reports the same split; `pha reindex --source pages` repairs it.
+    """
+    stats = db.stale_embedding_stats(conn, model)
+    if not stats["chunks"]:
+        return None
+    names = ", ".join(str(m or "(unknown)") for m, _n in stats["models"][:3])
+    return (f"{stats['chunks']} page chunk(s) in {stats['documents']} document(s) "
+            f"hold vectors from another embedding model ({names}) and are not "
+            f"searched — run `pha reindex --source pages` to re-embed them")
 
 
 def record_keyword_search(
@@ -312,11 +338,21 @@ def _record_semantic_arm(
         collection=collection, encoder=encoder, record_kind=record_kind,
         fields=fields, ignore_case=ignore_case,
     )
+    stale = db.stale_record_embedding_stats(conn, cfg.embed_model)
+    stale_note = None
+    if stale["records"]:
+        names = ", ".join(str(m or "(unknown)") for m in stale["models"][:3])
+        stale_note = (f"{stale['records']} record vector(s) in "
+                      f"{stale['documents']} document(s) use another embedding "
+                      f"model ({names}) and are not searched — run "
+                      f"`pha reindex --source records` to re-embed them")
     if not hits:
-        return [], ("Record semantic search unavailable: embedding model "
-                    "unreachable, no record embeddings, or run "
-                    "pha reindex --source records.")
-    return hits, None
+        return [], _join_notes(
+            "Record semantic search unavailable: embedding model unreachable, "
+            "no record embeddings, or run pha reindex --source records.",
+            stale_note,
+        )
+    return hits, stale_note
 
 
 def _record_hybrid(
@@ -468,6 +504,7 @@ def _page_search(
         }
 
     note: str | None = None
+    stale: str | None = None
     sem: list[dict] = []
     embed_server = locks.embed_key(cfg)
     if not allow_embed and locks.job_running(cfg, embed_server):
@@ -479,15 +516,19 @@ def _page_search(
                 "embeddings.base_url at a separate server.")
     else:
         sem = semantic_search(conn, client, cfg.embed_model, query, limit, collection)
+        # Only meaningful when the embed ran: a skipped arm is already explained.
+        stale = _stale_embedding_note(conn, cfg.embed_model)
 
     if mode == "semantic":
         if note is None and not sem:
             note = "Semantic search unavailable: embedding model unreachable or no embedded chunks."
+        note = _join_notes(note, stale)
         return {"mode": mode, "query": query, "results": sem, "note": note}
 
     kw = keyword_search(conn, query, limit, collection)
     if note is None and not sem:
         note = "Embedding model unreachable or no embedded chunks; showing keyword results only."
+    note = _join_notes(note, stale)
     merged = _rrf_merge(kw, sem, limit)
     return {"mode": mode, "query": query, "results": merged, "note": note}
 

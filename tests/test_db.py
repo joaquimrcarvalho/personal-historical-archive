@@ -132,6 +132,12 @@ def test_summary_reuses_chunk_stats_and_embedded_count_is_indexed(tmp_path):
         "EXPLAIN QUERY PLAN SELECT document_id, COUNT(*) e FROM chunks "
         "WHERE embedding IS NOT NULL GROUP BY document_id")]
     assert any("idx_chunks_embedded" in p for p in plan), plan
+    # The per-model split (`pha status`, the mixed-model search note) must be
+    # index-only too, or a read-only status scans every embedding blob.
+    plan = [r[-1] for r in conn.execute(
+        "EXPLAIN QUERY PLAN SELECT embed_model, COUNT(*) FROM chunks "
+        "WHERE embedding IS NOT NULL GROUP BY embed_model")]
+    assert any("idx_chunks_embed_model" in p for p in plan), plan
     conn.close()
 
 
@@ -143,6 +149,8 @@ def test_migrate_readds_embed_model_column(tmp_path):
 
     path = tmp_path / "archive.db"
     conn = db.connect(path)
+    # An archive that predates the column also predates the index over it.
+    conn.execute("DROP INDEX IF EXISTS idx_chunks_embed_model")
     conn.execute("ALTER TABLE chunks DROP COLUMN embed_model")
     conn.commit()
     conn.close()

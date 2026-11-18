@@ -1459,6 +1459,7 @@ def ingest_file(
 def index_document(
     cfg: Config, conn, doc_id: int, embed_client: ModelClient | None = None,
     verbose: bool = True, incremental: bool = True, pages=None,
+    strict: bool | None = None,
 ) -> int:
     """Index BOTH variants when an editor is configured: the raw transcription
     (variant='raw') and the editor's output (variant='edited'), so searches
@@ -1494,6 +1495,10 @@ def index_document(
     - a document with no vectors yet (a fresh ingest indexed while the embed
       endpoint is down) still degrades to text-only with a warning, so
       `pha scan` keeps its zero-config behaviour.
+
+    ``strict=True`` is for an EXPLICIT reindex (`pha reindex`): a failed embed
+    then raises even when the document has no vectors yet, because "reindexed"
+    must not mean "left text-only". The default keeps the scan degrade.
     """
     all_pages = db.get_pages(conn, doc_id)
     if pages is None:
@@ -1519,13 +1524,17 @@ def index_document(
     scope_ids = None if pages is None else selected_ids
     # Loss is only possible when the rows we are about to replace carry vectors.
     # A forced (non-incremental) pass re-embeds everything, so it only needs the
-    # cheap existence test — not every stored blob.
+    # cheap existence test — not every stored blob. `strict=True` (an explicit
+    # reindex) overrides the heuristic: a document may have NO vectors yet, and
+    # a silent degrade to text-only would still be a failed reindex.
     if incremental:
         old = db.existing_chunks(conn, doc_id, scope_ids)
-        strict = any(r["embedding"] is not None for r in old)
+        have_vectors = any(r["embedding"] is not None for r in old)
     else:
         old = []
-        strict = db.any_embedded_chunk(conn, doc_id, scope_ids)
+        have_vectors = db.any_embedded_chunk(conn, doc_id, scope_ids)
+    if strict is None:
+        strict = have_vectors
     # Reuse pool: (page_id, variant) -> {text: [stored vectors]}, limited to
     # vectors the CURRENT embed model produced (an unknown/different model is
     # never reused — see the docstring).
@@ -1619,6 +1628,11 @@ def index_records(cfg: Config, conn, doc_id: int,
     its ``embed_model`` matches the configured model and ``force`` is false.
     Existing vectors are cleared only after the new embeddings are in hand, so
     an embed failure cannot silently downgrade a working record index.
+
+    A failed embed RAISES: this is only reached from an explicit reindex pass,
+    so the document must be reported as failed rather than left keyword-only
+    (which used to look like a successful reindex). The stored vectors are
+    untouched and the next pass retries the document.
     """
     if not cfg.embed_model:
         return 0
@@ -1637,7 +1651,6 @@ def index_records(cfg: Config, conn, doc_id: int,
         (doc_id,),
     ).fetchall()
     old_map = {r["record_id"]: r for r in old}
-    strict = bool(old)
     blobs: list[bytes | None] = [None] * len(rows)
     to_embed: list[tuple[int, str]] = []
     for i, row in enumerate(rows):
@@ -1668,15 +1681,16 @@ def index_records(cfg: Config, conn, doc_id: int,
             batch_size=cfg.embed_batch_size,
         )
     except ModelError as e:
-        if strict:
-            raise ModelError(
-                f"record embeddings unavailable ({e}); document #{doc_id} "
-                "record index left unchanged rather than dropping its stored vectors"
-            ) from e
-        vecs = [None] * len(to_embed)
-        if verbose:
-            print(f"  warning: record embeddings unavailable ({e}); "
-                  "records remain keyword-searchable", flush=True)
+        # `index_records` is only ever called by an explicit reindex pass, so a
+        # failed embed must be REPORTED, not degraded: a record index left
+        # keyword-only after `pha reindex --source records` looked like success
+        # (silent under-embedding), and a document whose vectors came from
+        # another model stayed on that model. Existing vectors are untouched
+        # either way — the next pass retries the document.
+        raise ModelError(
+            f"record embeddings unavailable ({e}); document #{doc_id} "
+            "record index left as it was rather than dropping its stored vectors"
+        ) from e
     finally:
         if close_embed:
             embed_client.close()
@@ -4592,7 +4606,7 @@ def reindex_all(cfg: Config, client: ModelClient, verbose: bool = True,
                 if source in ("pages", "all"):
                     counts[d["id"]] = index_document(
                         cfg, conn, d["id"], embed_client=client, verbose=verbose,
-                        incremental=not force, pages=pages,
+                        incremental=not force, pages=pages, strict=True,
                     )
                 if source in ("records", "all"):
                     record_counts[d["id"]] = index_records(

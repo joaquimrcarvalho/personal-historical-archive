@@ -111,6 +111,13 @@ CREATE INDEX IF NOT EXISTS idx_records_doc ON records(document_id);
 _OPTIONAL_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_chunks_embedded "
     "ON chunks(document_id) WHERE embedding IS NOT NULL",
+    # Which model produced each stored vector. Without it, counting the chunks
+    # per embed model has to visit every row of the (blob-bearing) chunks table
+    # — tens of seconds on a large archive. `pha status` and the semantic
+    # search's stale-model note are read-only commands, so they cannot create
+    # this index themselves; any write command does, once.
+    "CREATE INDEX IF NOT EXISTS idx_chunks_embed_model "
+    "ON chunks(embed_model) WHERE embedding IS NOT NULL",
 )
 
 
@@ -504,6 +511,11 @@ def summary(conn: sqlite3.Connection, chunk_stats: dict | None = None) -> dict:
     has it: the chunk totals are then derived from that one grouped scan
     instead of counting `chunks` again. Either way the embedded count is served
     by the partial `idx_chunks_embedded` index, never a scan of the blobs.
+
+    `chunk_models` splits the embedded chunks by the model that produced their
+    vector. A single-model archive reports one entry; more than one means part
+    of the page index is invisible to semantic search (see
+    `semantic_search`) until `pha reindex` unifies it.
     """
     docs = conn.execute("SELECT status, COUNT(*) n FROM documents GROUP BY status").fetchall()
     pages = conn.execute("SELECT COUNT(*) n FROM pages WHERE status = 'done'").fetchone()["n"]
@@ -520,6 +532,7 @@ def summary(conn: sqlite3.Connection, chunk_stats: dict | None = None) -> dict:
         "pages_done": pages,
         "chunks": chunks,
         "chunks_embedded": embedded,
+        "chunk_models": embedding_model_counts(conn),
         # Encoder output: how much exists and how much is semantically indexed.
         # `pha status` and `pha_extraction_status` surface this, so "was this
         # archive encoded, and is it searchable?" no longer needs SQL.
@@ -1076,17 +1089,85 @@ def chunk_stats(conn: sqlite3.Connection, doc_id: int | None = None) -> dict:
 
 
 def all_embeddings(
-    conn: sqlite3.Connection, collection: str | None = None
+    conn: sqlite3.Connection, collection: str | None = None,
+    embed_model: str | None = None,
 ) -> list[tuple[int, bytes]]:
+    """Every stored chunk vector, optionally only those of one embed model.
+
+    Two vectors can be compared only when the SAME model produced them, so a
+    semantic search passes the model it embeds the query with: scoring a
+    q4_k_s query against q4_k_m vectors (a different quantization of the same
+    base model, hence the same dimension) does not error — it silently ranks
+    the other model's chunks out of the top results. Omitting `embed_model`
+    keeps the old "everything" behaviour for callers that only count rows.
+    """
     clause, params = _dir_clause(collection)
     sql = (
         "SELECT c.id, c.embedding FROM chunks c "
         "JOIN documents d ON d.id = c.document_id "
         "WHERE c.embedding IS NOT NULL"
     )
+    if embed_model is not None:
+        sql += " AND c.embed_model = ?"
+        params.append(embed_model)
     if clause:
         sql += clause
     return conn.execute(sql, params).fetchall()
+
+
+def _has_index(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ? LIMIT 1",
+        (name,),
+    ).fetchone() is not None
+
+
+def embedding_model_counts(conn: sqlite3.Connection) -> list[dict]:
+    """Stored chunk vectors grouped by the model that produced them.
+
+    Needs `idx_chunks_embed_model`: without it this visits every row of the
+    blob-bearing `chunks` table (tens of seconds on a large archive), and the
+    commands that read it (`pha status`, `pha search`) are read-only and cannot
+    create the index themselves. Returns `[]` when the index is absent, so a
+    read-only archive keeps a fast status instead of blocking on a full scan —
+    any write command creates the index once, after which the split is shown.
+    """
+    if not _has_index(conn, "idx_chunks_embed_model"):
+        return []
+    rows = conn.execute(
+        "SELECT IFNULL(embed_model, '') AS model, COUNT(*) AS chunks, "
+        "COUNT(DISTINCT document_id) AS documents FROM chunks "
+        "WHERE embedding IS NOT NULL GROUP BY embed_model ORDER BY chunks DESC"
+    ).fetchall()
+    return [{"model": r["model"] or None, "chunks": r["chunks"],
+             "documents": r["documents"]} for r in rows]
+
+
+def stale_embedding_stats(conn: sqlite3.Connection,
+                          embed_model: str | None) -> dict:
+    """Chunks whose stored vector came from a DIFFERENT model than `embed_model`.
+
+    These are the vectors a semantic search cannot score with a query embedded
+    by `embed_model`, so a mixed index silently covers only part of the archive.
+    `documents` counts distinct documents (the per-model sums would double-count
+    a document that is itself split across two models). Zeros when the model
+    index is absent (see `embedding_model_counts`).
+    """
+    counts = embedding_model_counts(conn)
+    if not counts:
+        return {"chunks": 0, "documents": 0, "models": []}
+    row = conn.execute(
+        "SELECT COUNT(*) AS chunks, COUNT(DISTINCT document_id) AS documents "
+        "FROM chunks WHERE embedding IS NOT NULL AND IFNULL(embed_model, '') != ?",
+        (embed_model or "",),
+    ).fetchone()
+    models = [
+        (r["model"] or None, r["chunks"])
+        for r in counts
+        if (r["model"] or "") != (embed_model or "")
+    ]
+    return {"chunks": row["chunks"], "documents": row["documents"],
+            "models": models}
 
 
 def get_chunk_text(conn: sqlite3.Connection, chunk_id: int) -> str | None:
@@ -1334,6 +1415,32 @@ def record_embedding_stats(conn: sqlite3.Connection, doc_id: int | None = None) 
         params,
     ).fetchall()
     return {r["document_id"]: r["n"] for r in rows}
+
+
+def stale_record_embedding_stats(conn: sqlite3.Connection,
+                                 embed_model: str | None) -> dict:
+    """Record vectors produced by a DIFFERENT model than `embed_model`.
+
+    The record semantic arm filters by model (comparing two models' vectors is
+    meaningless), so these records are invisible to it until
+    `pha reindex --source records` re-embeds them. The table is small, so this
+    needs no index.
+    """
+    if not record_embeddings_exist(conn):
+        return {"records": 0, "documents": 0, "models": []}
+    row = conn.execute(
+        "SELECT COUNT(*) AS records, COUNT(DISTINCT r.document_id) AS documents "
+        "FROM record_embeddings re JOIN records r ON r.id = re.record_id "
+        "WHERE IFNULL(re.embed_model, '') != ?",
+        (embed_model or "",),
+    ).fetchone()
+    models = [
+        r["model"] for r in conn.execute(
+            "SELECT DISTINCT IFNULL(embed_model, '') AS model FROM record_embeddings "
+            "WHERE IFNULL(embed_model, '') != ?", (embed_model or "",))
+    ]
+    return {"records": row["records"], "documents": row["documents"],
+            "models": models}
 
 
 def clear_records(conn: sqlite3.Connection, doc_id: int, encoder: str) -> None:
