@@ -183,7 +183,14 @@ def read_review(corpus: bench.Corpus, page: str) -> list[int]:
         return []
     if not isinstance(data, dict):
         return []
-    if str(data.get("readings_hash") or "") != corpus.readings_hash(page):
+    dirs = data.get("readings")
+    if isinstance(dirs, (list, tuple)) and dirs:
+        expected = corpus.readings_hash_for(
+            page, corpus.readers_for_dirs([str(d) for d in dirs]))
+    else:
+        # older sidecar without its reader list: fall back to the current set
+        expected = corpus.readings_hash(page)
+    if str(data.get("readings_hash") or "") != expected:
         return []
     out: set[int] = set()
     for item in data.get("reviewed") or []:
@@ -202,6 +209,7 @@ def write_review(corpus: bench.Corpus, page: str, reviewed: list[int]) -> Path:
     nums = sorted({int(n) for n in reviewed if int(n) > 0})
     data = {
         "page": page,
+        "readings": [r.dir for r in corpus.readers],
         "readings_hash": corpus.readings_hash(page),
         "reviewed": nums,
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),

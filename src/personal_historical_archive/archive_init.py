@@ -190,8 +190,9 @@ part of the search index; they measure which reader is most accurate.
   `pha bench verify` checks it; `pha bench reference` writes the slashed merge.
 - `pha bench score` scores only `human-corrected`, non-stale pages;
   `pha bench export` writes a self-contained static site.
-- Adding a reader later (`pha bench add-reader`) makes every gold page stale:
-  re-open and save it before scoring.
+- Adding a reader later (`pha bench add-reader`) does not invalidate the gold:
+  the new reader is scored against the pages already reviewed. Re-reading or
+  removing one of the readers a page was reviewed against does make it stale.
 
 The rules — what an agent may edit (`comparison/`), what is generated
 (`reference/`), what is human-only (`human/`), and the `.review/` tick state —

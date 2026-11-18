@@ -94,8 +94,9 @@ the agent's work whenever the draft is wrong.
    appends it and inserts its column into the existing comparisons without
    regenerating them. Row-numbered pages are automatic; hand-aligned pages are
    skipped unless `--force-lines` (a line mapping there is a guess). The gold
-   then becomes stale — the reading set is part of its hash — so re-open and
-   Save gold each page before scoring.
+   stays valid — its hash covers the readers recorded in its front matter — so
+   the new reader is scored against it; re-read a recorded reader and the page
+   becomes stale.
 
 7. **Human review.** The reviewer works in `pha bench serve` (the page image
    beside the stacked readings; a draggable divider sets the split). **Save

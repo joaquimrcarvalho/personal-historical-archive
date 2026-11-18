@@ -186,19 +186,52 @@ class Corpus:
     def readings(self, page: str) -> list[tuple[Reader, str | None]]:
         return [(r, self.reading(r, page)) for r in self.readers]
 
-    def readings_hash(self, page: str) -> str:
-        """A stable hash of every reading on the page, in corpus order.
+    def readers_for_dirs(self, dirs: list[str]) -> list[Reader]:
+        """The Reader objects for these directory names, in that order.
 
-        The gold records it; when a reading is replaced (re-read with a new
-        model, or after a prompt edit) the hash changes and the gold is stale.
+        A recorded reader that no longer exists becomes an empty Reader: its
+        text is missing, so the hash changes and the gold is reported stale
+        (the evidence it was reviewed against is gone).
         """
+        by_dir = {r.dir: r for r in self.readers}
+        return [by_dir.get(d) or Reader(dir=d) for d in dirs]
+
+    def readings_hash_for(self, page: str, readers: list[Reader]) -> str:
+        """The hash of these readers' texts on the page, in the given order."""
         h = hashlib.sha256()
-        for r in self.readers:
+        for r in readers:
             h.update(r.dir.encode("utf-8"))
             h.update(b"\0")
             h.update((self.reading(r, page) or "").encode("utf-8"))
             h.update(b"\0")
         return "sha256:" + h.hexdigest()
+
+    def readings_hash(self, page: str) -> str:
+        """A stable hash of every current reading on the page, in corpus order.
+
+        This is what a *new* gold records. Validity is judged against
+        `gold_hash`, i.e. the readers that gold was actually reviewed against —
+        adding a reader later does not invalidate a page (its evidence did not
+        change), while re-reading or removing one of the recorded readers does.
+        """
+        return self.readings_hash_for(page, self.readers)
+
+    def gold_reader_dirs(self, page: str) -> list[str]:
+        dirs = self.gold_meta(page).get("readings")
+        if isinstance(dirs, (list, tuple)) and dirs:
+            return [str(d) for d in dirs]
+        return []
+
+    def gold_hash(self, page: str) -> str:
+        """The hash the gold's `readings_hash` should equal today.
+
+        Over the readers recorded in the gold's front matter; falls back to the
+        current set for a gold written before the list was recorded.
+        """
+        dirs = self.gold_reader_dirs(page)
+        if not dirs:
+            return self.readings_hash(page)
+        return self.readings_hash_for(page, self.readers_for_dirs(dirs))
 
     # -- gold -------------------------------------------------------------
     def gold_meta(self, page: str) -> dict:
@@ -223,7 +256,7 @@ class Corpus:
         recorded = str(meta.get("readings_hash") or "")
         status = str(meta.get("status") or "")
         return (bool(recorded) and status in (STATUS_GOLD, STATUS_DRAFT)
-                and recorded != self.readings_hash(page))
+                and recorded != self.gold_hash(page))
 
 
 # --------------------------------------------------------------------------- text helpers
@@ -884,7 +917,7 @@ def verify_corpus(corpus: Corpus, readings: int | None = None,
                 gtext = gold.read_text(encoding="utf-8")
                 comp_nums = entry_numbers(comp.read_text(encoding="utf-8"))
                 probs, warns = verify_gold_text(
-                    gtext, corpus.readings_hash(page), comp_nums)
+                    gtext, corpus.gold_hash(page), comp_nums)
                 reports.append(FileReport(gold, probs, warns))
     return reports
 
@@ -2217,10 +2250,11 @@ def add_reader(corpus: Corpus, cfg: Config, directory: str, model: str,
                reference: bool = False, allow_lines: bool = False) -> dict:
     """Append a reader, (optionally) run it, and insert its column.
 
-    Adding a reader changes the corpus's reading set, so every reviewed page
-    becomes stale (its readings_hash covers the set) — that is reported, never
-    papered over. Existing comparison files are extended in place rather than
-    regenerated, which preserves a hand-edited edition.
+    The gold's readings_hash covers the readers recorded in each page's front
+    matter, not the corpus's current set: adding a reader leaves reviewed pages
+    valid and scored against it, while re-reading or removing a recorded reader
+    makes them stale. Existing comparison files are extended in place rather
+    than regenerated, which preserves a hand-edited edition.
     """
     directory = (directory or "").strip()
     model = (model or "").strip()
@@ -2269,6 +2303,9 @@ def add_reader(corpus: Corpus, cfg: Config, directory: str, model: str,
         build_reference(corpus, readings=k)
         plan["reference"] = True
     plan["stale_gold"] = sum(1 for p in corpus.page_ids() if corpus.is_stale(p))
+    plan["gold_before_reader"] = sum(
+        1 for p in corpus.page_ids()
+        if corpus.is_gold(p) and directory not in corpus.gold_reader_dirs(p))
     return plan
 
 
@@ -2296,9 +2333,12 @@ def cmd_add_reader(cfg: Config, args) -> int:
     for w in res["warnings"]:
         print(f"  warning: {w}")
     if res["stale_gold"]:
-        print(f"\n  {res['stale_gold']} gold page(s) are now stale: the reading set "
-              f"changed. Re-open them in `pha bench serve`, check the new column, "
-              f"and Save gold; scoring excludes them until then.")
+        print(f"\n  {res['stale_gold']} gold page(s) are stale (a reader they were "
+              f"reviewed against was re-read or removed); re-open and Save gold.")
+    if res.get("gold_before_reader"):
+        print(f"\n  {res['gold_before_reader']} gold page(s) predate this reader. "
+              f"They stay valid and are scored against it; re-save a page only if "
+              f"you want the new reader recorded in its provenance.")
     print("\nnext: `pha bench verify %s` and `pha bench score %s`"
           % (args.corpus, args.corpus))
     return 1 if res["warnings"] or res["skipped"] else 0

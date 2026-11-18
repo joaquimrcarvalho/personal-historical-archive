@@ -517,7 +517,8 @@ def test_add_reader_inserts_a_column_and_marks_gold_stale(cfg):
     gold = corpus.gold_path("001")
     gold.parent.mkdir(parents=True, exist_ok=True)
     gold.write_text("---\npage: '001'\nstatus: human-corrected\nreviewed_by: R\n"
-                    f"readings_hash: {h}\n---\n\n## Corrected text\n\n```\n"
+                    f"readings: [A, B]\nreadings_hash: {h}\n---\n\n"
+                    "## Corrected text\n\n```\n"
                     "[1] P. Manuel Rodrigues, professo.\n"
                     "[2] P. Juan Correa, Ministro\n"
                     "[3] P. Luis de Vasconcellos.\n```\n", encoding="utf-8")
@@ -538,7 +539,9 @@ def test_add_reader_inserts_a_column_and_marks_gold_stale(cfg):
     reloaded = bench.load_corpus(corpus.root)
     assert [r.dir for r in reloaded.readers] == ["A", "B", "C"]
     assert reloaded.readers[2].model == "model-C"
-    assert reloaded.is_stale("001") is True          # the reading set changed
+    # the gold was reviewed against A and B; adding C does not invalidate it
+    assert reloaded.is_stale("001") is False
+    assert reloaded.gold_hash("001") == h
 
 
 def test_add_reader_lines_profile(cfg):
@@ -593,3 +596,33 @@ def test_add_reader_refuses_a_hand_aligned_comparison_by_default(cfg):
     assert res["updated"] == []
     assert "row-numbered" in res["skipped"][0]["reason"]
     assert "3. Model C" not in corpus.comparison_path("001").read_text()
+
+
+def test_re_reading_a_recorded_reader_does_stale_the_gold(cfg):
+    corpus = make_corpus(cfg)
+    corpus.comparison_path("001").parent.mkdir(parents=True, exist_ok=True)
+    corpus.comparison_path("001").write_text(COMPARISON_2, encoding="utf-8")
+    h = corpus.readings_hash("001")
+    gold = corpus.gold_path("001")
+    gold.parent.mkdir(parents=True, exist_ok=True)
+    gold.write_text("---\npage: '001'\nstatus: human-corrected\nreviewed_by: R\n"
+                    f"readings: [A, B]\nreadings_hash: {h}\n---\n\n"
+                    "## Corrected text\n\n```\n[1] x\n[2] y\n[3] z\n```\n",
+                    encoding="utf-8")
+    assert corpus.is_stale("001") is False
+    write_reading(corpus.root, "A", "001", "1. changed\n2. values\n3. here")
+    assert corpus.is_stale("001") is True
+
+
+def test_review_ticks_survive_adding_a_reader(cfg):
+    import json as _json
+    from personal_historical_archive import benchui
+    corpus = make_corpus(cfg)
+    corpus.comparison_path("001").parent.mkdir(parents=True, exist_ok=True)
+    corpus.comparison_path("001").write_text(COMPARISON_2, encoding="utf-8")
+    benchui.write_review(corpus, "001", [1, 2])
+    write_reading(corpus.root, "C", "001", "1. a\n2. b\n3. c")
+    bench.add_reader(corpus, cfg, directory="C", model="m-C", run=False, allow_lines=True)
+    assert benchui.read_review(corpus, "001") == [1, 2]
+    data = _json.loads(benchui.review_path(corpus, "001").read_text())
+    assert data["readings"] == ["A", "B"]

@@ -644,8 +644,9 @@ bench` command group is the engine. Concretely:
   appends the reader and inserts its column into the existing comparison files
   instead of regenerating them (row-numbered pages automatically; hand-aligned
   pages are skipped unless `--force-lines`, because a line mapping there is a
-  guess). The gold becomes stale — the reading set is part of its hash — and is
-  reported, never silently re-scored.
+  guess). The gold stays valid: its hash covers the readers recorded in its own
+  front matter, so the new reader is scored against it; re-reading or removing a
+  recorded reader is what makes a page stale.
 - **Draft saving**: a long page can be saved part-way with **Save draft**
   (`status: draft`, empty entries allowed). A draft is excluded from scoring and
   is the page the reviewer resumes from; **Save gold** completes it and applies

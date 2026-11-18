@@ -143,10 +143,13 @@ different prompts, or both — plus a human-corrected gold. Corpora live under
   `n_pages`, partial coverage and the token-level names metric are stated in
   the artefact. `pha bench export` writes a self-contained static site and
   publishes nothing by itself.
-- **Adding a reader changes the reading set, so every gold page becomes stale.**
-  `pha bench add-reader` inserts the new column into row-numbered comparisons;
-  hand-aligned pages are skipped unless `--force-lines`, whose line mapping must
-  be checked entry by entry.
+- **Adding a reader does not invalidate the gold.** The gold's `readings_hash`
+  covers the readers recorded in that page's own front matter, so a page
+  reviewed against three readers stays valid when a fourth is added (and is
+  scored against it); re-reading or removing one of the recorded readers does
+  make it stale. `pha bench add-reader` inserts the new column into row-numbered
+  comparisons; hand-aligned pages are skipped unless `--force-lines`, whose line
+  mapping must be checked entry by entry.
 - The reviewer works in `pha bench serve` (loopback, image beside the readings);
   it writes only `comparison/`, `reference/`, `human/` and `.review/`.
 
