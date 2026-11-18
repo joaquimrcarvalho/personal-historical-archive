@@ -127,7 +127,7 @@ not exposed to the open internet (LAN, VPN, or behind a proxy).
 ```
   archive machine                                   public host (VPS / another box)
   ├── pha (ingestion, LM Studio)     ← untouched    ├── pha-search-web :8090 (Caddy/nginx → TLS)
-  ├── pha mcp --search-only --transport sse :8000 ──┤     ├── mirror index (own sqlite)
+  ├── pha mcp --search-only --transport sse :8010 ──┤     ├── mirror index (own sqlite)
   └── pha serve :8765 (loopback) ───────────────────┘     ├── image store (own, §6.5)
         ▲ read at SYNC time only                          ├── embedding endpoint (own)
         │ (never per visitor request)                     └── query LLM (hosted API)
@@ -942,7 +942,7 @@ search_web:
 
   archive:                                  # how to reach pha (READ-ONLY)
     mode: local                             # local | mcp  (D1: start co-located on the LAN)
-    mcp_url: http://10.8.0.2:8000/sse        # Mode B: private network only
+    mcp_url: http://10.8.0.2:8010/sse        # Mode B: private network only
     serve_url: http://127.0.0.1:8765         # image source — read at SYNC time only (§6.5)
     allow_tools: [pha_list_documents, pha_get_document, pha_get_page,
                   pha_public_corpus]

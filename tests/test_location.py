@@ -81,7 +81,7 @@ def test_mcp_commands_are_client_shaped(tmp_path):
         assert entry["env"]["PHA_HOME"] == str(cfg.root)
     assert rec["mcp"]["stdio"]["args"][-1] == "mcp"
     assert rec["mcp"]["sse"]["args"][-7:] == [
-        "mcp", "--transport", "sse", "--host", "127.0.0.1", "--port", "8000",
+        "mcp", "--transport", "sse", "--host", "127.0.0.1", "--port", "8010",
     ]
     assert rec["serve"]["args"][-1] == "serve"
     assert rec["serve"]["url"].startswith("http://")

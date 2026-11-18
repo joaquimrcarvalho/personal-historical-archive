@@ -75,6 +75,12 @@ embeddings, raw and edited variants both indexed) → hybrid search + FastMCP
 The project dir holds only code, `prompts/`, `schema/` and the `_sample.md`
 templates.
 
+The MCP server (`pha mcp`) speaks **stdio** to a local client and **SSE on port
+8010** — never 8000, which other local MCP servers and dev servers hold, where
+`pha mcp` dies at startup with `address already in use`. `<archive>/pha-location.md`
+and `.pha/location.json` record the exact command for *this* machine: use it
+verbatim when relaunching a server that died, rather than reconstructing paths.
+
 **`pha bench`** extends this to **benchmark corpora**: several model/prompt
 readings of the same pages, aligned entry by entry, reviewed into a human gold,
 scored and exported as a static site. Design: `BENCHMARK_TOOL_PLAN.md`; data:

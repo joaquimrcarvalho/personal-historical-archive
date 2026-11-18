@@ -44,6 +44,12 @@ PHA_DIRNAME = ".pha"
 LOCATION_JSON = "location.json"
 LOCATION_MD = "pha-location.md"
 
+# The MCP SSE port pha documents here (and that `pha mcp --port` defaults to).
+# Deliberately NOT 8000: that port is commonly held by other local MCP servers
+# (Zotero's, for one) and dev servers, so `pha mcp --transport sse` died at
+# startup with "address already in use". Keep in step with cli.py's default.
+MCP_SSE_PORT = 8010
+
 # A gitignore block appended to an archive that lacks it. Additive only: an
 # archive owner's own .gitignore is never rewritten, just extended once.
 MANAGED_IGNORE_MARKER = (
@@ -151,7 +157,8 @@ def build_location(cfg: "Config") -> dict:
         },
         "mcp": {
             "stdio": entry("mcp"),
-            "sse": entry("mcp", "--transport", "sse", "--host", "127.0.0.1", "--port", "8000"),
+            "sse": entry("mcp", "--transport", "sse", "--host", "127.0.0.1",
+                         "--port", str(MCP_SSE_PORT)),
         },
         "serve": {**entry("serve"), "url": cfg.serve_base_url},
         "location_file": os.path.join(archive_dir, LOCATION_MD),
@@ -190,7 +197,7 @@ def render_markdown(rec: dict) -> str:
     primary = _prefix(command or pha["module"])
     module = _prefix(pha["module"])
     mcp_stdio = f"{primary} mcp"
-    mcp_sse = f"{primary} mcp --transport sse --host 127.0.0.1 --port 8000"
+    mcp_sse = f"{primary} mcp --transport sse --host 127.0.0.1 --port {MCP_SSE_PORT}"
     serve = f"{primary} serve"
     version = pha["version"]
     written = rec["written_at"].replace("T", " ")[:16]

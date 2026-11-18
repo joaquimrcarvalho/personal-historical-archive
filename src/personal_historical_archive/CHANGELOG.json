@@ -480,6 +480,18 @@
           "commit": "379edda1bea7"
         }
       ]
+    },
+    "0.51.2": {
+      "date": "2026-11-18",
+      "summary": "The MCP SSE server now uses port 8010 by default, so it no longer dies at startup when another local server already holds 8000.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "mcp",
+          "text": "default the SSE port to 8010, not 8000",
+          "commit": "3df651a74159"
+        }
+      ]
     }
   }
 }

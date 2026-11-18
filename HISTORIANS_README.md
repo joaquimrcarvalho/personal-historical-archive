@@ -587,7 +587,7 @@ archive available over the network (an "MCP server"). Ask your agent:
 
 ```
 Make the archive available to another machine:
-  pha mcp --transport sse --host 0.0.0.0 --port 8000
+  pha mcp --transport sse --host 0.0.0.0 --port 8010
 and tell me the address this computer's network uses (e.g. 192.168.1.20).
 (Optional: first run  pha set dropbox <folders>  if you want to move the
 documents folder.)

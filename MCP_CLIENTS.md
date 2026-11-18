@@ -126,10 +126,16 @@ Bind to a reachable interface (not just `127.0.0.1`) and choose a port:
 ```bash
 cd /path/to/personal-historical-archive
 pha set archive-dir /path/to/archive          # one-time; B's own archive dir
-pha mcp --transport sse --host 0.0.0.0 --port 8000
+pha mcp --transport sse --host 0.0.0.0 --port 8010
 ```
 
 Notes / security:
+- **Port 8010, not 8000.** `--port` already defaults to 8010. 8000 is the first
+  port another local MCP server or dev server grabs (Zotero's MCP agent,
+  `python -m http.server`, most web frameworks), and a server that cannot bind
+  dies at startup with `[Errno 48] address already in use` — which reads like
+  "the MCP server keeps dying". If 8010 is taken too, choose another port and
+  use it consistently in the URLs below.
 - `pha mcp` uses this machine's `config.yaml`, `.env`, and models. The remote
   agent drives **B's** dropbox and B's LM Studio — nothing runs on A.
 - There is **no authentication**. Bind to a private/LAN address or run behind
@@ -137,10 +143,10 @@ Notes / security:
   than `0.0.0.0` to limit exposure; or use an SSH tunnel:
 
 ```bash
-# machine A: SSH tunnel to B, forwards local 8000 -> B's 8000
-ssh -N -L 8000:127.0.0.1:8000 user@<machineB>
+# machine A: SSH tunnel to B, forwards local 8010 -> B's 8010
+ssh -N -L 8010:127.0.0.1:8010 user@<machineB>
 ```
-Then point the client at `http://127.0.0.1:8000/sse`.
+Then point the client at `http://127.0.0.1:8010/sse`.
 
 ### 2. On machine A — point your agent's MCP client at B
 
@@ -148,18 +154,18 @@ Then point the client at `http://127.0.0.1:8000/sse`.
   in every client. Use the **MCP Inspector** or a terminal, or a browser-based
   MCP client that supports SSE URLs. Point it at:
   ```
-  http://<machineB>:8000/sse
+  http://<machineB>:8010/sse
   ```
 - **Claude Code (CLI)** supports remote MCP via a URL:
   ```bash
   claude mcp add personal-historical-archive remote \
-    --transport sse --url http://<machineB>:8000/sse
+    --transport sse --url http://<machineB>:8010/sse
   ```
 - If the client only accepts stdio `command`, put a tiny wrapper on A that
   proxies to B, or use the `mcp` CLI:
   ```bash
   npx @modelcontextprotocol/inspector \
-    --transport sse --url http://<machineB>:8000/sse
+    --transport sse --url http://<machineB>:8010/sse
   ```
 
 ### 3. Machine A has no local models / dropbox

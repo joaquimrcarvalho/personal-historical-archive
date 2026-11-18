@@ -77,7 +77,7 @@ pha has two deployment modes (see `MCP_CLIENTS.md`):
   dropbox, models, and `archive.db`).
 - **Remote** — VS Code runs on **machine A**; the archive (dropbox/models/DB)
   lives on **machine B**, reachable only via the MCP server over SSE
-  (`pha mcp --transport sse --host <LAN-IP> --port 8000`).
+  (`pha mcp --transport sse --host <LAN-IP> --port 8010`).
 
 This decision changes the data layer completely, so the spec makes it a
 first-class concept with **two interchangeable backends behind one interface**:
@@ -420,7 +420,7 @@ These are hard requirements derived from `AGENTS.md` and the code:
   "pha.executablePath": "",          // "pha" default; else full path to the venv entry
   "pha.archiveDir": "",              // optional; mirrors PHA_ARCHIVE_DIR
   "pha.connection.mode": "auto",     // "auto" | "local" | "remote"
-  "pha.connection.remoteUrl": "http://127.0.0.1:8000/sse",  // SSE endpoint for remote
+  "pha.connection.remoteUrl": "http://127.0.0.1:8010/sse",  // SSE endpoint for remote
   "pha.refresh.intervalSeconds": 30, // dashboard/status polling
   "pha.jobs.showOutputOnRun": true,
   "pha.secrets.mask": true

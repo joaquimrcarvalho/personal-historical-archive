@@ -5172,7 +5172,10 @@ def main(argv: list[str] | None = None) -> None:
     m = sub.add_parser("mcp", help="run the MCP server (stdio or sse)")
     m.add_argument("--transport", choices=["stdio", "sse"], default="stdio")
     m.add_argument("--host", default="127.0.0.1")
-    m.add_argument("--port", type=int, default=8000)
+    # 8010, not the conventional 8000: other local MCP servers (e.g. Zotero's)
+    # and dev servers hold 8000, and `pha mcp` would die at startup with
+    # "address already in use". See MCP_CLIENTS.md.
+    m.add_argument("--port", type=int, default=8010)
     m.set_defaults(fn=cmd_mcp)
 
     sv = sub.add_parser(

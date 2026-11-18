@@ -375,7 +375,8 @@ connections (another machine, SSE, security, SSH tunnels) see
 ```
 
 `PHA_HOME` makes the server find `config.yaml` regardless of the working
-directory. An SSE variant is available: `pha mcp --transport sse --port 8000`.
+directory. An SSE variant is available: `pha mcp --transport sse --port 8010`
+(8010 is the default; 8000 is left to the other local MCP/dev servers).
 
 **Full agent setup instructions** (Claude Desktop, Cursor, Claude Code,
 MCP Inspector, SSE, and a suggested agent workflow) live in
@@ -1414,7 +1415,7 @@ pha archive-dir              # alias for `pha set archive-dir`
 pha set dropbox [PATH]       # DEPRECATED: set only the documents folder
 pha upload document PATH [--name N] [--replace] [--merge]
 pha upload collection PATH [--name N] [--replace] [--merge]
-pha mcp [--transport stdio|sse] [--port 8000]
+pha mcp [--transport stdio|sse] [--port 8010]
 pha bundle TARGET... [--out DIR] [--force] [--move]  # export collections/docs as a portable bundle
                                                      #   (--move: delete them from THIS archive too)
 pha unbundle BUNDLE [--force]                # import a bundle into THIS archive (no re-scan/edit)

@@ -868,7 +868,7 @@ def make_server(cfg: Config) -> FastMCP:
     return mcp
 
 
-def main(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8000) -> None:
+def main(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8010) -> None:
     cfg = Config.load()
     # An MCP client launches this with whatever cwd it happens to have (often
     # "/") and with no TTY, so the CLI's interactive fresh-install guard never

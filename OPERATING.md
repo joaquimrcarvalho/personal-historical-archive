@@ -537,7 +537,7 @@ Starting points:
 
 - **MCP server** runs on the machine that owns the dropbox and models; a client
   on another machine needs only an MCP connection. `pha mcp --transport sse
-  --host <LAN-IP> --port 8000` (no auth — use a private LAN/VPN/SSH tunnel); see
+  --host <LAN-IP> --port 8010` (no auth — use a private LAN/VPN/SSH tunnel); see
   `MCP_CLIENTS.md`.
 - **`pha` not on PATH?** Look in the archive first: `<archive>/pha-location.md`
   (and `.pha/location.json`) records where the tool lives on THIS machine,

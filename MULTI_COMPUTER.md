@@ -459,7 +459,7 @@ job holds the server they need.
 
 The MCP server runs on the machine that owns the dropbox and models. A client on
 another machine needs only an MCP connection — no local models or dropbox. Start
-on the archive machine with `pha mcp --transport sse --host <LAN-IP> --port 8000`
+on the archive machine with `pha mcp --transport sse --host <LAN-IP> --port 8010`
 (no auth — use a private LAN/VPN/SSH tunnel). See `MCP_CLIENTS.md` for the full
 wiring.
 
