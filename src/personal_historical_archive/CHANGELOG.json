@@ -468,6 +468,18 @@
           "commit": "95cda75570d5"
         }
       ]
+    },
+    "0.51.1": {
+      "date": "2026-11-18",
+      "summary": "Semantic search compares only vectors produced by the configured embedding model, reports a half-migrated index instead of silently ranking half the archive out, and a reindex embed failure is now an error rather than a silently keyword-only document.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "search",
+          "text": "score only vectors of the configured embedding model",
+          "commit": "379edda1bea7"
+        }
+      ]
     }
   }
 }
