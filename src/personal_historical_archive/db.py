@@ -87,6 +87,21 @@ CREATE TABLE IF NOT EXISTS notes (
     updated_at REAL NOT NULL
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(text);
+-- One row per embedded CHUNK of a note. A note is often far longer than the
+-- embedding model's window (the shipped nomic is served with a 2048-token
+-- context), and the endpoint truncates an over-long input silently, so a note
+-- embedded whole only represents its first few thousand characters. Chunking
+-- keeps the whole note semantically searchable; `notes.embedding` keeps the
+-- FIRST chunk's vector as the cheap "this note is embedded" marker.
+CREATE TABLE IF NOT EXISTS note_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+    chunk_no INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    embedding BLOB,
+    embed_model TEXT,
+    UNIQUE (note_id, chunk_no)
+);
 CREATE TABLE IF NOT EXISTS document_bibliography (
     document_id   INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
     sidecar_path  TEXT,
@@ -118,6 +133,8 @@ _OPTIONAL_INDEXES = (
     # this index themselves; any write command does, once.
     "CREATE INDEX IF NOT EXISTS idx_chunks_embed_model "
     "ON chunks(embed_model) WHERE embedding IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_note_chunks_model "
+    "ON note_chunks(embed_model) WHERE embedding IS NOT NULL",
 )
 
 
@@ -1859,6 +1876,12 @@ def notes_fts_exists(conn: sqlite3.Connection) -> bool:
     ).fetchone() is not None
 
 
+def note_chunks_table_exists(conn: sqlite3.Connection) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='note_chunks'"
+    ).fetchone() is not None
+
+
 def all_notes(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Every indexed note, `name`-ordered. [] when the index was never built."""
     if not notes_table_exists(conn):
@@ -1878,6 +1901,10 @@ def get_note(conn: sqlite3.Connection, note_id: int | None = None,
 def delete_note(conn: sqlite3.Connection, note_id: int) -> None:
     if notes_fts_exists(conn):
         _write(conn, "DELETE FROM notes_fts WHERE rowid = ?", (int(note_id),))
+    # Explicit rather than relying on ON DELETE CASCADE: not every connection
+    # (e.g. an older archive opened by a read-only path) enforces foreign keys.
+    if note_chunks_table_exists(conn):
+        _write(conn, "DELETE FROM note_chunks WHERE note_id = ?", (int(note_id),))
     _write(conn, "DELETE FROM notes WHERE id = ?", (int(note_id),))
 
 
@@ -1940,20 +1967,79 @@ def set_note_embedding(conn: sqlite3.Connection, note_id: int, embedding: bytes,
                (embedding, embed_model, int(note_id)))
 
 
+def replace_note_chunks(conn: sqlite3.Connection, note_id: int,
+                        chunks: list[tuple[int, str, bytes | None, str | None]]) -> int:
+    """Replace a note's chunk rows with `(chunk_no, text, embedding, model)`.
+
+    Empty `chunks` clears them, which is what a note whose text changed but
+    whose re-embed failed must do: keeping the old chunks would leave vectors
+    pointing at withdrawn wording.
+    """
+    if not note_chunks_table_exists(conn):
+        return 0
+    _write(conn, "DELETE FROM note_chunks WHERE note_id = ?", (int(note_id),))
+    for chunk_no, text, blob, model in chunks:
+        _write(
+            conn,
+            "INSERT INTO note_chunks (note_id, chunk_no, text, embedding, embed_model) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (int(note_id), int(chunk_no), text, blob, model),
+        )
+    return len(chunks)
+
+
 def notes_missing_embeddings(conn: sqlite3.Connection,
                              embed_model: str | None) -> list[sqlite3.Row]:
-    """Notes whose vector is absent or was produced by a different model."""
+    """Notes that need (re)embedding: no vector, another model's vector, or no chunks.
+
+    A note embedded whole by an older pha has `notes.embedding` but no
+    `note_chunks` rows; it is reported here so the next indexing pass chunks it
+    (that is the upgrade path — the vector it has covers only the note's head).
+    """
     if not notes_table_exists(conn):
         return []
+    if not note_chunks_table_exists(conn):
+        # No chunk table yet (a pha older than chunked notes, or a read-only
+        # connection that has not run the DDL): the stored vector is a
+        # whole-note one and covers only the note's head, so EVERY note with
+        # text needs (re)chunking. Returning only notes with a NULL vector here
+        # made the upgrade silently invisible: `pha search` saw nothing to do
+        # and answered without the notes.
+        return conn.execute(
+            "SELECT id, name, text FROM notes WHERE TRIM(text) != '' ORDER BY id"
+        ).fetchall()
     return conn.execute(
-        "SELECT id, name, text FROM notes "
-        "WHERE embedding IS NULL OR IFNULL(embed_model, '') != ? ORDER BY id",
+        "SELECT n.id, n.name, n.text FROM notes n "
+        "WHERE TRIM(n.text) != '' AND ("
+        "  n.embedding IS NULL OR IFNULL(n.embed_model, '') != ?"
+        "  OR NOT EXISTS (SELECT 1 FROM note_chunks nc WHERE nc.note_id = n.id)"
+        ") ORDER BY n.id",
         (embed_model or "",),
+    ).fetchall()
+
+
+def all_note_chunk_embeddings(conn: sqlite3.Connection,
+                              embed_model: str | None = None) -> list[sqlite3.Row]:
+    """Every embedded note chunk: rows of (note_id, embedding).
+
+    Semantic note search scores chunks and keeps a note's BEST chunk, because a
+    note is a unit of meaning but its representation is now several vectors.
+    """
+    if not (notes_table_exists(conn) and note_chunks_table_exists(conn)):
+        return []
+    if embed_model:
+        return conn.execute(
+            "SELECT note_id, embedding FROM note_chunks WHERE embedding IS NOT NULL "
+            "AND embed_model = ?", (embed_model,),
+        ).fetchall()
+    return conn.execute(
+        "SELECT note_id, embedding FROM note_chunks WHERE embedding IS NOT NULL"
     ).fetchall()
 
 
 def all_note_embeddings(conn: sqlite3.Connection,
                         embed_model: str | None = None) -> list[sqlite3.Row]:
+    """LEGACY: the whole-note vector in `notes.embedding` (see note_chunks)."""
     if not notes_table_exists(conn):
         return []
     if embed_model:
@@ -1985,14 +2071,31 @@ def notes_keyword_search(conn: sqlite3.Connection, query: str,
 
 
 def notes_stats(conn: sqlite3.Connection) -> dict:
-    """Index-side totals: how many notes are stored and how many carry a vector."""
+    """Index-side totals: notes stored, notes with at least one chunk vector,
+    and how many chunk vectors exist in total.
+
+    `embedded` counts NOTES (the unit a search returns), so an archive whose
+    notes were embedded whole by an older pha reports 0 here until they are
+    re-chunked: their single vector covers only the head of the note and must
+    not be presented as fully indexed.
+    """
     if not notes_table_exists(conn):
-        return {"indexed": 0, "embedded": 0}
+        return {"indexed": 0, "embedded": 0, "chunks": 0}
+    if not note_chunks_table_exists(conn):
+        # Same reasoning as `notes_missing_embeddings`: without chunk rows there
+        # is no chunk vector, and a whole-note vector must not be reported as
+        # fully indexed. 0 here is what surfaces the re-chunking hint in
+        # `pha status` on an archive upgraded from a pre-chunking pha.
+        row = conn.execute("SELECT COUNT(*) n FROM notes").fetchone()
+        return {"indexed": int(row["n"] or 0), "embedded": 0, "chunks": 0}
     row = conn.execute(
-        "SELECT COUNT(*) n, SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) e "
-        "FROM notes"
+        "SELECT (SELECT COUNT(*) FROM notes) n, "
+        "       (SELECT COUNT(DISTINCT note_id) FROM note_chunks "
+        "        WHERE embedding IS NOT NULL) e, "
+        "       (SELECT COUNT(*) FROM note_chunks WHERE embedding IS NOT NULL) c"
     ).fetchone()
-    return {"indexed": int(row["n"] or 0), "embedded": int(row["e"] or 0)}
+    return {"indexed": int(row["n"] or 0), "embedded": int(row["e"] or 0),
+            "chunks": int(row["c"] or 0)}
 
 
 # --------------------------------------------------------------------------- bibliography

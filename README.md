@@ -1655,10 +1655,51 @@ or per-invocation with the `PHA_NO_UPDATE_CHECK=1` environment variable.
 - `vision.*` — model server + vision model for extraction
 - `embeddings.*` — model server + embedding model; `batch_size` caps how many
   chunks go in each `/embeddings` request (some endpoints reject an input over
-  a fixed max, e.g. 200 vectors)
+  a fixed max, e.g. 200 vectors); `context_tokens`/`max_chars` bound how much
+  text fits the model's window (auto-discovered from the server when it reports
+  one). **The embedding model is a per-machine
+  setting**: which server and model exist on this computer differs between
+  machines, so a `embeddings:` block in the **per-user settings**
+  (`~/.config/pha/config.yaml`, `%APPDATA%\pha\config.yaml` on Windows) is
+  merged key by key over this file. Change it there with `pha set embeddings`
+  rather than editing this tracked file; see *Changing the embedding model*.
 - `extraction.*` — render dpi, image cap, chunk size/overlap, concurrency
 - `search.*` — default mode and result count
 - `update.*` — self-update behaviour (see *Self-update* above)
+
+**Changing the embedding model.** On a checkout, this file is tracked by git,
+so editing it dirties the repository (and `pha update` pulls with `--ff-only`);
+on a wheel install there is no `config.yaml` at all, so pha falls back to the
+default compiled into it. Both are the wrong place for a machine-specific
+choice, so the per-user settings carry it:
+
+```sh
+pha set embeddings                                  # what is effective, and from where
+pha set embeddings --model nomic-embed-text \
+  --base-url http://127.0.0.1:11434/v1              # Ollama on THIS machine
+pha set embeddings --unset                          # back to config.yaml / the default
+```
+
+`--base-url`, `--server`, `--backend`, `--batch-size`, `--timeout-s` and the
+window controls `--context-tokens`/`--max-chars` work the same way.
+`pha doctor` prints the effective model and its source under
+*embedding model (semantic search)*. Editing the `embeddings:` block in this
+file still works and remains the archive-wide default; a per-user block wins
+over it key by key. Changing the model needs `pha reindex` (see below); changing
+only the endpoint or batch size does not (use `pha reindex --force` if the
+server itself changed).
+
+**The input window is discovered, not assumed.** `/embeddings` reports nothing
+when it truncates an over-long input: it cuts it silently and returns a vector
+for the beginning. pha therefore asks the server for the configured model's
+context (LM Studio's `GET /api/v0/models`, Ollama's `POST /api/show`), falls
+back to `embeddings.context_tokens: 2048` when the endpoint does not say, and
+sizes every input against it. Discovery can only *shrink* the budget, so
+switching to a smaller-window model cannot re-introduce truncation.
+`embeddings.max_chars` is an optional hard cap for token-dense scripts (CJK is
+~1–2 characters per token, not 4). Notes are embedded **chunk by chunk**, so a
+20 kB note no longer gets a vector covering only its first few thousand
+characters; page chunks, note chunks and records all use the same budget.
 
 **Switching backends** (e.g. Ollama instead of LM Studio) is a config change:
 
@@ -1670,6 +1711,9 @@ embeddings:
   base_url: http://127.0.0.1:11434/v1
   model: nomic-embed-text
 ```
+
+For a single machine, prefer `pha set embeddings --base-url … --model …` over
+editing the tracked block above.
 
 After switching the embedding model run `pha reindex` — the stored vectors name
 the model that produced them, so a changed model re-embeds every chunk

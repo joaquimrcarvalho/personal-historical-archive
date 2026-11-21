@@ -24,9 +24,12 @@ the review round-trip — the things an agent must know before acting — see
   records) → SQLite (FTS5 + embeddings, indexing both raw and edited
   variants) → hybrid search + FastMCP (`pha_*` tools).
 - Beside that pipeline sits the **memory**: `notes/` (the researcher's own
-  conclusions) is indexed into its own `notes` + `notes_fts` tables by
-  `notes.py`, and `pha search` fuses pages, records and notes with RRF keyed on
-  `(kind, id)`. Notes are never `documents` — search is the only surface that
+  conclusions) is indexed into its own `notes` + `notes_fts` + `note_chunks`
+  tables by `notes.py`, and `pha search` fuses pages, records and notes with RRF
+  keyed on `(kind, id)`. `note_chunks` holds one vector per chunk of a note,
+  because a note is routinely longer than the embedding model's window, while
+  `notes.embedding` keeps the first chunk's vector as the "this note is
+  embedded" marker. Notes are never `documents` — search is the only surface that
   sees them, and a note hit is marked `kind: "note"` so a conclusion is never
   mistaken for evidence.
 
@@ -77,6 +80,27 @@ The per-user file also keeps `paths.archives`, a list of alternatives managed
 by `pha set archive-dir` (register), `pha list archive-dir`, `pha use
 archive-dir` (switch active), and `pha rm archive-dir` (unregister, never delete
 files).
+
+**Machine-local embedding settings.** Besides `paths.*`, the per-user file may
+carry an `embeddings:` block (`model`, `base_url`, `server`, `backend`,
+`batch_size`, `timeout_s`, and the window controls `context_tokens`/`max_chars`).
+It is merged **key by key over** the project
+`config.yaml` (per-user wins) and is the supported way to change the embedding
+model on one machine: `config.yaml` is git-tracked, so editing it on a checkout
+dirties the repo and `pha update` pulls with `--ff-only`; a wheel install has no
+`config.yaml` at all and falls back to the defaults in `config.py`. Which source
+won is recorded on the Config (`embed_source`: `user` | `config` | `default`)
+and printed by `pha doctor` and `pha set embeddings`. An explicit
+`Config.load(root)` is authoritative and ignores the per-user block, like the
+archive pointer. Other per-user keys are ignored.
+
+**Sizing embedded text.** The `/embeddings` endpoint silently truncates an input
+longer than the model's context, so pha decides the budget before the request:
+`ModelClient.embedding_window` asks the server (LM Studio `/api/v0/models`,
+Ollama `/api/show`) and `embed.max_input_chars` takes the smaller of that window
+(× ~4 chars/token) and `embeddings.context_tokens`/`max_chars`. Page chunks, note
+chunks and record text are all bounded by it; discovery can only shrink the
+budget, never raise it.
 
 `pha set archive-dir` also removes the legacy `.env` line, which is what makes
 it effective.

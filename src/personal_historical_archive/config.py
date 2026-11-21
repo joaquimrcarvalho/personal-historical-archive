@@ -283,28 +283,44 @@ def user_settings_file() -> Path:
     return user_config_dir() / "config.yaml"
 
 
-def _user_config_archive_dir() -> str:
-    """`paths.archive_dir` from the per-user settings, or "" when there is none.
+def user_settings_raw() -> dict:
+    """The per-user settings file parsed as a dict ({} when absent).
 
     Never fatal: a missing file is the normal case, and an unreadable or
-    malformed one must not stop pha from starting — the caller falls through to
-    the project-root default (and the unconfigured-archive guard reports that).
+    malformed one must not stop pha from starting — the callers fall through to
+    their own defaults (and the unconfigured-archive guard reports that).
     """
     f = user_settings_file()
     try:
         raw = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
     except FileNotFoundError:
-        return ""
+        return {}
     except (OSError, yaml.YAMLError) as e:
         print(f"warning: cannot read the user settings {f}: {e}", file=sys.stderr)
-        return ""
-    if not isinstance(raw, dict):
-        return ""
-    paths = raw.get("paths") or {}
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _user_config_archive_dir() -> str:
+    """`paths.archive_dir` from the per-user settings, or "" when there is none."""
+    paths = user_settings_raw().get("paths") or {}
     if not isinstance(paths, dict):
         return ""
     value = paths.get("archive_dir")
     return str(value).strip() if value is not None else ""
+
+
+# WHERE an `embeddings.*` setting came from. The embeddings block is a MACHINE
+# setting (which model server and model exist on THIS computer), so the
+# per-user settings outrank the checkout's config.yaml key by key; the code
+# defaults are the last resort (a built pha with no config.yaml at all).
+# Reported by `pha doctor` and `pha set embeddings` so "which model is pha
+# actually using, and who decided it" is answerable without reading source.
+EMBED_SOURCE_TEXT = {
+    "user": "per-user settings (~/.config/pha/config.yaml)",
+    "config": "project config.yaml",
+    "default": "built-in default (no config.yaml carries an embeddings block)",
+}
 
 
 @dataclass
@@ -608,6 +624,17 @@ class Config:
     # key. See locks.py.
     embed_server: str
     embed_batch_size: int
+    # embed_context_tokens: the embedding model's context window, in tokens.
+    # The shipped nomic GGUF is served by LM Studio with maxContextLength=2048
+    # (not the 8192 on the model card), so that is the default. Nothing in the
+    # API reports truncation: an input over the window is silently cut, and the
+    # vector represents only its beginning.
+    embed_context_tokens: int
+    # embed_max_chars: the largest input, in characters, that fits the window
+    # (context_tokens x ~4 chars/token, the same heuristic the encoders use).
+    # Override for token-dense scripts (CJK is ~1-2 chars/token, so a 2048-token
+    # window holds roughly 2048-4096 chars there).
+    embed_max_chars: int
     # extraction
     render_dpi: int
     max_image_px: int
@@ -645,6 +672,10 @@ class Config:
     # ACTUALLY used instead of re-deriving it from three files (and drifting —
     # see D3 in enhancements/pha-archive-pointer-loss-bug-report.md).
     archive_source_kind: str = "default"
+    # WHERE the effective embeddings block came from: "user" | "config" |
+    # "default" (see EMBED_SOURCE_TEXT). Decided alongside the merge, so
+    # `pha doctor`/`pha set embeddings` report what was actually used.
+    embed_source: str = "default"
 
     @classmethod
     def load(cls, root: Path | None = None) -> "Config":
@@ -662,6 +693,24 @@ class Config:
         paths = raw.get("paths", {})
         vis = raw.get("vision", {}) or {}
         emb = raw.get("embeddings", {}) or {}
+        # Machine-local embedding settings: the model server AND model exist on
+        # THIS computer, so the per-user settings outrank the checkout's
+        # config.yaml key by key. This is what lets a second machine switch the
+        # embedding model without editing the git-tracked config.yaml (and what
+        # a wheel install has instead of a config.yaml at all). An explicit
+        # `root` is authoritative, so it is not overridden either.
+        user_emb: dict = {}
+        if not explicit_root:
+            _ue = user_settings_raw().get("embeddings")
+            if isinstance(_ue, dict):
+                user_emb = _ue
+        if user_emb:
+            emb = {**(emb if isinstance(emb, dict) else {}), **user_emb}
+            embed_source = "user"
+        elif emb:
+            embed_source = "config"
+        else:
+            embed_source = "default"
         ext = raw.get("extraction", {}) or {}
         sea = raw.get("search", {}) or {}
         srv = raw.get("serve", {}) or {}
@@ -798,6 +847,16 @@ class Config:
         editors = _parse_editors(raw, prompts_dir, root, ed_dir, models)
         encoders = _parse_encoders(enc_dir, models)
 
+        # The embedding window is a hard input limit, unlike an LLM's prompt
+        # budget: the endpoint silently truncates an over-long input, so pha
+        # sizes every text it embeds (page chunks, notes, records) against it.
+        _ctx = int(emb.get("context_tokens", 2048) or 2048)
+        if _ctx < 1:
+            _ctx = 2048
+        _max_chars = int(emb.get("max_chars", 0) or 0)
+        if _max_chars < 64:
+            _max_chars = _ctx * 4
+
         return cls(
             root=root,
             archive_dir=archive_dir,
@@ -828,6 +887,8 @@ class Config:
             embed_timeout_s=int(emb.get("timeout_s", 120)),
             embed_server=str(emb.get("server", "")).strip(),
             embed_batch_size=int(emb.get("batch_size", 100)),
+            embed_context_tokens=_ctx,
+            embed_max_chars=_max_chars,
             render_dpi=int(ext.get("render_dpi", 200)),
             max_image_px=int(ext.get("max_image_px", 1800)),
             jpeg_quality=int(ext.get("jpeg_quality", 88)),
@@ -846,6 +907,7 @@ class Config:
             update_repo=str(upd.get("repo", "joaquimrcarvalho/personal-historical-archive")),
             update_branch=str(upd.get("branch", "main")),
             archive_source_kind=archive_source_kind,
+            embed_source=embed_source,
         )
 
     def get_palaeographer(self, pal_id: str | None = None) -> Palaeographer:
@@ -870,6 +932,17 @@ class Config:
         if model_id not in self.models:
             raise KeyError(f"unknown model {model_id!r}; configured: {sorted(self.models)}")
         return self.models[model_id]
+
+    def embed_chunk_chars(self) -> int:
+        """The CONFIGURED upper bound on a chunk, in chars.
+
+        `extraction.chunk_chars`, clamped to `embeddings.max_chars` (the
+        model's window x ~4 chars/token). The embedding paths use
+        `embed.chunk_size`, which applies a smaller window discovered from the
+        server on top of this; the method exists so the bound can be inspected
+        without a client.
+        """
+        return max(64, min(int(self.chunk_chars), int(self.embed_max_chars)))
 
     def server_slots(self, server: str) -> int:
         """Declared concurrent-job capacity for a model-server key (default 1).

@@ -25,6 +25,7 @@ import sqlite3
 from pathlib import Path
 
 from . import db, locks
+from . import embed as embed_lib
 from .embed import pack, prefixed
 from .model_client import ModelClient, ModelError
 
@@ -197,18 +198,26 @@ def index_notes(cfg, conn: sqlite3.Connection, embed_client: ModelClient | None 
     valid vector any more, so a failed embed degrades it to text-only (it is
     still findable by keyword) instead of leaving a stale vector pointing at
     wording that no longer exists.
+
+    **A note is embedded in CHUNKS**, not whole. The embedding endpoint truncates
+    an input longer than the model's context (the shipped nomic is served with
+    2048 tokens) silently, so a 20 kB note embedded whole got a vector for its
+    first few thousand characters only. One row per chunk in `note_chunks` keeps
+    the whole note searchable by meaning; `notes.embedding` keeps the first
+    chunk's vector as the "this note is embedded" marker.
     """
     if not db.notes_table_exists(conn):
         # An older archive opened read-only: the tables arrive on the next
         # write-capable command (`pha search` builds them, see ensure_indexed).
         return {"changed": 0, "removed": 0, "indexed": 0, "embedded": 0,
-                "text_only": 0, "unchanged": 0, "error": "notes table not created"}
+                "text_only": 0, "unchanged": 0, "chunks": 0,
+                "error": "notes table not created"}
 
     work = plan(cfg, conn, force=force)
     changed = work["changed"]
     removed = work["removed"]
     embed_error: str | None = None
-    to_embed = changed
+    to_embed = list(changed)
     missing: list[sqlite3.Row] = []
     if embed_client is not None and (cfg.embed_model or "").strip():
         missing = db.notes_missing_embeddings(conn, cfg.embed_model)
@@ -216,50 +225,98 @@ def index_notes(cfg, conn: sqlite3.Connection, embed_client: ModelClient | None 
         # `missing`; embedding the two groups together would embed it twice.
         changed_ids = {item["name"] for item in changed}
         missing = [r for r in missing if r["name"] not in changed_ids]
-        to_embed = changed + [{"name": r["name"], "text": r["text"], "id": r["id"]}
-                              for r in missing]
-    vectors: dict[str, bytes] = {}
-    if embed_client is not None and to_embed and (cfg.embed_model or "").strip():
+        to_embed = to_embed + [{"name": r["name"], "text": r["text"], "id": r["id"]}
+                               for r in missing]
+
+    # Chunk every note that is about to be (re)embedded. The size is capped by
+    # the embed model's window (`Config.embed_chunk_chars`), so a raised
+    # `extraction.chunk_chars` cannot make the server truncate silently.
+    # Imported here: ingest imports this module at load time.
+    from .ingest import chunk_text
+
+    pieces_by_name: dict[str, list[str]] = {}
+    inputs: list[str] = []
+    if to_embed:
+        size = embed_lib.chunk_size(cfg, embed_client)
+        for item in to_embed:
+            pieces = chunk_text(item["text"] or "", size, cfg.chunk_overlap)
+            pieces_by_name[item["name"]] = pieces
+            inputs.extend(prefixed(cfg.embed_model, piece, "doc") for piece in pieces)
+    vectors: dict[str, list[bytes | None]] = {}
+    if embed_client is not None and inputs and (cfg.embed_model or "").strip():
         try:
-            vecs = embed_client.embed(
-                cfg.embed_model,
-                [prefixed(cfg.embed_model, item["text"], "doc") for item in to_embed],
-                batch_size=cfg.embed_batch_size,
-            )
-            for item, vec in zip(to_embed, vecs):
-                if vec:
-                    vectors[item["name"]] = pack(vec)
+            vecs = embed_client.embed(cfg.embed_model, inputs,
+                                      batch_size=cfg.embed_batch_size)
+            i = 0
+            for item in to_embed:
+                blobs: list[bytes | None] = []
+                for _ in pieces_by_name[item["name"]]:
+                    vec = vecs[i] if i < len(vecs) else None
+                    blobs.append(pack(vec) if vec else None)
+                    i += 1
+                vectors[item["name"]] = blobs
         except ModelError as e:
             embed_error = str(e)
             if verbose:
                 print(f"  warning: note embeddings unavailable ({e}); "
                       f"indexing notes text-only", flush=True)
 
+    def _chunk_rows(item: dict) -> list[tuple[int, str, bytes, str | None]]:
+        """The chunk rows to store for one note: only the chunks WITH a vector.
+
+        A chunk left without one (embed failed) is simply absent, so
+        `notes_missing_embeddings` reports the note again and the next pass
+        fills it; a text-only chunk row would hide the gap.
+        """
+        blobs = vectors.get(item["name"]) or []
+        rows = []
+        for no, piece in enumerate(pieces_by_name.get(item["name"], [])):
+            blob = blobs[no] if no < len(blobs) else None
+            if blob:
+                rows.append((no, piece, blob, cfg.embed_model))
+        return rows
+
+    embedded = 0
+    chunk_vectors = 0
     for item in changed:
-        blob = vectors.get(item["name"])
-        db.upsert_note(
+        rows = _chunk_rows(item)
+        blob = rows[0][2] if rows else None
+        note_id = db.upsert_note(
             conn, name=item["name"], path=item["path"], title=item["title"],
             mtime=item["mtime"], size_bytes=item["size_bytes"],
             sha256=item["sha256"], text=item["text"], embedding=blob,
             embed_model=cfg.embed_model if blob else None,
             fts_text=search_text(item["text"], item["title"]),
         )
+        # Always replace: the old chunks belonged to the note's previous text.
+        db.replace_note_chunks(conn, note_id, rows)
+        if blob:
+            embedded += 1
+        chunk_vectors += len(rows)
         if verbose:
-            state = "embedded" if blob else "text-only"
+            state = f"embedded in {len(rows)} chunk(s)" if blob else "text-only"
             print(f"  note: {item['name']} ({item['size_bytes']} B, {state})", flush=True)
     for row in removed:
         db.delete_note(conn, int(row["id"]))
         if verbose:
             print(f"  note: {row['name']} removed from the archive", flush=True)
-    # Notes whose text did not change but whose vector is missing or from
-    # another model: those cannot be written by `upsert_note` (which needs the
-    # whole record), so they get a targeted update.
+    # Notes whose text did not change but whose vectors are missing, from
+    # another model, or were stored whole by an older pha (no chunk rows): they
+    # cannot be written by `upsert_note` (which needs the whole record), so they
+    # get targeted updates.
     filled = 0
     for row in missing:
-        blob = vectors.get(row["name"])
-        if blob:
-            db.set_note_embedding(conn, int(row["id"]), blob, cfg.embed_model)
-            filled += 1
+        item = {"name": row["name"], "text": row["text"]}
+        rows = _chunk_rows(item)
+        if not rows:
+            continue
+        db.set_note_embedding(conn, int(row["id"]), rows[0][2], cfg.embed_model)
+        db.replace_note_chunks(conn, int(row["id"]), rows)
+        filled += 1
+        chunk_vectors += len(rows)
+        if verbose:
+            print(f"  note: {row['name']} embedded in {len(rows)} chunk(s)",
+                  flush=True)
     if changed or removed or filled:
         conn.commit()
     indexed = len(changed) + filled
@@ -267,8 +324,9 @@ def index_notes(cfg, conn: sqlite3.Connection, embed_client: ModelClient | None 
         "changed": len(changed),
         "removed": len(removed),
         "indexed": indexed,
-        "embedded": sum(1 for item in changed if vectors.get(item["name"])) + filled,
-        "text_only": sum(1 for item in changed if not vectors.get(item["name"])),
+        "embedded": embedded + filled,
+        "text_only": sum(1 for item in changed if not _chunk_rows(item)),
+        "chunks": chunk_vectors,
         "unchanged": work["unchanged"],
         "error": embed_error,
     }
@@ -338,7 +396,7 @@ def stats(cfg, conn: sqlite3.Connection) -> dict:
     """
     files = note_files(cfg)
     indexed = (db.notes_stats(conn) if db.notes_table_exists(conn)
-               else {"indexed": 0, "embedded": 0})
+               else {"indexed": 0, "embedded": 0, "chunks": 0})
     stale = removed = 0
     if db.notes_table_exists(conn):
         try:
@@ -348,7 +406,8 @@ def stats(cfg, conn: sqlite3.Connection) -> dict:
         except (sqlite3.Error, OSError):
             stale = removed = 0
     return {"files": len(files), "indexed": indexed["indexed"],
-            "embedded": indexed["embedded"], "stale": stale, "removed": removed}
+            "embedded": indexed["embedded"], "chunks": indexed.get("chunks", 0),
+            "stale": stale, "removed": removed}
 
 
 def describe(res: dict | None) -> str | None:

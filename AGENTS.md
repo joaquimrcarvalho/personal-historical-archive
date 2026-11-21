@@ -181,6 +181,13 @@ picked up by staleness-by-mtime on the next matching pass, so re-run `pha scan` 
 catalogue, and the null editor: `ARCHITECTURE.md` §2–3. How to inspect or change
 what a collection is set to: `OPERATING.md` §2–3.
 
+**The embedding model is not a stage** and does not come from `models/`: it is
+`embeddings.model` in `config.yaml`, overridable per machine with
+`pha set embeddings --model <id>` (per-user settings, wins over `config.yaml`;
+`pha doctor` prints the effective model, its source and its input window, which
+pha asks the server for). Notes are embedded chunk by chunk, bounded by that
+window — never embedded whole. Changing the model needs `pha reindex`.
+
 ## Working in an archive (not this repo)
 
 An agent may be running **from an archive directory**, where the person is almost

@@ -325,6 +325,11 @@ A skill added by hand is yours: pha never overwrites it.
   servers may run together. Running two models on one server fills the disk and hangs the
   machine. `pha doctor` shows the servers and their capacity.
   Quit LM Studio when not ingesting.
+- **The embedding model (search by meaning) is a per-machine setting, not part
+  of a collection.** See what is in use with `pha set embeddings` or
+  `pha doctor`; change it on this machine with `pha set embeddings --model <id>`
+  (and `--base-url` when the server changes), then `pha reindex`. Do not edit
+  the pha source checkout for this.
 - Full usage and troubleshooting: see the pha README in the source repository
   linked at the top.
 """

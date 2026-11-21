@@ -16,7 +16,7 @@ from . import addresses
 from . import bibliography
 from . import db
 from . import manage
-from .config import Config, user_settings_file
+from .config import EMBED_SOURCE_TEXT, Config, user_settings_file
 from .extract import is_supported, resolve_editor_id, resolve_encoder_id, resolve_palaeographer_id, resolve_prompt, encoder_files_for
 from .ingest import (
     edit_all,
@@ -487,8 +487,9 @@ def cmd_notes(cfg: Config, args) -> None:
             return
         if res.get("error"):
             print(f"! {res['error']}", file=sys.stderr)
-        print(f"notes: {res['indexed']} indexed ({res['embedded']} embedded, "
-              f"{res['text_only']} text-only), {res['removed']} removed, "
+        chunks = f" in {res.get('chunks', 0)} chunk(s)" if res.get("chunks") else ""
+        print(f"notes: {res['indexed']} indexed ({res['embedded']} embedded"
+              f"{chunks}, {res['text_only']} text-only), {res['removed']} removed, "
               f"{res['unchanged']} unchanged")
         return
 
@@ -1794,9 +1795,14 @@ def cmd_status(cfg: Config, args) -> None:
             if note_stats.get("stale"):
                 extra = (f"   ({note_stats['stale']} changed since indexing — "
                          f"`pha notes index`, or just search)")
+            chunks = note_stats.get("chunks") or 0
+            chunked = f" in {chunks} chunk(s)" if chunks else ""
             print(f"  notes:     {note_stats['indexed']} indexed of "
                   f"{note_stats['files']} in notes/   "
-                  f"({note_stats['embedded']} embedded){extra}")
+                  f"({note_stats['embedded']} embedded{chunked}){extra}")
+            if note_stats["indexed"] and not note_stats["embedded"]:
+                print("             vectors are missing or were stored whole by "
+                      "an older pha — `pha reindex --source notes`")
         local_skills = skill_stats.get("modified", 0) + skill_stats.get("unverified", 0)
         if local_skills:
             print(f"  skills:    {local_skills} file(s) differ from pha's bundle "
@@ -3974,6 +3980,123 @@ def cmd_set_dropbox(cfg: Config, args) -> None:
                        str(getattr(cfg, "dropbox", "")), path)
 
 
+def _print_embed_window(cfg: Config) -> None:
+    """Show the input window chunks will be sized against, asking the server.
+
+    The endpoint does not report truncation, so this is the only way to know
+    whether a model change made the effective budget smaller. Best-effort: an
+    unreachable server prints the configured fallback.
+    """
+    from . import embed as embed_lib
+
+    probe = _client(cfg, cfg.embed_base_url, 3)
+    try:
+        tokens = probe.embedding_window(cfg.embed_model)
+        budget = embed_lib.max_input_chars(cfg, probe)
+        chunk = embed_lib.chunk_size(cfg, probe)
+    finally:
+        probe.close()
+    if tokens:
+        print(f"input window    : {tokens} tokens reported by the server "
+              f"(~{budget} chars); chunks <= {chunk} chars")
+    else:
+        print(f"input window    : {budget} chars from embeddings.context_tokens "
+              f"(the server did not report one); chunks <= {chunk} chars")
+
+
+def cmd_set_embeddings(cfg: Config, args) -> None:
+    """Change the embedding model/server for THIS machine.
+
+    `embeddings.*` used to be editable only in the project `config.yaml` — a
+    git-tracked file, so switching the embedding model on a checkout dirtied
+    the repo (`pha update` pulls with `--ff-only`), and a wheel install had no
+    config.yaml at all and fell back to the defaults compiled into pha. The
+    embedding model is a MACHINE setting — which server and which model exist
+    on this computer — so it lives in the per-user settings and overrides the
+    checkout key by key (see `Config.load` and `config.EMBED_SOURCE_TEXT`).
+
+    With no flags, print what is effective and where it came from.
+    """
+    from . import archive_registry as registry
+
+    changes = {
+        "model": getattr(args, "model", None),
+        "base_url": getattr(args, "base_url", None),
+        "server": getattr(args, "server", None),
+        "backend": getattr(args, "backend", None),
+        "batch_size": getattr(args, "batch_size", None),
+        "timeout_s": getattr(args, "timeout_s", None),
+        "context_tokens": getattr(args, "context_tokens", None),
+        "max_chars": getattr(args, "max_chars", None),
+    }
+    changes = {k: v for k, v in changes.items() if v is not None}
+
+    if getattr(args, "unset", False):
+        if changes:
+            print("error: --unset takes no other setting", file=sys.stderr)
+            sys.exit(2)
+        if registry.unset_section("embeddings"):
+            print(f"removed the embeddings block from {user_settings_file()}")
+            print("the project config.yaml (or the built-in default) applies again")
+        else:
+            print(f"no embeddings block in {user_settings_file()} — nothing to remove")
+        return
+
+    if not changes:
+        src = EMBED_SOURCE_TEXT.get(cfg.embed_source, cfg.embed_source)
+        print(f"embedding model : {cfg.embed_model}")
+        print(f"endpoint        : {cfg.embed_base_url}")
+        print(f"backend         : {cfg.embed_backend}")
+        print(f"server key      : {cfg.embed_server or '(the endpoint URL)'}")
+        print(f"batch size      : {cfg.embed_batch_size}   timeout: {cfg.embed_timeout_s}s")
+        print(f"source          : {src}")
+        print(f"per-user file   : {user_settings_file()}")
+        _print_embed_window(cfg)
+        print("change it with  : pha set embeddings --model <id> [--base-url URL]")
+        return
+
+    if "model" in changes and not str(changes["model"]).strip():
+        print("error: --model must not be empty", file=sys.stderr)
+        sys.exit(2)
+    if "base_url" in changes and not str(changes["base_url"]).startswith(("http://", "https://")):
+        print("error: --base-url must start with http:// or https://", file=sys.stderr)
+        sys.exit(2)
+    for key in ("batch_size", "timeout_s", "context_tokens"):
+        if key in changes and int(changes[key]) < 1:
+            print(f"error: --{key.replace('_', '-')} must be at least 1", file=sys.stderr)
+            sys.exit(2)
+    if "max_chars" in changes and int(changes["max_chars"]) < 64:
+        print("error: --max-chars must be at least 64", file=sys.stderr)
+        sys.exit(2)
+
+    for key, value in changes.items():
+        registry.set_setting("embeddings", key, value)
+    f = user_settings_file()
+    for key, value in changes.items():
+        print(f"stored embeddings.{key} -> {value!r}  (in {f})")
+    print(f"source: {EMBED_SOURCE_TEXT['user']} — it overrides any "
+          "`embeddings:` block in the project config.yaml")
+    if changes.get("model") or changes.get("base_url"):
+        probe = _client(cfg, str(changes.get("base_url") or cfg.embed_base_url), 3)
+        try:
+            tokens = probe.embedding_window(
+                str(changes.get("model") or cfg.embed_model))
+        finally:
+            probe.close()
+        if tokens:
+            print(f"input window   : {tokens} tokens reported by the server "
+                  f"for this model — chunks are sized against it")
+    if "model" in changes:
+        print("run `pha reindex` to re-embed this archive with the new model "
+              "(only chunks of another model are re-embedded).")
+    elif "context_tokens" in changes or "max_chars" in changes:
+        print("chunk and note sizes are derived from this setting: "
+              "`pha reindex --force` re-chunks the archive with it.")
+    else:
+        print("the model name is unchanged, so stored vectors stay valid; "
+              "`pha reindex --force` re-embeds if the server itself changed.")
+
+
 def cmd_encoder(cfg: Config, args) -> None:
     if getattr(args, "new", False):
         cmd_encoder_new(cfg, args)
@@ -4248,6 +4371,30 @@ def cmd_doctor(cfg: Config, args) -> None:
                 _dconn.close()
         except Exception:  # noqa: BLE001 - the engine report is the contract
             library_missing = []
+    embed_report: dict = {}
+    if not unconfigured:
+        # Ask the server how big its window is (best-effort, no model load):
+        # that is what `pha reindex` will size chunks against, so the doctor's
+        # view must include it rather than repeating the config.
+        from . import embed as embed_lib
+
+        probe = _client(cfg, cfg.embed_base_url, 3)
+        try:
+            server_tokens = probe.embedding_window(cfg.embed_model)
+            embed_report = {
+                "model": cfg.embed_model,
+                "base_url": cfg.embed_base_url,
+                "server": cfg.embed_server,
+                "source": cfg.embed_source,
+                "source_text": EMBED_SOURCE_TEXT.get(cfg.embed_source, cfg.embed_source),
+                "context_tokens": cfg.embed_context_tokens,
+                "server_tokens": server_tokens,
+                "max_chars": embed_lib.max_input_chars(cfg, probe),
+                "chunk_chars": embed_lib.chunk_size(cfg, probe),
+                "configured_chunk_chars": cfg.chunk_chars,
+            }
+        finally:
+            probe.close()
     report = doctor.diagnose(
         declared=declared,
         require=require,
@@ -4255,6 +4402,7 @@ def cmd_doctor(cfg: Config, args) -> None:
         servers=[] if unconfigured else [servers[k] for k in sorted(servers)],
         lock_dir=None if unconfigured else str(locks.lock_dir()),
         library_missing=library_missing,
+        embeddings=embed_report,
     )
     if getattr(args, "json", False):
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -5567,7 +5715,7 @@ def main(argv: list[str] | None = None) -> None:
     k.add_argument("--set", metavar="NAME", help="store a value for NAME (read from stdin)")
     k.set_defaults(fn=cmd_key)
 
-    sset = sub.add_parser("set", help="set a project setting (archive dir in config.yaml; secrets in .env)")
+    sset = sub.add_parser("set", help="set a machine/project setting (archive dir in config.yaml; embeddings per machine; secrets in .env)")
     ssub = sset.add_subparsers(dest="setting", required=True)
     sad = ssub.add_parser("archive-dir", help="set the archive data root (documents + definitions + generated output)")
     sad.add_argument("path", nargs="?", help="path to the archive directory (or prompted)")
@@ -5591,6 +5739,29 @@ def main(argv: list[str] | None = None) -> None:
     sdb = ssub.add_parser("dropbox", help="DEPRECATED: set only the dropbox documents folder")
     sdb.add_argument("path", nargs="?", help="path to the documents folder (or prompted)")
     sdb.set_defaults(fn=cmd_set_dropbox)
+    sem = ssub.add_parser(
+        "embeddings",
+        help="set the embedding model/server for this machine "
+             "(per-user, overrides the project config.yaml; no flags = show)")
+    sem.add_argument("--model", help="embedding model id as the server names it "
+                                     "(e.g. text-embedding-nomic-embed-text-v1.5@q4_k_m)")
+    sem.add_argument("--base-url", dest="base_url",
+                     help="OpenAI-compatible /embeddings endpoint (http://host:port/v1)")
+    sem.add_argument("--server", help="model-server identity for the lock (e.g. mac-studio)")
+    sem.add_argument("--backend", help="embedding backend (default: lmstudio)")
+    sem.add_argument("--batch-size", dest="batch_size", type=int,
+                     help="chunks sent per /embeddings request")
+    sem.add_argument("--timeout-s", dest="timeout_s", type=int,
+                     help="per-request timeout in seconds")
+    sem.add_argument("--context-tokens", dest="context_tokens", type=int,
+                     help="fallback input window in tokens, used when the server "
+                          "does not report one (default 2048)")
+    sem.add_argument("--max-chars", dest="max_chars", type=int,
+                     help="hard cap on embedded text, for token-dense scripts "
+                          "(default: context-tokens x 4)")
+    sem.add_argument("--unset", action="store_true",
+                     help="remove the per-user embeddings block (project/default applies again)")
+    sem.set_defaults(fn=cmd_set_embeddings)
     sub.add_parser("archive-dir", help="alias for `pha set archive-dir`").set_defaults(fn=cmd_set_archive_dir)
     sub.add_parser("dropbox", help="DEPRECATED alias for `pha set dropbox`").set_defaults(fn=cmd_set_dropbox)
 

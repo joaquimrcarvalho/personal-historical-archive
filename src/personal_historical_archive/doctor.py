@@ -94,6 +94,7 @@ def diagnose(
     servers: list[dict[str, Any]] | None = None,
     lock_dir: str | None = None,
     library_missing: list[dict[str, Any]] | None = None,
+    embeddings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Check every supported engine and return a JSON-friendly report.
 
@@ -225,6 +226,11 @@ def diagnose(
         # keys the archive's model files declare, their declared capacity, and
         # where the locks live. Empty when no config is available.
         "servers": servers or [],
+        # The embedding model semantic search will use, and WHERE that setting
+        # came from ("user" per-user settings | "config" project config.yaml |
+        # "default" built-in). Machine-specific, so it is worth printing: a
+        # second machine that never changed it is running the default.
+        "embeddings": embeddings or {},
         "lock_dir": lock_dir,
         # `done` documents whose library folder is not on disk (F4). Reported,
         # but deliberately NOT part of `ok`: that flag gates the engine checks
@@ -286,6 +292,28 @@ def render(report: dict[str, Any]) -> str:
         lines.append("        loaded (auto-evict off), or the server has the RAM.")
     if report.get("lock_dir"):
         lines.append(f"  lock dir: {report['lock_dir']}")
+    emb = report.get("embeddings") or {}
+    if emb:
+        lines.append("")
+        lines.append("embedding model (semantic search)")
+        lines.append(f"  {emb.get('model') or '(none)'}  at {emb.get('base_url') or '?'}")
+        lines.append(f"  source: {emb.get('source_text') or emb.get('source') or '?'}")
+        if emb.get("max_chars"):
+            server = emb.get("server_tokens")
+            window = (f"{server} tokens reported by the server"
+                      if server else
+                      f"{emb.get('context_tokens')} tokens (configured — the server "
+                      f"did not report one)")
+            lines.append(f"  window: {window}, ~{emb['max_chars']} chars   "
+                         f"chunks <= {emb.get('chunk_chars')} chars")
+        cfg_chars = int(emb.get("configured_chunk_chars") or 0)
+        if cfg_chars and emb.get("max_chars") and cfg_chars > int(emb["max_chars"]):
+            lines.append(f"  WARNING: extraction.chunk_chars={cfg_chars} exceeds the "
+                         f"window; chunks are capped at {emb['max_chars']} chars, so "
+                         f"lower chunk_chars (or set embeddings.max_chars).")
+        if emb.get("source") == "default":
+            lines.append("  change it with `pha set embeddings --model <id>` "
+                         "(per machine, no source edit)")
     lines.append("")
     # Library health: a `done` document whose library output is not on disk has
     # its text in the database and none of the served output the archive exists

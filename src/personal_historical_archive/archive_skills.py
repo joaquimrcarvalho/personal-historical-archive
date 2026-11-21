@@ -2696,14 +2696,20 @@ curl -s http://127.0.0.1:1234/v1/embeddings \
   -d '{"model":"pha-local-embed","input":"locality probe"}'
 ```
 
-Set the pha model file accordingly:
+Point pha's embedding model at that identifier. The embedding model is NOT a
+`models/<id>.md` file — it is `embeddings.model`, a machine setting, so change it
+with the per-user setter rather than editing a checkout's `config.yaml`:
 
-```yaml
-# models/embed-local.md
-base_url: http://127.0.0.1:1234/v1
-model: pha-local-embed
-server: this-machine
+```sh
+pha set embeddings --model pha-local-embed \
+  --base-url http://127.0.0.1:1234/v1 --server this-machine
+pha doctor        # "embedding model (semantic search)": model + where it came from
+pha reindex       # re-embed with the new model (only that model's chunks are stale)
 ```
+
+`--server this-machine` gives the endpoint a lock identity, so jobs that use the
+same LM Studio serialise. `pha set embeddings` with no flags prints the current
+model, endpoint and source; `--unset` returns to `config.yaml`/the default.
 
 The unique identifier is the important part: the shared model key can already
 be loaded remotely, while a fresh `pha-local-*` identifier is a local instance

@@ -155,3 +155,30 @@ def remove(path: str | Path, force: bool = False) -> tuple[bool, str]:
         paths.pop("archives", None)
     _write(data)
     return True, message
+
+
+# --------------------------------------------------------------------- settings
+#
+# The per-user file is machine-owned, so unlike a project `config.yaml` (heavily
+# commented, and edited by line for that reason) it is written as a YAML
+# round-trip. Unrelated top-level settings are preserved.
+
+def set_setting(section: str, key: str, value) -> Path:
+    """Set ``section.key`` in the per-user settings (creating the section)."""
+    data = _read()
+    sec = data.get(section)
+    if not isinstance(sec, dict):
+        sec = {}
+        data[section] = sec
+    sec[key] = value
+    return _write(data)
+
+
+def unset_section(section: str) -> bool:
+    """Remove a whole top-level section. Returns False when it was absent."""
+    data = _read()
+    if section not in data:
+        return False
+    del data[section]
+    _write(data)
+    return True

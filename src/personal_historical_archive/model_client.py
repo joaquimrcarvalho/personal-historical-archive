@@ -36,6 +36,12 @@ class ModelStall(ModelError):
 # ModelClient.deadline_s). A legitimate reasoning page may be silent for
 # minutes, so the deadline must be generous — but it must exist.
 _DEADLINE_MULTIPLE = 2
+# Embedding-window probes: what the SERVER says the model's context is, in
+# tokens. Cached per process (see ModelClient.embedding_window) and given a
+# short timeout: this is metadata, not work, and it must not stall a pass.
+_EMBED_WINDOW_CACHE: dict[tuple[str, str], int | None] = {}
+_EMBED_WINDOW_PROBE_TIMEOUT_S = 3.0
+
 _DEADLINE_MIN_S = 60
 
 
@@ -752,6 +758,106 @@ class ModelClient:
             return [m.get("id", "") for m in self._get("/models").get("data", [])]
         except ModelError:
             return []
+
+    # ---------------------------------------------------- embedding window
+
+    def embedding_window(self, model: str) -> int | None:
+        """The context window, in TOKENS, that the server advertises for an
+        embedding model — or None when it does not say.
+
+        pha must size its own inputs because `/embeddings` reports nothing when
+        it truncates: an over-long input is cut silently and the returned
+        vector describes only its beginning. Two local servers can answer:
+
+        - **LM Studio**: `GET /api/v0/models` → `maxContextLength` (the shipped
+          nomic GGUF reports **2048**, not the 8192 on the model card — the
+          server's number is the one that applies);
+        - **Ollama**: `POST /api/show` → `model_info.<arch>.context_length`.
+
+        A generic OpenAI-compatible endpoint usually exposes neither, in which
+        case None is returned and the configured `embeddings.context_tokens` is
+        used. This is where "another embedding model later" needs no config:
+        the next embedding run asks the server.
+
+        Best-effort and cached per (base_url, model): never raises, never loads
+        a model, and a server that does not answer is not asked twice.
+        """
+        key = (self.base_url, model)
+        if key in _EMBED_WINDOW_CACHE:
+            return _EMBED_WINDOW_CACHE[key]
+        tokens = (self._probe_lmstudio_window(model)
+                  or self._probe_ollama_window(model)
+                  or self._probe_openai_window(model))
+        _EMBED_WINDOW_CACHE[key] = tokens
+        return tokens
+
+    def _probe_json(self, method: str, url: str,
+                    payload: dict[str, Any] | None = None) -> dict | None:
+        """One best-effort metadata request. Never raises, never retries.
+
+        `url` is ABSOLUTE: httpx merges a path against `base_url`'s own path,
+        so "/api/v0/models" became "/v1/api/v0/models" and the native API said
+        "unexpected endpoint".
+        """
+        try:
+            if method == "GET":
+                r = self._http.get(url, timeout=_EMBED_WINDOW_PROBE_TIMEOUT_S)
+            else:
+                r = self._http.post(url, json=payload or {},
+                                    timeout=_EMBED_WINDOW_PROBE_TIMEOUT_S)
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            return data if isinstance(data, dict) else None
+        except Exception:  # noqa: BLE001 - a probe must never break a pass
+            return None
+
+    def _probe_lmstudio_window(self, model: str) -> int | None:
+        data = self._probe_json("GET", self._anthropic_root + "/api/v0/models")
+        if not data:
+            return None
+        for entry in data.get("data") or []:
+            if not isinstance(entry, dict):
+                continue
+            mid = str(entry.get("id") or "")
+            # Exact, else the same base id in another quantization: the window
+            # is a property of the model, so a quant suffix does not matter.
+            if mid != model and mid.split("@")[0] != model.split("@")[0]:
+                continue
+            # The native HTTP API spells it snake_case; the `lms` CLI's JSON
+            # uses camelCase. Accept both (prefer the trained/context window to
+            # the loaded one: `loaded_context_length` can be lower).
+            for key in ("max_context_length", "maxContextLength",
+                        "loaded_context_length", "loadedContextLength"):
+                tokens = entry.get(key)
+                if isinstance(tokens, int) and tokens > 0:
+                    return tokens
+        return None
+
+    def _probe_ollama_window(self, model: str) -> int | None:
+        data = self._probe_json("POST", self._anthropic_root + "/api/show",
+                                {"name": model})
+        if not data:
+            return None
+        info = data.get("model_info")
+        if isinstance(info, dict):
+            for key, value in info.items():
+                if key.endswith(".context_length") and isinstance(value, int) and value > 0:
+                    return value
+        return None
+
+    def _probe_openai_window(self, model: str) -> int | None:
+        data = self._probe_json("GET", self.base_url + "/models")
+        if not data:
+            return None
+        for entry in data.get("data") or []:
+            if not isinstance(entry, dict) or str(entry.get("id") or "") != model:
+                continue
+            for key in ("context_length", "max_context_length", "max_model_len"):
+                tokens = entry.get(key)
+                if isinstance(tokens, int) and tokens > 0:
+                    return tokens
+        return None
 
     def ensure_model(self, model: str) -> None:
         available = self.list_models()

@@ -10,7 +10,7 @@ from . import db
 from . import doctor
 from . import manage
 from . import notes as notes_memory
-from .config import Config
+from .config import EMBED_SOURCE_TEXT, Config
 from .ingest import make_vision_client, scan_once
 from .model_client import ModelClient
 from .search import search as run_search
@@ -462,14 +462,35 @@ def make_server(cfg: Config) -> FastMCP:
         model files declare (`engine: tesseract` / `engine: liteparse`) can
         run here, and how to install them when not. Returns one entry per
         engine: binary, found, path, version, ok, which model files declare
-        it, and install/verify hints for broken ones.
+        it, and install/verify hints for broken ones. Also reports the
+        effective embedding model (`embeddings.model`), its endpoint and the
+        source of that setting (`user` per-machine | `config` | `default`).
         """
         declared: dict[str, list[str]] = {}
         for m_id, m in (cfg.models or {}).items():
             eng = (m.engine or "").strip().lower()
             if eng in doctor.ENGINES:
                 declared.setdefault(eng, []).append(m_id)
-        return doctor.diagnose(declared=declared, archive=str(cfg.archive_dir))
+        from . import embed as embed_lib
+
+        probe = ModelClient(cfg.embed_base_url, timeout_s=3)
+        try:
+            server_tokens = probe.embedding_window(cfg.embed_model)
+            embeddings = {
+                "model": cfg.embed_model,
+                "base_url": cfg.embed_base_url,
+                "server": cfg.embed_server,
+                "source": cfg.embed_source,
+                "source_text": EMBED_SOURCE_TEXT.get(cfg.embed_source, cfg.embed_source),
+                "context_tokens": cfg.embed_context_tokens,
+                "server_tokens": server_tokens,
+                "max_chars": embed_lib.max_input_chars(cfg, probe),
+                "chunk_chars": embed_lib.chunk_size(cfg, probe),
+            }
+        finally:
+            probe.close()
+        return doctor.diagnose(declared=declared, archive=str(cfg.archive_dir),
+                               embeddings=embeddings)
 
     @mcp.tool()
     def pha_schema() -> dict:

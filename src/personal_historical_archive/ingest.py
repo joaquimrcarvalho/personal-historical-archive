@@ -20,6 +20,7 @@ from . import db
 from . import locks
 from . import notes as notes_memory
 from .config import Config, Editor, Encoder, Palaeographer
+from . import embed as embed_lib
 from .embed import pack, prefixed
 from .extract import (
     build_page_prompt,
@@ -1510,14 +1511,19 @@ def index_document(
     edited: dict[int, str] = {}
     if doc and doc["editor"]:
         edited = _edited_texts(conn, doc_id, doc["editor"])
+    # Size chunks against the EMBEDDING model's window, not just the configured
+    # size: the endpoint truncates an over-long input silently, so a chunk
+    # above `embeddings.context_tokens` (~4 chars/token) would lose its tail.
+    # `pha doctor` warns when `extraction.chunk_chars` had to be clamped.
+    chunk_size = embed_lib.chunk_size(cfg, embed_client)
     items: list[tuple[int, int, str, str]] = []  # (page_id, chunk_no, text, variant)
     n = 0
     for p in selected:
-        for ch in chunk_text(p["raw_text"], cfg.chunk_chars, cfg.chunk_overlap):
+        for ch in chunk_text(p["raw_text"], chunk_size, cfg.chunk_overlap):
             items.append((p["id"], n, ch, "raw"))
             n += 1
         if p["id"] in edited:
-            for ch in chunk_text(edited[p["id"]], cfg.chunk_chars, cfg.chunk_overlap):
+            for ch in chunk_text(edited[p["id"]], chunk_size, cfg.chunk_overlap):
                 items.append((p["id"], n, ch, "edited"))
                 n += 1
     selected_ids = [p["id"] for p in selected]
@@ -1651,6 +1657,9 @@ def index_records(cfg: Config, conn, doc_id: int,
         (doc_id,),
     ).fetchall()
     old_map = {r["record_id"]: r for r in old}
+    # One budget for the pass (the probe is cached, but the arithmetic is not
+    # worth repeating per record).
+    max_chars = embed_lib.max_input_chars(cfg, embed_client)
     blobs: list[bytes | None] = [None] * len(rows)
     to_embed: list[tuple[int, str]] = []
     for i, row in enumerate(rows):
@@ -1660,7 +1669,10 @@ def index_records(cfg: Config, conn, doc_id: int,
             continue
         text = row["search_text"] or db.record_search_text(
             db._as_record_dict(row["data"]))
-        to_embed.append((i, prefixed(cfg.embed_model, text, "doc")))
+        # One vector per record, so a record is not chunked; bound it to the
+        # embedding window instead of letting the server cut it silently.
+        # `pha doctor` reports the budget it was sized against.
+        to_embed.append((i, prefixed(cfg.embed_model, text[:max_chars], "doc")))
     if not to_embed:
         if verbose:
             print(f"  record index: {len(rows)} record(s) reused; already current",

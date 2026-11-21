@@ -335,8 +335,8 @@ is installed here.
 | The searchable index | `<archive>/archive.db` | generated — do not edit |
 | Page image cache | `<archive>/renders/` | generated — swept by `pha prune`; never edited by hand |
 | Trial runs | `<archive>/.pha-test/` | from `pha test`; never touches the archive |
-| Machine & project settings | the pha installation's `config.yaml` | model servers, the embedding model, render and serve defaults |
-| Per-user settings | `~/.config/pha/config.yaml` (Windows: `%APPDATA%\pha\config.yaml`) | which archive belongs to you on this machine |
+| Machine & project settings | the pha installation's `config.yaml` | model servers, render and serve defaults, the archive-wide embedding model |
+| Per-user settings | `~/.config/pha/config.yaml` (Windows: `%APPDATA%\pha\config.yaml`) | which archive belongs to you on this machine, and the embedding model on this machine (`pha set embeddings`, which wins over `config.yaml`) |
 | Which pha, on this machine | `<archive>/pha-location.md` | written on every run |
 
 ### Checking what is actually configured

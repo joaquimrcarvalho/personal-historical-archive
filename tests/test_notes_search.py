@@ -339,3 +339,131 @@ def test_status_reports_the_notes_index(tmp_path, capsys):
     assert data["notes"]["files"] == 1
     assert data["notes"]["indexed"] == 1
     assert data["notes"]["stale"] == 0
+
+
+# --------------------------------------------------------------- chunking
+
+class _KeywordEmbed:
+    """Deterministic vectors that make ONE word decisive, so a chunk's content
+    (not a hash) decides which vector wins."""
+
+    def embed(self, model, texts, batch_size=None):
+        return [[1.0, 0.0, 0.0] if "tailword" in t.lower() else [0.0, 1.0, 0.0]
+                for t in texts]
+
+
+def test_a_long_note_is_embedded_in_chunks_and_its_tail_is_searchable(tmp_path):
+    """The window is 2048 tokens; a note is often longer. Embedded whole, only
+    its head got a vector (144 of 171 notes on the Jesuit archive are over the
+    window). Every chunk must be indexed, or the tail is invisible to semantic
+    search."""
+    cfg = _make_cfg(tmp_path)
+    body = "# Long\n\n" + ("filler prose. " * 400) + "\ntailword appears only here.\n"
+    _write_note(cfg, "long", body)
+    client = _KeywordEmbed()
+
+    res = _index(cfg, embed_client=client)
+
+    assert res["chunks"] >= 2, "a 5 kB note must need more than one chunk"
+    conn = db.connect(cfg.db_path)
+    try:
+        note = db.all_notes(conn)[0]
+        rows = conn.execute(
+            "SELECT chunk_no, text, embedding FROM note_chunks WHERE note_id=? "
+            "ORDER BY chunk_no", (note["id"],)).fetchall()
+        assert len(rows) == res["chunks"]
+        assert note["embedding"] is not None, "the marker vector is the first chunk"
+        assert any("tailword" in r["text"] for r in rows), "the tail got a chunk"
+        assert all(len(r["text"]) <= 2000 for r in rows)
+        hits = search(conn, client, _cfg_ns(cfg), "tailword", mode="semantic",
+                      source="notes")["results"]
+        assert [h["note"] for h in hits] == ["long"]
+    finally:
+        conn.close()
+
+
+def test_a_whole_note_vector_from_an_older_pha_is_rechunked(tmp_path):
+    """Upgrade path: a note with `notes.embedding` but no chunk rows must be
+    reported as needing work and chunked, without the file changing."""
+    cfg = _make_cfg(tmp_path)
+    _write_note(cfg, "old", "# Old\n\n" + ("text " * 700) + "tailword\n")
+    conn = db.connect(cfg.db_path)
+    try:
+        notes_memory.index_notes(cfg, conn)  # text only
+        conn.execute("UPDATE notes SET embedding = ?, embed_model = ?",
+                     (b"\0" * 12, cfg.embed_model))
+        conn.commit()
+        assert db.notes_missing_embeddings(conn, cfg.embed_model), \
+            "a whole-note vector with no chunks must be flagged"
+    finally:
+        conn.close()
+
+    res = _index(cfg, embed_client=_KeywordEmbed())
+
+    assert res["changed"] == 0 and res["embedded"] == 1
+    assert res["chunks"] >= 2
+    conn = db.connect(cfg.db_path)
+    try:
+        note = db.all_notes(conn)[0]
+        stored = conn.execute(
+            "SELECT embedding FROM note_chunks WHERE note_id=?",
+            (note["id"],)).fetchall()
+        assert len(stored) == res["chunks"]
+    finally:
+        conn.close()
+
+
+def test_deleting_a_note_deletes_its_chunks(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    _write_note(cfg, "gone", "# Gone\n\n" + ("text " * 500) + "end\n")
+    _index(cfg, embed_client=_KeywordEmbed())
+    conn = db.connect(cfg.db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM note_chunks").fetchone()[0] > 1
+        note_id = db.all_notes(conn)[0]["id"]
+        db.delete_note(conn, note_id)
+        conn.commit()
+        assert conn.execute("SELECT COUNT(*) FROM note_chunks").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_notes_stats_counts_embedded_notes_and_chunks(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    _write_note(cfg, "one", "# One\n\n" + ("text " * 500) + "\n")
+    _index(cfg, embed_client=_KeywordEmbed())
+    conn = db.connect(cfg.db_path)
+    try:
+        stats = db.notes_stats(conn)
+        assert stats["indexed"] == 1
+        assert stats["embedded"] == 1
+        assert stats["chunks"] >= 2
+    finally:
+        conn.close()
+
+
+def test_an_archive_from_before_chunking_is_reported_as_needing_chunks(tmp_path):
+    """A DB with no `note_chunks` table (an older pha) must not claim its
+    whole-note vectors are a complete index: `pha status` says 0 embedded and
+    the next index pass chunks every note."""
+    cfg = _make_cfg(tmp_path)
+    _write_note(cfg, "a", "# A\n\nbody\n")
+    _index(cfg)
+    conn = db.connect(cfg.db_path)
+    try:
+        conn.execute("DROP TABLE note_chunks")
+        conn.commit()
+        assert db.notes_stats(conn)["embedded"] == 0
+        flagged = db.notes_missing_embeddings(conn, cfg.embed_model)
+        assert [r["name"] for r in flagged] == ["a"]
+    finally:
+        conn.close()
+
+    # The next index pass recreates the table and chunks the note.
+    res = _index(cfg, embed_client=_KeywordEmbed())
+    assert res["embedded"] == 1 and res["chunks"] >= 1
+    conn = db.connect(cfg.db_path)
+    try:
+        assert db.notes_stats(conn)["embedded"] == 1
+    finally:
+        conn.close()

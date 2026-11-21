@@ -83,6 +83,15 @@ embeddings:
                           # unset = key on base_url. Declaring it is how two
                           # archives on one machine serialise on one LM Studio.
   model: text-embedding-nomic-embed-text-v1.5@q4_k_s
+  # context_tokens: the embedding model's INPUT window, in tokens. The endpoint
+  # truncates an over-long input silently, so pha sizes page/note chunks against
+  # this. pha first asks the server (LM Studio /api/v0/models, Ollama /api/show);
+  # this value is the fallback for endpoints that do not report one. The shipped
+  # nomic GGUF is served with 2048 tokens.
+  context_tokens: 2048
+  # max_chars: optional hard cap, for token-dense scripts (CJK is ~1-2 chars per
+  # token, not 4). Unset = context_tokens x 4.
+  # max_chars: 8000
   timeout_s: 120
   batch_size: 100        # embed at most this many chunks per request (endpoint limit)
 

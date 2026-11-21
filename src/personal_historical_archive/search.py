@@ -404,16 +404,25 @@ def note_keyword_search(conn: sqlite3.Connection, query: str, limit: int) -> lis
 
 def note_semantic_search(conn: sqlite3.Connection, client: ModelClient, model: str,
                          query: str, limit: int) -> list[dict]:
-    rows = db.all_note_embeddings(conn, embed_model=model)
+    # A note is embedded CHUNK by chunk (a long note does not fit the model's
+    # context), so the note's score is its best-matching chunk. Taking the max
+    # rather than summing keeps a very long note from outranking a short, more
+    # focused one just by having more chunks.
+    rows = db.all_note_chunk_embeddings(conn, embed_model=model)
     if not rows or client is None:
         return []
     q = _embed_query(client, model, query)
     if q is None:
         return []
-    scored = [(cosine(q, unpack(row["embedding"])), int(row["id"])) for row in rows]
-    scored.sort(key=lambda pair: pair[0], reverse=True)
+    best: dict[int, float] = {}
+    for row in rows:
+        note_id = int(row["note_id"])
+        score = cosine(q, unpack(row["embedding"]))
+        if score > best.get(note_id, float("-inf")):
+            best[note_id] = score
+    scored = sorted(best.items(), key=lambda pair: pair[1], reverse=True)
     out = []
-    for score, note_id in scored[:limit]:
+    for note_id, score in scored[:limit]:
         hit = _decorate_note(db.get_note(conn, note_id=note_id), "semantic",
                              round(score, 5))
         if hit:

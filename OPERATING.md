@@ -162,6 +162,24 @@ recording provenance for a reading must cite `prompts-sent/`, never
 `prompt-*.md`. An `engine` palaeographer (tesseract/liteparse) sends no prompt
 and therefore has no `transcription-p<NNN>.md`.
 
+### The embedding model is a machine setting, not a collection stage
+
+Search by meaning uses `embeddings.model` (in `config.yaml`), which is **not**
+selected by `pha.yaml`, does not live in `models/`, and is the same for every
+collection. Because it depends on what is installed on the computer, a
+per-machine override outranks `config.yaml`:
+
+```sh
+pha set embeddings                 # effective model, endpoint and their source
+pha set embeddings --model <id>    # this machine only
+pha doctor                         # "embedding model (semantic search)"
+```
+
+After the model name changes, `pha reindex` re-embeds automatically (only
+chunks of another model are stale). Changing only the endpoint or batch size
+does not invalidate stored vectors; `pha reindex --force` re-embeds if the
+server itself changed. `pha set embeddings --unset` returns to `config.yaml`.
+
 ---
 
 ## 3. Setting the palaeographer / editor / encoders for a collection
@@ -398,7 +416,16 @@ page's own folder is the document's.
   `pha search` re-indexes changed notes automatically before querying (it
   writes only when something changed), `pha notes index` does it explicitly,
   `pha reindex --source notes|all` adds their embeddings, and `pha status`
-  reports `notes: N indexed of M ... (K embedded)`.
+  reports `notes: N indexed of M ... (K embedded in C chunks)`.
+- **A note is embedded chunk by chunk, not whole.** The embedding endpoint
+  silently truncates an input longer than the model's window (2048 tokens for
+  the shipped nomic), and most research notes are longer than that, so a
+  whole-note vector only represented its beginning. Chunking keeps the tail
+  searchable by meaning; `pha status` warns when the stored vectors predate this
+  (whole-note vectors from an older pha) and `pha reindex --source notes` fixes
+  them — the first search after such an upgrade also does it, so run the reindex
+  beforehand on a large `notes/` folder if a query should stay fast. The chunk
+  size follows the window the server reports; see `pha doctor`.
 - **Never present a note as evidence.** When search returns note hits, offer
   them to the owner ("the archive also has notes on this — should I read
   them?") and, if used, report them as earlier conclusions with their own
