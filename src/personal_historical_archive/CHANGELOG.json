@@ -516,6 +516,18 @@
           "commit": "2607ed937efe"
         }
       ]
+    },
+    "0.53.0": {
+      "date": "2026-11-21",
+      "summary": "pha encode can repair one missed record: --doc D --page P runs one encoder on one page with no entry detection and pins the result, so a bulk encode keeps it.",
+      "changes": [
+        {
+          "type": "feat",
+          "scope": "encode",
+          "text": "re-encode one page and pin its record(s)",
+          "commit": "3780bbad83f2"
+        }
+      ]
     }
   }
 }
