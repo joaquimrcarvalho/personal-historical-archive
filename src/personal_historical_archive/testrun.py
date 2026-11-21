@@ -230,8 +230,17 @@ def _resolve_encoders(
         enc = _load(enc_override)
         if enc is None:
             raise KeyError(f"unknown encoder {enc_override!r}")
+        # The sidecar may pair this rules id with a model; `--encoder` selects
+        # the RULES, not the model. Dropping the hint made `pha test --encoder`
+        # run the default LM Studio model (HTTP 400) instead of the collection's
+        # configured one. A model that is not in the sidecar list falls back to
+        # the default, which is the old behaviour.
+        model_hint = next(
+            (spec.model for spec in (sc.encoders or []) if spec.rules == enc_override),
+            None,
+        )
         out.append((enc, encoder_file_named(enc_override, file_dir, cfg.dropbox),
-                    enc_override, f"flag:{enc_override}", None))
+                    enc_override, f"flag:{enc_override}", model_hint))
     elif sc.encoders:
         for spec in sc.encoders:
             enc = _load(spec.rules)

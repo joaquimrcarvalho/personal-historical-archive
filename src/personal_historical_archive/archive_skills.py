@@ -132,6 +132,13 @@ per document so you can build the relative path.
   encoders that would run without a model call or a write.
 - D: `pha_job_start({ action: 'encode', path: 'collections/COLX', reprocess: true })`
   (or `doc: '<id>'`); there is no dry-run in the job tool.
+- one page (repair an entry the bulk **detection** missed): C `pha encode --doc
+  <id> --page 3 [--encoder <rules>]` — no detection, the record(s) pinned so a
+  later bulk encode keeps them; `--dry-run` plans, `--unpin` releases,
+  `--replace` supersedes the same number already stored on another page. D:
+  `pha_job_start({ action: 'encode', doc: '<id>', page: 3 })`. A page the model
+  finds nothing on pins nothing. New records are keyword-searchable at once;
+  `pha reindex --source records --doc <id>` embeds them for semantic search.
 
 **Dry-run a configuration before a full pass** (never touches the DB/library/
 renders — writes to `<archive>/.pha-test/`):
@@ -196,6 +203,7 @@ D, poll `pha_job_status`). `pha doctor` lists the servers and their capacity.
 | Re-edit one page | `pha edit --path <p> --page 3` | `pha_job_start edit path=… page=3` | not supported |
 | Re-read one page (a chosen model) | `pha scan --path <p> --page 3 --palaeographer X --model Y` | `pha_job_start scan path=… page=3 palaeographer=X model=Y` | preview only: `pha test <p> --page 3` |
 | Re-encode | `pha encode [--path P|--doc ID] [--reprocess] [--dry-run]` | `pha_job_start encode path=… reprocess=true` | not supported |
+| Re-encode one page (a missed entry) | `pha encode --doc <id> --page 3 [--encoder X]` | `pha_job_start encode doc=<id> page=3` | not supported |
 | Dry-run config | `pha test <path> --pages 3` | — | — |
 | Inspect config | `pha editor/palaeographer/prompts <file>` | `pha_collection_config(<path>)` | `pha_collection_config(<path>)` |
 | Verify | `pha status`, `pha page` | `pha_status`, `pha_page` | `pha_extraction_status`, `pha_get_page` |

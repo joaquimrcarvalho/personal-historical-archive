@@ -245,6 +245,12 @@ document; `--dry-run` lists the plan without calls or writes. This is what
 `pha handoff work` uses per document, so a hand-over no longer has to encode the
 whole archive.
 
+`pha encode --doc ID --page P` runs ONE encoder over ONE page with **no entry
+detection** and pins the record(s) (`records.pinned_at` + `encoder_model`), so a
+later bulk encode keeps them and cannot double-record the same entry; `--unpin`
+releases the pin. That is the repair for a document the bulk detection missed,
+without re-encoding the volume.
+
 The top-level `encoders/` dir holds only the sample template.
 
 ### The null editor

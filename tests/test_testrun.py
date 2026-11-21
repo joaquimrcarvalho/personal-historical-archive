@@ -134,6 +134,31 @@ def test_resolve_encoders_override(tmp_path):
     assert encs[0][3].startswith("flag:")
 
 
+def test_encoder_override_keeps_the_sidecars_model(tmp_path):
+    """`pha test --encoder X` selects the RULES, not the model.
+
+    Dropping the sidecar's model hint made it run the default LM Studio model
+    (HTTP 400) instead of the collection's configured one.
+    """
+    cfg = _make_cfg(tmp_path)
+    doc = _col_doc(cfg)
+    (cfg.models_dir / "alt.md").write_text(
+        "---\ndescription: alt model\n"
+        "base_url: http://127.0.0.1:9999/v1\nmodel: alt-model\n---\n",
+        encoding="utf-8",
+    )
+    (doc.parent / "pha.yaml").write_text(
+        "encoders:\n  - {rules: default, model: alt}\n", encoding="utf-8")
+    cfg = Config.load(cfg.root)          # pick up the new model interface
+    sc = tr.resolve_sidecar(cfg.dropbox, doc.parent, stem="doc")
+
+    encs = tr._resolve_encoders(cfg, doc, sc, "default", None, None, None)
+
+    assert len(encs) == 1
+    assert encs[0][2] == "default"
+    assert encs[0][0].model_ref == "alt", "the sidecar binding must survive --encoder"
+
+
 # --------------------------------------------------------------------------- page rendering
 
 def test_render_document_pages_filter(tmp_path):

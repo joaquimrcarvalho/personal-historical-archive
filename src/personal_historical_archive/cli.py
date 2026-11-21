@@ -19,6 +19,7 @@ from . import manage
 from .config import EMBED_SOURCE_TEXT, Config, user_settings_file
 from .extract import is_supported, resolve_editor_id, resolve_encoder_id, resolve_palaeographer_id, resolve_prompt, encoder_files_for
 from .ingest import (
+    encode_pages,
     edit_all,
     encode_documents,
     make_vision_client,
@@ -757,9 +758,12 @@ def cmd_records(cfg: Config, args) -> None:
     for rec in records:
         where = (f"p.{rec['page_no']}" if rec["page_no"] is not None
                  else "not page-grounded")
+        # `pin` = deliberately extracted from one page (`pha encode --page N`);
+        # a bulk encode will keep it until `pha encode --unpin`.
+        marks = "  [pinned]" if rec.get("pinned") else ""
         print(_fit(
             f"  #{rec['id']:>5d}  [{rec['encoder']}/{rec['kind'] or 'record'}]  "
-            f"{rec['filename']}  [{rec['collection']}]  {where}", width))
+            f"{rec['filename']}  [{rec['collection']}]  {where}{marks}", width))
         text = str(rec["data"].get("text") or "").strip().replace("\n", " ")
         if text:
             print(_fit(f"           {text}", width))
@@ -1614,6 +1618,7 @@ def cmd_status(cfg: Config, args) -> None:
         record_counts = db.record_counts_by_document(conn)
         pinned = db.pinned_counts(conn)
         pinned_edits = db.pinned_edit_counts(conn)
+        pinned_records = db.pinned_record_counts(conn)
         # Documents received here for a hand-over (the worker side). Their
         # embedding belongs to the owner, so a document with 0 chunks is not a
         # lost index — see the `index deferred` marker below (gap G1).
@@ -1736,6 +1741,7 @@ def cmd_status(cfg: Config, args) -> None:
                 "chunks_embedded": s["chunks_embedded"],
                 "chunks_by_model": s.get("chunk_models", []),
                 "records": rec_stats,
+                "pinned_records": pinned_records,
                 "notes": note_stats,
                 "skills": skill_stats,
                 "new": total_new,
@@ -1958,6 +1964,16 @@ def cmd_status(cfg: Config, args) -> None:
                   f"{per_doc}")
             print("     Run:  pha edit --unpin --path <doc>   (keep the text; let a "
                   "later edit re-edit them)")
+        # Records frozen from one page (`pha encode --page N`): a bulk encode
+        # keeps them, which is why the count belongs next to the other pins.
+        if pinned_records:
+            per_doc = ", ".join(f"#{did} ({n})" for did, n in sorted(pinned_records.items()))
+            print()
+            print(f"  📌 {sum(pinned_records.values())} pinned record(s) across "
+                  f"{len(pinned_records)} document(s) — extracted one page at a time: "
+                  f"{per_doc}")
+            print("     Run:  pha encode --unpin --doc <N> [--page P]   (keep the "
+                  "records; let a later bulk encode rewrite them)")
     finally:
         conn.close()
 
@@ -4130,6 +4146,64 @@ def cmd_encoder(cfg: Config, args) -> None:
         print(f"  {f}: {e.description if e else '?'}{pages}")
 
 
+def _print_encode_page_results(res: dict, dry_run: bool) -> None:
+    """Report `pha encode --page` plans/results: what was pinned, what not."""
+    results = res.get("results") or []
+    for r in results:
+        action = r.get("action")
+        if action in ("error", "refused", "skipped"):
+            print(f"  ! {r.get('filename', '?')}: {r.get('reason', action)}", file=sys.stderr)
+            continue
+        if action == "unpinned":
+            where = f" on page {r['page']}" if r.get("page") else ""
+            print(f"  released {r.get('unpinned', 0)} record pin(s) of {r.get('filename')}{where}")
+            continue
+        page = r.get("page")
+        label = f"{r.get('filename')} page {page}"
+        if action == "planned":
+            flags = []
+            if r.get("pin"):
+                flags.append("pin")
+            if r.get("replace"):
+                flags.append("--replace")
+            if r.get("outside_range"):
+                flags.append(f"OUTSIDE the encoder's declared range {r.get('pages')}")
+            extra = f" [{', '.join(flags)}]" if flags else ""
+            print(f"  would encode {label} with {r.get('encoder')}@{r.get('model') or '?'}"
+                  f" ({r.get('chars')} chars){extra}")
+            if r.get("existing_on_page"):
+                pinned = r.get("existing_pinned_on_page") or 0
+                print(f"      replaces {r['existing_on_page']} existing record(s) on the page"
+                      + (f", {pinned} pinned" if pinned else ""))
+            continue
+        # encoded
+        if r.get("no_record"):
+            # R4: the pin certifies an extraction that happened. Say it plainly.
+            print(f"  no record detected on {label} — nothing pinned")
+            continue
+        if not r.get("records"):
+            print(f"  {label}: nothing stored")
+        else:
+            detail = f"{r['records']} record(s)"
+            if r.get("dropped"):
+                detail += f", {r.get('dropped')} duplicate(s) dropped"
+            if r.get("refused"):
+                detail += f", {r.get('refused')} refused"
+            state = "pinned" if r.get("pinned") else "NOT pinned (--no-pin)"
+            print(f"  + {label} [{r.get('encoder')}@{r.get('model') or '?'}] {detail} — {state}")
+        if r.get("outside_range"):
+            print(f"    ! page {page} is outside the encoder's declared range "
+                  f"{r.get('pages')} — allowed on purpose (exception repair)",
+                  file=sys.stderr)
+        for clash in r.get("clashes") or []:
+            print(f"    ! {clash.get('record')}: {clash.get('reason')} — "
+                  f"re-run with --replace to supersede it", file=sys.stderr)
+        for w in r.get("lost_windows") or []:
+            print(f"    ! lost window {w.get('pages')}: {w.get('reason')}", file=sys.stderr)
+    if dry_run:
+        return
+
+
 def cmd_encode(cfg: Config, args) -> None:
     raw_doc = getattr(args, "doc", None)
     doc_id = None
@@ -4139,6 +4213,32 @@ def cmd_encode(cfg: Config, args) -> None:
         except (TypeError, ValueError):
             print(f"error: --doc must be a document id (got {raw_doc!r})", file=sys.stderr)
             sys.exit(2)
+
+    pages = _parse_pages(getattr(args, "page", None))
+    encoder = getattr(args, "encoder", None)
+    model_override = getattr(args, "model", None)
+    no_pin = bool(getattr(args, "no_pin", False))
+    unpin = bool(getattr(args, "unpin", False))
+    replace = bool(getattr(args, "replace", False))
+    dry_run = bool(getattr(args, "dry_run", False))
+    per_page_only = bool(encoder or model_override or replace or no_pin)
+    if per_page_only and not pages:
+        print("error: --encoder/--model/--replace/--no-pin are per-page actions — "
+              "pass --page N (a bulk pass uses each collection's configured encoders)",
+              file=sys.stderr)
+        sys.exit(2)
+    if pages or unpin:
+        res = encode_pages(
+            cfg, doc_id=doc_id, path=getattr(args, "path", None), pages=pages,
+            encoder_id=encoder, model_override=model_override,
+            pin=not no_pin, replace=replace, dry_run=dry_run, unpin=unpin,
+            verbose=True,
+            include_leased=bool(getattr(args, "include_leased", False)),
+            wait_s=_lock_wait_s(args),
+        )
+        _print_encode_page_results(res, dry_run)
+        return
+
     res = encode_documents(
         cfg,
         path=getattr(args, "path", None),
@@ -5559,10 +5659,30 @@ def main(argv: list[str] | None = None) -> None:
     ec.add_argument("--doc", default=None, metavar="ID",
                     help="encode only this document id (see `pha status` / `pha_documents`)")
     ec.add_argument("--reprocess", action="store_true", help="re-encode even when records are up to date")
+    ec.add_argument("--page", action="append", default=None, metavar="N",
+                    help="encode ONE page of one document (repeatable/comma list: "
+                         "--page 195,196): no entry detection, the record(s) pinned so a "
+                         "bulk encode keeps them — with --dry-run this plans it")
+    ec.add_argument("--encoder", default=None,
+                    help="with --page: the encoder rules id to run (default: the one whose "
+                         "declared pages range covers the page)")
+    ec.add_argument("--model", default=None,
+                    help="with --page: the model interface to run this page with (one run only)")
+    ec.add_argument("--no-pin", action="store_true",
+                    help="with --page: store the record(s) but do not protect them from a "
+                         "later bulk encode")
+    ec.add_argument("--unpin", action="store_true",
+                    help="release the record pins of one document (optionally --page N); "
+                         "the records are kept")
+    ec.add_argument("--replace", action="store_true",
+                    help="with --page: supersede a record already stored on ANOTHER page "
+                         "with the same number (default: refuse and name that page)")
     ec.add_argument("--dry-run", action="store_true",
-                    help="plan only: list the documents and encoders that would run; no model call, no write")
+                    help="plan only: list the documents/encoders that would run (with --page: "
+                         "the page/encoder/model/pin plan); no model call, no write")
     ec.add_argument("--include-leased", action="store_true",
                         help="also process documents currently out on a hand-over")
+    _add_wait_args(ec)
     ec.set_defaults(fn=cmd_encode)
 
     tt = sub.add_parser("test", help="test a configuration on a sample of pages (transcription + editing + encoding)")

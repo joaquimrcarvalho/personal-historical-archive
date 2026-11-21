@@ -1072,6 +1072,20 @@ printed i–xv but occupies PDF pages 1-15).
   and `--dry-run` to list the documents and encoders that would run without a
   model call or a write. Page-level trials of an encoder stay in `pha test
   <target> --pages N` / `--page N`, which writes only under `.pha-test/`.
+- **`pha encode --page N` repairs an entry the bulk pass missed.** It runs ONE
+  encoder over ONE page with **no entry detection** (detection is what missed
+  it), stores the record(s) and **pins** them, so a later bulk `pha encode` /
+  `--reprocess` keeps them and drops a re-derived duplicate instead of adding a
+  second copy. A page the model finds nothing on stores and pins **nothing**
+  (the pin certifies an extraction that happened). Flags: `--encoder <rules>`
+  (default: the encoder whose `pages:` range covers N), `--model <id>` (one run),
+  `--dry-run` (the plan, no model call), `--no-pin`, `--unpin` (release, keep the
+  record), `--replace` (supersede the same `number` already stored on another
+  page — the running head repeats, so this can happen). The stored record is
+  grounded to the page you named (a model echoing the running head's printed
+  page is corrected). New records are keyword-searchable immediately; run
+  `pha reindex --source records` to embed them for semantic search. Page mode
+  takes the encoder's model-server lock, so `--wait`/`--no-wait` apply.
 - **`pha encoder --new` creates an encoder interactively** — a wizard that asks
   a non-technical user plain-language questions (what the material is, a sample
   passage, which things matter and what to record about each), uses the chosen
@@ -1398,6 +1412,10 @@ pha palaeographer [file]
 pha editor [file]
 pha encoder [file] [--new]
 pha encode [--path P | --doc ID] [--reprocess] [--dry-run]
+pha encode --doc N --page P [--encoder X] [--model Y] [--replace]
+           [--no-pin | --unpin] [--dry-run]
+                          # repair ONE page: no entry detection, the record(s)
+                          #   pinned so a bulk encode keeps them
 pha test [target] [--pages N] [--random] [--seed S] [--show]
                                     # run transcription+editing+encoding on a sample of pages
                                     #   (safe: writes to a scratch dir; never touches the archive;

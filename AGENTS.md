@@ -96,9 +96,10 @@ is the safe discovery probe.
 ## The rules you must not get wrong
 
 1. **One model per model-server at a time.** `pha scan`, `pha edit`,
-   `pha reindex`, `pha test`, `pha unbundle` and `pha handoff fetch` each lock
-   every model-server they will talk to and **refuse** (naming the holder) if one
-   is busy. Two jobs may run concurrently only if their servers are disjoint.
+   `pha reindex`, `pha test`, `pha unbundle`, `pha handoff fetch` and
+   `pha encode --page N` each lock every model-server they will talk to and
+   **refuse** (naming the holder) if one is busy. Two jobs may run concurrently
+   only if their servers are disjoint.
    Never start an edit/reindex against a server a scan is using — that is what
    fills the disk and costs a document its vectors. Check `pha doctor` and
    `pha_extraction_status` before starting a pass. Full mechanism:
@@ -187,6 +188,13 @@ what a collection is set to: `OPERATING.md` §2–3.
 `pha doctor` prints the effective model, its source and its input window, which
 pha asks the server for). Notes are embedded chunk by chunk, bounded by that
 window — never embedded whole. Changing the model needs `pha reindex`.
+
+**A record can be repaired one page at a time.** `pha encode --doc N --page P`
+runs one encoder over that page with **no entry detection** (detection is what
+can miss a document) and pins the record(s); a later bulk `pha encode` keeps a
+pinned record and drops a re-derived duplicate instead of doubling it. A page
+that yields no record pins nothing. It takes the encoder's model-server lock;
+`--unpin` releases, `--replace` supersedes the same `number` on another page.
 
 ## Working in an archive (not this repo)
 

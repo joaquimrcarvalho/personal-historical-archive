@@ -3463,6 +3463,51 @@ def _record_key(rec: dict) -> tuple:
     return tuple(parts)
 
 
+def _record_identity(rec: dict):
+    """What identifies the ENTRY a record is about, across pages: (kind, number,
+    series).
+
+    `_record_key` deliberately includes the page, so the same document recorded
+    on another page is a different key. That is right for dedupe but wrong for
+    the page-encode guard (R10): the running head repeats, and a page encode can
+    return a document the encoder already recorded earlier. `None` when the
+    record carries no number — an unnumbered fragment cannot be compared.
+    """
+    number = rec.get("number")
+    if number is None or str(number).strip() == "":
+        return None
+
+    def norm(value) -> str:
+        return re.sub(r"\s+", " ", str(value)).strip().lower()
+
+    return (norm(rec.get("kind") or "record"), norm(number),
+            norm(rec.get("series") or ""))
+
+
+def _ground_record_page(rec: dict, page_no: int) -> dict:
+    """Set the record's start page to the page being encoded.
+
+    The entry hint already tells the model this, but a model that echoes the
+    running head's printed page (or the page before) must not store a record the
+    archive cannot find where the operator put it."""
+    keys = [k for k in db.RECORD_START_PAGE_KEYS if k in rec]
+    if keys:
+        for key in keys:
+            rec[key] = int(page_no)
+    else:
+        rec["page_start"] = int(page_no)
+    return rec
+
+
+def _db_record_page(row) -> int | None:
+    """The page a stored record starts on, from its normalised `source`."""
+    raw = db.row_get(row, "source")
+    try:
+        return int(str(raw))
+    except (TypeError, ValueError):
+        return None
+
+
 # What IDENTIFIES the entity a record is about. Comparing the WHOLE record let
 # shared page boilerplate (title, catalogue, community, a templated source_text)
 # dominate the ratio, so two distinct index entries scored >= 0.75 and one was
@@ -3972,13 +4017,36 @@ def encode_document(
         client.close()
 
     # Store first, so an artifact filter can read the records file it consumes.
-    db.clear_records(conn, doc_id, resolved)
+    # A PINNED record (a deliberate `pha encode --page N`) survives the clear,
+    # and a bulk record that duplicates its identity is dropped: the pin is the
+    # authority for that entry. `pha encode --unpin` is how the pin is lifted so
+    # a later bulk pass may overwrite it again.
+    pinned_rows = [row for row in db.records_for_document(conn, doc_id)
+                   if row["encoder"] == resolved and db.row_get(row, "pinned_at")]
+    pinned_identities = set()
+    for row in pinned_rows:
+        try:
+            prev = json.loads(row["data"])
+        except (TypeError, ValueError):
+            continue
+        ident = _record_identity(prev)
+        if ident:
+            pinned_identities.add(ident)
+    db.clear_records(conn, doc_id, resolved, keep_pinned=True)
+    stored = 0
+    pinned_skipped = 0
     for rec in records:
+        ident = _record_identity(rec)
+        if ident and ident in pinned_identities:
+            pinned_skipped += 1
+            continue
         page = db.record_start_page(rec)
         db.add_record(conn, doc_id, resolved, str(rec.get("kind") or rec.get("type") or "record"),
                       json.dumps(rec, ensure_ascii=False),
                       str(page) if page is not None else "",
-                      filters=record_filters)
+                      filters=record_filters,
+                      encoder_model=encoder.model_ref or None)
+        stored += 1
     if doc["encoder"] != resolved:
         db.update_document(conn, doc_id, encoder=resolved)
     conn.commit()
@@ -4022,12 +4090,468 @@ def encode_document(
                     pass
 
     return {"action": "encoded", "filename": doc["filename"], "encoder": resolved,
-            "records": len(records), "windows": windows, "lost_windows": lost_windows,
+            "records": stored, "windows": windows, "lost_windows": lost_windows,
+            "pinned_kept": len(pinned_rows),
+            "pinned_duplicates_dropped": pinned_skipped,
             # Visible accounting for the same-page dedup: a run that drops records
             # must say so (the bug report's whole complaint was the silence).
             "duplicates_dropped": duplicates,
             "same_page_duplicates": len(same_page_dups),
             "same_page_duplicate_examples": same_page_dups[:5]}
+
+
+def _resolve_page_encoder(cfg: Config, doc, specs, encoder_id, page_no):
+    """(enc_file, model_hint, encoder, resolved, resolved_pages, error).
+
+    `error` is a dict for the caller to return (``{"action": ...}``) or None.
+    """
+    from .structure import StructureError
+
+    def _load(spec):
+        enc_file, model_hint = spec
+        enc = cfg.encoder_from_file(enc_file) if enc_file is not None else None
+        if enc is None:
+            return None
+        return (enc_file, model_hint, enc)
+
+    def _resolve_pages(enc, resolved):
+        try:
+            return resolve_encoder_pages(
+                cfg, dict(doc), enc, resolved, page_count=doc["page_count"],
+            ), None
+        except StructureError as e:
+            return None, {"action": "error", "filename": doc["filename"],
+                          "page": int(page_no), "encoder": resolved,
+                          "reason": str(e)}
+
+    page_no = int(page_no)
+    if encoder_id:
+        picked = next((spec for spec in specs if spec[0].stem == encoder_id), None)
+        if picked is not None:
+            loaded = _load(picked)
+            if loaded is None:
+                return None, None, None, None, None, {
+                    "action": "error", "filename": doc["filename"],
+                    "page": page_no, "reason": f"invalid encoder file for {encoder_id!r}"}
+            enc_file, model_hint, enc = loaded
+            resolved = picked[0].stem
+        elif encoder_id in cfg.encoders:
+            enc_file, model_hint, enc, resolved = None, None, cfg.get_encoder(encoder_id), encoder_id
+        else:
+            available = ", ".join(sorted(spec[0].stem for spec in specs)) or "(none)"
+            return None, None, None, None, None, {
+                "action": "error", "filename": doc["filename"], "page": page_no,
+                "reason": f"unknown encoder {encoder_id!r}; registered here: {available}"}
+        rp, err = _resolve_pages(enc, resolved)
+        return enc_file, model_hint, enc, resolved, rp, err
+
+    # No --encoder: the ranges decide. A whole-document encoder (no `pages:`)
+    # covers every page.
+    covering, ranges = [], []
+    for spec in specs:
+        loaded = _load(spec)
+        if loaded is None:
+            continue
+        enc_file, model_hint, enc = loaded
+        rp, err = _resolve_pages(enc, enc_file.stem)
+        if err is not None:
+            return None, None, None, None, None, err
+        ranges.append(f"{enc_file.stem} ({rp.pages or 'all'})")
+        if rp.page_filter is None or page_no in rp.page_filter:
+            covering.append((enc_file, model_hint, enc, enc_file.stem, rp))
+    if not covering:
+        # Legacy archive: a global encoder named on the document, no local files.
+        legacy = doc["encoder"] if doc["encoder"] in cfg.encoders else None
+        if legacy:
+            enc = cfg.get_encoder(legacy)
+            rp, err = _resolve_pages(enc, legacy)
+            return None, None, enc, legacy, rp, err
+        detail = f" (declared ranges: {', '.join(ranges)})" if ranges else ""
+        return None, None, None, None, None, {
+            "action": "error", "filename": doc["filename"], "page": page_no,
+            "reason": f"no encoder covers page {page_no}{detail}; pass --encoder"}
+    if len(covering) > 1:
+        names = ", ".join(f"{e} ({rp.pages or 'all'})"
+                          for _f, _m, _e, e, rp in covering)
+        return None, None, None, None, None, {
+            "action": "error", "filename": doc["filename"], "page": page_no,
+            "reason": f"several encoders cover page {page_no}: {names}; pass --encoder"}
+    enc_file, model_hint, enc, resolved, rp = covering[0]
+    return enc_file, model_hint, enc, resolved, rp, None
+
+
+def encode_page(
+    cfg: Config,
+    conn,
+    doc_id: int,
+    page_no: int,
+    *,
+    encoder_id: str | None = None,
+    model_override: str | None = None,
+    pin: bool = True,
+    replace: bool = False,
+    dry_run: bool = False,
+    verbose: bool = True,
+    include_leased: bool = False,
+    wait_s: float = 0.0,
+) -> dict:
+    """Run ONE encoder over ONE page, store the record(s) it returns and pin them.
+
+    The record-stage twin of `pha scan --page N` / `pha edit --page N`. Two
+    things make it different from a bulk encode, and both are the point:
+
+    - **No entry detection.** `detect_entry_pages` is exactly the step that
+      missed the document (a number surviving only in the running head), so the
+      page is handed to the model as an entry start instead (R2).
+    - **The result is PINNED.** A later bulk `pha encode` / `--reprocess` keeps
+      it (`db.clear_records(..., keep_pinned=True)`) and drops a derived
+      duplicate of it, so a deliberate per-page extraction is not lost (R3).
+
+    A page the model returns no record for stores and pins NOTHING (R4): the
+    pin certifies an extraction that happened, and the page must stay free for a
+    normal bulk pass.
+    """
+    from .structure import StructureError
+
+    doc = db.get_document(conn, doc_id)
+    if not doc:
+        return {"action": "error", "filename": "?", "page": int(page_no),
+                "reason": "no document"}
+    lease = _leases(cfg).get(doc["sha256"])
+    if lease is not None and not include_leased:
+        return {"action": "skipped", "filename": doc["filename"], "page": int(page_no),
+                "reason": f"out on hand-over {lease.handoff_id} (age {_lease_age(lease)})"}
+    doc_path = Path(doc["path"])
+
+    specs = _encoder_specs_for_document(cfg, doc)
+    enc_file, model_hint, encoder, resolved, rp, err = _resolve_page_encoder(
+        cfg, doc, specs, encoder_id, page_no)
+    if err is not None:
+        return err
+    encoder = cfg.resolve_model(encoder, model_override or model_hint)
+    model_ref = encoder.model_ref or encoder.model or None
+    outside = rp.page_filter is not None and int(page_no) not in rp.page_filter
+
+    page_row = conn.execute(
+        "SELECT * FROM pages WHERE document_id = ? AND page_no = ?",
+        (doc_id, int(page_no))).fetchone()
+    if page_row is None:
+        return {"action": "error", "filename": doc["filename"], "page": int(page_no),
+                "reason": f"no page {page_no} of {doc['page_count'] or 0}"}
+    effective = db.effective_edit_for_page(conn, page_row["id"], doc["editor"])
+    text = ((effective["text"] if effective is not None else page_row["raw_text"]) or "").strip()
+    if not text or text == "*waiting*":
+        has_reading = (bool(page_row["raw_text"])
+                       and str(page_row["raw_text"]).strip() != "*waiting*")
+        hint = (f"pha edit --path {doc['path']} --page {page_no}" if has_reading
+                else f"pha scan --path {doc['path']} --page {page_no}")
+        return {"action": "refused", "filename": doc["filename"], "page": int(page_no),
+                "encoder": resolved,
+                "reason": f"page {page_no} has no transcript to encode — run `{hint}` first"}
+
+    existing = [row for row in db.records_for_document(conn, doc_id)
+                if row["encoder"] == resolved]
+    on_page = [row for row in existing if _db_record_page(row) == int(page_no)]
+
+    plan = {
+        "action": "planned", "filename": doc["filename"], "document_id": doc_id,
+        "page": int(page_no), "encoder": resolved, "model": model_ref,
+        "pin": bool(pin), "replace": bool(replace),
+        "pages": rp.pages, "outside_range": bool(outside),
+        "chars": len(text),
+        "existing_on_page": len(on_page),
+        "existing_pinned_on_page": sum(1 for r in on_page if db.row_get(r, "pinned_at")),
+        "path": str(doc["path"]),
+    }
+    if dry_run:
+        return plan
+
+    lock = locks.acquire(cfg, {locks.stage_key(encoder)}, label="pha encode --page",
+                         wait_s=wait_s, verbose=verbose)
+    try:
+        if not lock.ok:
+            reason = lock.reason()
+            print(f"  {reason}", flush=True)
+            return {"action": "skipped", "filename": doc["filename"],
+                    "page": int(page_no), "encoder": resolved, "reason": reason}
+
+        enc_stage = _encoder_stage_for(cfg, doc_path, resolved, enc_file)
+        lib_dir = _library_dir_for(cfg, conn, doc_id)
+        _, edited_dir = _stage_filter_dirs(cfg, conn, doc_id)
+        records_file = (lib_dir / f"records-{resolved}.json") if lib_dir else None
+        concat_file = (lib_dir / f"concatenated-{resolved}.md") if lib_dir else None
+        record_chain = ((enc_stage.pre if enc_stage is not None else [])
+                        + [F for F in (enc_stage.post if enc_stage is not None else [])
+                           if not _is_artifact(cfg, F)])
+        record_filters = _configured_filters_signature(cfg, record_chain)
+
+        page_texts = [(int(page_no), text)]
+        if enc_stage is not None and enc_stage.pre:
+            whole = "\n\n".join(f"--- page {p} ---\n{t}" for p, t in page_texts)
+            whole = _run_stage_filters(
+                cfg, enc_stage.pre, hook="encoder.pre", value=whole, conn=conn,
+                path=doc_path, doc_id=doc_id, stage="encoder", encoder=resolved,
+                library_dir=lib_dir, pages_dir_edited=edited_dir,
+                records_file=records_file, concatenated_file=concat_file,
+                verbose=verbose,
+            )
+            filtered = _split_page_blocks(whole)
+            if filtered:
+                page_texts = filtered
+
+        if enc_file is not None:
+            from .extract import resolve_encoder_prompt
+            doc_prompt, _src = resolve_encoder_prompt(enc_file, "encoder.prompt")
+            lx_prompt, _lx_src = resolve_encoder_prompt(enc_file, "encoder.prompt.langextract")
+        else:
+            doc_prompt, _src = resolve_prompt(
+                doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
+                cfg.dropbox, cfg.prompts, kind="encoder.prompt",
+            )
+            lx_prompt, _lx_src = resolve_prompt(
+                doc_path.stem, doc_path if doc_path.is_dir() else doc_path.parent,
+                cfg.dropbox, cfg.prompts, kind="encoder.prompt.langextract",
+            )
+        base_prompt = compose_prompts(encoder.prompt_text, doc_prompt)
+        if lx_prompt:
+            base_prompt = compose_prompts(base_prompt, lx_prompt)
+
+        block = "\n\n".join(f"--- page {p} ---\n{t}" for p, t in page_texts)
+        client, encoder = make_encoder_client(cfg, encoder=encoder)
+        try:
+            parsed, lost = _extract_encoder_window(
+                client, encoder, base_prompt, doc, page_texts, block,
+                int(page_no), verbose, mode="page")
+        finally:
+            client.close()
+
+        found: list[dict] = []
+        dropped, _same_page = _dedupe_window(parsed, found, set())
+
+        # R10: the same document may already be recorded on another page (the
+        # running head repeats; `_record_key` contains the page, so dedupe would
+        # not catch it). Compare the identity — (kind, number, series) — against
+        # every existing record of this encoder, whatever its page.
+        existing_identities: dict[tuple, list] = {}
+        existing_titles: dict[str, list] = {}
+        for row in existing:
+            try:
+                prev = json.loads(row["data"])
+            except (TypeError, ValueError):
+                continue
+            ident = _record_identity(prev)
+            if ident:
+                existing_identities.setdefault(ident, []).append(row)
+            title = re.sub(r"\s+", " ", str(prev.get("title") or "")).strip().lower()
+            if title:
+                existing_titles.setdefault(title, []).append((row, prev))
+
+        to_store: list[dict] = []
+        refused: list[dict] = []
+        unnumbered = 0
+        seen_idents: set = set()
+        delete_ids: list[int] = []
+        for rec in found:
+            ident = _record_identity(rec)
+            if ident:
+                if ident in seen_idents:
+                    dropped += 1
+                    continue
+                seen_idents.add(ident)
+                hits = [row for row in existing_identities.get(ident, [])
+                        if _db_record_page(row) != int(page_no)]
+                if hits:
+                    page_hit = _db_record_page(hits[0])
+                    if not replace:
+                        refused.append({"record": _record_label(rec), "page": page_hit,
+                                        "reason": f"already recorded on page {page_hit}"})
+                        continue
+                    delete_ids.extend(int(row["id"]) for row in hits)
+            else:
+                unnumbered += 1
+                title = re.sub(r"\s+", " ", str(rec.get("title") or "")).strip().lower()
+                hits = [row for row, _prev in existing_titles.get(title, [])
+                        if title and _db_record_page(row) != int(page_no)]
+                if hits:
+                    page_hit = _db_record_page(hits[0])
+                    if not replace:
+                        refused.append({"record": _record_label(rec), "page": page_hit,
+                                        "reason": f"same title already recorded on page {page_hit}"})
+                        continue
+                    delete_ids.extend(int(row["id"]) for row in hits)
+            # Page mode KNOWS where the entry starts — that is its premise — so
+            # the stored record is grounded to the page the operator named even
+            # if the model echoed another page in `page_start`. Without this a
+            # re-run would not find the record it is replacing (it would look
+            # like a record starting elsewhere), and `pha records --page P`
+            # would not list it.
+            to_store.append(_ground_record_page(rec, page_no))
+
+        if not to_store:
+            # R4 (or every record was refused): store nothing, pin nothing, and
+            # do NOT delete what is already there — a model miss must not erase a
+            # deliberate extraction.
+            conn.commit()
+            return {"action": "refused" if refused else "encoded",
+                    "filename": doc["filename"], "document_id": doc_id,
+                    "page": int(page_no), "encoder": resolved, "model": model_ref,
+                    "records": 0, "dropped": dropped, "refused": len(refused),
+                    "clashes": refused, "no_record": not found and not refused,
+                    "lost_windows": lost, "pinned": False, "outside_range": outside,
+                    "pages": rp.pages}
+
+        # Re-encoding a page replaces the records that started there (R7), pinned
+        # or not; `--replace` also supersedes the other-page record it clashes
+        # with. Their FTS rows and vectors go with them.
+        delete_ids.extend(int(row["id"]) for row in on_page)
+        db.delete_records(conn, sorted(set(delete_ids)))
+        for rec in to_store:
+            page = db.record_start_page(rec)
+            db.add_record(conn, doc_id, resolved,
+                          str(rec.get("kind") or rec.get("type") or "record"),
+                          json.dumps(rec, ensure_ascii=False),
+                          str(page) if page is not None else "",
+                          filters=record_filters, pinned=bool(pin),
+                          encoder_model=model_ref)
+        conn.commit()
+        write_records_file(cfg, conn, doc_id, resolved)
+        # The concatenated file is the WHOLE document the encoder consumed; a
+        # page run must not leave it holding just this page.
+        all_pages = db.get_pages(conn, doc_id)
+        edits = _edited_texts(conn, doc_id, doc["editor"]) if doc["editor"] else {}
+        all_texts = [(p["page_no"], (edits.get(p["id"]) or p["raw_text"] or "").strip())
+                     for p in all_pages if (edits.get(p["id"]) or p["raw_text"] or "").strip()]
+        write_concatenated_file(cfg, conn, doc_id, all_texts, resolved)
+
+        if enc_stage is not None and enc_stage.post:
+            due = [F for F in enc_stage.post
+                   if not _is_artifact(cfg, F)
+                   or _artifact_due(cfg, conn, doc_id, resolved, F, edited_dir)]
+            if due:
+                _records_out, ran = _run_stage_filters(
+                    cfg, due, hook="encoder.post", value=to_store, conn=conn,
+                    path=doc_path, doc_id=doc_id, stage="encoder", encoder=resolved,
+                    library_dir=lib_dir, pages_dir_edited=edited_dir,
+                    records_file=records_file, concatenated_file=concat_file,
+                    verbose=verbose, return_ran=True,
+                )
+                for r in ran:
+                    spec = next((F for F in due if F.name == r["name"]), None)
+                    if spec is None or not _is_artifact(cfg, spec) or lib_dir is None:
+                        continue
+                    try:
+                        from .filters import load_filter
+                        write_stamp(lib_dir, resolved, load_filter(cfg.filters_dir, r["name"]))
+                    except FilterError:
+                        pass
+
+        return {"action": "encoded", "filename": doc["filename"],
+                "document_id": doc_id, "page": int(page_no), "encoder": resolved,
+                "model": model_ref, "records": len(to_store), "dropped": dropped,
+                "refused": len(refused), "clashes": refused, "replace": bool(replace),
+                "pinned": bool(pin), "unnumbered": unnumbered,
+                "outside_range": outside, "pages": rp.pages, "chars": len(text),
+                "lost_windows": lost, "no_record": False}
+    finally:
+        locks.release(lock)
+
+
+def unpin_record_pages(cfg: Config, conn, doc_id: int,
+                       pages=None) -> dict:
+    """`pha encode --unpin`: release record pins, keeping the records.
+
+    Like `pha scan --unpin` / `pha edit --unpin`, this never deletes: it only
+    makes the rows eligible for the next bulk encode. `pages` empty/None
+    releases every pin of the document's records; otherwise only the named
+    pages (records that START there)."""
+    doc = db.get_document(conn, doc_id)
+    if not doc:
+        return {"action": "error", "filename": "?", "reason": "no document"}
+    wanted = sorted({int(p) for p in pages}) if pages else [None]
+    cleared = sum(db.clear_record_pins(conn, doc_id, page_no=p) for p in wanted)
+    conn.commit()
+    return {"action": "unpinned", "filename": doc["filename"], "unpinned": cleared,
+            "page": (wanted[0] if len(wanted) == 1 else None),
+            "pages": wanted if wanted != [None] else None}
+
+
+def encode_pages(
+    cfg: Config,
+    *,
+    doc_id: int | None = None,
+    path: str | None = None,
+    pages=None,
+    encoder_id: str | None = None,
+    model_override: str | None = None,
+    pin: bool = True,
+    replace: bool = False,
+    dry_run: bool = False,
+    unpin: bool = False,
+    verbose: bool = True,
+    include_leased: bool = False,
+    wait_s: float = 0.0,
+) -> dict:
+    """The page-scoped encode pass for one document (`pha encode --page N`).
+
+    Resolves exactly ONE document from `--doc` or `--path`; a path matching
+    several documents is refused (stricter than `pha edit --page`, which hits
+    page N of each: a pin is a claim about one document's page)."""
+    cfg.ensure_dirs()
+    conn = db.connect(cfg.db_path)
+    try:
+        if doc_id is not None:
+            doc = db.get_document(conn, int(doc_id))
+            if doc is None:
+                return {"results": [{"action": "error", "filename": "(encode)",
+                                     "reason": f"document not found: {doc_id}"}]}
+            targets = [doc]
+        elif path:
+            root = Path(path)
+            if not root.is_absolute():
+                root = cfg.dropbox / root
+            root = root.resolve()
+            if root != cfg.dropbox.resolve() and cfg.dropbox.resolve() not in root.parents:
+                if not root.exists():
+                    return {"results": [{"action": "error", "filename": path,
+                                         "reason": "target path does not exist"}]}
+            found: list = []
+            seen: set[int] = set()
+            for f in discover(cfg.dropbox, cfg.dir_documents, root=root, exclude=[cfg.inbox]):
+                doc = db.get_document_by_path(conn, str(f))
+                if doc is None or doc["id"] in seen:
+                    continue
+                seen.add(doc["id"])
+                found.append(doc)
+            if len(found) > 1:
+                names = ", ".join(d["filename"] for d in found[:5])
+                return {"results": [{"action": "error", "filename": path,
+                                     "reason": f"--page needs exactly one ingested document "
+                                               f"here; {len(found)} match ({names}) — use --doc"}]}
+            if not found:
+                return {"results": [{"action": "error", "filename": path,
+                                     "reason": "no ingested document matches this path"}]}
+            targets = found
+        else:
+            return {"results": [{"action": "error", "filename": "(encode)",
+                                 "reason": "--page needs --doc or --path (one document)"}]}
+
+        doc = targets[0]
+        if unpin:
+            return {"results": [unpin_record_pages(cfg, conn, doc["id"], pages=pages)]}
+        if not pages:
+            return {"results": [{"action": "error", "filename": doc["filename"],
+                                 "reason": "--page N is required (or --unpin)"}]}
+        results = []
+        for page_no in sorted(int(p) for p in pages):
+            results.append(encode_page(
+                cfg, conn, doc["id"], page_no,
+                encoder_id=encoder_id, model_override=model_override,
+                pin=pin, replace=replace, dry_run=dry_run, verbose=verbose,
+                include_leased=include_leased, wait_s=wait_s,
+            ))
+        return {"results": results}
+    finally:
+        conn.close()
 
 
 def _encoder_specs_for_document(cfg: Config, doc) -> list[tuple[Path, str | None]]:

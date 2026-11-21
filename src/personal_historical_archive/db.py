@@ -309,6 +309,15 @@ def migrate(conn: sqlite3.Connection) -> None:
         # It is safe to backfill from the existing data on the next writer
         # connection (see _backfill_records_index).
         conn.execute("ALTER TABLE records ADD COLUMN search_text TEXT")
+    # A pinned record is a deliberate per-page extraction (`pha encode --page N`)
+    # that a later bulk encode must not discard — the record-stage twin of
+    # pages.pinned_at / page_edits.pinned_at. NULL = an ordinary bulk record, so
+    # no backfill is needed. `encoder_model` records which model produced THIS
+    # record (provenance parity with pages.palaeographer_model).
+    if "pinned_at" not in rcols:
+        conn.execute("ALTER TABLE records ADD COLUMN pinned_at REAL")
+    if "encoder_model" not in rcols:
+        conn.execute("ALTER TABLE records ADD COLUMN encoder_model TEXT")
     # page status vocabulary: failed pages are 'waiting' (retried on next scan).
     # Only writes when rows need converting, so normal connections stay read-only.
     if conn.execute("SELECT COUNT(*) AS n FROM pages WHERE status = 'error'").fetchone()["n"]:
@@ -1460,18 +1469,48 @@ def stale_record_embedding_stats(conn: sqlite3.Connection,
             "models": models}
 
 
-def clear_records(conn: sqlite3.Connection, doc_id: int, encoder: str) -> None:
+def clear_records(conn: sqlite3.Connection, doc_id: int, encoder: str,
+                  keep_pinned: bool = True) -> int:
+    """Delete a document's records for one encoder; pinned rows survive.
+
+    A pinned record was extracted deliberately from one named page
+    (`pha encode --page N`), so a bulk `pha encode` / `--reprocess` must not
+    discard it. Its FTS row and its vector are kept with it — deleting those
+    would leave a record that is not findable, which is the only thing a record
+    is for. `pha encode --unpin` is how a pin is released so the next bulk pass
+    may overwrite it. Returns the number of records deleted.
+    """
+    scope = "document_id = ? AND encoder = ?"
+    params: tuple = (doc_id, encoder)
+    if keep_pinned:
+        scope += " AND pinned_at IS NULL"
     conn.execute(
-        "DELETE FROM record_embeddings WHERE record_id IN "
-        "(SELECT id FROM records WHERE document_id = ? AND encoder = ?)",
-        (doc_id, encoder),
+        f"DELETE FROM record_embeddings WHERE record_id IN "
+        f"(SELECT id FROM records WHERE {scope})", params,
     )
     conn.execute(
-        "DELETE FROM records_fts WHERE rowid IN "
-        "(SELECT id FROM records WHERE document_id = ? AND encoder = ?)",
-        (doc_id, encoder),
+        f"DELETE FROM records_fts WHERE rowid IN "
+        f"(SELECT id FROM records WHERE {scope})", params,
     )
-    _write(conn, "DELETE FROM records WHERE document_id = ? AND encoder = ?", (doc_id, encoder))
+    cur = _write(conn, f"DELETE FROM records WHERE {scope}", params)
+    return int(cur.rowcount or 0)
+
+
+def delete_records(conn: sqlite3.Connection, record_ids) -> int:
+    """Delete specific records (with their FTS row and vector). Returns the count.
+
+    `pha encode --page N` uses this to replace the records that started on the
+    page it re-encoded, and (`--replace`) the superseded record on another page;
+    a scoped `clear_records` cannot express either.
+    """
+    ids = [int(r) for r in (record_ids or [])]
+    if not ids:
+        return 0
+    marks = ",".join("?" * len(ids))
+    conn.execute(f"DELETE FROM record_embeddings WHERE record_id IN ({marks})", ids)
+    conn.execute(f"DELETE FROM records_fts WHERE rowid IN ({marks})", ids)
+    cur = _write(conn, f"DELETE FROM records WHERE id IN ({marks})", ids)
+    return int(cur.rowcount or 0)
 
 
 def add_record(
@@ -1482,7 +1521,16 @@ def add_record(
     data: str,
     source: str | None = None,
     filters: str | None = None,
-) -> None:
+    *,
+    pinned: bool = False,
+    encoder_model: str | None = None,
+) -> int:
+    """Insert one record (and its FTS row). Returns the new record id.
+
+    `pinned` marks a deliberate per-page extraction that a later bulk encode
+    must keep; `encoder_model` is the resolved model interface that produced it
+    (NULL for rows written before this was recorded).
+    """
     import time as _t
 
     rec = _as_record_dict(data)
@@ -1492,12 +1540,53 @@ def add_record(
         source = str(page) if page is not None else ""
     cur = _write(
         conn,
-        "INSERT INTO records (document_id, encoder, kind, data, source, created_at, filters, search_text) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (doc_id, encoder, kind, data, source, _t.time(), filters, search_text),
+        "INSERT INTO records (document_id, encoder, kind, data, source, created_at, "
+        "filters, search_text, pinned_at, encoder_model) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (doc_id, encoder, kind, data, source, _t.time(), filters, search_text,
+         _now() if pinned else None, encoder_model),
     )
     _write(conn, "INSERT INTO records_fts (rowid, text) VALUES (?, ?)",
            (cur.lastrowid, search_text))
+    return int(cur.lastrowid)
+
+
+def set_record_pins(conn: sqlite3.Connection, record_ids, pinned: bool = True) -> int:
+    """Pin (or release) specific record rows. Returns the rows changed."""
+    ids = [int(r) for r in (record_ids or [])]
+    if not ids:
+        return 0
+    marks = ",".join("?" * len(ids))
+    cur = _write(conn, f"UPDATE records SET pinned_at = ? WHERE id IN ({marks})",
+                 tuple([_now() if pinned else None] + ids))
+    return int(cur.rowcount or 0)
+
+
+def clear_record_pins(conn: sqlite3.Connection, doc_id: int,
+                      page_no: int | None = None) -> int:
+    """Release the pins on a document's records (all, or those starting on one
+    page). The records and their provenance are kept — `--unpin` only lifts the
+    protection, exactly like the page/edition pins."""
+    sql = ("UPDATE records SET pinned_at = NULL WHERE document_id = ? "
+           "AND pinned_at IS NOT NULL")
+    params: tuple = (doc_id,)
+    if page_no is not None:
+        sql += " AND CAST(source AS INTEGER) = ?"
+        params = (doc_id, int(page_no))
+    cur = _write(conn, sql, params)
+    return int(cur.rowcount or 0)
+
+
+def pinned_record_counts(conn: sqlite3.Connection) -> dict[int, int]:
+    """{document_id: pinned record count} for `pha status`.
+
+    `{}` on an archive whose DB predates the pin column (read-only commands run
+    no migration), like `pinned_counts` for pages."""
+    if not has_column(conn, "records", "pinned_at"):
+        return {}
+    return {int(r["document_id"]): int(r["n"]) for r in conn.execute(
+        "SELECT document_id, COUNT(*) n FROM records "
+        "WHERE pinned_at IS NOT NULL GROUP BY document_id")}
 
 
 _RECORD_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -1599,11 +1688,18 @@ def record_field_search(
     )
     if not _table_exists(conn, "records"):
         return []
+    # The pin/provenance columns are optional: a read-only command runs no
+    # migration, so an archive opened before this schema must still list.
+    extra = ""
+    if has_column(conn, "records", "pinned_at"):
+        extra += ", r.pinned_at"
+    if has_column(conn, "records", "encoder_model"):
+        extra += ", r.encoder_model"
     sql = (
         "SELECT r.id AS record_id, r.document_id, r.encoder, "
         "r.kind AS record_kind, r.source, r.data, r.created_at, "
         "d.filename, d.dir_path, d.path, "
-        "0.0 AS bm, '' AS snippet "
+        "0.0 AS bm, '' AS snippet" + extra + " "
         "FROM records r JOIN documents d ON d.id = r.document_id"
     )
     sql += where
@@ -1691,6 +1787,10 @@ def record_public(row) -> dict:
         "encoder": row["encoder"],
         "kind": row["record_kind"],
         "created_at": row["created_at"],
+        # A pinned record was extracted deliberately from one page
+        # (`pha encode --page N`); `encoder_model` says which model produced it.
+        "pinned": bool(row_get(row, "pinned_at")),
+        "encoder_model": row_get(row, "encoder_model"),
         "data": data,
     }
 
@@ -1705,12 +1805,19 @@ def page_records(conn: sqlite3.Connection, document_id: int, page_no: int) -> li
     """
     if not _table_exists(conn, "records"):
         return []
+    extra = ""
+    if has_column(conn, "records", "pinned_at"):
+        extra += ", pinned_at"
+    if has_column(conn, "records", "encoder_model"):
+        extra += ", encoder_model"
     rows = conn.execute(
-        "SELECT id, encoder, kind, data FROM records "
+        f"SELECT id, encoder, kind, data{extra} FROM records "
         "WHERE document_id = ? AND source = ? ORDER BY id",
         (int(document_id), str(int(page_no))),
     ).fetchall()
     return [{"id": r["id"], "encoder": r["encoder"], "kind": r["kind"],
+             "pinned": bool(row_get(r, "pinned_at")),
+             "encoder_model": row_get(r, "encoder_model"),
              "data": _as_record_dict(r["data"])} for r in rows]
 
 

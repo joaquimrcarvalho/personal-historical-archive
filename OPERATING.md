@@ -393,6 +393,39 @@ labels the citation with the pair the text actually came from. An explicit
 `--editor X` on `pha page`/`pha cite` still selects a VARIANT FOLDER by name; the
 page's own folder is the document's.
 
+### Re-encoding ONE page (`pha encode --page N`)
+
+The record-stage twin of §6/§7, for an entry the bulk **entry detection** missed
+(e.g. a document number that survives only in the running head — a real case in
+Documenta Indica vol. VII, doc 22, printed p. 115 = page 195):
+
+```sh
+pha encode --doc 78 --page 195 --dry-run      # the plan: encoder, model, pin
+pha encode --doc 78 --page 195 --encoder documents
+pha encode --doc 78 --page 195 --unpin        # release, keep the record
+```
+
+- It runs **no entry detection** — the page is handed to the model as an entry
+  start — and pins the record(s) it stores. A later bulk `pha encode` /
+  `--reprocess` keeps a pinned record and drops a re-derived duplicate.
+- A page where the model returns **no** record stores and pins nothing
+  (`no record detected on page P — nothing pinned`); an existing pinned record
+  on that page is NOT erased by a model miss.
+- `--encoder` names the rules (default: the one whose `pages:` range covers P;
+  several or none is an error). `--model` overrides the model for that run.
+  A page outside the declared range still runs, with a warning — the exception
+  path must not be blocked by the range that missed it.
+- `--replace` supersedes a record with the same `number` already stored on
+  **another** page (the running head repeats, so a page repair can return a
+  document the bulk pass already recorded); without it the run refuses and names
+  that page. `--no-pin` stores without protection.
+- It takes the encoder's model-server lock (`--wait`/`--no-wait`, §4).
+- Records are keyword-searchable at once; new records are **not** embedded by
+  `encode` (no encode pass embeds) — run `pha reindex --source records --doc N`
+  for semantic search. `pha status` reports `N pinned record(s)`;
+  `pha records` marks them `[pinned]`, and `pha records --json` carries
+  `pinned`/`encoder_model`.
+
 ---
 
 ## 8. Notes (research notes generated from archive queries)

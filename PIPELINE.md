@@ -66,6 +66,21 @@ chronological table *and* a run of notices.
 *Result:* a records file (`records-<encoder>.json`), the exact text the model
 was given (`concatenated-<encoder>.md`), and the records in the index.
 
+**If one document was not recognised** (its number appears only in a running
+head, say), a bulk pass silently leaves it out. Repair that ONE page without
+touching the rest of the volume:
+
+```sh
+pha encode --doc 78 --page 195 --encoder documents --dry-run   # what would run
+pha encode --doc 78 --page 195 --encoder documents             # repair + protect
+```
+
+This skips the detection that missed the document, stores the record and
+**protects** it, so a later full encode keeps it. If the model finds nothing on
+that page, nothing is stored and nothing is protected. `pha encode --unpin`
+releases the protection; `--replace` is for the same document number already
+recorded on another page.
+
 ### What the records let you ask
 
 Once a document has been through the encoder, you can ask about the **things in
