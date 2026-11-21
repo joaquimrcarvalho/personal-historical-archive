@@ -504,6 +504,18 @@
           "commit": "9b3dfe18897c"
         }
       ]
+    },
+    "0.52.0": {
+      "date": "2026-11-21",
+      "summary": "The embedding model is now a per-machine setting, its input window is discovered from the server, and long notes are embedded in chunks instead of being silently truncated.",
+      "changes": [
+        {
+          "type": "feat",
+          "scope": "embed",
+          "text": "per-machine model, chunked notes, discovered window",
+          "commit": "2607ed937efe"
+        }
+      ]
     }
   }
 }
