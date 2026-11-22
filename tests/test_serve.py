@@ -770,3 +770,29 @@ def test_page_view_has_a_resizable_split(cfg, add_document, write_render, server
     assert "pha-serve-media" in text            # drag state persists
     assert 'class="reader-media"' in text and 'class="reader-text"' in text
     assert "--media-w" in text                  # the width variable is in the CSS
+
+
+def test_splitter_script_runs_after_the_document_exists(cfg, add_document, write_render, server):
+    """The splitter script is injected into <head>, before the reader exists.
+
+    It used to query `main.reader` immediately, get null, and return — so the divider
+    rendered but no drag listener was ever attached. The script must wait for
+    DOMContentLoaded (or run after the body) or dragging silently does nothing.
+    """
+    doc_id = add_document()
+    write_render(doc_id, 1, b"JPEG")
+    status, ctype, body = server.get("/doc/colx-d/p1")
+    assert status == 200
+    text = body.decode()
+    head = text.split("</head>", 1)[0]
+    # The script still sits in the head...
+    assert "pha-serve-media" in head
+    # ...but wires the reader only once the document has been parsed.
+    assert "const start=()=>{" in head
+    assert "if(!d)return;" in head
+    assert "document.readyState==='loading'" in head
+    assert "addEventListener('DOMContentLoaded',start,{once:true})" in head
+    assert "else start();" in head
+    # And dragging must not select the surrounding text instead of resizing.
+    assert "user-select:none" in head
+

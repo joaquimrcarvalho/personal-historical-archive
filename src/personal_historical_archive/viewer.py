@@ -33,7 +33,8 @@ main.reader{display:grid;
 .reader-media img.page{width:100%;height:auto;max-height:none}
 .reader-text{min-width:0}
 .splitter{grid-column:2;align-self:stretch;min-height:60vh;position:relative;
-  cursor:col-resize;touch-action:none;border:0;background:transparent;padding:0}
+  cursor:col-resize;touch-action:none;user-select:none;-webkit-user-select:none;
+  border:0;background:transparent;padding:0}
 .splitter::before{content:"";position:absolute;left:5px;top:0;bottom:0;width:2px;
   background:#c9c5bc;border-radius:2px}
 .splitter:hover::before,.splitter:focus-visible::before{background:#5f5c55;width:4px;left:4px}
@@ -120,10 +121,17 @@ def html_page(title: str, body: str, head_extra: str = "") -> bytes:
 
 
 SPLITTER_JS = """<script>(function(){
+// This script is injected into <head>, so it runs BEFORE <body> exists. Wire it up only
+// after the document is parsed, or `main.reader` is still null here and the whole
+// handler silently does nothing (the divider looked draggable but never moved).
+const start=()=>{
 const wb=document.querySelector('main.reader'),d=wb&&wb.querySelector('.splitter');
 if(!d)return;
 const KEY='pha-serve-media',clamp=p=>Math.min(80,Math.max(25,p));
-const saved=localStorage.getItem(KEY);if(saved)wb.style.setProperty('--media-w',saved);
+const store={get(){try{return localStorage.getItem(KEY)}catch(e){return null}},
+  set(v){try{localStorage.setItem(KEY,v)}catch(e){}},
+  clear(){try{localStorage.removeItem(KEY)}catch(e){}}};
+const saved=store.get();if(saved)wb.style.setProperty('--media-w',saved);
 let drag=false;
 const pct=ev=>{const r=wb.getBoundingClientRect();
 const x=(ev.clientX!==undefined?ev.clientX:(ev.touches&&ev.touches[0].clientX))-r.left;
@@ -132,10 +140,13 @@ const apply=p=>wb.style.setProperty('--media-w',p.toFixed(1)+'%');
 d.addEventListener('pointerdown',e=>{drag=true;d.setPointerCapture(e.pointerId);e.preventDefault();});
 d.addEventListener('pointermove',e=>{if(drag)apply(pct(e));});
 const end=()=>{if(!drag)return;drag=false;
-localStorage.setItem(KEY,wb.style.getPropertyValue('--media-w'));};
+store.set(wb.style.getPropertyValue('--media-w'));};
 d.addEventListener('pointerup',end);d.addEventListener('pointercancel',end);
-d.addEventListener('dblclick',()=>{wb.style.removeProperty('--media-w');localStorage.removeItem(KEY);});
+d.addEventListener('dblclick',()=>{wb.style.removeProperty('--media-w');store.clear();});
 d.addEventListener('keydown',e=>{const cur=parseFloat(wb.style.getPropertyValue('--media-w'))||55;
 let p=null;if(e.key==='ArrowLeft')p=clamp(cur-2);if(e.key==='ArrowRight')p=clamp(cur+2);
-if(p!==null){e.preventDefault();apply(p);localStorage.setItem(KEY,p.toFixed(1)+'%');}});
+if(p!==null){e.preventDefault();apply(p);store.set(p.toFixed(1)+'%');}});
+};
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});
+else start();
 })();</script>"""
