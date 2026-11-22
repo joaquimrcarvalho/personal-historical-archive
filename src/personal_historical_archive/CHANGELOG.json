@@ -528,6 +528,18 @@
           "commit": "3780bbad83f2"
         }
       ]
+    },
+    "0.53.1": {
+      "date": "2026-11-22",
+      "summary": "The pha serve image/text divider is actually draggable again: its script now wires itself after the page is parsed, its saved width is non-fatal, and a drag no longer selects the page text.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "serve",
+          "text": "the image/text divider now actually drags",
+          "commit": "bd2576fbf754"
+        }
+      ]
     }
   }
 }
