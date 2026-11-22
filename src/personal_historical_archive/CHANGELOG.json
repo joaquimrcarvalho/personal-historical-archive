@@ -540,6 +540,18 @@
           "commit": "bd2576fbf754"
         }
       ]
+    },
+    "0.53.2": {
+      "date": "2026-11-22",
+      "summary": "The pha serve viewer now renders the edited reading as Markdown — headings, lists, tables and links — while the raw transcription stays verbatim.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "serve",
+          "text": "render the edited reading as Markdown",
+          "commit": "a69d650063df"
+        }
+      ]
     }
   }
 }
