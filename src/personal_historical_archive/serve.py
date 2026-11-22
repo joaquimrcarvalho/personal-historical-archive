@@ -8,7 +8,9 @@ because it names the *slug* (derived from the dropbox-relative path), not the
 document id, the dated library folder or the content-addressed render directory.
 The HTML viewer shows the page render together with the stored raw
 transcription and, when one is available, the effective edited reading.  The
-bare JPEG stays at ``/doc/<slug>/p<NNN>.jpg`` for inline embeds.
+raw transcription is displayed verbatim; the edited reading is Markdown and is
+rendered (headings, lists, tables, links) by ``markdown_lite``.  The bare JPEG
+stays at ``/doc/<slug>/p<NNN>.jpg`` for inline embeds.
 The server resolves ``slug -> current sha256`` per request (cached on the DB's
 mtime), so a re-scan/re-edit is picked up without a restart and without the
 consumer rewriting its markdown.
@@ -41,6 +43,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import addresses
 from . import db
 from .config import Config
+from .markdown_lite import render_markdown
 from .viewer import CSS as _CSS
 from .viewer import SPLITTER_JS
 from .viewer import html_page as _html_page
@@ -138,6 +141,23 @@ def _reading_panel(title: str, text: str | None, provenance: str,
     if text and text.strip():
         body = (f'<pre class="transcript" tabindex="0">'
                 f'{html.escape(text)}</pre>')
+    else:
+        body = f'<p class="muted">{html.escape(empty_message)}</p>'
+    return (f'<section class="reading"><h2>{html.escape(title)}</h2>'
+            f'{provenance}{body}</section>')
+
+
+def _markdown_panel(title: str, text: str | None, provenance: str,
+                    empty_message: str) -> str:
+    """A reading panel whose text is Markdown (the edited reading).
+
+    The editor writes Markdown — tables, headings, lists, links — so showing it
+    in a ``<pre>`` makes the structure unreadable.  ``markdown_lite`` renders
+    the supported subset and escapes every text segment; the raw transcription
+    keeps ``_reading_panel`` because it must stay verbatim.
+    """
+    if text and text.strip():
+        body = f'<div class="md">{render_markdown(text)}</div>'
     else:
         body = f'<p class="muted">{html.escape(empty_message)}</p>'
     return (f'<section class="reading"><h2>{html.escape(title)}</h2>'
@@ -846,7 +866,7 @@ def make_handler(cfg: Config, index: _Index, quiet: bool = False):
                     empty)
                 edited = reading.get("edited") if reading else None
                 if edited:
-                    edited_panel = _reading_panel(
+                    edited_panel = _markdown_panel(
                         "Edited reading", edited["text"],
                         _provenance(edited["label"], pinned=edited["pinned"],
                                     reviewed=edited["reviewed"]),

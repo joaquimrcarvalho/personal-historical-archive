@@ -10,7 +10,9 @@ from __future__ import annotations
 import html
 
 # One tiny stylesheet, inlined: the viewer must work offline and with no build
-# step or external asset. Transcriptions are plain text, never interpreted.
+# step or external asset. The raw transcription is plain text, never
+# interpreted; only the edited reading is rendered as Markdown (the `.md`
+# block below), because that is the form the editor writes.
 CSS = """\
 :root{color-scheme:light dark}
 *{box-sizing:border-box}
@@ -64,6 +66,32 @@ pre.transcript{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word
   max-height:calc(100vh - 12rem);overflow:auto;margin:.4rem 0 0;
   padding:.65rem .75rem;background:#fbfaf7;border:1px solid #eee;
   border-radius:7px}
+.md{font-size:15px;line-height:1.55}
+.md p{margin:0 0 .7em}
+.md h1,.md h2,.md h3,.md h4,.md h5,.md h6{margin:1em 0 .35em;line-height:1.3}
+.md h1{font-size:1.25em}
+.md h2{font-size:1.15em}
+.md h3{font-size:1.05em}
+.md ul,.md ol{margin:.3em 0 .8em;padding-left:1.5em}
+.md li{margin:.15em 0}
+.md blockquote{margin:.5em 0 .8em;padding:.1em .8em;
+  border-left:3px solid #d8d4cb;color:#5f5a50}
+.md code{background:#f1efe9;border-radius:4px;padding:.05em .3em;
+  font:13.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.md pre{margin:.4em 0 .8em;padding:.65em .75em;overflow:auto;
+  background:#fbfaf7;border:1px solid #eee;border-radius:7px}
+.md pre code{background:none;padding:0;font-size:13.5px}
+.md-table-wrap{margin:.5em 0 .9em;overflow-x:auto;max-width:100%}
+.md table{border-collapse:collapse;font-size:14px}
+.md th,.md td{border:1px solid #ddd;padding:.25em .55em;text-align:left;
+  vertical-align:top}
+.md th{background:#f1efe9;font-weight:600}
+.md img{max-width:100%;height:auto}
+.md hr{border:0;border-top:1px solid #ddd;margin:1em 0}
+.md-footnotes{margin-top:1.2em;padding-top:.6em;border-top:1px solid #ddd;
+  font-size:13px}
+.md-fn-ref a{text-decoration:none}
+.md-fn-num{color:#777}
 img.page{max-width:100%;max-height:calc(100vh - 8.5rem);box-shadow:0 1px 8px rgba(0,0,0,.28)}
 a.btn,span.btn{padding:.22rem .55rem;border:1px solid #bbb;border-radius:6px;
   text-decoration:none;color:inherit;white-space:nowrap}
@@ -90,6 +118,13 @@ button{font:inherit;padding:.22rem .55rem}
   .provenance{color:#9a9a9a}
   .badge{border-color:#444;color:#b8b1a4}
   pre.transcript{background:#17181a;border-color:#333}
+  .md blockquote{color:#b8b1a4;border-color:#444}
+  .md code{background:#26282c}
+  .md pre{background:#17181a;border-color:#333}
+  .md th,.md td{border-color:#333}
+  .md th{background:#26282c}
+  .md hr,.md-footnotes{border-color:#333}
+  .md-fn-num{color:#9a9a9a}
   .notice{border-color:#4a4335;background:#2a2620}
 }
 @media (max-width:900px){

@@ -405,6 +405,37 @@ def test_viewer_shows_a_filled_edit_but_not_a_waiting_stub(
     assert "not run yet" not in text
 
 
+def test_viewer_renders_the_edited_markdown_but_keeps_raw_verbatim(
+        cfg, add_document, write_render, server):
+    """The edited reading is Markdown (tables, headings) and must be rendered.
+
+    The raw transcription is not Markdown: it stays in a <pre> so its whitespace
+    and incidental markup are never reinterpreted.
+    """
+    doc_id = add_document(pages=(1,), editor="french-ocr",
+                          editor_model="deepseek-v4-flash")
+    write_render(doc_id, 1)
+    raw = "| not | a | table |\n|---|---|---|"
+    edit = ("## Notes\n\n"
+            "| Nomen | Patria |\n"
+            "|---|---|\n"
+            "| Amaya | Lusitana |\n\n"
+            "- one\n- two")
+    _set_page_text(cfg, doc_id, 1, raw=raw, editor="french-ocr", edit=edit)
+
+    text = server.get("/doc/colx-d/p001")[2].decode()
+    assert '<pre class="transcript"' in text
+    assert "<table" not in text              # raw is never rendered
+
+    text = server.get("/doc/colx-d/p001?view=edited")[2].decode()
+    assert '<div class="md">' in text
+    assert "<h2>Notes</h2>" in text
+    assert '<table class="md-table">' in text
+    assert "<th>Nomen</th>" in text and "<td>Amaya</td>" in text
+    assert "<li>one</li>" in text
+    assert '<pre class="transcript"' not in text
+
+
 def test_viewer_escapes_raw_and_edited_text(cfg, add_document, write_render,
                                             server):
     doc_id = add_document(pages=(1,))
