@@ -1288,8 +1288,12 @@ function PhaView(props) {
     const vmap = {}
     matched.forEach((hit) => { vmap[hit.page_no] = hit.variant })
     const pages = r && r.ok && r.pages ? r.pages.filter((p) => vmap[p.page_no] !== undefined) : []
-    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null, records: null, recordsTotal: 0, recordsOffset: 0, recordsErr: null, recordLoading: false, listMode: 'pages', textMode: 'raw', selectedRecordId: null, pageRecords: null, pageRecordsErr: null, pageRecordsLoading: false }))
+    setState((s) => ({ ...s, selectedId: id, detail: r && r.ok ? { doc: r.doc, pages, edits: r.edits || [], matched: true } : null, searchPageVariant: vmap, noteMode: false, selectedNote: null, page: null, pageReq: null, pageErr: null, pendingPages: null, pendingNeeds: null, configMode: false, config: null, configMsg: null, inboxSel: null, bib: null, bibErr: null, records: null, recordsTotal: 0, recordsOffset: 0, recordsErr: null, recordLoading: false, listMode: 'pages', textMode: 'raw', selectedRecordId: null, pageRecords: null, pageRecordsErr: null, pageRecordsLoading: false }))
     loadPending(id)
+    // The reference is per document, like the pages and records above: without this the
+    // live bib state of the previously opened document stays on screen (and in the
+    // Reference panel and Ask in Chat) because the renderer prefers it to the snapshot's.
+    loadBib(id)
     // A search-opened document shows its encoder records too (the pane's block is not
     // specific to the document-list path).
     loadRecords(id)

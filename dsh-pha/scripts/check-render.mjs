@@ -520,6 +520,30 @@ try {
     'Search sends the chosen source to /pha/search')
 } catch (e) { check(false, 'search renders record hits and sends the source — threw: ' + e.message) }
 
+// A document opened from the search results must reload its OWN bibliographic
+// reference. It used to reuse the previous document's live `bib` state, so #270 showed
+// the reference of #17 (the reference line, the Reference panel and Ask in Chat).
+try {
+  const fromSearch = renderLoadedView({
+    searchMode: true,
+    selectedId: 17,
+    detail: {
+      doc: { id: 17, filename: 'DocHistMissPadPortOriente_vol01_1499-1522.pdf', path: '/a/dropbox/collections/doc-hist/doc17.pdf', kind: 'pdf', page_count: 2, status: 'done' },
+      pages: [{ id: 1, page_no: 1, status: 'done' }], edits: [], matched: false,
+    },
+    bib: { found: true, reference: 'Rego, António da Silva, Documentação para a história das missões do padroado português do Oriente: India, vol. 1 (1499-1522), Lisboa, Agência Geral das Colónias, 1947.' },
+    hits: [{ document_id: 270, filename: 'baldini-ricci-collegio-romano-2013.pdf', collection: 'collections/baldini', page_no: 2, variant: 'raw', text: 'Ricci Coimbra' }],
+  })
+  const result = fromSearch.nodes.find((n) => hasClass(n, 'pha-doc') && textOf(n).includes('baldini-ricci-collegio-romano-2013.pdf'))
+  check(!!result, 'a search result renders its document row')
+  await result.props.onClick()
+  await tick()
+  check(fromSearch.fetched.includes('/pha/document?doc=270'),
+    'clicking a search result opens that document')
+  check(fromSearch.fetched.includes('/pha/bib?doc=270'),
+    'opening a document from search reloads its own reference (not the previous document\'s)')
+} catch (e) { check(false, 'a search-opened document reloads its reference — threw: ' + e.message) }
+
 console.log('')
 if (failures > 0) {
   console.log(`${failures} check(s) FAILED`)
