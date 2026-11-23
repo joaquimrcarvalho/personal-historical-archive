@@ -552,6 +552,18 @@
           "commit": "a69d650063df"
         }
       ]
+    },
+    "0.53.3": {
+      "date": "2026-11-23",
+      "summary": "Opening a document from the search results now shows that document's own bibliographic reference, not the previous document's.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "dsh-pha",
+          "text": "load the search-opened document's own reference",
+          "commit": "6874d6939c1a"
+        }
+      ]
     }
   }
 }
