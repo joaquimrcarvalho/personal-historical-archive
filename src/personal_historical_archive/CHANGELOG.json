@@ -588,6 +588,18 @@
           "commit": "bcd79db324a9"
         }
       ]
+    },
+    "0.53.6": {
+      "date": "2026-11-27",
+      "summary": "The Obsidian skill now talks to Obsidian itself — MCP tools, the obsidian CLI, or the Local REST API — instead of writing files into the vault, and the provenance script prints which vault the API is serving and refuses to write to a vault whose .pha-vault.md sentinel does not name this archive.",
+      "changes": [
+        {
+          "type": "feat",
+          "scope": "skills",
+          "text": "address the Obsidian vault through Obsidian, never its files",
+          "commit": "cd0d4cbe9246"
+        }
+      ]
     }
   }
 }
