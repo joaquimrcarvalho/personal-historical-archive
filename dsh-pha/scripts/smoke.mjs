@@ -498,6 +498,36 @@ if (recordsTool) {
   check(out && out.ok === true && out.total === 42 && out.limit === 100 && out.records.length === 1,
     'pha_records returns the parsed `pha records --json` payload with ok:true')
 }
+
+// The agent search tool must survive the harness's lossless-JSON snapshot.
+// `pha search --json` gives a RECORD hit no `variant`; copying `hit.variant`
+// unconditionally made the tool value carry an `undefined` property, which the
+// tool pipeline rejects for the whole call ("value is not lossless JSON").
+const searchTool = recTools.find((t) => t.name === 'pha_search')
+check(!!searchTool && typeof searchTool.execute === 'function', 'tool pha_search is registered')
+if (searchTool) {
+  const before = recSpawns.length
+  const out = await searchTool.execute({ query: 'carta', limit: 5 })
+  const argv = recSpawns.slice(before).map((s) => s.argv).find((a) => a[1] === 'search')
+  check(!!argv && JSON.stringify(argv.slice(1)) === JSON.stringify([
+    'search', 'carta', '--mode', 'keyword', '--json', '--limit', '5',
+  ]), 'pha_search builds `pha search --mode keyword --json`')
+  check(out && out.ok === true && out.results.length === 3, 'pha_search returns every hit kind')
+  const undefinedFields = []
+  for (const row of out.results) {
+    for (const key of Object.keys(row)) if (row[key] === undefined) undefinedFields.push(key)
+  }
+  check(undefinedFields.length === 0,
+    'pha_search rows carry no undefined property (the value is lossless JSON)')
+  const rec = out.results.find((r) => r.kind === 'record')
+  check(!!rec && rec.record_id === 12 && rec.encoder === 'letters' && rec.record_kind === 'letter'
+    && !('variant' in rec),
+    'pha_search keeps a record hit record-shaped and omits the variant it lacks')
+  const page = out.results.find((r) => r.kind === 'page')
+  check(!!page && page.document_id === 8 && page.variant === 'raw',
+    'pha_search keeps a page hit page-shaped')
+  check(out.results.some((r) => r.kind === 'note'), 'pha_search still includes note hits')
+}
 recPlugin.dispose()
 
 // 5. The client half stays loadable as a harness client module.

@@ -650,6 +650,40 @@ function apply(ctx, config) {
 
   const SEARCH_SOURCES = ['pages', 'records', 'notes', 'all']
 
+  // One row shape for a search hit, shared by the /pha/search route and the
+  // pha_search tool. `pha search --json` gives page, record and note hits
+  // DIFFERENT fields — a record hit has no `variant`, a page hit has no
+  // `record_id` — so a row must be built from the fields the hit actually
+  // carries. The tool value also must contain no `undefined` property: the
+  // harness snapshots it under its lossless-JSON rules and fails the WHOLE call
+  // with "value is not lossless JSON", because JSON.stringify would silently
+  // drop the key. (The web route only survives `undefined` because the response
+  // is stringified, which is exactly the drift this helper prevents.)
+  function searchHitRow(hit) {
+    let row
+    if (hit.kind === 'note') {
+      row = { kind: 'note', note: hit.note, title: hit.title, path: hit.path,
+              text: String(hit.text || '').slice(0, 900) }
+    } else {
+      row = { kind: hit.kind || null, document_id: hit.document_id,
+              filename: hit.filename, collection: hit.collection,
+              page_no: hit.page_no, variant: hit.variant,
+              text: String(hit.text || '').slice(0, 900) }
+      // A record hit keeps its identity instead of becoming a page-shaped row:
+      // `page_no` is the record's START page, and the record itself is a row of
+      // its own (record_id/encoder/record_kind select it in /pha/records).
+      if (hit.kind === 'record') {
+        row.record_id = hit.record_id
+        row.encoder = hit.encoder
+        row.record_kind = hit.record_kind
+      }
+    }
+    for (const key of Object.keys(row)) {
+      if (row[key] === undefined) delete row[key]
+    }
+    return row
+  }
+
   const tools = [
     ['pha_status', 'Run `pha status` on the configured archive and return its text report (documents, pages, chunks, new and on-hold files).', {}, [], async () => {
       const r = await phaRun(['status'])
@@ -689,23 +723,20 @@ function apply(ctx, config) {
       // issues several calls (or the route, which repeats --field).
       return Object.assign({ ok: true }, await runRecords(a, a.field ? [String(a.field)] : []))
     }],
-    ['pha_search', 'Full-text search across the archive (keyword / phrase match). Returns structured hits with document id, page number, variant and snippet text — pages that contain the query terms, plus the archive\'s own notes on the subject (`kind: "note"`), which are earlier conclusions to check the pages against, not evidence themselves.', { query: { type: 'string', description: 'search terms' }, limit: { type: 'integer', description: 'max hits (default 5, max 20)' } }, ['query'], async (a) => {
+    ['pha_search', 'Full-text search across the archive (keyword / phrase match). Every hit carries `kind` (`page` or `record`) with document id, page number and snippet text; a page hit also carries `variant` and a record hit `record_id`/`encoder`/`record_kind`. Also returns the archive\'s own notes on the subject (`kind: "note"` with `note`, `title`, `path`), which are earlier conclusions to check the pages against, not evidence themselves.', { query: { type: 'string', description: 'search terms' }, limit: { type: 'integer', description: 'max hits (default 5, max 20)' } }, ['query'], async (a) => {
       const q = String(a.query || '').trim()
       if (!q) throw new Error('query required')
       const limit = Math.min(20, Math.max(1, Number(a.limit) || 5))
       const r = await phaRun(['search', q, '--mode', 'keyword', '--json', '--limit', String(limit)])
       if (r.code !== 0) throw new Error('pha search failed: ' + String(r.err || r.out).slice(0, 400))
       const data = parseJson(r.out)
-      const results = (data.results || []).map((hit) => (
-        hit.kind === 'note'
-          ? { kind: 'note', note: hit.note, title: hit.title, path: hit.path,
-              mode: data.mode || 'keyword',
-              text: String(hit.text || '').slice(0, 900) }
-          : { document_id: hit.document_id, filename: hit.filename, collection: hit.collection,
-              page_no: hit.page_no, variant: hit.variant, mode: data.mode || 'keyword',
-              text: String(hit.text || '').slice(0, 900) }
-      ))
-      return { ok: true, query: q, mode: data.mode || 'keyword', results }
+      const mode = data.mode || 'keyword'
+      const results = (data.results || []).map((hit) => {
+        const row = searchHitRow(hit)
+        row.mode = mode
+        return row
+      })
+      return { ok: true, query: q, mode, results }
     }],
     ['pha_open', 'Open one page of a document in the OS-default application (e.g. a markdown editor) so a human can review/edit the library file on the archive machine. The OS decides which app handles the .md; pha never edits the text (a human edits, then pha review imports).', { doc: { type: 'string', description: 'document id or filename substring' }, page: { type: 'integer', description: 'page number (1-based)' }, edited: { type: 'boolean', description: 'open the edited variant instead of raw' } }, ['doc', 'page'], async (a) => runOpen(a)],
     ['pha_pending', 'List the library page files a human edited but that are not yet imported into the DB for one document (numeric document id) — i.e. the DB is out of sync with the library files on disk. Returns the pages plus which pha passes (review / edit / reindex) are needed to bring it back in sync.', { doc: { type: 'string', description: 'document id (number)' } }, ['doc'], async (a) => runPending(a.doc)],
@@ -954,23 +985,9 @@ function apply(ctx, config) {
         // A note is the researcher's own conclusion, not a document row: the view
         // renders document hits, so notes stay out of that list (as before).
         .filter((hit) => hit.kind !== 'note')
-        .map((hit) => {
-          const row = {
-            kind: hit.kind || null,
-            document_id: hit.document_id, filename: hit.filename, collection: hit.collection,
-            page_no: hit.page_no, variant: hit.variant,
-            text: String(hit.text || '').slice(0, 900),
-          }
-          // A record hit keeps its identity instead of becoming a page-shaped row:
-          // `page_no` is the record's START page, and the record itself is a row of
-          // its own (record_id/encoder/record_kind select it in /pha/records).
-          if (hit.kind === 'record') {
-            row.record_id = hit.record_id
-            row.encoder = hit.encoder
-            row.record_kind = hit.record_kind
-          }
-          return row
-        })
+        // Same row shape as the pha_search tool, so a browser request and an
+        // agent call can never drift apart (a record hit stays record-shaped).
+        .map(searchHitRow)
       return { ok: true, query: q, source, results }
     })],
     ['/pha/pageImage', json(pageImage)],
