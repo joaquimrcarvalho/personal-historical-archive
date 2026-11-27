@@ -564,6 +564,18 @@
           "commit": "6874d6939c1a"
         }
       ]
+    },
+    "0.53.4": {
+      "date": "2026-11-27",
+      "summary": "Search results that include a structured encoder record no longer break the pha_search tool: every row carries only the fields its hit actually has, and a record hit stays identifiable by its record id and encoder.",
+      "changes": [
+        {
+          "type": "fix",
+          "scope": "dsh-pha",
+          "text": "keep pha_search results lossless JSON",
+          "commit": "e7daef1ec203"
+        }
+      ]
     }
   }
 }
