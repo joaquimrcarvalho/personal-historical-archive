@@ -75,10 +75,15 @@ most common tasks:
   reading-count checks) and `scripts/make_reference.py` (one-line-per-entry
   `reference/` variant); a reviewed `human/` folder is read-only for agents.
 - `obsidian-vault` - search, create and organise notes in the owner's
-  Obsidian vault (wikilinks, index notes), and keep archive-derived notes in
-  sync: YAML provenance is checked/stamped with
-  `scripts/archive_note_sync.py` (`OBSIDIAN_VAULT`, `PHA_ARCHIVE_DIR`; flags
-  `--vault`/`--archive` override).
+  Obsidian vault (wikilinks, index notes) through Obsidian itself — the MCP
+  tools or the `obsidian` CLI, never a filesystem path — and keep
+  archive-derived notes in sync: YAML provenance is checked/stamped with
+  `scripts/archive_note_sync.py`, which goes through the Local REST API
+  (`OBSIDIAN_API_KEY`, `OBSIDIAN_BASE_URL`; `--archive` or `PHA_ARCHIVE_DIR`).
+  Every run prints which vault the API is serving, from that vault's
+  `.pha-vault.md` sentinel, and the script refuses to write to a vault it cannot
+  prove is the intended one (`identify` writes the sentinel, after the user
+  confirms).
 - `timelink-kleio-provenance` - cite facts from Timelink/Dehergne
   prosopography by going from the SQLite attribute row back to the Kleio
   file and line, and render a `vscode://file/<absolute-path>:<line>` link;

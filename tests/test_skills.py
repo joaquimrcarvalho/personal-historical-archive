@@ -113,9 +113,17 @@ EXPECTED = {
         "UP_TO_DATE",
         "STALE",
         "MISSING_SOURCE",
-        # machine-specific paths are configurable, not hardcoded
-        "OBSIDIAN_VAULT",
+        # addressed through Obsidian itself, never a filesystem path
+        "mcp__obsidian__",
+        "obsidian search",
+        "OBSIDIAN_API_KEY",
+        "127.0.0.1:27123",
         "PHA_ARCHIVE_DIR",
+        # which vault is this: the identity line and its sentinel
+        ".pha-vault.md",
+        "UNIDENTIFIED",
+        "WRONG",
+        "identify",
     ],
     "timelink-kleio-provenance": [
         # the model facts
