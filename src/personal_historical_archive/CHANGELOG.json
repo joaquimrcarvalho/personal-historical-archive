@@ -576,6 +576,18 @@
           "commit": "e7daef1ec203"
         }
       ]
+    },
+    "0.53.5": {
+      "date": "2026-11-27",
+      "summary": "The archive's search skill now puts the archive before the internet, searches in several formulations and both modes, sweeps the collections and reports coverage instead of claiming absence, answers 'do we have X?' from the catalogue, and warns that a runtime's copy of a skill is a snapshot; the archive AGENTS.md gains the same rule, and a new test rejects skill front matter a runtime would silently fail to parse.",
+      "changes": [
+        {
+          "type": "feat",
+          "scope": "skills",
+          "text": "search the archive before the internet, and search it properly",
+          "commit": "bcd79db324a9"
+        }
+      ]
     }
   }
 }
