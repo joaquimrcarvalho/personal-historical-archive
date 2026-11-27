@@ -17,7 +17,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS = REPO_ROOT / "skills"
 
 EXPECTED = {
-    "pha-search-context": ["pha page", "pha_get_page", "variant", "edited"],
+    "pha-search-context": ["pha page", "pha_get_page", "variant", "edited",
+                           # the order of evidence and the coverage loop
+                           "archive question first", "--mode keyword",
+                           "--mode hybrid", "--limit 25", "coverage loop",
+                           "catalogue question", "pha documents"],
     "lmstudio-model-locality": [
         "LM Link",
         "pha scan",
@@ -146,6 +150,28 @@ def test_skill_frontmatter_name_matches_folder():
         assert f"name: {name}" in fm, (
             f"{name}/SKILL.md front matter name must match the folder name"
         )
+
+
+def test_skill_frontmatter_parses_as_yaml():
+    """A description that contains `: ` makes the front matter invalid YAML.
+
+    A runtime that parses the front matter to build its skill catalog then
+    drops the skill silently — no error, the skill simply is not there any
+    more. Validate the block as YAML, not by substring, for every skill.
+    """
+    import yaml
+
+    for skill_dir in sorted(p for p in SKILLS.iterdir() if p.is_dir()):
+        path = skill_dir / "SKILL.md"
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert text.startswith("---\n"), f"{path} must start with YAML front matter"
+        front = text.split("---", 2)[1]
+        parsed = yaml.safe_load(front)
+        assert isinstance(parsed, dict), f"{path} front matter is not a mapping"
+        assert parsed.get("name") == skill_dir.name, f"{path} name must match folder"
+        assert parsed.get("description"), f"{path} needs a description (the trigger)"
 
 
 @pytest.mark.parametrize("name, markers", EXPECTED.items())

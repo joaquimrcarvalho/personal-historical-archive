@@ -258,7 +258,7 @@ writes the return payload.
 
 _SKILL_SEARCH_CONTEXT = """---
 name: pha-search-context
-description: Answer from personal-historical-archive (pha) search results — the archive's memory. Use when an agent has run `pha search` or the `pha_search` MCP tool and must answer from the hits, when the user asks "what do I have about X", or when the user asks for the full transcription / edited version behind a search snippet. First check whether the archive already has notes on the question (`kind: "note"` hits) and offer to read them — notes are earlier conclusions, not evidence. Then number the results; before quoting or answering from a page hit, retrieve the complete text of that page (raw transcription and the edited variant when one exists); and when a hit is a page of a multi-page document that appears to have started on an earlier page, pull the earlier pages (back to the document/record start) so the answer has real context, never a bare snippet.
+description: Answer from personal-historical-archive (pha) search results — the archive's memory. Use whenever a question concerns the archive's subject matter ("what do we know about X", "why is it so", "do we have X"), and always before searching the internet — the archive is searched first and the web is only a supplement. Use also when an agent has run `pha search` or the `pha_search` tool and must answer from the hits, or when the user asks for the full transcription / edited version behind a snippet. Search more than once (the same name is spelled differently in each collection) and report coverage, not just hits; check the notes first (note hits, `kind` `"note"` — earlier conclusions, not evidence) and offer to read them; answer "do we have X" from the catalogue (`pha documents`), never from a full-text hit. Then number the results; before quoting or answering from a page hit, retrieve the complete text of that page (raw transcription and the edited variant when one exists); and when a hit is a page of a multi-page document that appears to have started on an earlier page, pull the earlier pages (back to the document/record start) so the answer has real context, never a bare snippet.
 ---
 
 # pha Search Context
@@ -301,8 +301,40 @@ Agents repeatedly make three mistakes:
    in the user's preferred variant (faithful transcription vs the
    edited/modernised/translated text).
 
-This skill fixes all three: **check the notes first, present page hits
-numbered, then always recover full context before answering.**
+This skill fixes all of them: **check the notes first, search more than
+once, present page hits numbered, then always recover full context before
+answering.**
+
+## The archive before the internet
+
+A question about the archive's subject is an **archive question first**. The
+order is fixed, and it is not a preference:
+
+1. `notes/` — what the archive already concluded (step 0 below).
+2. the pages, records and catalogues — what the sources actually say.
+3. the internet — only for what the archive does not hold.
+
+Searching the web first is how an agent ends up citing an online edition of a
+book that is sitting in `dropbox/collections/`, and then tells a historian
+about their own archive. Published reference works, source editions and
+multi-volume corpora are often already here. **Check the holdings before
+reaching outside:** `pha documents` lists every document with its collection,
+`pha bib` reports reference coverage, and `dropbox/collections/` is the shelf
+list.
+
+- **Say which is which.** An archive claim cites `(document #12, p. 34, raw
+  transcription)`; an external one cites the edition and a URL. Never fold
+  both into one undifferentiated list of "sources".
+- **An external edition is not the archive's page.** Page numbers, spelling
+  and sometimes the text differ between printings; cite the copy you actually
+  read, and do not attach an external page number to an archive document.
+- **A work that matters and is missing is an acquisition, not a permanent
+  exception.** Say the archive lacks it, use the external copy, and offer to
+  add it (the Zotero route, or drop the PDF into the dropbox) so the next
+  question does not start from the internet again.
+- **Never let an external source silently outrank the archive.** If web
+  evidence and an archive page disagree, report both and say which is which;
+  the archive page is the evidence, the web is context.
 
 ## The two capability profiles
 
@@ -322,6 +354,63 @@ profile first:
 An agent that can see the filesystem should still prefer the CLI/MCP for
 metadata, but either profile must follow the same numbered-results + context
 recovery workflow below.
+
+## Searching well: the coverage loop
+
+One query is not a search. A historical archive holds millions of words in
+several languages, and the same person, place or book is spelled differently
+in each collection: a Latin form, the vernacular form, an abbreviation, a
+hyphenation. A single modern phrase returns a handful of chunks from whatever
+volume happens to match it — and *that* is what "partial results" looks like
+from the reading side.
+
+Before answering a question **about** the archive, rather than looking up one
+known page, work the loop:
+
+1. **Two or three formulations, not one.** The modern name; the form the
+   sources actually use (Latin, old spelling, the abbreviation); and — the
+   strongest — a phrase you would expect to find **on the page**, not in a
+   modern summary. A distinctive phrase from the expected passage finds it
+   where a single modern keyword buries it.
+2. **Both modes.** `pha search "…" --mode keyword` returns only pages that
+   contain the words — the right tool for a name, a date, a short quotation.
+   `--mode hybrid` adds semantic matches and finds a topic the archive
+   discusses in other words. Run the name query in keyword *and* the topic
+   query in hybrid; they answer different questions.
+3. **More than five hits.** The default limit is a page of results, not the
+   corpus. Ask for 15–25 (`--limit 25`) before concluding that a collection
+   has nothing.
+4. **Sweep the collections.** A person or a place is usually spread across
+   several collections — catalogues, letters, reference works, academic
+   studies. After the first pass, re-run the best query with
+   `--collection collections/<name>` over the collections that could hold the
+   answer; the top collection in one query is not the only one.
+5. **Ask the notes separately.** `pha search "…" --source notes` finds earlier
+   conclusions even when their wording matches no page.
+6. **Report the coverage, not just the hits.** Say what you searched and what
+   you did not: "pages, records and notes for X, across three collections;
+   found in A and B, nothing in C". Then "the archive does not have it" means
+   *searched and absent* — a finding — and not *the query missed*.
+
+Run the search from the shell when the archive is on this machine:
+`pha search "…" --mode … --source … --limit … --collection …`. In some agent
+runtimes the `pha_search` tool is keyword-only and capped at 5–20 hits with no
+way to widen it; if that is what you have, say so and use the CLI instead.
+
+### "Do we have X?" is a catalogue question
+
+A full-text search answers *"where is X mentioned?"*, never *"do we own X?"*.
+An archive can cite a work a hundred times and not hold it. To answer
+ownership:
+
+- check the catalogue, not the text: `pha documents` (every document with its
+  collection), `pha bib` (reference coverage), or the `dropbox/collections/`
+  folder list;
+- a search hit that *names* the work is a **citation**, not a holding — say
+  "the archive cites it; it does not appear to hold it";
+- a note in `notes/` may record the work even when the PDF is absent; say
+  where you looked, and never turn "not found by search" into "the archive
+  does not have it".
 
 ## Workflow
 
@@ -486,6 +575,11 @@ Every substantive claim should cite the source it came from:
 | Need | Profile M (MCP) | Profile C (CLI/files) |
 | --- | --- | --- |
 | Numbered search results | `pha_search` returns list — number it yourself | `pha search "…"` (already numbered); `--json` for structured |
+| Exact name / phrase only | `pha_search` (keyword-only in some runtimes) | `pha search "…" --mode keyword` |
+| Topic, archive may use other words | — (use the CLI if the tool has no `mode`) | `pha search "…" --mode hybrid` |
+| Wider result set | `limit` up to the tool's cap | `--limit 25` |
+| One collection only | — | `pha search "…" --collection collections/COLX` |
+| Does the archive hold a work? | `pha_list_documents` | `pha documents`, `pha bib`, `ls dropbox/collections/` |
 | Full page raw | `pha_get_page(id, p)` → `transcribed` | `pha page DOC p` |
 | Full page edited | `pha_get_page(id, p)` → `edited` dict | `pha page DOC p --edited` |
 | Structured records of page | `pha_get_page` → `encoded` | `pha page … --json` / library files |
@@ -505,6 +599,17 @@ Every substantive claim should cite the source it came from:
 
 ## Checklist
 
+- [ ] The archive was searched **before** the internet; external sources are
+      labelled as external, cited to the edition actually read, and a missing
+      work that matters was offered for acquisition rather than cited forever.
+- [ ] More than one formulation was tried (modern name, the source's own
+      spelling, a distinctive phrase from the expected passage), in keyword
+      and/or hybrid as appropriate, with `--limit` wide enough to see past the
+      first five hits.
+- [ ] The collections that could hold the answer were swept, and the coverage
+      was reported ("searched A, B; nothing in C") rather than implied.
+- [ ] "Do we have X?" was answered from the catalogue (`pha documents` /
+      `pha bib`), distinguishing a holding from a citation.
 - [ ] The notes were searched for the subject, and any note hits were
       **offered to the user** before being folded into an answer.
 - [ ] A note that was used is reported as an earlier conclusion, kept separate
@@ -560,8 +665,13 @@ most common tasks:
 
 - `pha-search-context` — a search hit is a *snippet*; recover the full page
   (raw and edited) before quoting or summarizing. Also covers the archive's
-  **notes** as memory: search them beside the sources, and offer them to the
-  user as earlier conclusions to check, never as evidence.
+  **notes** as memory (search them beside the sources, and offer them as
+  earlier conclusions to check, never as evidence), the **order of evidence**
+  (archive first, the web only as a labelled supplement), the **coverage
+  loop** that stops "partial results" (several formulations, both search
+  modes, wider limits, a sweep of the collections, and a report of what was
+  searched), and "do we have X?" as a *catalogue* question (`pha documents`)
+  rather than a full-text one.
 - `pha-document-operations` — re-scan / re-edit / re-encode one
   **already-ingested** document or collection (`pha scan --path … --reprocess`,
   `pha edit --path … --page N`, `pha test`).

@@ -38,8 +38,13 @@ most common tasks:
 
 - `pha-search-context` — a search hit is a *snippet*; recover the full page
   (raw and edited) before quoting or summarizing. Also covers the archive's
-  **notes** as memory: search them beside the sources, and offer them to the
-  user as earlier conclusions to check, never as evidence.
+  **notes** as memory (search them beside the sources, and offer them as
+  earlier conclusions to check, never as evidence), the **order of evidence**
+  (archive first, the web only as a labelled supplement), the **coverage
+  loop** that stops "partial results" (several formulations, both search
+  modes, wider limits, a sweep of the collections, and a report of what was
+  searched), and "do we have X?" as a *catalogue* question (`pha documents`)
+  rather than a full-text one.
 - `pha-document-operations` — re-scan / re-edit / re-encode one
   **already-ingested** document or collection (`pha scan --path … --reprocess`,
   `pha edit --path … --page N`, `pha test`).

@@ -377,6 +377,26 @@ technical steps. Unless they tell you otherwise:
 - If something fails, say what went wrong and what you propose, in the same
   plain language — not just the raw error text.
 
+## Evidence order: the archive first, the internet as a supplement
+
+Every question about the subject matter of this archive is an **archive
+question first**. Look in `notes/` and in the indexed pages and records before
+reaching for the web, and search more than once: the same person, place or
+book is spelled differently in each collection (a Latin form, the vernacular
+form, an abbreviation), so one modern phrase returns a handful of hits and can
+look like "the archive has nothing". The full loop — several formulations,
+both search modes, a wider limit, a sweep of the collections, and a report of
+what was searched — is in `skills/pha-search-context/SKILL.md`.
+
+- **Cite the archive copy when the archive holds the work** — check with
+  `pha documents` and `pha bib` before citing an online edition of a book that
+  is already in `dropbox/collections/`.
+- **Label external evidence as external**, cite the edition actually read, and
+  never attach an external page number to an archive document.
+- **A work that matters and is missing is an acquisition**: say the archive
+  lacks it, use the external copy, and offer to add it rather than citing an
+  online edition forever.
+
 ## Before anything else: make sure `pha` is available and pointed here
 
 `pha` is the tool that reads and writes this archive. **On this machine it is
@@ -454,10 +474,12 @@ the pha source repository. Before the matching task, read the skill and follow
 it:
 
 - `skills/pha-search-context/SKILL.md` — a `pha search` hit is a **snippet of a
-  page**, not a document: number the hits, then recover the complete text of
-  the page (raw transcription *and* the edited variant when one exists) with
-  `pha page <doc> <page> [--edited]` before quoting or answering; when a hit
-  starts mid-document, read back to the document/item start.
+  page**, not a document: search the archive before the internet, in more than
+  one formulation and both modes, and report what you searched; number the
+  hits, then recover the complete text of the page (raw transcription *and*
+  the edited variant when one exists) with `pha page <doc> <page> [--edited]`
+  before quoting or answering; when a hit starts mid-document, read back to
+  the document/item start.
 - `skills/pha-document-operations/SKILL.md` — re-run the pipeline on an
   **already-ingested** document or collection (rescan / re-edit / re-encode):
   `pha scan --path collections/COLX [--reprocess]`,
@@ -499,9 +521,12 @@ Each skill is a folder with `skills/<name>/SKILL.md` (YAML front matter whose
 `examples/`, a licence). `skills/README.md` documents the format, and how to
 make a runtime pick a skill up automatically (copy the whole folder to that
 runtime's user-level skills directory, e.g. `cp -R
-skills/palaeographers-compare ~/.agents/skills/`). A bundled file missing
-from the archive is (re)created on the next pha run; an existing file is
-never overwritten — edit, extend or add skills freely.
+skills/palaeographers-compare ~/.agents/skills/`). That copy is a **snapshot**:
+pha refreshes the archive's `skills/` folder, never the runtime's copy, so
+re-copy a skill after it changes — a stale copy quietly keeps the old
+instructions, and its old trigger text, in front of the agent. A bundled file
+missing from the archive is (re)created on the next pha run; an existing file
+is never overwritten — edit, extend or add skills freely.
 
 **Need a skill that is not here? Read the open skill index.**
 <https://github.com/joaquimrcarvalho/pha-skill-index> lists extra published
